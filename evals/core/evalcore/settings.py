@@ -96,6 +96,7 @@ class CampaignSettings(StrictModel):
     def recorded(self) -> dict:
         data = self.model_dump(mode="json", by_alias=True)
         data["effective_case_count"], data["effective_trials_per_case"] = self.counts
+        data["resolved_cases_path"] = str(self.cases_path.resolve())
         data["resolved_combinations"] = [c.model_dump() for c in self.resolved_combinations()]
         data["setting_sources"] = {
             field.alias or key: "explicit" if key in self.model_fields_set else "default"

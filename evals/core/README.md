@@ -54,8 +54,11 @@ Unknown exceptions in the target are failures unless explicitly declared
 infrastructure. Errors outside the target solver are Inspect lifecycle
 infrastructure; `EvalError` does not expose typed categories, so core never parses
 model-controlled error text. Subprocesses must respect cancellation and use their
-own timeouts. The core time limit covers execution plus scoring. Failed samples
-are not automatically retried.
+own timeouts. The core time limit covers execution plus scoring. Failed samples are not automatically retried. Explicit `campaign --resume`
+requires identical settings/assignment, carries clean trials, and retries only
+missing, infrastructure and unclassified harness failures. Target-owned
+`rescore`/`resume-trial` commands recover private captures; resumed segments are
+excluded from headline success rate/pass^k and reported separately.
 
 ## Settings and reports
 
@@ -89,7 +92,12 @@ Trial wall time includes setup/scoring; campaign wall time is also recorded.
 Results go to the target's `results_dir/<campaign>/<UTC timestamp>/`; reruns
 create fresh report pairs and never overwrite earlier reports. `run_campaign` has
 an optional `report_directory` for grouped demonstrations; that explicit directory
-must not already exist. Software-change AC5 uses it for its three driver reports. The summary includes schema version 1, settings, matched assignment,
+must not already exist. Software-change AC5 uses it for its three driver reports. Targets may implement `begin_run`, `checkpoint_record`, `persist_record`,
+`failure_metrics` and `can_resume_capture` to retain host-private attempt evidence
+and support explicit continuation. Software-change checkpoints score/role usage
+before later samples, then updates with finalized Inspect usage. Its captures are
+never scanned as report exports; report refusal prints a recovery command.
+The summary includes schema version 1, settings, matched assignment,
 pinned identities, harness/target/case versions, comparisons and every trial.
 Markdown presents the same information. Raw Inspect logs remain outside the result
 pair, under the target's gitignored `logs_dir`.

@@ -92,14 +92,22 @@ appends the fixed prompt. Normal drivers start from the vague request, with no
 prewritten intent and no human input after launch. No new engine/provider code
 is required.
 
-After terminal observation, scoring copies tests and reference into the sandbox;
-it never applies reference to delivered code. Public show/history data, SQLite,
-artifacts and the pre-test delivery snapshot are copied out as ignored captures.
-Idle/hard stops and non-terminal driver exits retain DB (including any WAL),
-artifacts, show/history and the delivery snapshot as `nonterminal.tar` in the same
-ignored campaign/sample capture location. If no run was created yet, show/history
-retain the CLI error and no nonexistent DB/artifacts are invented. Hidden tests
-and reference are still never copied before terminal observation.
+After every driver stop, raw `/workspace` is captured before parsing/scoring to
+`captures/<campaign>/<run timestamp>/<sample>/workspace.tar` plus host `meta.json`.
+The tar includes repo .git and local remote as well as DB/WAL, artifacts and raw
+show/history; only directories named target/.cache are excluded. If no run was
+created, CLI error receipts are retained without inventing DB/artifacts. Private
+captures never pass through the results scan.
+
+Scoring always starts a fresh mount-free trial-image container, restores this
+capture, and observes the captured DB. Only final/terminated runs receive hidden
+tests/reference; reference is never applied to delivered code. Terminated runs
+receive delivery metrics but cannot succeed. `evalctl rescore` uses this exact
+scorer. `campaign --resume` carries clean trials; `--resume-interrupted` or
+`resume-trial` restores an active trial and owner answers for a new driver segment.
+Resumed trials appear separately and do not enter headline success rate/pass^k.
+See the [harness README](../README.md#rescore-and-continue-scripted-proof-examples)
+for exact commands, metadata/accounting and external snapshot recovery.
 Private artifacts and raw Inspect logs must never be selected for publication.
 The reports contain only metrics/IDs and safe evidence, not source or brief prose.
 
@@ -114,8 +122,11 @@ trial is not idle. An idle stop kills the driver process group; hard stops retai
 `DRIVER_LIMIT_MARGIN_SECONDS = 300` (minimum driver budget 60 seconds) for capture
 and scoring. Driver timeout failures report `driver_timeout_kind` and
 `run_health.timeout_kind` as `idle` or `hard`. Inspect's sample limit is the hard
-limit. Abrupt infrastructure/cancellation failure outside the driver hook can
-still prevent capture; unknown dimensions remain null.
+limit. The driver-finally hook captures even bridge/owner/driver exceptions before
+scoring. Docker loss, host disk failure or abrupt host process death during a copy
+can still prevent a complete capture; partial chunks remain private and unknown
+dimensions stay null. `case-check` now verifies/reuses the pinned arm64 image and
+never implicitly rebuilds it; building is explicit `image-check` only.
 
 See [scoring](scoring.md) for exact definitions:
 

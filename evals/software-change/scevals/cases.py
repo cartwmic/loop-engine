@@ -10,7 +10,7 @@ import re
 import subprocess
 import tomllib
 
-from .image import DEFAULT_IMAGE, DEFAULT_REF, build_image, output, run, trial_container
+from .image import DEFAULT_IMAGE, DEFAULT_REF, verify_image, output, run, trial_container
 
 RUNTIME = Path(__file__).with_name("case_runtime.py")
 REQUIREMENT = r"REQ-[A-Z0-9-]+"
@@ -178,8 +178,11 @@ def case_check(args):
     except CaseFormatError as error:
         print(f"INVALID: {error}")
         return 0 if args.expect_invalid else 1
-    # Build even when a cached image exists, so the pinned source identity is checked.
-    built = build_image(args.ref, args.tag)
+    try:
+        built = verify_image(args.ref, args.tag)
+    except RuntimeError:
+        print("Trial image missing or mismatched; run image-check first.")
+        return 2
     reference = run_hidden_tests(case, reference=True, image=args.tag)
     noop = run_hidden_tests(case, reference=False, image=args.tag)
     reasons = check_results(case, reference, noop)
@@ -214,3 +217,5 @@ def register_subcommands(subparsers: argparse._SubParsersAction):
     register_demo(subparsers)
     from .results import register_subcommands as register_results
     register_results(subparsers)
+    from .lifecycle import register_subcommands as register_lifecycle
+    register_lifecycle(subparsers)

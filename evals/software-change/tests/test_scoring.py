@@ -57,9 +57,9 @@ def test_public_ac5_demo_separates_recall_and_preserves_terminal_copy_gate():
             if item["kind"] in ("hidden_tests", "reference_solution"):
                 assert item["phase"] == "after_terminal"
                 assert item["elapsed_seconds"] > metrics["terminal_elapsed_seconds"]
-        assert all(item["elapsed_seconds"] > metrics["terminal_elapsed_seconds"] for item in metrics["copy_out_log"])
-        capture = ROOT / "captures" / summary["campaign"] / trial["sample_id"]
-        assert (capture / "terminal.tar").is_file() and (capture / "hidden-results.json").is_file()
+        assert metrics["copy_out_log"][0]["phase"] == "after_driver"
+        capture = Path(summary["capture_run"]) / trial["sample_id"]
+        assert (capture / "workspace.tar").is_file() and (capture / "meta.json").is_file()
         directory.rename(captures / (directory.parent.name + "-" + directory.name))
     run_dir = Path(receipt["drivers"][0]["report"]).parent
     run_dir.rmdir()  # leave no empty test directories under publishable results/

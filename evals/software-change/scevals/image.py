@@ -43,6 +43,20 @@ def build_image(ref=DEFAULT_REF, tag=DEFAULT_IMAGE):
     return {"ref": ref, "commit": commit, "version": version, "image": tag}
 
 
+def verify_image(ref=DEFAULT_REF, tag=DEFAULT_IMAGE):
+    """Read-only validation; image-check is the only explicit build command."""
+    commit = output(["git", "-C", str(REPOSITORY), "rev-parse", "--verify", f"{ref}^{{commit}}"])
+    try:
+        identity = json.loads(output(["docker", "image", "inspect", tag]))[0]
+    except (subprocess.CalledProcessError, ValueError, IndexError):
+        raise RuntimeError("trial image missing; run image-check first") from None
+    if (identity.get("Architecture") != "arm64" or identity.get("Os") != "linux" or
+            (identity["Config"].get("Labels") or {}).get("org.opencontainers.image.revision") != commit or
+            identity["Config"].get("Volumes")):
+        raise RuntimeError("trial image mismatch; run image-check first")
+    return {"ref": ref, "commit": commit, "image": tag}
+
+
 def trial_container_command(image=DEFAULT_IMAGE):
     """Same creation options used by this check and later direct-Docker trials.
 

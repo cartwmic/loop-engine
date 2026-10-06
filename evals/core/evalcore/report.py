@@ -105,6 +105,11 @@ def render_markdown(summary: dict) -> str:
         lines += [f"## {combo['id']}", "", "### Core metrics", "```json",
                   json.dumps(combo["core"], indent=2, allow_nan=False), "```", "", "### Target metrics", "```json",
                   json.dumps(combo["target_metrics"], indent=2, ensure_ascii=False, allow_nan=False), "```", ""]
+    if summary.get("resumed_trials"):
+        lines += ["## Resumed trials (excluded from headline success rate and pass^k)", "```json",
+                  json.dumps(summary["resumed_trials"], indent=2, ensure_ascii=False, allow_nan=False), "```", ""]
+    if summary.get("carried_trials"):
+        lines += ["## Carried trials", "```json", json.dumps(summary["carried_trials"], indent=2), "```", ""]
     lines += ["## Trials (including infrastructure and timeouts)", "```json",
               json.dumps(summary["trials"], indent=2, ensure_ascii=False, allow_nan=False), "```", ""]
     return "\n".join(lines)

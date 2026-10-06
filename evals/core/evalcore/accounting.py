@@ -71,6 +71,10 @@ class TrialRecord:
     usage_by_role: dict[str, dict] = field(default_factory=dict)
     target_metrics: dict = field(default_factory=dict)
     error_type: str | None = None
+    resumed: bool = False
+    segments: list[dict] = field(default_factory=list)
+    carried_from: str | None = None
+    usage_unknown_roles: list[str] = field(default_factory=list)
 
     def recorded(self) -> dict:
         return asdict(self)
@@ -90,26 +94,29 @@ def cost_by_role(records: list[TrialRecord], settings: CampaignSettings, role_mo
         cache_read, cache_write = total("input_tokens_cache_read"), total("input_tokens_cache_write")
         model = role_models[role]
         price = settings.prices.get(model)
+        known = not any(role in r.usage_unknown_roles for r in records)
         usd = None
-        if price:
+        if price and known:
             read_price = price.input_per_million if price.cache_read_per_million is None else price.cache_read_per_million
             write_price = price.input_per_million if price.cache_write_per_million is None else price.cache_write_per_million
             usd = (inputs * price.input_per_million + outputs * price.output_per_million
                    + cache_read * read_price + cache_write * write_price) / 1_000_000
         result[role] = {
-            "model": model, "input_tokens": inputs, "output_tokens": outputs,
-            "cache_read_tokens": cache_read, "cache_write_tokens": cache_write,
-            "total_tokens": inputs + outputs + cache_read + cache_write,
+            "model": model, "input_tokens": inputs if known else None, "output_tokens": outputs if known else None,
+            "cache_read_tokens": cache_read if known else None, "cache_write_tokens": cache_write if known else None,
+            "total_tokens": inputs + outputs + cache_read + cache_write if known else None,
+            "usage_available": known,
             "estimated_usd": usd, "price_available": price is not None,
         }
     dollars = [v["estimated_usd"] for v in result.values()]
-    return {"by_role": result, "total_tokens": sum(v["total_tokens"] for v in result.values()),
+    totals = [v["total_tokens"] for v in result.values()]
+    return {"by_role": result, "total_tokens": sum(totals) if all(v is not None for v in totals) else None,
             "estimated_usd": sum(dollars) if all(v is not None for v in dollars) else None}
 
 
 def core_metrics(records: list[TrialRecord], settings: CampaignSettings, role_models: dict[str, str]) -> dict:
     _, k = settings.counts
-    scorable = [r for r in records if r.outcome != "infrastructure"]
+    scorable = [r for r in records if r.outcome != "infrastructure" and not r.resumed]
     case_ids = sorted({r.case_id for r in records})
     eligible = []
     incomplete = []
@@ -121,6 +128,10 @@ def core_metrics(records: list[TrialRecord], settings: CampaignSettings, role_mo
             incomplete.append({"case_id": case_id, "scorable_trials": len(trials), "required_trials": k})
     return {
         "trial_count": len(records),
+        "resumed_trials": len([r for r in records if r.resumed]),
+        "resumed_success_rate": rate(sum(r.outcome == "success" for r in records if r.resumed and r.outcome != "infrastructure"),
+                                     sum(r.resumed and r.outcome != "infrastructure" for r in records)),
+        "terminated_trials": sum(r.target_metrics.get("lifecycle") == "terminated" for r in records),
         "success_rate": rate(sum(r.outcome == "success" for r in scorable), len(scorable)),
         "pass_k": {"k": k, **rate(sum(all(r.outcome == "success" for r in ts) for ts in eligible), len(eligible))},
         "incomplete_cases": incomplete,

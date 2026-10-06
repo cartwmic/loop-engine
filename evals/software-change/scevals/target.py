@@ -1,5 +1,6 @@
 """Software-change trial lifecycle; scoring can extend the terminal sandbox hook."""
 from collections import Counter
+from copy import deepcopy
 from dataclasses import dataclass
 import io
 import json
@@ -17,7 +18,9 @@ from inspect_ai.model import get_model
 from inspect_ai.model._model import sample_role_usage
 from inspect_ai.util import sandbox, sandbox_service
 
-from evalcore.report import protected_values, scan_results
+from evalcore.runner import harness_versions
+from evalcore.report import utc_timestamp
+from .capture import ReplayContainer, captured_lifecycle, read_capture, restore
 from evalcore.settings import Case
 from evalcore.target import InfrastructureError, ModelError, TrialExecution, TrialScore
 from .cases import RUNTIME, load_case
@@ -137,7 +140,10 @@ class TerminalTrial:
         await self.copy(RUNTIME, "/opt/scoring/case_runtime.py", "test_runner", "after_terminal")
 
     def metrics(self):
-        return {k: v for k, v in self.evidence.items() if k != "started"} | {"simulated_owner": self.owner.receipt()}
+        receipt = (self.owner.receipt() if self.evidence.get("owner_history_available", True)
+                   else {"model": self.owner.model_id, "answer_count": None,
+                         "answers": None, "revealed_requirement_ids": None})
+        return {k: v for k, v in self.evidence.items() if k != "started"} | {"simulated_owner": receipt}
 
 
 class SoftwareChangeTarget:
@@ -148,6 +154,66 @@ class SoftwareChangeTarget:
     def load_cases(self, path):
         paths = [path] if (path / "case.toml").is_file() else sorted(p.parent for p in path.glob("*/case.toml"))
         return [Case(id=c.id, version=c.version, path=c.path) for c in map(load_case, paths)]
+
+    def begin_run(self, settings, run_id):
+        self.run_directory = ROOT / "captures" / settings.campaign / run_id
+        self.run_directory.mkdir(mode=0o700, parents=True, exist_ok=False)
+        self.run_settings = settings
+        (self.run_directory / "run.json").write_text(json.dumps({"settings": settings.recorded()}, indent=2) + "\n")
+
+    def can_resume_capture(self, path):
+        try:
+            archive, _ = read_capture(path)
+            return captured_lifecycle(archive) == "active"
+        except (OSError, ValueError, tarfile.TarError):
+            return False
+
+    def capture_for(self, context):
+        return self.run_directory / context.assignment.sample_id
+
+    def failure_metrics(self, context):
+        path = self.capture_for(context) / "meta.json"
+        return json.loads(path.read_text()).get("evidence", {}) if path.is_file() else {}
+
+    def checkpoint_record(self, context, record):
+        """Retain completed score/usage even if a later sample kills the campaign."""
+        if getattr(self, "operation", "campaign") == "rescore":
+            return
+        saved = deepcopy(record)
+        saved.usage_by_role = {role: usage.model_dump() for role, usage in sample_role_usage().items()}
+        source = getattr(self, "sources", {}).get(record.sample_id)
+        if source:
+            _, prior = read_capture(source)
+            saved.resumed = True
+            for role, usage in prior.get("usage_by_role", {}).items():
+                current = saved.usage_by_role.setdefault(role, {})
+                for key, value in usage.items():
+                    if isinstance(value, (int, float)):
+                        current[key] = (current.get(key) or 0) + value
+        saved.target_metrics = self.finalize_metrics(saved.target_metrics, usage_by_role=saved.usage_by_role,
+                                                    terminal=saved.terminal, outcome=saved.outcome, reason=saved.reason)
+        self.persist_record(saved)
+
+    def persist_record(self, record):
+        path = self.run_directory / record.sample_id / "meta.json"
+        if path.is_file():
+            meta = json.loads(path.read_text())
+            meta["record"] = record.recorded()
+            meta["usage_by_role"] = record.usage_by_role
+            meta["wall_seconds"] = record.wall_seconds
+            segments = meta.setdefault("segments", [])[:meta.get("prior_segment_count", 0)]
+            if getattr(self, "operation", "campaign") != "rescore":
+                segment_usage = record.usage_by_role
+                if segments:
+                    segment_usage = {role: {key: (value or 0) - sum(s.get("usage_by_role", {}).get(role, {}).get(key) or 0 for s in segments)
+                                            for key, value in usage.items() if isinstance(value, (int, float))}
+                                     for role, usage in record.usage_by_role.items()}
+                segments.append({"wall_seconds": record.wall_seconds, "usage_by_role": segment_usage,
+                                 "stop_reason": record.reason, "driver_stop_kind": meta["driver_stop_kind"], "outcome": record.outcome})
+            record.segments = segments
+            meta["segments"] = segments
+            meta["record"] = record.recorded()
+            path.write_text(json.dumps(meta, indent=2) + "\n")
 
     def prepare_sample(self, context):
         options = context.settings.target_options
@@ -177,7 +243,9 @@ class SoftwareChangeTarget:
             raise ValueError("trial image must be native arm64 Linux")
         if identity["Config"].get("Volumes"):
             raise ValueError("trial image must not declare volumes")
-        compose_dir = ROOT / "captures" / context.settings.campaign
+        if getattr(self, "operation", "campaign") == "rescore":
+            return Sample(input=load_case(context.case.path).request.read_text())
+        compose_dir = self.run_directory
         compose_dir.mkdir(parents=True, exist_ok=True)
         compose = compose_dir / (context.assignment.sample_id + ".yaml")
         compose.write_text("services:\n  default:\n    image: " + json.dumps(image) + "\n    platform: linux/arm64\n"
@@ -185,6 +253,10 @@ class SoftwareChangeTarget:
         return Sample(input=load_case(context.case.path).request.read_text(), sandbox=("docker", str(compose)))
 
     async def run_trial(self, state, context):
+        source = getattr(self, "sources", {}).get(context.assignment.sample_id)
+        if getattr(self, "operation", "campaign") == "rescore":
+            archive, meta = read_capture(source)
+            return TrialExecution(terminal=False, data=(archive, meta))
         env = sandbox()
         connection = await env.connection()
         inspected = await anyio.run_process(["docker", "inspect", connection.container])
@@ -200,7 +272,14 @@ class SoftwareChangeTarget:
                                   "platform": config["Platform"], "working_dir": config["Config"]["WorkingDir"]},
                     "role_models": context.combination.role_models()}
         trial = TerminalTrial(env, case, owner, evidence, False, None)
-        await trial.copy_tree(case.path / "public", "/workspace/public", "public", "before_driver")
+        prior = {}
+        if source:
+            archive, prior = read_capture(source)
+            await restore(env, archive)
+            owner.answers = prior.get("simulated_owner", {}).get("answers", [])
+            evidence["resumed"] = True
+        else:
+            await trial.copy_tree(case.path / "public", "/workspace/public", "public", "before_driver")
         await env.write_file("/workspace/trial/providers.toml", '[providers.software-change]\ncommand = "software-change"\nargs = []\n')
         # The isolated local remote is harness infrastructure, not the case repo.
         # Its hook counts successful receive operations without making any push.
@@ -210,10 +289,19 @@ class SoftwareChangeTarget:
         await env.write_file("/workspace/local-remote.git/hooks/post-receive",
                              "#!/bin/sh\ncat >/dev/null\nprintf 'push\\n' >> /workspace/trial/local-push-log\n")
         await env.exec(["chmod", "+x", "/workspace/local-remote.git/hooks/post-receive"], timeout=30)
-        await env.write_file("/workspace/trial/local-push-log", "")
+        if not source:
+            await env.write_file("/workspace/trial/local-push-log", "")
         options = context.settings.target_options
         driver = options.get("scripted_driver")
-        run_id = "scripted-example" if driver else "eval-trial"
+        inject_infrastructure = False
+        if driver and options.get("scripted_infrastructure_trial") == context.assignment.trial and not source:
+            marker = self.run_directory.parent / (".infrastructure-" + context.assignment.sample_id + ".once")
+            try:
+                marker.touch(exist_ok=False)
+                inject_infrastructure = True
+            except FileExistsError:
+                pass
+        run_id = prior.get("evidence", {}).get("run_id", "eval-trial")
         evidence["run_id"] = run_id
         await trial.copy(Path(__file__).with_name("driver_process.py"), "/opt/sc-evals/driver_process.py", "driver_launcher", "before_driver")
         if driver:
@@ -221,6 +309,9 @@ class SoftwareChangeTarget:
         prompt = PREAMBLE.format(profile=context.settings.profile, run_id=run_id,
                                   scripted="Scripted driver: " + driver if driver else "",
                                   request=state.input)
+        if source:
+            prompt = ("Resume existing run " + run_id + " from its durable run.sqlite and artifacts. "
+                      "Inspect show/history first; continue the existing run, do NOT start or initialize a new run.\n" + prompt)
         done, started = anyio.Event(), anyio.Event()
         instance = context.assignment.sample_id
 
@@ -277,7 +368,10 @@ class SoftwareChangeTarget:
                                                         *options.get("driver_command", ["sc-driver"]), prompt],
                                                         cwd="/workspace/public/repo",
                                                         env={"SC_BRIDGE_URL": "http://localhost:13131/v1", "SC_OWNER_INSTANCE": instance,
-                                                             "SC_PROFILE": context.settings.profile},
+                                                             "SC_PROFILE": context.settings.profile,
+                                                             "SC_RESUME": "1" if source else "0",
+                                                             "SC_SCRIPTED_INFRA": "1" if inject_infrastructure else "0",
+                                                             "SC_SCRIPTED_TERMINATE": "1" if options.get("scripted_terminated") else "0"},
                                                         timeout=driver_limit)
                             except TimeoutError:
                                 result = None
@@ -300,24 +394,49 @@ class SoftwareChangeTarget:
             if isinstance(error, BaseExceptionGroup):
                 raise InfrastructureError("multiple bridge/owner lifecycle errors") from None
             raise error
+        finally:
+            # Capture even a bridge/driver crash, before interpreting engine output.
+            with anyio.CancelScope(shield=True):
+                await self.capture_raw(trial, context, prior)
+        if provider_connection_failed():
+            raise InfrastructureError("model provider connection failed")
+        if inject_infrastructure:
+            raise InfrastructureError("scripted infrastructure stop")
+        archive, meta = read_capture(self.capture_for(context))
+        return TrialExecution(terminal=False, data=(archive, meta))
+
+    async def inspect_capture(self, trial):
+        env, evidence = trial.env, trial.evidence
+        run_id = evidence["run_id"]
         ok, text = await engine_json(env, ["show", "--view", "full", run_id], "/workspace/trial/show.json")
         if ok:
             snapshot = json.loads(text)["result"]
-            trial.terminal = snapshot["lifecycle"] == "final"
+            trial.terminal = snapshot["lifecycle"] in ("final", "terminated")
             evidence["terminal_state"] = snapshot["current_state"]
             evidence["lifecycle"] = snapshot["lifecycle"]
         if trial.terminal:
             trial.terminal_time = time.monotonic() - evidence["started"]
             evidence["terminal_elapsed_seconds"] = trial.terminal_time
-        if driver and trial.terminal:
+        if trial.evidence.get("scripted_driver") and trial.terminal and snapshot["lifecycle"] == "final":
             # Only controlled fixture markers are exported; arbitrary worker prose is not.
             receipt = json.loads(await env.read_file("/workspace/trial/driver-receipt.json"))
             evidence.setdefault("role_observations", {}).update({role: value for role, value in receipt["role_outputs"].items()
                                              if re.fullmatch(r"routing-marker-[a-z0-9-]+", value)})
             evidence["scripted"] = True
-        return TrialExecution(terminal=trial.terminal, data=trial)
+        return trial.terminal
 
     async def progress_state(self, env, run_id):
+        # `show` opens/initializes SQLite. Racing it against the driver's first
+        # `start` can fail that start with exit 20. Probe read-only and do not
+        # invoke engine views until the pinned DB has a committed run row.
+        ready = await env.exec(["python3", "-c",
+            "import sqlite3,sys; "
+            "\ntry:\n c=sqlite3.connect('file:/workspace/trial/run.sqlite?mode=ro', uri=True, timeout=0.1); "
+            "row=c.execute('SELECT 1 FROM runs WHERE id=?', (sys.argv[1],)).fetchone(); c.close(); "
+            "print('ready' if row else '')"
+            "\nexcept sqlite3.Error: pass", run_id], timeout=30)
+        if not ready.success or ready.stdout.strip() != "ready":
+            return None
         ok, text = await engine_json(env, ["show", "--view", "full", run_id], "/tmp/progress-show.json")
         if not ok:
             return None  # A driver may not have created its run yet.
@@ -331,60 +450,106 @@ class SoftwareChangeTarget:
         return (snapshot["current_state"], snapshot["state_visit"],
                 max((row["sequence"] for row in snapshot["context"]), default=0), hash(history))
 
-    async def capture_terminal(self, trial, context):
-        """Copy terminal or interrupted evidence to ignored captures only."""
-        run_id = trial.evidence["run_id"]
-        packets = {}
-        for operation, arguments in (("show", ["show", "--view", "full", run_id]),
-                                     ("history", ["history", run_id])):
-            # CLI errors (including no run yet) also remain private captures.
-            ok, text = await engine_json(trial.env, arguments, f"/workspace/trial/{operation}.json")
-            if not ok and trial.terminal:
-                raise InfrastructureError("terminal history capture failed")
-            packets[operation] = json.loads(text).get("result") if ok else None
-        # A model may terminate without drafting artifacts. Capture an empty
-        # directory, then classify its missing intent as model failure, not infra.
-        await trial.env.exec(["mkdir", "-p", "/workspace/trial/artifacts"], timeout=30)
-        result = await trial.env.exec(["sh", "-c",
-            'set -- trial/artifacts trial/show.json trial/history.json trial/local-push-log public/repo; '
-            'for file in trial/run.sqlite trial/run.sqlite-wal trial/run.sqlite-shm; do '
-            '[ ! -f "$file" ] || set -- "$@" "$file"; done; '
-            'tar --exclude=.git -cf /tmp/terminal-capture.tar "$@" && '
-            # Inspect caps a single sandbox read at 100 MiB; real runs grow larger.
+    async def capture_raw(self, trial, context, prior):
+        """No host parsing or report secrecy scan may precede durable raw capture."""
+        env = trial.env
+        # Generate raw CLI receipts without interpreting their contents. Failure
+        # (including no run yet) is retained, not allowed to veto the workspace tar.
+        for operation, arguments in (("show", ["show", "--view", "full", trial.evidence["run_id"]]),
+                                     ("history", ["history", trial.evidence["run_id"]])):
+            try:
+                await engine_json(env, arguments, f"/workspace/trial/{operation}.json")
+            except Exception:
+                pass
+        chunk = int(context.settings.target_options.get("capture_chunk_bytes", CAPTURE_CHUNK_BYTES))
+        if chunk <= 0:
+            chunk = CAPTURE_CHUNK_BYTES
+        result = await env.exec(["sh", "-c",
+            'find . -type d \\( -name target -o -name .cache \\) -prune -o -print0 | '
+            'tar --null --no-recursion -cf /tmp/workspace.tar -T - && '
             'rm -rf /tmp/capture-parts && mkdir /tmp/capture-parts && '
-            'split -b ' + str(int(context.settings.target_options.get("capture_chunk_bytes", CAPTURE_CHUNK_BYTES))) + ' -d -a 4 /tmp/terminal-capture.tar /tmp/capture-parts/part-'],
-            cwd="/workspace", timeout=120)
+            f'split -b {chunk} -d -a 6 /tmp/workspace.tar /tmp/capture-parts/part-'],
+            cwd="/workspace", timeout=600)
         if not result.success:
-            raise InfrastructureError("terminal artifact capture failed")
-        parts = await trial.env.exec(["sh", "-c", "ls /tmp/capture-parts"], timeout=30)
-        raw = b"".join([await trial.env.read_file(f"/tmp/capture-parts/{name}", text=False)
-                        for name in sorted(parts.stdout.split())])
-        with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
-            files = {m.name: archive.extractfile(m).read() if m.isfile() else m.linkname.encode()
-                     for m in archive.getmembers() if m.isfile() or m.issym()}
-        # Refuse secret-bearing captures too; never print a matching value.
-        scan_results([raw.decode("utf-8", "replace"), *[b.decode("utf-8", "replace") for b in files.values()]], protected_values())
-        capture = ROOT / "captures" / context.settings.campaign / context.assignment.sample_id
-        capture.mkdir(parents=True, exist_ok=True)
-        (capture / ("terminal.tar" if trial.terminal else "nonterminal.tar")).write_bytes(raw)
-        trial.evidence["copy_out_log"] = [{"kind": "run_history_artifacts_and_delivery", "phase": "after_terminal" if trial.terminal else "after_driver",
-                                            "elapsed_seconds": time.monotonic() - trial.evidence["started"]}]
-        push_log = await trial.env.read_file("/workspace/trial/local-push-log")
-        return (packets["show"], packets["history"],
-                {k[len("trial/artifacts/"):]: v for k, v in files.items() if k.startswith("trial/artifacts/")},
-                {k[len("public/repo/"):]: v for k, v in files.items() if k.startswith("public/repo/")},
-                push_log.splitlines(), capture)
+            raise InfrastructureError("raw workspace capture failed")
+        parts = await env.exec(["sh", "-c", "ls /tmp/capture-parts"], timeout=30)
+        capture = self.capture_for(context)
+        capture.mkdir(mode=0o700, parents=True, exist_ok=False)
+        # Write incrementally: preserve completed chunks even if a later read fails.
+        with (capture / "workspace.tar.partial").open("wb") as stream:
+            for name in sorted(parts.stdout.split()):
+                stream.write(await env.read_file(f"/tmp/capture-parts/{name}", text=False))
+        (capture / "workspace.tar.partial").rename(capture / "workspace.tar")
+        evidence = trial.metrics()
+        evidence["scripted_driver"] = context.settings.target_options.get("scripted_driver")
+        stop = trial.evidence.get("driver_timeout_kind") or ("exit" if "driver_exit_code" in evidence else "crash")
+        evidence["copy_out_log"] = [{"kind": "workspace", "phase": "after_driver",
+                                     "elapsed_seconds": time.monotonic() - trial.evidence["started"]}]
+        meta = {"format_version": 1, "settings": context.settings.recorded(),
+                "assignment": context.assignment.model_dump(), "role_models": context.combination.role_models(),
+                "evidence": evidence, "driver_stop_kind": stop,
+                "simulated_owner": {"receipt": trial.owner.receipt(), "answers": trial.owner.answers},
+                "harness": harness_versions(), "segments": prior.get("segments", []),
+                "prior_segment_count": len(prior.get("segments", [])),
+                "resumed": bool(prior),
+                "usage_by_role": {role: usage.model_dump() for role, usage in sample_role_usage().items()},
+                "wall_seconds": time.monotonic() - trial.evidence["started"],
+                "source_capture": str(getattr(self, "sources", {}).get(context.assignment.sample_id, ""))}
+        (capture / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
 
     async def score(self, state, execution, context):
-        trial = execution.data
-        if not execution.terminal:
-            await self.capture_terminal(trial, context)
-            if provider_connection_failed():
-                # The driver stopped because the provider dropped a connection
-                # even after retries: infrastructure, not model behaviour.
-                raise InfrastructureError("model provider connection failed")
-            return TrialScore(False, trial.metrics())
-        snapshot, history, artifacts, delivered, push_events, capture = await self.capture_terminal(trial, context)
+        archive, meta = execution.data
+        execution.terminal = captured_lifecycle(archive) in ("final", "terminated")
+        # Scripted fault injection is deliberately outside score_capture so replay
+        # always exercises the exact same scorer as a healthy campaign.
+        if (getattr(self, "operation", "campaign") != "rescore" and
+                context.settings.target_options.get("scripted_scoring_error_trial") == context.assignment.trial):
+            raise RuntimeError("scripted scoring harness error")
+        async with ReplayContainer(context.settings.target_options.get("image", DEFAULT_IMAGE)) as env:
+            await restore(env, archive)
+            case = load_case(context.case.path)
+            owner = SimulatedOwner(case, context.settings.simulator_model)
+            owner.answers = meta.get("simulated_owner", {}).get("answers", [])
+            evidence = dict(meta.get("evidence", {}))
+            evidence["original_usage_available"] = meta.get("original_usage_available", True)
+            evidence["owner_history_available"] = "simulated_owner" in meta
+            evidence.setdefault("run_id", "eval-trial")
+            evidence.setdefault("copy_log", [])
+            evidence.setdefault("copy_out_log", [{"kind": "external_workspace", "phase": "after_driver", "elapsed_seconds": 0}])
+            # Elapsed metrics use the original driver clock, not replay wall time.
+            elapsed = evidence.get("copy_out_log", [{}])[0].get("elapsed_seconds", 0)
+            evidence["started"] = time.monotonic() - elapsed
+            trial = TerminalTrial(env, case, owner, evidence, False, None)
+            await self.inspect_capture(trial)
+            execution.terminal = trial.terminal
+            if not trial.terminal:
+                return TrialScore(False, trial.metrics())
+            return await self.score_capture(trial, archive, context)
+
+    async def score_capture(self, trial, archive, context):
+        """All campaign and replay metrics read restored captured state only."""
+        ok, text = await engine_json(trial.env, ["show", "--view", "full", trial.evidence["run_id"]], "/workspace/trial/show.json")
+        if not ok:
+            raise InfrastructureError("captured run show failed")
+        snapshot = json.loads(text)["result"]
+        ok, text = await engine_json(trial.env, ["history", trial.evidence["run_id"]], "/workspace/trial/history.json")
+        if not ok:
+            raise InfrastructureError("captured run history failed")
+        history = json.loads(text)["result"]
+        with tarfile.open(archive) as tar:
+            files = {}
+            for member in tar:
+                name = member.name.removeprefix("./")
+                if not (name.startswith("trial/artifacts/") or
+                        name.startswith("public/repo/") and ".git" not in Path(name).parts or
+                        name == "trial/local-push-log"):
+                    continue
+                if member.isfile() or member.issym():
+                    files[name] = tar.extractfile(member).read() if member.isfile() else member.linkname.encode()
+        artifacts = {k[len("trial/artifacts/"):]: v for k, v in files.items() if k.startswith("trial/artifacts/")}
+        delivered = {k[len("public/repo/"):]: v for k, v in files.items()
+                     if k.startswith("public/repo/") and ".git" not in Path(k).parts}
+        push_events = files.get("trial/local-push-log", b"").decode().splitlines()
         await trial.copy_scoring_material()
         result = await trial.env.exec(["python3", "/opt/scoring/case_runtime.py", "--tests", "/opt/scoring/tests",
                                        "--output", "/workspace/trial/hidden-results.json"],
@@ -395,25 +560,25 @@ class SoftwareChangeTarget:
         success = (not tests["collection_error"] and
                    Counter(t["requirement_id"] for t in tests["tests"]) == Counter(trial.case.test_requirements) and
                    all(t["status"] == "passed" for t in tests["tests"]))
-        scan_results((json.dumps(tests),), protected_values())
-        (capture / "hidden-results.json").write_text(json.dumps(tests) + "\n")
         trial.evidence["copy_out_log"].append({"kind": "hidden_test_results", "phase": "after_terminal",
                                                "elapsed_seconds": time.monotonic() - trial.evidence["started"]})
+        intent_valid = True
         try:
             intent = json.loads(artifacts["intent.json"])
             if not isinstance(intent, dict):
                 raise ValueError()
         except (KeyError, ValueError, TypeError):
-            raise ModelError("terminal intent artifact missing or invalid") from None
+            intent, intent_valid = {}, False
         # Judge inputs stay host-side. Core attributes the bound judge role to
         # evaluation overhead, never to the workflow model comparison.
         # The judge is evaluation overhead: its failure must not fail the trial of
         # the model under test. Report the judgment as unavailable instead.
         try:
-            judge_metrics = (await judge_intent(intent, trial.case.brief.read_text())).metrics()
+            judge_metrics = ((await judge_intent(intent, trial.case.brief.read_text())).metrics() if intent_valid
+                             else {"status": "intent_missing_or_invalid", "model": context.settings.judge_model})
         except ModelError:
             judge_metrics = {"status": "judge_error", "model": context.settings.judge_model}
-        health = run_health(snapshot, history, trial.terminal, trial.evidence.get("driver_exit_code"))
+        health = run_health(snapshot, history, snapshot["lifecycle"] == "final", trial.evidence.get("driver_exit_code"))
         passed_reviews = reviews_passed(snapshot, history)
         sources = {h["action"]["transition"]["source"] for h in history if h["action"]["kind"] == "transition"}
         needed = [role for role, needed in (("role-implementer", "implement" in sources),
@@ -426,7 +591,12 @@ class SoftwareChangeTarget:
                   "honesty": honesty(snapshot, artifacts, delivered, tests, trial.case.requirement_ids, hidden_success=success),
                   "needed_role_aliases": needed,
                   "intent_judge": judge_metrics}
-        return TrialScore(success and not trial.evidence.get("driver_timed_out", False), metrics)
+        if not trial.evidence.get("owner_history_available", True):
+            metrics["elicitation_recall"] = None
+            metrics["discipline"]["owner_question_count"] = None
+        if "driver_exit_code" not in trial.evidence:
+            metrics["run_health"]["unattended_finish"] = None
+        return TrialScore(success and intent_valid and snapshot["lifecycle"] == "final" and not trial.evidence.get("driver_timed_out", False), metrics)
 
     def finalize_metrics(self, metrics, *, usage_by_role, terminal, outcome, reason):
         """Core calls after Inspect has finalized authoritative alias accounting."""
@@ -438,7 +608,10 @@ class SoftwareChangeTarget:
             metrics.setdefault(key, None)
         metrics["usage_by_role_alias"] = {role: usage_by_role.get(role, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
                                            for role in ("role-driver", "role-implementer", "role-reviewer")}
-        needed = metrics.get("needed_role_aliases")
+        if metrics.get("original_usage_available") is False:
+            metrics["usage_by_role_alias"] = {role: {"input_tokens": None, "output_tokens": None, "total_tokens": None}
+                                              for role in ("role-driver", "role-implementer", "role-reviewer")}
+        needed = metrics.get("needed_role_aliases") if metrics.get("original_usage_available", True) else None
         metrics["unused_needed_roles"] = ([r for r in needed if not usage_by_role.get(r, {}).get("total_tokens", 0)]
                                            if needed is not None else None)
         metrics["unused_needed_role"] = bool(metrics["unused_needed_roles"]) if needed is not None else None
@@ -458,7 +631,8 @@ class SoftwareChangeTarget:
 
     def report_metrics(self, scores):
         return {"terminal_trials": sum(s.get("lifecycle") == "final" for s in scores),
-                "owner_answers": sum(s.get("simulated_owner", {}).get("answer_count", 0) for s in scores),
+                "owner_answers": (None if any(s.get("simulated_owner", {}).get("answer_count", 0) is None for s in scores)
+                                  else sum(s.get("simulated_owner", {}).get("answer_count", 0) for s in scores)),
                 "role_observations": [s.get("role_observations", {}) for s in scores],
                 "software_change_metrics": [{k: s[k] for k in ("hidden_test_outcome", "delivery_recall", "delivery_by_requirement",
                     "elicitation_recall", "review_escapes", "run_health", "discipline", "honesty", "usage_by_role_alias",

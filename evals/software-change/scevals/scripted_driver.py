@@ -25,6 +25,7 @@ def process(argv, packet=None, cwd=None):
 
 def main():
     mode, profile_id = sys.argv[1:]
+    resuming = os.environ.get('SC_RESUME') == '1'
     if mode not in ('never-asks', 'asks-and-builds', 'asks-but-does-not-build'):
         raise ValueError('unknown scripted driver')
     repository = Path('/workspace/public/repo')
@@ -32,7 +33,8 @@ def main():
     artifacts = work / 'artifacts'
     artifacts.mkdir(parents=True, exist_ok=True)
     data_root = work / 'data'
-    command(['software-change', 'data-dump', data_root])
+    if not resuming:
+        command(['software-change', 'data-dump', data_root])
     configs = data_root / 'crates/software-change-provider/data/configs'
     profiles = [json.loads(p.read_text()) for p in configs.glob('*.json')]
     profile = next(p for p in profiles if p['config_version'] == profile_id)
@@ -40,32 +42,34 @@ def main():
     selected = work / 'profile.json'
     selected.write_text(json.dumps(profile))
     fixtures = data_root / 'crates/software-change-provider/data/calibration/fixtures'
-    for subject in ('intent', 'design', 'plan', 'implementation-report', 'validation-report'):
-        shutil.copyfile(fixtures / (subject + '-good.json'), artifacts / (subject + '.json'))
-    # Git is owned by this disposable trial driver, never the host checkout.
-    for args in (['init', '-q'], ['config', 'user.name', 'Scripted eval driver'],
-                 ['config', 'user.email', 'eval@example.invalid'], ['add', '.'],
-                 ['commit', '-qm', 'Public example baseline']):
-        command(['git', '-C', repository, *args])
-    command(['git', 'init', '--bare', '-q', '/workspace/local-remote.git'])
-    command(['git', '-C', repository, 'remote', 'add', 'origin', '/workspace/local-remote.git'])
-    intent_path = artifacts / 'intent.json'
-    intent = json.loads(intent_path.read_text())
-    intent['baseline'] = {'kind': 'git', 'repository_scope': 'primary',
-                          'commit': command(['git', '-C', repository, 'rev-parse', 'HEAD']).strip()}
-    intent['problem'] = (Path('/workspace/public/request.md')).read_text()
-    intent_path.write_text(json.dumps(intent))
-    plan_path = artifacts / 'plan.json'
-    plan = json.loads(plan_path.read_text())
-    plan['proof_commands'] = [{'id': 'public-function', 'command': 'python3',
-                              'args': ['-B', '-c', 'from labels import label_key; assert isinstance(label_key("example"), str)'],
-                              'owner': 'driver', 'obligation': 'Check public function remains callable.'}]
-    plan_path.write_text(json.dumps(plan))
+    if not resuming:
+        for subject in ('intent', 'design', 'plan', 'implementation-report', 'validation-report'):
+            shutil.copyfile(fixtures / (subject + '-good.json'), artifacts / (subject + '.json'))
+        # Git is owned by this disposable trial driver, never the host checkout.
+        for args in (['init', '-q'], ['config', 'user.name', 'Scripted eval driver'],
+                     ['config', 'user.email', 'eval@example.invalid'], ['add', '.'],
+                     ['commit', '-qm', 'Public example baseline']):
+            command(['git', '-C', repository, *args])
+        command(['git', 'init', '--bare', '-q', '/workspace/local-remote.git'])
+        command(['git', '-C', repository, 'remote', 'add', 'origin', '/workspace/local-remote.git'])
+        intent_path = artifacts / 'intent.json'
+        intent = json.loads(intent_path.read_text())
+        intent['baseline'] = {'kind': 'git', 'repository_scope': 'primary',
+                              'commit': command(['git', '-C', repository, 'rev-parse', 'HEAD']).strip()}
+        intent['problem'] = (Path('/workspace/public/request.md')).read_text()
+        intent_path.write_text(json.dumps(intent))
+        plan_path = artifacts / 'plan.json'
+        plan = json.loads(plan_path.read_text())
+        plan['proof_commands'] = [{'id': 'public-function', 'command': 'python3',
+                                  'args': ['-B', '-c', 'from labels import label_key; assert isinstance(label_key("example"), str)'],
+                                  'owner': 'driver', 'obligation': 'Check public function remains callable.'}]
+        plan_path.write_text(json.dumps(plan))
+        config = work / 'providers.toml'
+        config.write_text('[providers.software-change]\ncommand = "software-change"\nargs = []\n')
     config = work / 'providers.toml'
-    config.write_text('[providers.software-change]\ncommand = "software-change"\nargs = []\n')
     engine, provider = 'loop-engine', 'software-change'
     database = work / 'run.sqlite'
-    run_id = 'scripted-example'
+    run_id = 'eval-trial'
     roles = {}
 
     def call(*args):
@@ -84,8 +88,9 @@ def main():
         return process([provider, 'checkpoint', '--phase', phase, '--artifact-root', artifacts,
                         '--working-directory', repository], cwd=repository)
 
-    call('start', '--id', run_id, 'software-change', '@' + str(selected),
-         Path('/workspace/public/request.md').read_text())
+    if not resuming:
+        call('start', '--id', run_id, 'software-change', '@' + str(selected),
+             Path('/workspace/public/request.md').read_text())
     if os.environ.get("SC_SCRIPTED_EXIT_AFTER_START"):
         return
     if os.environ.get("SC_SCRIPTED_HANG"):
@@ -139,9 +144,14 @@ def main():
             call('append',run_id,'finding-ledger',json.dumps(ledger))
             event('approved' if any(e['event'] == 'approved' for e in shown['result']['requestable_events']) else 'passed')
         elif state == 'explore':
-            if mode != 'never-asks':
+            if mode != 'never-asks' and not resuming:
                 for question in ('How should whitespace affect grouping?', 'What Unicode casing rules apply?', 'What happens for empty labels?'):
                     command(['ask-owner', question])
+            if os.environ.get('SC_SCRIPTED_INFRA') == '1' and not resuming:
+                return
+            if os.environ.get('SC_SCRIPTED_TERMINATE') == '1':
+                call('terminate', run_id)
+                return
             event('intent-ready')
         elif state == 'design':
             event('design-ready')

@@ -15,7 +15,7 @@ from inspect_ai.scorer import Score, scorer
 from inspect_ai.solver import solver
 
 from .accounting import CLASSIFICATION_RULES, TrialRecord, classify_exception, core_metrics
-from .report import protected_values, write_report
+from .report import UnsafeReportError, protected_values, utc_timestamp, write_report
 from .settings import CampaignSettings, OVERHEAD_ROLES, matched_assignment
 from .target import Target, TrialContext
 
@@ -39,16 +39,22 @@ def trial_solver(target: Target, contexts: dict[str, TrialContext], records: dic
         record = TrialRecord(**assignment.model_dump(), outcome="failure", reason="not_completed")
         records[assignment.sample_id] = record
         started = time.monotonic()
+        execution = None
         try:
             # Include scoring in the same limit. Target subprocesses must also honour it.
             async with asyncio.timeout(context.settings.hard_limit_seconds):
                 execution = await target.run_trial(state, context)
                 record.terminal = execution.terminal
                 scored = await target.score(state, execution, context)
+                record.terminal = execution.terminal
                 record.target_metrics = scored.metrics
                 record.outcome = "success" if execution.terminal and scored.success else "failure"
                 record.reason = "passed" if record.outcome == "success" else "target_failure"
         except Exception as error:
+            if execution is not None:
+                record.terminal = execution.terminal
+            if hasattr(target, "failure_metrics"):
+                record.target_metrics = target.failure_metrics(context)
             record.outcome, record.reason = classify_exception(error)
             # The exception class name is safe to report; the full traceback may
             # contain private case text, so it stays in the ignored local logs.
@@ -59,6 +65,8 @@ def trial_solver(target: Target, contexts: dict[str, TrialContext], records: dic
                 "".join(traceback.format_exception(error)))
         finally:
             record.wall_seconds = time.monotonic() - started
+            if hasattr(target, "checkpoint_record"):
+                target.checkpoint_record(context, record)
         state.completed = True
         return state
     return solve
@@ -72,7 +80,8 @@ def trial_scorer(records: dict[str, TrialRecord]):
     return score
 
 
-def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_paths: tuple[Path, ...] = (), report_directory: Path | None = None) -> Path:
+def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_paths: tuple[Path, ...] = (), report_directory: Path | None = None,
+                 carried_records: list[TrialRecord] = (), assignments_override=None) -> Path:
     if report_directory is not None and report_directory.exists():
         raise FileExistsError("report directory already exists")
     provider_config_paths = (*settings.provider_config_paths, *provider_config_paths,
@@ -80,8 +89,18 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
     # Validate readability before executing. Re-scan values at write time as well.
     protected_values(provider_config_paths=provider_config_paths)
     cases, assignments = matched_assignment(settings, target.load_cases(settings.cases_path))
+    if assignments_override is not None:
+        assignments = assignments_override
     case_lookup = {c.id: c for c in cases}
-    records: dict[str, TrialRecord] = {}
+    if hasattr(target, "begin_run"):
+        target.begin_run(settings, utc_timestamp())
+        print(f"Captures retained: {target.run_directory}", flush=True)
+        import json
+        manifest = {"settings": settings.recorded(), "matched_assignment": [a.model_dump() for a in assignments],
+                    "sources": {k: str(v) for k, v in getattr(target, "sources", {}).items()}}
+        (target.run_directory / "run.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    records: dict[str, TrialRecord] = {r.sample_id: r for r in carried_records}
+    carried_ids = set(records)
     tasks = []
     # Resolve all model providers before executing any trial. No generation here.
     for combo in settings.resolved_combinations():
@@ -92,7 +111,9 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
             if model_id in settings.model_generation else GenerateConfig(),
             **settings.model_args.get(model_id, {})) for role, model_id in model_ids.items()}
         contexts = {a.sample_id: TrialContext(settings, a, case_lookup[a.case_id], combo)
-                    for a in assignments if a.combination_id == combo.id}
+                    for a in assignments if a.combination_id == combo.id and a.sample_id not in carried_ids}
+        if not contexts:
+            continue
         samples = []
         for context in contexts.values():
             sample = target.prepare_sample(context)
@@ -106,9 +127,11 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
         ))
     started = time.monotonic()
     logs = eval(tasks, log_dir=str(target.logs_dir), display="none", retry_on_error=0,
-                log_model_api=False, max_tasks=1)
+                log_model_api=False, max_tasks=1) if tasks else []
     sample_logs = {str(s.id): s for log in logs for s in log.samples or []}
     for assignment in assignments:
+        if assignment.sample_id in carried_ids:
+            continue
         sample = sample_logs.get(assignment.sample_id)
         record = records.get(assignment.sample_id)
         if record is None:
@@ -126,14 +149,43 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
                 # has no typed category; never infer one from untrusted traceback text.
                 record.outcome = "infrastructure"
                 record.reason = "inspect_lifecycle_error"
+    # Replay retains original workflow/simulator usage from host meta. Only the
+    # newly run judge replaces prior judge overhead; no fictitious workflow calls.
+    if hasattr(target, "sources"):
+        import json
+        for sample_id, source in target.sources.items():
+            path = Path(source) / "meta.json"
+            if path.is_file() and sample_id in records:
+                meta = json.loads(path.read_text())
+                record = records[sample_id]
+                previous = meta.get("usage_by_role", {})
+                if meta.get("original_usage_available") is False:
+                    record.usage_unknown_roles = ["role-driver", "role-implementer", "role-reviewer", "simulator"]
+                if getattr(target, "operation", "campaign") == "rescore":
+                    record.usage_by_role = {**previous, **record.usage_by_role}
+                    record.wall_seconds = meta.get("wall_seconds", record.wall_seconds)
+                else:
+                    for role, usage in previous.items():
+                        current = record.usage_by_role.setdefault(role, {})
+                        for key, value in usage.items():
+                            if isinstance(value, (int, float)):
+                                current[key] = (current.get(key) or 0) + value
+                record.resumed = meta.get("resumed", False) or getattr(target, "operation", "campaign") != "rescore"
+                record.segments = meta.get("segments", [])
     ordered_records = [records[a.sample_id] for a in assignments]
     # Targets that need finalized alias usage/failure classification cannot obtain
     # it during sandbox scoring. Keep this optional and target-neutral.
     finalize = getattr(target, "finalize_metrics", None)
     if finalize is not None:
         for record in ordered_records:
+            if record.sample_id in carried_ids:
+                continue
             record.target_metrics = finalize(record.target_metrics, usage_by_role=record.usage_by_role,
                                              terminal=record.terminal, outcome=record.outcome, reason=record.reason)
+    if hasattr(target, "persist_record"):
+        for record in ordered_records:
+            if record.sample_id not in carried_ids:
+                target.persist_record(record)
     comparisons = []
     for combo in settings.resolved_combinations():
         trials = [r for r in ordered_records if r.combination_id == combo.id]
@@ -150,6 +202,22 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
         "classification_rules": CLASSIFICATION_RULES,
         "campaign_wall_seconds": time.monotonic() - started,
         "comparisons": comparisons, "trials": [r.recorded() for r in ordered_records],
+        "capture_run": str(target.run_directory) if hasattr(target, "run_directory") else None,
+        "sources": {**{k: str(v) for k, v in getattr(target, "carried_sources", {}).items()},
+                    **{k: str(v) for k, v in getattr(target, "sources", {}).items()}},
+        "usage_basis": "captured host meta.json (Inspect role_usage); replay uses current judge usage; external snapshots have unknown original usage",
+        "operation": getattr(target, "operation", "campaign"),
+        "resumed_trials": [r.recorded() for r in ordered_records if r.resumed],
+        "carried_trials": [{"sample_id": r.sample_id, "from_run": r.carried_from} for r in ordered_records if r.carried_from],
     }
-    return write_report(target.results_dir, summary, provider_config_paths=provider_config_paths,
-                        report_directory=report_directory)
+    if hasattr(target, "run_directory"):
+        import json
+        # This is private, never a report-export bypass.
+        (target.run_directory / "records.json").write_text(json.dumps(summary, indent=2) + "\n")
+    try:
+        return write_report(target.results_dir, summary, provider_config_paths=provider_config_paths,
+                            report_directory=report_directory)
+    except UnsafeReportError:
+        if hasattr(target, "run_directory"):
+            print(f"Private captures kept. Rescore with: evalctl rescore {target.run_directory}", flush=True)
+        raise

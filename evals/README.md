@@ -20,7 +20,9 @@ not a statistically rigorous ranking.
 
 Every compared model/role combination receives the same case IDs, versions and
 trial counts; exploration and task decomposition within a trial are unconstrained.
-Success requires both a terminal workflow and every expected hidden test passing.
+Success requires a final (not terminated) workflow and every expected hidden test passing.
+Terminated workflows still receive hidden-test delivery metrics and remain failures.
+Resumed trials are reported separately and excluded from headline success rate/pass^k.
 Infrastructure failures are excluded from success rate and pass^k and counted
 separately. Timeouts, hangs and model errors are failures. k stays the configured
 trials per case; cases with fewer than k scorable trials are excluded from pass^k
@@ -44,9 +46,10 @@ uv run --project evals evalctl case-check evals/software-change/example-case
 `image-check` builds from a pinned local Git ref (default `v0.24.0`), records the
 resolved commit and executable versions, and checks an empty mount list. Building
 requires network access for image-layer dependencies, but no model credentials.
-Use `--ref REF --tag TAG` for another pinned image. `case-check` requires every
-reference test to pass and at least one no-op test to fail; an invalid case exits
-nonzero. Private cases stay in a separate repository, never under this checkout.
+Use `--ref REF --tag TAG` for another pinned image. `case-check` verifies and reuses the existing pinned arm64 image; it never builds.
+If the image is missing/mismatched, run `image-check` first (only when image changes
+are authorized). Every reference test must pass and at least one no-op test must
+fail; an invalid case exits nonzero. Private cases stay in a separate repository, never under this checkout.
 
 These public real-Pi/Docker proofs use scripted Inspect backends, with no live or
 paid model calls (build the image first):
@@ -175,14 +178,100 @@ replaced. `ac5-demo` groups its three report pairs under
 The command prints the actual destination. **results/ is not gitignored**: the
 owner selects only report/summary pairs to commit, never all runtime evidence.
 Old report layouts are still scanned by the recursive audit; no old results are
-migrated or deleted. Raw Inspect logs and captures remain under ignored `logs/`
-and `captures/`, including private histories/artifacts and local proof receipts. Interrupted
-software-change drivers retain `nonterminal.tar` (DB, artifacts and show/history)
-in the same campaign/sample captures directory; hidden scoring files never enter
-a non-terminal sandbox.
-Normal campaign capture paths are keyed by campaign/sample, so use a distinct
-campaign name when retaining raw evidence across reruns; timestamped reports alone
-do not version those captures.
+migrated or deleted. Raw Inspect logs and captures remain under ignored `logs/` and `captures/`,
+including private histories/artifacts, owner answers and proof receipts. **Never
+publish captures.** Each attempt has its own private run directory:
+
+```text
+captures/<campaign>/<UTC run timestamp>/run.json
+captures/<campaign>/<UTC run timestamp>/<sample_id>/workspace.tar
+captures/<campaign>/<UTC run timestamp>/<sample_id>/meta.json
+captures/<campaign>/<UTC run timestamp>/records.json
+```
+
+Immediately after driver stop (exit, crash, idle or hard stop), before host parsing
+or scoring, `workspace.tar` captures all of `/workspace`, including trial SQLite
+(and WAL/SHM when present), artifacts, raw show/history receipts, local-push-log,
+local-remote.git and public/repo **including .git**. Directories named `target` and
+`.cache` are excluded. Sandbox reads and host writes are chunked; an interrupted
+copy retains `workspace.tar.partial`. `meta.json` contains the settings snapshot,
+matched assignment, role models, driver timings/exit/stop kind, harness commit,
+private host-only owner receipt/answers, Inspect role usage and continuation
+segments. Raw receipts are generated without interpreting them; no hidden tests
+or reference files have entered this workspace. Run directories are mode 0700.
+Completed trial scores are checkpointed host-side before starting later trials.
+
+Captures are never subjected to publication scans. All scoring restores the tar
+into a **fresh mount-free pinned trial-image container**, observes the restored DB,
+and copies hidden tests/reference only for final or terminated lifecycles. The
+campaign and rescore commands use the same scorer. Even a refused report retains
+the capture and prints its rescore command; use `--settings` with safe reportable
+settings to remove irrelevant case/config-looking settings content if necessary.
+A lost Docker daemon/container or host disk failure can prevent a complete copy;
+a partial copy is retained when possible, not claimed complete.
+
+### Rescore and continue (scripted proof examples)
+
+```sh
+uv run --project evals evalctl rescore evals/software-change/captures/CAMPAIGN/RUN_TIMESTAMP
+uv run --project evals evalctl rescore evals/software-change/captures/CAMPAIGN/RUN_TIMESTAMP --settings SETTINGS.toml
+uv run --project evals evalctl campaign --settings SETTINGS.toml --resume evals/software-change/results/CAMPAIGN/RUN_TIMESTAMP
+uv run --project evals evalctl campaign --settings SETTINGS.toml --resume evals/software-change/captures/CAMPAIGN/RUN_TIMESTAMP --resume-interrupted
+uv run --project evals evalctl resume-trial evals/software-change/captures/CAMPAIGN/RUN_TIMESTAMP/SAMPLE_ID
+```
+
+Each writes a fresh timestamped report pair, never replaces a prior report.
+Rescore re-evaluates every captured trial with current harness code. Original
+workflow/simulator usage comes from host `meta.json` (snapshotted Inspect
+`sample.role_usage`), not model-controlled receipts or reconstructed estimates;
+current judge usage replaces prior judge overhead. This implementation does not
+need to read `.eval` logs for accounting. External snapshots without metadata have
+unknown original workflow/simulator tokens and dollars (null), not fabricated zero.
+Without host owner receipts, elicitation recall and owner-question/answer counts
+are also null; unattended driver completion is unknown without an exit receipt.
+
+For an external bare tar of `/workspace` (members relative to `/workspace`,
+including `trial/`, `public/repo/.git` and the local remote), the exact command is:
+
+```sh
+uv run --project /Volumes/Workshop/macbook/git/loop-engine-preserve/evals evalctl rescore /ABSOLUTE/workspace.tar --settings /ABSOLUTE/SETTINGS.toml --sample external-trial --case /ABSOLUTE/CASE --model sc-scripted/driver
+```
+
+`--case` is a case directory or a case ID from settings. `--model` identifies the
+configured driver combination; without `--settings` it is used for all roles
+(including simulator/judge) and the case path must be a single case. Only use
+scripted models for offline proofs. `--run-id` defaults to `eval-trial`; select the
+actual run ID for older/external snapshots. Replaying requires the pinned image,
+case ID/version and host case files; it does not turn a tar into a standalone case.
+
+Campaign `--resume` requires **identical effective settings and matched assignment**.
+It carries clean successes and failures attributed to the model, re-running only
+missing trials, infrastructure failures and unclassified harness errors. Reports
+list carried sample IDs and their source run. `--resume-interrupted` continues
+eligible captured active trials instead of re-running them; other retryable
+trials start fresh. `resume-trial` accepts only non-terminal infrastructure/harness
+interruptions, restores the repo/DB/artifacts and prior owner answers, and launches
+a fresh driver instructed to continue `eval-trial` from durable records, not start
+a new run. Each segment records time, role usage and stop reason. Resumed trials
+measure a new driver taking over mid-run, not one uninterrupted run: they have a
+separate report section/rate and are excluded from headline success rate and
+fixed-k pass^k; mixed cases may therefore be incomplete. Scorable original trials
+carried unchanged remain eligible. Terminal scoring failures should be rescored,
+not resumed as a driver. Replay preserves ordinary symlinks (including absolute
+and `..` targets) inside the disposable mount-free container; it rejects unsafe
+archive member paths/devices, workspace-escaping hardlinks and any member that
+would be extracted through an archived symlink.
+
+Offline public-command proofs (real Pi/engine/Docker, no paid calls):
+
+```sh
+uv run --project evals pytest -q evals/software-change/tests/test_lifecycle.py
+```
+
+They check same-capture campaign/rescore/repeat parity, fault recovery, provider
+markers, terminated delivery scoring, matched continuation, restored history and
+owner answers, separate resumed accounting and report-refusal recovery. Equality
+normalizes only execution identity, timing and provenance, never scored values.
 
 Before publication, scan all results against every public and private case used:
 

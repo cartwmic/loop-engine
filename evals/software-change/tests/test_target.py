@@ -153,10 +153,10 @@ def test_driver_stops_before_trial_limit_so_the_outcome_is_recorded():
 
 def assert_nonterminal_capture(summary, trial):
     metrics = trial["target_metrics"]
-    capture = ROOT / "captures" / summary["settings"]["campaign"] / trial["sample_id"] / "nonterminal.tar"
+    capture = Path(summary["capture_run"]) / trial["sample_id"] / "workspace.tar"
     assert capture.is_file()
     with tarfile.open(capture) as archive:
-        names = archive.getnames()
+        names = [name.removeprefix("./") for name in archive.getnames()]
         assert "trial/show.json" in names and "trial/history.json" in names
         if metrics.get("lifecycle"):
             assert "trial/run.sqlite" in names
@@ -243,12 +243,28 @@ def test_progress_reading_tolerates_non_json():
 
     class Env:
         async def exec(self, *args, **kwargs):
-            return SimpleNamespace(success=True, stdout="")
+            return SimpleNamespace(success=True, stdout="ready" if args[0][0] == "python3" else "")
 
         async def read_file(self, path):
             return "db busy\n{"
 
     assert asyncio.run(SoftwareChangeTarget().progress_state(Env(), "eval-trial")) is None
+
+
+def test_progress_does_not_initialize_a_database_before_driver_start():
+    from types import SimpleNamespace
+    from scevals.target import SoftwareChangeTarget
+
+    calls = []
+    class Env:
+        async def exec(self, command, **kwargs):
+            calls.append(command)
+            return SimpleNamespace(success=True, stdout="")
+        async def read_file(self, path):
+            pytest.fail("engine views must not run before a committed run exists")
+    assert asyncio.run(SoftwareChangeTarget().progress_state(Env(), "eval-trial")) is None
+    assert len(calls) == 1 and calls[0][0] == "python3"
+    assert "mode=ro" in calls[0][2]
 
 
 def test_dropped_provider_connection_is_infrastructure(monkeypatch):

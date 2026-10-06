@@ -47,8 +47,16 @@ def campaign(args):
     if "campaign" not in data:
         data["campaign"] = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     settings = CampaignSettings.model_validate(data)
-    destination = run_campaign(load_target(settings.target), settings,
-                               provider_config_paths=tuple(Path(p) for p in args.provider_config))
+    target = load_target(settings.target)
+    config_paths = tuple(Path(p) for p in args.provider_config)
+    if args.resume:
+        from .continuation import resume_campaign
+        destination = resume_campaign(target, settings, args.resume, resume_interrupted=args.resume_interrupted,
+                                      provider_config_paths=config_paths)
+    else:
+        if args.resume_interrupted:
+            raise ValueError("--resume-interrupted requires --resume")
+        destination = run_campaign(target, settings, provider_config_paths=config_paths)
     print(f"Report written: {destination}")
     return 0
 
@@ -59,6 +67,8 @@ def build_parser(plugins: list[str] = ()) -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     cmd = commands.add_parser("campaign", help="run a matched Inspect campaign")
     cmd.add_argument("--settings", help="campaign TOML or JSON (paths relative to invocation directory)")
+    cmd.add_argument("--resume", type=Path, help="prior result or capture run directory; identical settings required")
+    cmd.add_argument("--resume-interrupted", action="store_true", help="continue captured non-terminal infrastructure/harness stops instead of rerunning")
     cmd.add_argument("--target", help="trusted Python module:factory; default scevals.target:create_target")
     cmd.add_argument("--campaign")
     models = cmd.add_mutually_exclusive_group()
