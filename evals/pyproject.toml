@@ -14,6 +14,7 @@ evalctl = "evalcore.cli:main"
 
 [project.entry-points."inspect_ai"]
 codex = "evalcore.codex"
+pi = "evalcore.pi"
 
 [project.entry-points."loop_engine_evals.commands"]
 software-change-image = "scevals.image:register_subcommands"

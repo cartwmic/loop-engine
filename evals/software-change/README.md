@@ -69,7 +69,10 @@ commands. Run `uv run --project evals evalctl image-check` from the checkout roo
 no host mounts or image volumes are permitted. An image's commit identity must
 match the configured engine/provider refs; changing refs requires a matching image
 (selected with `target_options.image`). Credentials stay host-side behind Inspect's
-sandbox agent bridge.
+sandbox agent bridge, including `pi/claude-compat/claude-opus-5-5` via the installed
+host Pi SDK and `codex/gpt-6.1-sol` via the Codex subscription. The approved
+`campaigns/pilot.toml` sets per-model medium/high thinking respectively, with
+Codex high simulator/judge; loading this file does not authorize launching it.
 
 `scevals.target.SoftwareChangeTarget` implements the core interface. Every sample
 gets its own container and records the actual mount/bind configuration and copy

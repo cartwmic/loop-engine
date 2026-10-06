@@ -1,0 +1,17 @@
+# Owner-approved AC-8 pilot settings. Loading is safe; do not run without approval.
+target = "scevals.target:create_target"
+campaign = "pilot"
+cases_path = "/Volumes/Workshop/macbook/git/eval-cases"
+case_count = 3
+trials_per_case = 1
+profile = "standard-14"
+models = ["codex/gpt-6.1-sol", "pi/claude-compat/claude-opus-5-5"]
+simulator_model = "codex/gpt-6.1-sol"
+judge_model = "codex/gpt-6.1-sol"
+# Idle/hard limits intentionally use the harness defaults (1800/28800).
+
+[model_config."codex/gpt-6.1-sol"]
+reasoning_effort = "high"
+
+[model_config."pi/claude-compat/claude-opus-5-5"]
+reasoning_effort = "medium"

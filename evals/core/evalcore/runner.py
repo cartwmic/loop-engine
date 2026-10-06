@@ -8,7 +8,9 @@ import traceback
 from pathlib import Path
 
 from inspect_ai import Task, eval
-from inspect_ai.model import get_model
+from inspect_ai.model import GenerateConfig, get_model
+
+from . import pi  # register the host SDK provider even before wheel metadata refresh
 from inspect_ai.scorer import Score, scorer
 from inspect_ai.solver import solver
 
@@ -84,7 +86,11 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
     # Resolve all model providers before executing any trial. No generation here.
     for combo in settings.resolved_combinations():
         model_ids = {**combo.role_models(), **dict(zip(OVERHEAD_ROLES, (settings.simulator_model, settings.judge_model)))}
-        role_models = {role: get_model(model_id, role=role, memoize=False, **settings.model_args.get(model_id, {})) for role, model_id in model_ids.items()}
+        role_models = {role: get_model(
+            model_id, role=role, memoize=False,
+            config=GenerateConfig(**settings.model_generation[model_id].model_dump())
+            if model_id in settings.model_generation else GenerateConfig(),
+            **settings.model_args.get(model_id, {})) for role, model_id in model_ids.items()}
         contexts = {a.sample_id: TrialContext(settings, a, case_lookup[a.case_id], combo)
                     for a in assignments if a.combination_id == combo.id}
         samples = []

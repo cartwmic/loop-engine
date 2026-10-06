@@ -48,6 +48,9 @@ def audit_results(directory: Path, cases_path: Path, *, provider_config_paths=()
     auth = codex_auth_path()
     if auth.exists():
         provider_config_paths = (*provider_config_paths, auth)
+    from evalcore.pi import pi_config_paths
+    provider_config_paths = tuple(dict.fromkeys((*provider_config_paths,
+        *(path for path in pi_config_paths() if path.exists()))))
     protected = protected_values(environment, provider_config_paths)
     byte_needles = binary | {value.encode("utf-8") for value in hidden | protected}
     for file in files:

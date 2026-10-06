@@ -92,6 +92,40 @@ bridge/real-Pi bash tool loop:
 uv run --project evals pytest -q evals/core/tests/test_codex.py evals/software-change/tests/test_image_bridge.py
 ```
 
+The host-only `pi/<pi-provider>/<model>` Inspect provider forwards one completion
+(messages, tools and usage including cache read/write) to a long-lived Node helper.
+It loads the globally installed `@earendil-works/pi-coding-agent` SDK beside host
+Node, the normal Pi agent directory (including `PI_CODING_AGENT_DIR`), extensions,
+`models.json` and Pi-managed OAuth. The helper uses the public SDK session factory
+only to load/register providers, then calls `ModelRuntime.completeSimple`: no
+agent loop, lifecycle startup, tool execution or container credentials. Signed
+native assistant blocks are retained for conversation replay. Helper errors are
+sanitized; cancellation kills/reaps the helper. This reuses claude-compat's own
+request transport/envelope rather than reconstructing it in Python. Forced tool
+choices are supported for Anthropic/claude-compat and OpenAI APIs; unsupported
+APIs fail rather than silently downgrade. Host Node/Pi and the owner's trusted
+provider extensions must already be installed; the harness installs none.
+
+Campaigns may pin thinking separately for each model, across **all** roles:
+
+```toml
+[model_config."codex/gpt-6.1-sol"]
+reasoning_effort = "high"
+[model_config."pi/claude-compat/claude-opus-5-5"]
+reasoning_effort = "medium"
+```
+
+These become Inspect `GenerateConfig` at model creation (Codex Responses effort,
+Pi thinking level) and appear in recorded report settings. Unlisted models keep
+Inspect/provider defaults; unknown model IDs/settings are rejected. The approved
+`software-change/campaigns/pilot.toml` pins 3 private cases x 1 trial, both workflow
+models, Codex high simulator/judge, and default limits. It is settings only:
+**do not run the pilot without owner approval**. Offline proofs:
+
+```sh
+uv run --project evals pytest -q evals/core/tests/test_pi.py evals/core/tests/test_pilot.py evals/software-change/tests/test_pi_bridge.py
+```
+
 Settings require `cases_path`, `simulator_model`, `judge_model`, and either
 `models = ["provider/model", ...]` (each model in every workflow role) or explicit
 combinations, for example:
@@ -166,10 +200,11 @@ markers. A match exits 1 without printing matching content; missing/empty/invali
 inputs exit 2, never a vacuous pass. Conservative common-line matches are possible.
 This is a content-string check, not detection of paraphrases or arbitrary encodings.
 
-Codex campaign settings automatically add the host Pi auth file to provider
-configuration protection when **any** workflow/simulator/judge role uses `codex/`.
-Standalone `check-results` also protects that file whenever present, without
-printing its values. Whole configs, meaningful (non-punctuation-only) lines and
+Codex and Pi campaign settings automatically add their host Pi auth file to provider
+configuration protection when **any** workflow/simulator/judge role uses `codex/`
+or `pi/` respectively (Pi honors its normal agent-directory override).
+Standalone `check-results` also protects these files whenever present, without
+printing their values. Whole configs, meaningful (non-punctuation-only) lines and
 parsed string values are protected; formatting braces alone are not secrets.
 
 Supply every other resolved host provider config via repeated `--provider-config FILE`

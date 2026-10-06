@@ -31,6 +31,11 @@ class Combination(StrictModel):
         return dict(zip(WORKFLOW_ROLES, (self.driver, self.implementer, self.reviewer)))
 
 
+class ModelGenerationSettings(StrictModel):
+    # Keep the first per-model surface deliberately small; add knobs as needed.
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+
 class CampaignSettings(StrictModel):
     target: str = "scevals.target:create_target"
     campaign: str = Field(default="campaign", pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -48,6 +53,8 @@ class CampaignSettings(StrictModel):
     prices: dict[str, Price] = Field(default_factory=dict)
     # Per-model Inspect provider arguments, e.g. {"openrouter/x" = {strict_tools = false}}.
     model_args: dict[str, dict] = Field(default_factory=dict)
+    # Pydantic reserves model_config for class configuration; TOML/report alias.
+    model_generation: dict[str, ModelGenerationSettings] = Field(default_factory=dict, alias="model_config")
     # Read on the host for the pre-write scan; contents are never serialized.
     provider_config_paths: tuple[Path, ...] = ()
     loop_engine_version: str = "v0.24.0"
@@ -64,6 +71,12 @@ class CampaignSettings(StrictModel):
             raise ValueError("combination IDs must be unique")
         models = [self.simulator_model, self.judge_model,
                   *(model for combo in combos for model in combo.role_models().values())]
+        if any(key not in models for key in self.model_generation):
+            raise ValueError("model_config keys must name a configured role model")
+        if any(model.startswith("pi/") for model in models):
+            from .pi import pi_config_paths
+            paths = tuple(dict.fromkeys((*self.provider_config_paths, *pi_config_paths())))
+            object.__setattr__(self, "provider_config_paths", paths)
         if any(model.startswith("codex/") for model in models):
             from .codex import codex_auth_path
             paths = tuple(dict.fromkeys((*self.provider_config_paths, codex_auth_path())))
@@ -81,12 +94,12 @@ class CampaignSettings(StrictModel):
         return tuple(Combination(id=m, driver=m, implementer=m, reviewer=m) for m in self.models)
 
     def recorded(self) -> dict:
-        data = self.model_dump(mode="json")
+        data = self.model_dump(mode="json", by_alias=True)
         data["effective_case_count"], data["effective_trials_per_case"] = self.counts
         data["resolved_combinations"] = [c.model_dump() for c in self.resolved_combinations()]
         data["setting_sources"] = {
-            key: "explicit" if key in self.model_fields_set else "default"
-            for key in type(self).model_fields
+            field.alias or key: "explicit" if key in self.model_fields_set else "default"
+            for key, field in type(self).model_fields.items()
         }
         return data
 

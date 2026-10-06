@@ -70,7 +70,11 @@ The old `time_limit_seconds` setting is no longer accepted. `medium` is 6 x 3; `
 Targets may supply settings TOML files; paths resolve relative to the invocation
 working directory. `target_options` holds target-owned options such as a scripted
 driver command. All effective counts, explicit/default setting sources and role
-mappings are recorded. No profile or task decomposition policy is enforced here.
+mappings are recorded. `[model_config."provider/model"] reasoning_effort = "high"`
+sets Inspect generation config for that model in every workflow/simulator/judge
+role, separately from provider `model_args`. Thinking settings are recorded in
+reports; omitted entries keep provider defaults. The initial per-model surface
+is reasoning effort only; unknown settings and unused model IDs are rejected. No profile or task decomposition policy is enforced here.
 
 Every compared combination gets identical case IDs, versions and trial counts.
 Success rate excludes infrastructure trials; `pass_k` uses the configured trials
@@ -98,8 +102,8 @@ arbitrary machine-local configuration: operators/targets must supply all resolve
 config files with `provider_config_paths` settings, repeated `--provider-config`,
 or the target's optional `provider_config_paths` attribute. Environment variables
 whose names identify provider config may contain a path or inline text. Configs
-are read only on the host, never exported. Any `codex/` role automatically adds
-`~/.pi/agent/auth.json` to settings protection. Standalone software-change audits
+are read only on the host, never exported. Any `codex/` or `pi/` role automatically adds
+its host Pi auth file to settings protection (`pi/` honors `PI_CODING_AGENT_DIR`). Standalone software-change audits
 also protect it whenever present. Punctuation-only formatting lines are ignored;
 whole configs, meaningful lines and parsed string values remain protected. The scan is deliberately fail-closed:
 short credentials/common config values may also refuse an otherwise safe report.

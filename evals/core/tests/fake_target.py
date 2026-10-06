@@ -17,7 +17,8 @@ class FakeModelAPI(ModelAPI):
             error = RuntimeError("synthetic provider error")
             error.status_code = 503 if self.model_name == "service-error" else 400
             return error, ModelCall(request={"model": self.model_name}, error=True)
-        output = ModelOutput.from_content(model=self.model_name, content=self.model_name)
+        content = self.model_name + (f":{config.reasoning_effort}" if config.reasoning_effort else "")
+        output = ModelOutput.from_content(model=self.model_name, content=content)
         output.usage = ModelUsage(input_tokens=10, output_tokens=5, total_tokens=15)
         return output
 

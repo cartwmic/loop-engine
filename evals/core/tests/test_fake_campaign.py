@@ -95,6 +95,20 @@ def test_per_role_combination_changes_actual_calls(campaign_root):
     assert first["target_metrics"]["case_version_used"] == "v1.0"
 
 
+def test_per_model_generation_settings_reach_every_role_and_report(campaign_root):
+    summary = run(campaign_root, models=[], combinations=[
+        {"id": "roles", "driver": "fake/a", "implementer": "fake/b", "reviewer": "fake/a"}
+    ], simulator_model="fake/b", judge_model="fake/a", case_count=1, trials_per_case=1,
+        model_config={"fake/a": {"reasoning_effort": "high"}, "fake/b": {"reasoning_effort": "medium"}},
+        target_options={"inject_errors": False})
+    seen = summary["trials"][0]["target_metrics"]["seen_roles"]
+    assert seen == {"role-driver": "a:high", "role-implementer": "b:medium", "role-reviewer": "a:high",
+                    "simulator": "b:medium", "judge": "a:high"}
+    assert summary["settings"]["model_config"] == {
+        "fake/a": {"reasoning_effort": "high"}, "fake/b": {"reasoning_effort": "medium"}}
+    assert summary["settings"]["setting_sources"]["model_config"] == "explicit"
+
+
 def test_actual_time_limit_is_failure(campaign_root):
     summary = run(campaign_root, models=["fake/a"], case_count=1, trials_per_case=1,
                   hard_limit_seconds=1, target_options={"sleep": True})

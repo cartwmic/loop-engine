@@ -123,6 +123,19 @@ def test_public_generation_assembles_stream_and_usage(auth_file, mode):
     assert output.usage.input_tokens_cache_read == 7 and output.usage.total_tokens == 15
 
 
+def test_high_effort_reaches_subscription_responses(auth_file):
+    requests = []
+    async def run():
+        model = scripted_model([text_item()], requests=requests)
+        try:
+            await model.generate("Tiny high-thinking proof", config=GenerateConfig(reasoning_effort="high"))
+        finally:
+            await model.api.aclose()
+    asyncio.run(run())
+    assert len(requests) == 1
+    assert requests[0]["reasoning"]["effort"] == "high"
+
+
 def test_instructions_default_and_concurrent_requests(auth_file):
     requests = []
     async def run():

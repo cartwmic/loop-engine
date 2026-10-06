@@ -22,6 +22,9 @@ def test_defaults_and_deterministic_assignment():
 
 
 @pytest.mark.parametrize("overrides", [
+    {"model_config": {"mockllm/model": {"reasoning_effort": "invalid"}}},
+    {"model_config": {"mockllm/absent": {"reasoning_effort": "high"}}},
+    {"model_config": {"mockllm/model": {"reasoning_effort": "high", "unsupported": True}}},
     {"models": []}, {"models": ["missing-provider"]}, {"models": ["mockllm/model"] * 2},
     {"trials_per_case": 0}, {"case_count": -1}, {"hard_limit_seconds": 0}, {"idle_limit_seconds": 0},
     {"preset": "large"}, {"campaign": "../escape"}, {"simulator_model": ""},
