@@ -284,7 +284,10 @@ class SoftwareChangeTarget:
         shown = await env.exec([*cli, "show", "--view", "full", run_id], timeout=30)
         if not shown.success:
             return None  # A driver may not have created its run yet.
-        snapshot = json.loads(shown.stdout)["result"]
+        try:
+            snapshot = json.loads(shown.stdout)["result"]
+        except (ValueError, KeyError):
+            return None  # e.g. a busy database; treat as "no reading", not a failure
         history = await env.exec([*cli, "history", run_id], timeout=30)
         if not history.success:
             return None

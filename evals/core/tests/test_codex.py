@@ -217,3 +217,10 @@ def test_entry_point_declared():
     project = Path(__file__).resolve().parents[2] / "pyproject.toml"
     data = tomllib.loads(project.read_text())
     assert data["project"]["entry-points"]["inspect_ai"]["codex"] == "evalcore.codex"
+
+
+def test_dropped_stream_is_retried(auth_file):
+    import httpx
+    model = get_model("codex/gpt-6.1-sol", memoize=False)
+    assert model.api.should_retry(httpx.RemoteProtocolError("peer closed connection"))
+    assert not model.api.should_retry(ValueError("bad schema"))

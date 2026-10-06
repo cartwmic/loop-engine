@@ -6,6 +6,7 @@ from pathlib import Path
 
 from inspect_ai.model import GenerateConfig, modelapi
 from inspect_ai.model._providers.openai import OpenAIAPI
+import httpx
 
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 
@@ -114,6 +115,13 @@ class CodexAPI(OpenAIAPI):
     async def reasoning_summaries(self):
         # Inspect's OpenAI organization probe would make an unrelated extra call.
         return False
+
+    def should_retry(self, ex):
+        # The subscription backend sometimes drops a stream mid-body; that is a
+        # transient transport failure, not model behaviour. Retry it.
+        if isinstance(ex, (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError)):
+            return True
+        return super().should_retry(ex)
 
     async def generate(self, input, tools, tool_choice, config):
         if config.batch or config.extra_body and config.extra_body.get("background"):

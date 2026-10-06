@@ -235,3 +235,14 @@ def test_capture_is_read_in_parts():
                           target_options={"scripted_driver": "asks-and-builds", "capture_chunk_bytes": 65536})
     trial = summary["trials"][0]
     assert trial["outcome"] == "success", trial
+
+
+def test_progress_reading_tolerates_non_json():
+    from types import SimpleNamespace
+    from scevals.target import SoftwareChangeTarget
+
+    class Env:
+        async def exec(self, *args, **kwargs):
+            return SimpleNamespace(success=True, stdout="db busy\n{")
+
+    assert asyncio.run(SoftwareChangeTarget().progress_state(Env(), "eval-trial")) is None
