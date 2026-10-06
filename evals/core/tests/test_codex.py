@@ -226,3 +226,26 @@ def test_dropped_stream_is_retried(auth_file):
     assert model.api.should_retry(httpx.RemoteProtocolError("peer closed connection"))
     assert model.api.should_retry(httpcore.RemoteProtocolError("peer closed connection"))
     assert not model.api.should_retry(ValueError("bad schema"))
+
+
+def test_dropped_stream_is_resent_inside_the_provider(auth_file, monkeypatch):
+    import asyncio
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(asyncio, "sleep", lambda s: real_sleep(0))
+    attempts = []
+
+    class Drop(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'data: {"type":"response.created","sequence_number":0,"response":' + json.dumps(response(None, "in_progress")).encode() + b'}\n\n'
+            raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+    def handle(request):
+        attempts.append(1)
+        if len(attempts) < 3:
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Drop())
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse([text_item("after drop")]))
+
+    model = get_model("codex/gpt-6.1-sol", memoize=False,
+                      http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle)))
+    output = asyncio.run(model.generate([ChatMessageUser(content="hi")]))
+    assert output.completion == "after drop" and len(attempts) == 3

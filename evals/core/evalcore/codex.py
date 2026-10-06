@@ -1,4 +1,5 @@
 """Host-only Codex subscription provider for the pinned Inspect Responses API."""
+import asyncio
 import json
 import math
 import time
@@ -40,19 +41,18 @@ class OutputItemStream:
     Each request owns its accumulator; the SDK stream still owns connection
     cleanup and Inspect still handles deltas, errors, parsing and token usage.
     """
-    def __init__(self, stream):
-        self.stream = stream
+    def __init__(self, events):
+        self.stream = events  # fully received events; the connection is already closed
 
     async def __aenter__(self):
-        await self.stream.__aenter__()
         return self
 
     async def __aexit__(self, *args):
-        return await self.stream.__aexit__(*args)
+        return None
 
     async def __aiter__(self):
         items = {}
-        async for event in self.stream:
+        for event in self.stream:
             if event.type == "response.output_item.done":
                 items[event.output_index] = event.item
             elif event.type in ("response.completed", "response.incomplete", "response.failed"):
@@ -91,7 +91,19 @@ class CodexResponses:
         # The subscription backend does not accept the API token-limit field.
         request.pop("max_output_tokens", None)
         request.pop("background", None)  # the subscription backend rejects the parameter
-        return OutputItemStream(await self.responses.create(**request))
+        # The subscription backend sometimes drops a stream mid-body. Read the
+        # whole stream here and resend the request on a transport drop, so a
+        # drop never reaches the agent as a failed model call.
+        for attempt in range(STREAM_ATTEMPTS):
+            try:
+                stream = await self.responses.create(**request)
+                async with stream:
+                    events = [event async for event in stream]
+                return OutputItemStream(events)
+            except Exception as error:
+                if attempt == STREAM_ATTEMPTS - 1 or not is_transport_error(error):
+                    raise
+                await asyncio.sleep(min(60, 2 ** (attempt + 1)))
 
 
 def is_transport_error(ex):
@@ -107,6 +119,9 @@ def is_transport_error(ex):
 
 
 TRANSPORT_ERRORS = {"RemoteProtocolError", "ReadError", "WriteError", "ConnectError", "ReadTimeout"}
+
+
+STREAM_ATTEMPTS = 6
 
 
 @modelapi(name="codex")
