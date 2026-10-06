@@ -37,6 +37,8 @@ class ScriptedModel(ModelAPI):
                                   "revealed_requirement_ids": ids})
         elif self.model_name == "judge":
             content = '{"passed": true}'
+        elif self.model_name == "broken-judge":  # proves judge failures don't fail trials
+            content = "I think the intent is fine."
         elif self.model_name == "driver" and any("Scripted driver: " in m.text for m in input):
             results = [m for m in input if m.role == "tool"]
             if not results:

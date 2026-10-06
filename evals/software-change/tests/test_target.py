@@ -220,3 +220,10 @@ def test_real_pi_hang_after_terminal_is_still_a_failure():
     assert trial["target_metrics"]["hidden_test_outcome"]["passed"] is True
     assert trial["target_metrics"]["run_health"]["timeout_kind"] == "idle"
     assert trial["target_metrics"]["run_health"]["unattended_finish"] is False
+
+
+def test_judge_failure_does_not_fail_the_trial():
+    summary, _ = campaign("scripted-example.toml", "asks-and-builds", judge_model="sc-scripted/broken-judge")
+    trial = summary["trials"][0]
+    assert trial["outcome"] == "success", trial
+    assert trial["target_metrics"]["intent_judge"] == {"status": "judge_error", "model": "sc-scripted/broken-judge"}

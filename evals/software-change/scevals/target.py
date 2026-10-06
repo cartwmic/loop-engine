@@ -357,7 +357,12 @@ class SoftwareChangeTarget:
             raise ModelError("terminal intent artifact missing or invalid") from None
         # Judge inputs stay host-side. Core attributes the bound judge role to
         # evaluation overhead, never to the workflow model comparison.
-        judgment = await judge_intent(intent, trial.case.brief.read_text())
+        # The judge is evaluation overhead: its failure must not fail the trial of
+        # the model under test. Report the judgment as unavailable instead.
+        try:
+            judge_metrics = (await judge_intent(intent, trial.case.brief.read_text())).metrics()
+        except ModelError:
+            judge_metrics = {"status": "judge_error", "model": context.settings.judge_model}
         health = run_health(snapshot, history, trial.terminal, trial.evidence.get("driver_exit_code"))
         passed_reviews = reviews_passed(snapshot, history)
         sources = {h["action"]["transition"]["source"] for h in history if h["action"]["kind"] == "transition"}
@@ -370,7 +375,7 @@ class SoftwareChangeTarget:
                   "run_health": health, "discipline": discipline(trial.case, delivered, push_events, len(trial.owner.answers)),
                   "honesty": honesty(snapshot, artifacts, delivered, tests, trial.case.requirement_ids, hidden_success=success),
                   "needed_role_aliases": needed,
-                  "intent_judge": judgment.metrics()}
+                  "intent_judge": judge_metrics}
         return TrialScore(success and not trial.evidence.get("driver_timed_out", False), metrics)
 
     def finalize_metrics(self, metrics, *, usage_by_role, terminal, outcome, reason):

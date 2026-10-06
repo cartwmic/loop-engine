@@ -41,9 +41,12 @@ async def judge_intent(intent: dict, hidden_brief: str, *, judge_model: str | No
     output = await model.generate([
         ChatMessageSystem(content=JUDGE_INSTRUCTION),
         ChatMessageUser(content=json.dumps({"owner_brief": hidden_brief, "intent": intent})),
-    ], config=GenerateConfig(temperature=0, max_tokens=128))
+    ], config=GenerateConfig(temperature=0, max_tokens=4096))  # reasoning models need room
     try:
-        verdict = json.loads(output.completion)
+        text = output.completion.strip()
+        if text.startswith("```"):  # tolerate a fenced JSON reply
+            text = text.strip("`").removeprefix("json").strip()
+        verdict = json.loads(text)
         if not isinstance(verdict, dict) or set(verdict) != {"passed"} or type(verdict["passed"]) is not bool:
             raise ValueError()
     except (ValueError, TypeError):
