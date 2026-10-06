@@ -222,5 +222,7 @@ def test_entry_point_declared():
 def test_dropped_stream_is_retried(auth_file):
     import httpx
     model = get_model("codex/gpt-6.1-sol", memoize=False)
+    import httpcore
     assert model.api.should_retry(httpx.RemoteProtocolError("peer closed connection"))
+    assert model.api.should_retry(httpcore.RemoteProtocolError("peer closed connection"))
     assert not model.api.should_retry(ValueError("bad schema"))

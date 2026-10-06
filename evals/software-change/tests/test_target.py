@@ -246,3 +246,23 @@ def test_progress_reading_tolerates_non_json():
             return SimpleNamespace(success=True, stdout="db busy\n{")
 
     assert asyncio.run(SoftwareChangeTarget().progress_state(Env(), "eval-trial")) is None
+
+
+def test_dropped_provider_connection_is_infrastructure(monkeypatch):
+    from types import SimpleNamespace
+    import inspect_ai.log
+    from scevals.target import provider_connection_failed
+
+    def events(*errors):
+        ModelEvent = type("ModelEvent", (), {})
+        out = []
+        for role, error in errors:
+            e = ModelEvent(); e.role = role; e.error = error; out.append(e)
+        return SimpleNamespace(events=out)
+
+    monkeypatch.setattr(inspect_ai.log, "transcript", lambda: events(("role-driver", "RemoteProtocolError('peer closed')")))
+    assert provider_connection_failed()
+    monkeypatch.setattr(inspect_ai.log, "transcript", lambda: events(("role-driver", "RemoteProtocolError('x')"), ("role-driver", None)))
+    assert not provider_connection_failed()
+    monkeypatch.setattr(inspect_ai.log, "transcript", lambda: events(("simulator", "RemoteProtocolError('x')")))
+    assert not provider_connection_failed()

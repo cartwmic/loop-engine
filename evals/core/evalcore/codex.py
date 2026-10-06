@@ -94,6 +94,21 @@ class CodexResponses:
         return OutputItemStream(await self.responses.create(**request))
 
 
+def is_transport_error(ex):
+    """A dropped or failed connection (httpx or the httpcore error under it)."""
+    seen = set()
+    while ex is not None and id(ex) not in seen:
+        seen.add(id(ex))
+        if (type(ex).__module__.split(".")[0] in ("httpx", "httpcore")
+                and type(ex).__name__ in TRANSPORT_ERRORS):
+            return True
+        ex = ex.__cause__ or ex.__context__
+    return False
+
+
+TRANSPORT_ERRORS = {"RemoteProtocolError", "ReadError", "WriteError", "ConnectError", "ReadTimeout"}
+
+
 @modelapi(name="codex")
 class CodexAPI(OpenAIAPI):
     def __init__(self, model_name, base_url=None, api_key=None, config=GenerateConfig(), **model_args):
@@ -119,7 +134,7 @@ class CodexAPI(OpenAIAPI):
     def should_retry(self, ex):
         # The subscription backend sometimes drops a stream mid-body; that is a
         # transient transport failure, not model behaviour. Retry it.
-        if isinstance(ex, (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError)):
+        if is_transport_error(ex):
             return True
         return super().should_retry(ex)
 

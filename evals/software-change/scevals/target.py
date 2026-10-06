@@ -27,6 +27,16 @@ from .judge import JUDGE_CONTRACT, judge_intent
 # Inspect limits one sandbox file read to 100 MiB, so captures are read in parts.
 CAPTURE_CHUNK_BYTES = 64 * 1024 * 1024
 
+def provider_connection_failed():
+    """True when this sample's last workflow model call ended in a connection error."""
+    from inspect_ai.log import transcript
+    calls = [e for e in transcript().events
+             if type(e).__name__ == "ModelEvent" and e.role in ("role-driver", "role-implementer", "role-reviewer")]
+    return bool(calls) and bool(calls[-1].error) and str(calls[-1].error).startswith(CONNECTION_ERRORS)
+
+
+CONNECTION_ERRORS = ("RemoteProtocolError", "ReadError", "WriteError", "ConnectError", "APIConnectionError")
+
 # Time reserved after the driver stops for state capture and scoring.
 DRIVER_LIMIT_MARGIN_SECONDS = 300
 from .image import DEFAULT_IMAGE, REPOSITORY, output
@@ -345,6 +355,10 @@ class SoftwareChangeTarget:
         trial = execution.data
         if not execution.terminal:
             await self.capture_terminal(trial, context)
+            if provider_connection_failed():
+                # The driver stopped because the provider dropped a connection
+                # even after retries: infrastructure, not model behaviour.
+                raise InfrastructureError("model provider connection failed")
             return TrialScore(False, trial.metrics())
         snapshot, history, artifacts, delivered, push_events, capture = await self.capture_terminal(trial, context)
         await trial.copy_scoring_material()
