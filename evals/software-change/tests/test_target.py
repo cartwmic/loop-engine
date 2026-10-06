@@ -21,7 +21,7 @@ ROOT = REPO / "evals/software-change"
 CAPTURES = ROOT / "captures/T4/tests"
 
 
-def campaign(settings_name, driver=None, **overrides):
+def campaign(settings_name, driver=None, extra_env=None, **overrides):
     CAPTURES.mkdir(parents=True, exist_ok=True)
     settings = tomllib.loads((ROOT / "campaigns" / settings_name).read_text())
     if driver:
@@ -36,7 +36,7 @@ def campaign(settings_name, driver=None, **overrides):
     config = CAPTURES / (name + ".json")
     config.write_text(json.dumps(settings))
     cmd = ["uv", "run", "--project", "evals", "evalctl", "campaign", "--settings", str(config)]
-    result = subprocess.run(cmd, cwd=REPO, env=os.environ.copy(), text=True, capture_output=True, timeout=650)
+    result = subprocess.run(cmd, cwd=REPO, env={**os.environ, **(extra_env or {})}, text=True, capture_output=True, timeout=650)
     (CAPTURES / (name + ".log")).write_text(result.stdout + result.stderr)
     assert result.returncode == 0, result.stdout + result.stderr
     result_dir = Path(result.stdout.split("Report written: ", 1)[1].strip())
@@ -243,7 +243,10 @@ def test_progress_reading_tolerates_non_json():
 
     class Env:
         async def exec(self, *args, **kwargs):
-            return SimpleNamespace(success=True, stdout="db busy\n{")
+            return SimpleNamespace(success=True, stdout="")
+
+        async def read_file(self, path):
+            return "db busy\n{"
 
     assert asyncio.run(SoftwareChangeTarget().progress_state(Env(), "eval-trial")) is None
 
@@ -266,3 +269,13 @@ def test_dropped_provider_connection_is_infrastructure(monkeypatch):
     assert not provider_connection_failed()
     monkeypatch.setattr(inspect_ai.log, "transcript", lambda: events(("simulator", "RemoteProtocolError('x')")))
     assert not provider_connection_failed()
+
+
+def test_engine_output_larger_than_exec_limit_is_read_from_files():
+    # Real runs' full views exceed Inspect's exec-output limit; shrink the limit
+    # so even the scripted run exceeds it, and the trial must still be scored.
+    summary, _ = campaign("scripted-example.toml", "asks-and-builds",
+                          extra_env={"INSPECT_SANDBOX_MAX_EXEC_OUTPUT_SIZE": "20000"})
+    trial = summary["trials"][0]
+    assert trial["outcome"] == "success", trial
+    assert any(item["kind"] == "public" and item["source"] == "public/" for item in trial["target_metrics"]["copy_log"])

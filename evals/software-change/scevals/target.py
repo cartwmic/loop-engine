@@ -27,6 +27,22 @@ from .judge import JUDGE_CONTRACT, judge_intent
 # Inspect limits one sandbox file read to 100 MiB, so captures are read in parts.
 CAPTURE_CHUNK_BYTES = 64 * 1024 * 1024
 
+async def engine_json(env, arguments, path):
+    """Run a loop-engine JSON command into a file and read it back.
+
+    Real runs' full views exceed Inspect's 10 MiB exec-output limit, which
+    truncates stdout, so engine output never travels through stdout.
+    """
+    result = await env.exec(["sh", "-c", 'loop-engine --database /workspace/trial/run.sqlite '
+                             '--config /workspace/trial/providers.toml --json "$@" > "$0"', path, *arguments],
+                            timeout=120)
+    try:
+        text = await env.read_file(path)
+    except Exception:
+        return False, ""
+    return result.success, text
+
+
 def provider_connection_failed():
     """True when this sample's last workflow model call ended in a connection error."""
     from inspect_ai.log import transcript
@@ -93,6 +109,22 @@ class TerminalTrial:
                                            if Path(source).is_relative_to(self.case.path) else "harness/" + Path(source).name,
                                          "destination": destination, "phase": phase,
                                          "elapsed_seconds": time.monotonic() - self.evidence["started"]})
+
+    async def copy_tree(self, source, destination, kind, phase):
+        """Copy a directory as one archive: large repos are thousands of files."""
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w") as archive:
+            for file in sorted(Path(source).rglob("*")):
+                if file.is_file():
+                    archive.add(file, arcname=file.relative_to(source).as_posix())
+        await self.env.write_file("/tmp/copy-tree.tar", buffer.getvalue())
+        result = await self.env.exec(["sh", "-c", 'mkdir -p "$0" && tar -xf /tmp/copy-tree.tar -C "$0" && rm /tmp/copy-tree.tar',
+                                      destination], timeout=600)
+        if not result.success:
+            raise InfrastructureError("copying files into the trial container failed")
+        self.evidence["copy_log"].append({"kind": kind, "source": Path(source).relative_to(self.case.path).as_posix() + "/",
+                                          "destination": destination, "phase": phase,
+                                          "elapsed_seconds": time.monotonic() - self.evidence["started"]})
 
     async def copy_scoring_material(self):
         if not self.terminal:
@@ -168,9 +200,7 @@ class SoftwareChangeTarget:
                                   "platform": config["Platform"], "working_dir": config["Config"]["WorkingDir"]},
                     "role_models": context.combination.role_models()}
         trial = TerminalTrial(env, case, owner, evidence, False, None)
-        for file in sorted((case.path / "public").rglob("*")):
-            if file.is_file():
-                await trial.copy(file, "/workspace/" + file.relative_to(case.path).as_posix(), "public", "before_driver")
+        await trial.copy_tree(case.path / "public", "/workspace/public", "public", "before_driver")
         await env.write_file("/workspace/trial/providers.toml", '[providers.software-change]\ncommand = "software-change"\nargs = []\n')
         # The isolated local remote is harness infrastructure, not the case repo.
         # Its hook counts successful receive operations without making any push.
@@ -270,10 +300,9 @@ class SoftwareChangeTarget:
             if isinstance(error, BaseExceptionGroup):
                 raise InfrastructureError("multiple bridge/owner lifecycle errors") from None
             raise error
-        shown = await env.exec(["loop-engine", "--database", "/workspace/trial/run.sqlite", "--config",
-                                "/workspace/trial/providers.toml", "--json", "show", "--view", "full", run_id], timeout=30)
-        if shown.success:
-            snapshot = json.loads(shown.stdout)["result"]
+        ok, text = await engine_json(env, ["show", "--view", "full", run_id], "/workspace/trial/show.json")
+        if ok:
+            snapshot = json.loads(text)["result"]
             trial.terminal = snapshot["lifecycle"] == "final"
             evidence["terminal_state"] = snapshot["current_state"]
             evidence["lifecycle"] = snapshot["lifecycle"]
@@ -289,35 +318,30 @@ class SoftwareChangeTarget:
         return TrialExecution(terminal=trial.terminal, data=trial)
 
     async def progress_state(self, env, run_id):
-        cli = ["loop-engine", "--database", "/workspace/trial/run.sqlite", "--config",
-               "/workspace/trial/providers.toml", "--json"]
-        shown = await env.exec([*cli, "show", "--view", "full", run_id], timeout=30)
-        if not shown.success:
+        ok, text = await engine_json(env, ["show", "--view", "full", run_id], "/tmp/progress-show.json")
+        if not ok:
             return None  # A driver may not have created its run yet.
         try:
-            snapshot = json.loads(shown.stdout)["result"]
+            snapshot = json.loads(text)["result"]
         except (ValueError, KeyError):
             return None  # e.g. a busy database; treat as "no reading", not a failure
-        history = await env.exec([*cli, "history", run_id], timeout=30)
-        if not history.success:
+        ok, history = await engine_json(env, ["history", run_id], "/tmp/progress-history.json")
+        if not ok:
             return None
         return (snapshot["current_state"], snapshot["state_visit"],
-                max((row["sequence"] for row in snapshot["context"]), default=0), history.stdout)
+                max((row["sequence"] for row in snapshot["context"]), default=0), hash(history))
 
     async def capture_terminal(self, trial, context):
         """Copy terminal or interrupted evidence to ignored captures only."""
         run_id = trial.evidence["run_id"]
-        cli = ["loop-engine", "--database", "/workspace/trial/run.sqlite", "--config",
-               "/workspace/trial/providers.toml", "--json"]
         packets = {}
         for operation, arguments in (("show", ["show", "--view", "full", run_id]),
                                      ("history", ["history", run_id])):
-            result = await trial.env.exec([*cli, *arguments], timeout=30)
-            if not result.success and trial.terminal:
-                raise InfrastructureError("terminal history capture failed")
-            packets[operation] = json.loads(result.stdout).get("result") if result.success else None
             # CLI errors (including no run yet) also remain private captures.
-            await trial.env.write_file(f"/workspace/trial/{operation}.json", result.stdout)
+            ok, text = await engine_json(trial.env, arguments, f"/workspace/trial/{operation}.json")
+            if not ok and trial.terminal:
+                raise InfrastructureError("terminal history capture failed")
+            packets[operation] = json.loads(text).get("result") if ok else None
         # A model may terminate without drafting artifacts. Capture an empty
         # directory, then classify its missing intent as model failure, not infra.
         await trial.env.exec(["mkdir", "-p", "/workspace/trial/artifacts"], timeout=30)
