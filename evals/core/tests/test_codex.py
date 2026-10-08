@@ -249,3 +249,42 @@ def test_dropped_stream_is_resent_inside_the_provider(auth_file, monkeypatch):
                       http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle)))
     output = asyncio.run(model.generate([ChatMessageUser(content="hi")]))
     assert output.completion == "after drop" and len(attempts) == 3
+
+
+def test_real_socket_drop_is_resent(auth_file, monkeypatch):
+    """A real TCP server that closes mid-stream: the SDK's own httpx fork must be retried."""
+    import asyncio, socket, threading, time
+    hits = []
+    created = b'data: {"type":"response.created","sequence_number":0,"response":' + json.dumps(response(None, "in_progress")).encode() + b'}\n\n'
+    done = sse([text_item("ok after drops")])
+
+    def chunk(data):
+        return hex(len(data))[2:].encode() + b"\r\n" + data + b"\r\n"
+
+    def serve(sock):
+        while True:
+            conn, _ = sock.accept()
+            hits.append(1)
+            data = b""
+            while b"\r\n\r\n" not in data:
+                data += conn.recv(65536)
+            head, _, body = data.partition(b"\r\n\r\n")
+            length = int([line.split(b":")[1] for line in head.split(b"\r\n") if line.lower().startswith(b"content-length")][0])
+            while len(body) < length:
+                body += conn.recv(65536)
+            conn.sendall(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n" + chunk(created))
+            if len(hits) >= 3:
+                conn.sendall(chunk(done) + b"0\r\n\r\n")
+            time.sleep(0.1)
+            conn.close()
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(5)
+    threading.Thread(target=serve, args=(sock,), daemon=True).start()
+    monkeypatch.setattr(codex, "CODEX_BASE_URL", f"http://127.0.0.1:{sock.getsockname()[1]}/codex")
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(asyncio, "sleep", lambda s: real_sleep(0))
+    model = get_model("codex/gpt-6.1-sol", memoize=False)
+    output = asyncio.run(model.generate([ChatMessageUser(content="hi")]))
+    assert output.completion == "ok after drops" and len(hits) == 3

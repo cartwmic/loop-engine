@@ -111,7 +111,9 @@ def is_transport_error(ex):
     seen = set()
     while ex is not None and id(ex) not in seen:
         seen.add(id(ex))
-        if (type(ex).__module__.split(".")[0] in ("httpx", "httpcore")
+        # The OpenAI SDK ships its own httpx fork (module httpx2/httpcore2), so
+        # match the package family, not the exact module name.
+        if (type(ex).__module__.split(".")[0].startswith(("httpx", "httpcore", "h11"))
                 and type(ex).__name__ in TRANSPORT_ERRORS):
             return True
         ex = ex.__cause__ or ex.__context__
