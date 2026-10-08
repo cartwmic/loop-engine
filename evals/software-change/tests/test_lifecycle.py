@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tarfile
 import tomllib
@@ -89,7 +90,8 @@ def test_capture_first_fault_rescore_and_same_capture_parity():
     # The source/config markers and provider-looking filename are legitimate
     # private captured work. target/.cache payloads must not inflate snapshots.
     command = ["sh", "-c", 'printf "\\133providers.x\\135\\n" > /workspace/trial/example-providers.toml; '
-               'mkdir -p target .cache; printf excluded > target/probe; printf excluded > .cache/probe; '
+               'mkdir -p target .cache; printf "Signature: 8a477f597d28d172789f06886806bc55\\n" > target/CACHEDIR.TAG; '
+               'printf excluded > target/probe; printf excluded > .cache/probe; '
                'printf retained-file > /workspace/trial/target; exec sc-driver "$@"', "sh"]
     _, clean_settings = settings(scripted_driver="asks-and-builds", driver_command=command)
     clean, _, _ = invoke("campaign", "--settings", clean_settings)
@@ -192,6 +194,61 @@ def test_resume_continues_restored_db_owner_answers_and_excludes_headline(via_ca
     replay, _, _ = invoke("rescore", restored.parent)
     assert replay["trials"][0]["resumed"] and len(replay["trials"][0]["segments"]) == 2
     assert replay["comparisons"][0]["core"]["success_rate"]["denominator"] == 0
+
+
+def test_merge_rescored_captures_and_resume_only_missing_trial():
+    data, config = settings(scripted_driver="asks-and-builds")
+    data["trials_per_case"] = 3
+    config.write_text(json.dumps(data))
+    original, _, _ = invoke("campaign", "--settings", config)
+    root = Path(original["capture_run"])
+    rescored = []
+    for sample in ("m0-c0-t1", "m0-c0-t2"):
+        subset = PROOFS / (uuid.uuid4().hex + "-subset")
+        subset.mkdir(mode=0o700)
+        shutil.copytree(root / sample, subset / sample)
+        manifest = json.loads((root / "run.json").read_text())
+        manifest["sources"] = {}
+        (subset / "run.json").write_text(json.dumps(manifest))
+        score, _, _ = invoke("rescore", subset, "--settings", config)
+        rescored.append(score)
+    output = PROOFS / (uuid.uuid4().hex + "-merged")
+
+    def merge(destination, *sources, code=0):
+        result = subprocess.run(["uv", "run", "--project", str(REPO / "evals"), "evalctl",
+                                 "merge-captures", str(destination), *map(str, sources), "--settings", str(config)],
+                                cwd=REPO, capture_output=True, text=True, timeout=30)
+        (PROOFS / (uuid.uuid4().hex + "-merge.log")).write_text(result.stdout + result.stderr)
+        assert result.returncode == code, result.stdout + result.stderr
+        return result
+
+    sources = [Path(s["capture_run"]) for s in rescored]
+    assert "Merged 2 captures:" in merge(output, *sources).stdout
+    for sample in ("m0-c0-t1", "m0-c0-t2"):
+        assert (output / sample / "workspace.tar").is_file()
+    # Duplicate/settings failures validate before creating output; never overwrite.
+    duplicate = PROOFS / (uuid.uuid4().hex + "-duplicate")
+    merge(duplicate, sources[0], sources[0], code=2)
+    assert not duplicate.exists()
+    mismatch = PROOFS / (uuid.uuid4().hex + "-mismatch")
+    data["idle_limit_seconds"] = data.get("idle_limit_seconds", 1800) + 1
+    config.write_text(json.dumps(data))
+    merge(mismatch, *sources, code=2)
+    assert not mismatch.exists()
+    data["idle_limit_seconds"] -= 1
+    config.write_text(json.dumps(data))
+    merge(output, *sources, code=2)
+    resumed, _, _ = invoke("campaign", "--settings", config, "--resume", output)
+    assert len(resumed["trials"]) == 3 and len(resumed["carried_trials"]) == 2
+    assert all(t["outcome"] == "success" for t in resumed["trials"])
+    for index in (0, 1):
+        assert resumed["trials"][index]["target_metrics"] == rescored[index]["trials"][0]["target_metrics"]
+        assert resumed["trials"][index]["usage_by_role"] == rescored[index]["trials"][0]["usage_by_role"]
+    new_captures = Path(resumed["capture_run"])
+    assert not (new_captures / "m0-c0-t1").exists()
+    assert not (new_captures / "m0-c0-t2").exists()
+    assert (new_captures / "m0-c0-t3/workspace.tar").is_file()
+    assert resumed["comparisons"][0]["core"]["pass_k"]["rate"] == 1
 
 
 def test_refused_report_keeps_private_capture_and_recovery_command():

@@ -13,6 +13,10 @@ from inspect_ai.model import (ChatCompletionChoice, ChatMessageAssistant, Conten
 from inspect_ai.tool import ToolCall, ToolFunction
 
 from .codex import codex_auth_path
+from .target import InfrastructureError, ModelError
+
+
+RETRY_BASE_DELAY_SECONDS = 2
 
 
 def pi_config_paths() -> tuple[Path, ...]:
@@ -38,6 +42,10 @@ def message_request(message):
     if message.role == "assistant":
         data["native"] = (message.metadata or {}).get("pi_message")
     return data
+
+
+class RetryableCompletionError(Exception):
+    """Internal protocol marker, never contains provider text."""
 
 
 @modelapi(name="pi")
@@ -76,9 +84,18 @@ class PiAPI(ModelAPI):
                     self.process.stdin.write((json.dumps(request) + "\n").encode())
                     await self.process.stdin.drain()
                     response = json.loads(await self.process.stdout.readline())
+                    if isinstance(response, dict) and response.get("error") == "retryable":
+                        raise RetryableCompletionError()
+                    if isinstance(response, dict) and response.get("error") == "non_retryable":
+                        raise ModelError("Pi host non-retryable completion failed; check host error log")
                     if not isinstance(response, dict) or "message" not in response:
                         raise ValueError()
                     return response["message"]
+            except RetryableCompletionError:
+                raise
+            except ModelError:
+                await self._stop()
+                raise
             except asyncio.CancelledError:
                 await self._stop()
                 raise
@@ -99,12 +116,27 @@ class PiAPI(ModelAPI):
         options = {key: value for key, value in {
             "reasoning": levels.get(effort), "maxTokens": config.max_tokens,
             "temperature": config.temperature, "topP": config.top_p,
-            "maxRetries": 0,  # Inspect owns retries; no hidden helper retry loop.
+            "maxRetries": 0,  # This provider owns bounded retries; SDK retries disabled.
         }.items() if value is not None}
-        native = await self._exchange({"provider": self.provider, "model": self.pi_model,
-                                      "messages": [message_request(m) for m in input],
-                                      "tools": [t.model_dump(mode="json", exclude_none=True) for t in tools],
-                                      "tool_choice": choice, "options": options}, config.timeout or 300)
+        request = {"provider": self.provider, "model": self.pi_model,
+                   "messages": [message_request(m) for m in input],
+                   "tools": [t.model_dump(mode="json", exclude_none=True) for t in tools],
+                   "tool_choice": choice, "options": options}
+        try:
+            for attempt in range(6):
+                try:
+                    native = await self._exchange(request, config.timeout or 300)
+                    break
+                except RetryableCompletionError:
+                    if attempt == 5:
+                        async with self.lock:
+                            await self._stop()
+                        raise InfrastructureError("Pi host transient completion failed after 6 attempts; check host error log") from None
+                    await asyncio.sleep(min(RETRY_BASE_DELAY_SECONDS * 2 ** attempt, 60))
+        except asyncio.CancelledError:
+            async with self.lock:
+                await self._stop()
+            raise
         try:
             if native["stopReason"] in ("error", "aborted", "pending", "deferred"):
                 raise ValueError()

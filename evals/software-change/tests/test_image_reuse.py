@@ -41,6 +41,7 @@ def test_missing_image_requires_explicit_image_check(monkeypatch):
 
 def test_case_check_missing_image_explains_next_step(monkeypatch, capsys):
     monkeypatch.setattr(cases, "load_case", lambda path: object())
+    monkeypatch.setattr(cases, "unstated_interfaces", lambda case: [])
     def missing(*args):
         raise RuntimeError("private backend details")
     monkeypatch.setattr(cases, "verify_image", missing)

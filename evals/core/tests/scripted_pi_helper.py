@@ -3,11 +3,16 @@ import json
 import sys
 from pathlib import Path
 
+attempt = 0
 for line in sys.stdin:
+    attempt += 1
     request = json.loads(line)
     if len(sys.argv) > 1:
         with Path(sys.argv[1]).open("a") as stream:
             stream.write(json.dumps(request) + "\n")
+    if request["model"] == "retryable" or request["model"] == "transient" and attempt == 1:
+        print(json.dumps({"error": "retryable"}), flush=True)
+        continue
     if request["model"] == "hang":
         import time
         time.sleep(60)

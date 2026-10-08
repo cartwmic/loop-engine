@@ -172,9 +172,49 @@ def _summary(case, result):
                              for tag in case.requirement_ids}, "container": result["container"]}
 
 
+# Deliberately small/common vocabulary and runner-only names, not feature names.
+INTERFACE_STOPLIST = {
+    "true", "false", "none", "null", "test", "tests", "main", "mixed", "value", "values",
+    "name", "text", "data", "result", "error", "message", "python", "python3", "pytest",
+    "unittest", "case_runtime", "requirement", "cargo", "rustc", "build", "release",
+    "--quiet", "--offline", "--manifest-path", "--target-dir", "--nocapture",
+    "stdout", "stderr", "utf-8", "encoding", "check", "capture_output", "timeout",
+}
+
+
+def unstated_interfaces(case):
+    """Static heuristic only: never execute hidden tests or consult reference code."""
+    metadata = tomllib.loads((case.path / "case.toml").read_text())
+    allowlist = metadata.get("interface_allowlist", [])
+    if not isinstance(allowlist, list) or not all(isinstance(x, str) for x in allowlist):
+        raise CaseFormatError("interface_allowlist must be a list of strings")
+    names = set()
+    for file in sorted(case.tests.rglob("*.py")):
+        tree = ast.parse(file.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            # Also finds dict/JSON/json! keys in embedded source or JSON payloads.
+            literals = [node.value, *re.findall(r'''["']([A-Za-z_][A-Za-z0-9_-]*|--[A-Za-z][A-Za-z0-9_-]*)["']''', node.value)]
+            for value in literals:
+                if (len(value.removeprefix("--")) >= 4 and
+                        re.fullmatch(r"(?:--)?[A-Za-z_][A-Za-z0-9_-]*", value) and
+                        value.lower() not in INTERFACE_STOPLIST and
+                        not value.startswith("REQ-") and value not in allowlist):
+                    names.add(value)
+    public = [case.request, case.brief, *(p for p in case.repository.rglob("*")
+                                        if p.is_file() and ".git" not in p.relative_to(case.repository).parts)]
+    corpus = "\n".join(p.read_bytes().decode("utf-8", errors="replace") for p in public)
+    return sorted(name for name in names if not re.search(
+        r"(?<![A-Za-z0-9_-])" + re.escape(name) + r"(?![A-Za-z0-9_-])", corpus, re.IGNORECASE))
+
+
 def case_check(args):
     try:
         case = load_case(args.path)
+        unstated = unstated_interfaces(case)
+        if unstated:
+            raise CaseFormatError("hidden tests depend on unstated interface identifiers: " + ", ".join(unstated[:20]))
     except CaseFormatError as error:
         print(f"INVALID: {error}")
         return 0 if args.expect_invalid else 1

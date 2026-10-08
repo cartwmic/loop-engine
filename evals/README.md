@@ -102,8 +102,14 @@ Node, the normal Pi agent directory (including `PI_CODING_AGENT_DIR`), extension
 `models.json` and Pi-managed OAuth. The helper uses the public SDK session factory
 only to load/register providers, then calls `ModelRuntime.completeSimple`: no
 agent loop, lifecycle startup, tool execution or container credentials. Signed
-native assistant blocks are retained for conversation replay. Helper errors are
-sanitized; cancellation kills/reaps the helper. This reuses claude-compat's own
+native assistant blocks are retained for conversation replay. Error completions use
+Pi's installed `isRetryableAssistantError` classifier; transient failures are retried
+inside the provider for up to six attempts (2/4/8/16/32-second exponential backoff,
+capped at 60 seconds). Non-retryable failures remain model errors; exhausted
+transients are infrastructure errors. Raw error messages stay only in ignored host
+`software-change/logs/pi-helper-errors.log` (timestamp/model, mode 0600), with bearer
+tokens, `sk-*` keys and JWT-looking strings redacted. They never enter completion
+frames, results or containers. Cancellation, including backoff, kills/reaps the helper. This reuses claude-compat's own
 request transport/envelope rather than reconstructing it in Python. Forced tool
 choices are supported for Anthropic/claude-compat and OpenAI APIs; unsupported
 APIs fail rather than silently downgrade. Host Node/Pi and the owner's trusted
@@ -192,8 +198,9 @@ captures/<campaign>/<UTC run timestamp>/records.json
 Immediately after driver stop (exit, crash, idle or hard stop), before host parsing
 or scoring, `workspace.tar` captures all of `/workspace`, including trial SQLite
 (and WAL/SHM when present), artifacts, raw show/history receipts, local-push-log,
-local-remote.git and public/repo **including .git**. Directories named `target` and
-`.cache` are excluded. Sandbox reads and host writes are chunked; an interrupted
+local-remote.git and public/repo **including .git**. Cache-tagged directories (`CACHEDIR.TAG`, such as Cargo's build
+`target/`) and directories named `.cache` are excluded; source directories merely
+named `target` are retained. Sandbox reads and host writes are chunked; an interrupted
 copy retains `workspace.tar.partial`. `meta.json` contains the settings snapshot,
 matched assignment, role models, driver timings/exit/stop kind, harness commit,
 private host-only owner receipt/answers, Inspect role usage and continuation
@@ -218,6 +225,8 @@ uv run --project evals evalctl rescore evals/software-change/captures/CAMPAIGN/R
 uv run --project evals evalctl campaign --settings SETTINGS.toml --resume evals/software-change/results/CAMPAIGN/RUN_TIMESTAMP
 uv run --project evals evalctl campaign --settings SETTINGS.toml --resume evals/software-change/captures/CAMPAIGN/RUN_TIMESTAMP --resume-interrupted
 uv run --project evals evalctl resume-trial evals/software-change/captures/CAMPAIGN/RUN_TIMESTAMP/SAMPLE_ID
+uv run --project evals evalctl merge-captures evals/software-change/captures/CAMPAIGN/MERGED SOURCE_CAPTURE_RUN_1 SOURCE_CAPTURE_RUN_2 --settings SETTINGS.toml
+uv run --project evals evalctl campaign --settings SETTINGS.toml --resume evals/software-change/captures/CAMPAIGN/MERGED
 ```
 
 Each writes a fresh timestamped report pair, never replaces a prior report.
@@ -243,6 +252,19 @@ configured driver combination; without `--settings` it is used for all roles
 scripted models for offline proofs. `--run-id` defaults to `eval-trial`; select the
 actual run ID for older/external snapshots. Replaying requires the pinned image,
 case ID/version and host case files; it does not turn a tar into a standalone case.
+
+`merge-captures OUT_DIR SRC_DIR... --settings SETTINGS.toml` creates a new private
+capture run from disjoint scored capture runs (including those produced by
+`rescore`). It copies workspace snapshots and host metadata and preserves each
+source's scored record/usage keyed by `sample_id`. It refuses duplicates, unknown
+or mismatched assignments, missing snapshots, existing output and differing
+effective settings. Only the campaign label is exempt from settings comparison;
+recorded timestamps/provenance are not settings. All scoring/execution/model,
+price and target options must match. The target settings determine the full matched
+assignment even when each source scored only a subset. Subsequent campaign resume
+carries clean trials and runs only missing/retryable ones, with one combined report.
+No models or Docker execution occur during merging. Outputs and inputs are private;
+never place the merged directory in published results.
 
 Campaign `--resume` requires **identical effective settings and matched assignment**.
 It carries clean successes and failures attributed to the model, re-running only

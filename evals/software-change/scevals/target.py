@@ -56,6 +56,14 @@ def provider_connection_failed():
 
 CONNECTION_ERRORS = ("RemoteProtocolError", "ReadError", "WriteError", "ConnectError", "APIConnectionError")
 
+# Skip build caches only: directories tagged with CACHEDIR.TAG (cargo's target/)
+# and .cache. Never skip by the name "target": vendored crates contain source
+# directories called target (e.g. vendor/cc/src/target), and dropping them breaks
+# offline builds when the capture is replayed. tar exit 1 means "file changed
+# while read", which is harmless once the driver has stopped.
+CAPTURE_TAR_COMMAND = ("tar --exclude-caches-all --exclude=.cache -cf /tmp/workspace.tar . ; "
+                       "[ $? -le 1 ]")
+
 # Time reserved after the driver stops for state capture and scoring.
 DRIVER_LIMIT_MARGIN_SECONDS = 300
 from .image import DEFAULT_IMAGE, REPOSITORY, output
@@ -464,9 +472,7 @@ class SoftwareChangeTarget:
         chunk = int(context.settings.target_options.get("capture_chunk_bytes", CAPTURE_CHUNK_BYTES))
         if chunk <= 0:
             chunk = CAPTURE_CHUNK_BYTES
-        result = await env.exec(["sh", "-c",
-            'find . -type d \\( -name target -o -name .cache \\) -prune -o -print0 | '
-            'tar --null --no-recursion -cf /tmp/workspace.tar -T - && '
+        result = await env.exec(["sh", "-c", CAPTURE_TAR_COMMAND + ' && '
             'rm -rf /tmp/capture-parts && mkdir /tmp/capture-parts && '
             f'split -b {chunk} -d -a 6 /tmp/workspace.tar /tmp/capture-parts/part-'],
             cwd="/workspace", timeout=600)

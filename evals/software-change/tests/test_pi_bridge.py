@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from inspect_ai import Task, eval
 from inspect_ai.agent import sandbox_agent_bridge
 from inspect_ai.dataset import Sample
@@ -15,7 +17,9 @@ from evalcore import pi
 from scevals.image import DEFAULT_IMAGE
 
 
-def test_pi_scripted_helper_through_real_pi_trial_role(tmp_path):
+@pytest.mark.parametrize("transient", [False, True])
+def test_pi_scripted_helper_through_real_pi_trial_role(tmp_path, monkeypatch, transient):
+    monkeypatch.setattr(pi, "RETRY_BASE_DELAY_SECONDS", 0)
     helper = Path(__file__).resolve().parents[2] / "core/tests/scripted_pi_helper.py"
     requests = tmp_path / "requests.jsonl"
 
@@ -23,7 +27,7 @@ def test_pi_scripted_helper_through_real_pi_trial_role(tmp_path):
     def probe():
         async def solve(state, generate):
             env = sandbox()
-            model = get_model("pi/scripted/model", role="role-driver", memoize=False,
+            model = get_model("pi/scripted/transient" if transient else "pi/scripted/model", role="role-driver", memoize=False,
                               helper_command=[sys.executable, str(helper), str(requests)],
                               config=GenerateConfig(reasoning_effort="medium", max_retries=0))
             try:
@@ -61,12 +65,15 @@ def test_pi_scripted_helper_through_real_pi_trial_role(tmp_path):
     sample = logs[0].samples[0]
     assert sample.error is None, "scripted sandbox sample failed"
     calls = [json.loads(line) for line in requests.read_text().splitlines()]
-    assert len(calls) == 2
+    assert len(calls) == (3 if transient else 2)
+    if transient:
+        assert calls[0] == calls[1]  # same host request resent, agent sees no error
+        calls = calls[1:]
     assert all(c["options"]["reasoning"] == "medium" for c in calls)
     assert not any(m["role"] == "tool" for m in calls[0]["messages"])
     assert any(m["role"] == "tool" and "pi-tool-proof" in str(m["content"]) for m in calls[1]["messages"])
     usage = sample.role_usage["role-driver"]
     assert usage.total_tokens == 48 and usage.input_tokens_cache_read == 14 and usage.input_tokens_cache_write == 4
-    receipt = {**sample.metadata["pi_scripted_bridge"], "backend_calls": 2, "thinking_level": "medium",
+    receipt = {**sample.metadata["pi_scripted_bridge"], "backend_calls": 3 if transient else 2, "thinking_level": "medium",
                "role_usage": usage.model_dump()}
     (capture / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")

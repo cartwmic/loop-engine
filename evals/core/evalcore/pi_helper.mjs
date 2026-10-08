@@ -4,6 +4,24 @@
 import { pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
+import { appendFileSync, mkdirSync, chmodSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+export function redactProviderError(message) {
+  return String(message)
+    .replace(/\bBearer\s+[^\s"'<>]+/gi, "Bearer [REDACTED]")
+    .replace(/\bsk-[A-Za-z0-9_-]+/g, "[REDACTED]")
+    .replace(/\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED]");
+}
+
+export function logProviderError(model, message) {
+  const path = fileURLToPath(new URL("../../software-change/logs/pi-helper-errors.log", import.meta.url));
+  mkdirSync(fileURLToPath(new URL("../../software-change/logs/", import.meta.url)), { recursive: true, mode: 0o700 });
+  // JSONL escapes embedded newlines, preserving one timestamped entry per failure.
+  appendFileSync(path, JSON.stringify({ timestamp: new Date().toISOString(), model: redactProviderError(model),
+    message: redactProviderError(message) }) + "\n", { mode: 0o600 });
+  chmodSync(path, 0o600);
+}
 
 const write = process.stdout.write.bind(process.stdout);
 process.stdout.write = () => true;
@@ -69,7 +87,10 @@ export function toolChoiceForPi(choice, model) {
 }
 
 async function main() {
-  const { createAgentSession, SessionManager, ModelRuntime, getAgentDir } = await import(pathToFileURL(process.argv[2]).href);
+  const sdkUrl = pathToFileURL(process.argv[2]);
+  const { createAgentSession, SessionManager, ModelRuntime, getAgentDir } = await import(sdkUrl.href);
+  const { isRetryableAssistantError } = await import(new URL(
+    "node_modules/@earendil-works/pi-ai/dist/utils/retry.js", new URL("../", sdkUrl)).href);
   // The public session factory loads normal extensions and applies their provider
   // registrations to ModelRuntime. Never prompt this session or bind lifecycle
   // hooks: this is NOT an agent run and must not start MCP/tools/background work.
@@ -81,17 +102,26 @@ async function main() {
   const sessionId = randomUUID();
   try {
     for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
+      let modelName = "unknown";
       try {
         const request = JSON.parse(line);
+        modelName = `${request.provider}/${request.model}`;
         const model = runtime.getModel(request.provider, request.model);
         if (!model) throw new Error("Host Pi model unavailable");
         const options = { ...request.options, sessionId, toolChoice: toolChoiceForPi(request.tool_choice, model) };
         if (options.reasoning === "off") delete options.reasoning;
         const result = await runtime.completeSimple(model, messagesForPi(request, model), options);
-        if (["error", "aborted", "pending", "deferred"].includes(result.stopReason)) throw new Error("Pi completion failed");
-        write(JSON.stringify({ message: result }) + "\n");
-      } catch {
-        write(JSON.stringify({ error: "Pi host completion failed" }) + "\n");
+        if (result.stopReason === "error") {
+          logProviderError(modelName, result.errorMessage ?? "Unknown provider error");
+          write(JSON.stringify({ error: isRetryableAssistantError(result) ? "retryable" : "non_retryable" }) + "\n");
+        } else if (["aborted", "pending", "deferred"].includes(result.stopReason)) {
+          throw new Error(`Pi completion ${result.stopReason}`);
+        } else {
+          write(JSON.stringify({ message: result }) + "\n");
+        }
+      } catch (error) {
+        logProviderError(modelName, error?.message ?? String(error));
+        write(JSON.stringify({ error: "non_retryable" }) + "\n");
       }
     }
   } finally {
@@ -101,5 +131,8 @@ async function main() {
 
 // An import is useful for offline mapping tests; execution starts only as CLI.
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  main().catch(() => { write(JSON.stringify({ error: "Pi host SDK initialization failed" }) + "\n"); process.exitCode = 1; });
+  main().catch((error) => {
+    try { logProviderError("initialization", error?.message ?? String(error)); } catch { /* disk failure */ }
+    write(JSON.stringify({ error: "non_retryable" }) + "\n"); process.exitCode = 1;
+  });
 }

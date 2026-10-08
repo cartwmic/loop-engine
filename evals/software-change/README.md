@@ -25,6 +25,7 @@ id = "stable-case-id"
 version = "1"
 allowed_edit_scope = ["labels.py"]
 test_timeout_seconds = 60  # optional; raise it for cases that build first (e.g. Rust)
+interface_allowlist = []  # optional harness-only hidden-test identifiers
 ```
 
 - IDs are safe identifiers; versions are nonempty strings. Increment the version
@@ -56,6 +57,17 @@ uv run --project evals evalctl case-check evals/software-change/example-case
 uv run --project evals evalctl case-check /absolute/private-case-repository/CASE
 uv run --project evals evalctl case-check --expect-invalid evals/software-change/tests/fixtures/broken-case
 ```
+
+Before Docker execution, `case-check` statically extracts identifier-like quoted
+literals from hidden Python tests (including dict keys and embedded JSON/json!
+keys, CLI flags and subcommands). It rejects names absent from the starting public
+repository, public request and hidden brief, listing at most 20 names. It never
+consults the reference overlay. Very short names (under four characters), a small
+common-word/runner-plumbing stoplist and `REQ-*` tags are ignored. Use
+`interface_allowlist = ["harness_only_name"]` for harness-only names, not to hide
+feature contracts that the owner must disclose. This conservative heuristic is
+not semantic analysis: computed identifiers can escape detection; fixture values
+that look like identifiers can need an explicit allowlist.
 
 Reference/no-op attempts use separate mount-free containers. Invalid references,
 collection mismatches and skips reject the case. `--expect-invalid` succeeds only
@@ -95,7 +107,8 @@ is required.
 After every driver stop, raw `/workspace` is captured before parsing/scoring to
 `captures/<campaign>/<run timestamp>/<sample>/workspace.tar` plus host `meta.json`.
 The tar includes repo .git and local remote as well as DB/WAL, artifacts and raw
-show/history; only directories named target/.cache are excluded. If no run was
+show/history; cache-tagged directories (e.g. Cargo build target/) and .cache are
+excluded, while source directories merely named target are retained. If no run was
 created, CLI error receipts are retained without inventing DB/artifacts. Private
 captures never pass through the results scan.
 

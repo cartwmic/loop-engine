@@ -79,6 +79,67 @@ def rescore(args):
     return 0
 
 
+def merge_captures(args):
+    """Assemble private snapshots and scored records without scoring or model calls."""
+    target = SoftwareChangeTarget()
+    settings = CampaignSettings.model_validate(read_settings(args.settings))
+    _, assignments = matched_assignment(settings, target.load_cases(settings.cases_path))
+    expected = {a.sample_id: a.model_dump() for a in assignments}
+
+    def scoring_settings(value):
+        data = value.model_dump(mode="json", by_alias=True)
+        data["cases_path"] = str(value.cases_path.resolve())
+        # Execution/report label only; all model/limit/price/target options match.
+        data.pop("campaign")
+        return data
+
+    destination = args.out_dir.resolve()
+    if destination.exists():
+        raise FileExistsError("merge output directory already exists")
+    records, captures = {}, {}
+    for source in args.src_dirs:
+        summary, root = load_run(source)
+        original = settings_from_recorded(summary["settings"])
+        if scoring_settings(original) != scoring_settings(settings):
+            raise ValueError("merge requires matching scoring settings")
+        for data in summary["trials"]:
+            sample = data["sample_id"]
+            if sample in records:
+                raise ValueError(f"duplicate sample_id: {sample}")
+            if sample not in expected or any(data.get(k) != v for k, v in expected[sample].items()):
+                raise ValueError("merge capture assignment does not match target settings")
+            capture = root / sample
+            if not (capture / "meta.json").is_file():
+                capture = Path(summary.get("sources", {}).get(sample, capture))
+            archive, meta = read_capture(capture)
+            if not archive.is_file() or meta["assignment"] != expected[sample]:
+                raise ValueError("merge snapshot missing or assignment mismatch")
+            records[sample], captures[sample] = data, capture
+    if not records:
+        raise ValueError("no scored captures to merge")
+    # Validate all inputs before creating the destination; no partial output on
+    # duplicate/settings errors. A copy failure removes only this new directory.
+    destination.mkdir(mode=0o700, parents=True, exist_ok=False)
+    try:
+        for sample, capture in captures.items():
+            copied = destination / sample
+            shutil.copytree(capture, copied)
+            copied.chmod(0o700)
+            meta = json.loads((copied / "meta.json").read_text())
+            meta.update(settings=settings.recorded(), record=records[sample],
+                        usage_by_role=records[sample]["usage_by_role"], source_capture=str(capture.resolve()))
+            (copied / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+        manifest = {"settings": settings.recorded(), "matched_assignment": list(expected.values()),
+                    "sources": {}, "merged_from": [str(p.resolve()) for p in args.src_dirs]}
+        (destination / "run.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        (destination / "records.json").write_text(json.dumps({**manifest, "trials": list(records.values())}, indent=2) + "\n")
+    except BaseException:
+        shutil.rmtree(destination)
+        raise
+    print(f"Merged {len(records)} captures: {destination}")
+    return 0
+
+
 def resume_trial(args):
     archive, meta = read_capture(args.path)
     settings = settings_from_recorded(meta["settings"])
@@ -101,6 +162,11 @@ def resume_trial(args):
 
 
 def register_subcommands(subparsers):
+    parser = subparsers.add_parser("merge-captures", help="merge disjoint scored capture runs for matched campaign resume")
+    parser.add_argument("out_dir", type=Path)
+    parser.add_argument("src_dirs", type=Path, nargs="+")
+    parser.add_argument("--settings", required=True)
+    parser.set_defaults(handler=merge_captures)
     parser = subparsers.add_parser("rescore", help="score private workspace captures with the current harness")
     parser.add_argument("path", type=Path, help="capture run directory or bare /workspace tar")
     parser.add_argument("--settings")

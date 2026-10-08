@@ -7,7 +7,7 @@ import tempfile
 
 import pytest
 
-from scevals.cases import CaseFormatError, check_results, load_case, run_hidden_tests
+from scevals.cases import CaseFormatError, check_results, load_case, run_hidden_tests, unstated_interfaces
 
 ROOT = Path(__file__).resolve().parents[3]
 TARGET = ROOT / "evals/software-change"
@@ -82,6 +82,37 @@ def test_loading_never_executes_case_code(case_copy):
     tests.write_text(f"raise RuntimeError({str(sentinel)!r})\n" + tests.read_text())
     assert load_case(case_copy).id == "label-keys"
     assert not sentinel.exists()
+
+
+def test_unstated_interface_public_case_check(case_copy):
+    tests = case_copy / "hidden/tests/test_labels.py"
+    tests.write_text(tests.read_text() + '''
+@requirement("REQ-1")
+def test_interface():
+    assert {"assessment_id": 1}["assessment_id"] == 1
+    command = ["app", "author-counts", "--profile"]
+    embedded = 'json!({"review_group": "text"})'
+''')
+    case = load_case(case_copy)
+    assert unstated_interfaces(case) == ["--profile", "assessment_id", "author-counts", "review_group"]
+    command = ["uv", "run", "--project", str(ROOT / "evals"), "evalctl", "case-check", str(case_copy)]
+    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 1
+    assert "INVALID: hidden tests depend on unstated interface identifiers:" in result.stdout
+    assert "assessment_id" in result.stdout and "--profile" in result.stdout
+    assert "reference:" not in result.stdout  # static check precedes Docker
+    result = subprocess.run([*command, "--expect-invalid"], cwd=ROOT, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0
+    # Each disclosure source and the explicit harness-only escape hatch work.
+    (case_copy / "public/request.md").write_text(case.request.read_text() + " assessment_id\n")
+    (case_copy / "hidden/brief.md").write_text(case.brief.read_text() + " --profile\n")
+    (case_copy / "public/repo/cli.txt").write_text("author-counts\n")
+    manifest = case_copy / "case.toml"
+    manifest.write_text(manifest.read_text() + 'interface_allowlist = ["review_group"]\n')
+    assert unstated_interfaces(load_case(case_copy)) == []
+    manifest.write_text(manifest.read_text().replace('["review_group"]', '"review_group"'))
+    with pytest.raises(CaseFormatError, match="interface_allowlist"):
+        unstated_interfaces(load_case(case_copy))
 
 
 def test_result_checks_fail_closed():

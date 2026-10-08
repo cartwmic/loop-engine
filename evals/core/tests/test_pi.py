@@ -70,6 +70,23 @@ def test_helper_errors_are_sanitized(tmp_path, name):
     asyncio.run(run())
 
 
+def test_cancellation_during_retry_backoff_reaps_helper(tmp_path, monkeypatch):
+    monkeypatch.setattr(pi, "RETRY_BASE_DELAY_SECONDS", 60)
+    async def run():
+        m = model(tmp_path / "requests", "retryable")
+        task = asyncio.create_task(m.generate("hello"))
+        while m.api.process is None or not (tmp_path / "requests").exists():
+            await asyncio.sleep(.01)
+        await asyncio.sleep(.05)  # scripted response has entered the long backoff
+        process = m.api.process
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert process.returncode is not None and m.api.process is None
+        await m.api.aclose()
+    asyncio.run(run())
+
+
 def test_cancellation_reaps_helper(tmp_path):
     async def run():
         m = model(tmp_path / "requests", "hang")
@@ -105,7 +122,8 @@ def test_pi_auth_is_protected(tmp_path, monkeypatch, role):
             scan_results([value], protected_values({}, settings.provider_config_paths))
 
 
-def test_actual_sdk_loads_provider_extension_and_makes_one_completion(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failure", [None, "transient", "non-retryable", "exhausted"])
+def test_actual_sdk_loads_provider_extension_and_makes_one_completion(tmp_path, monkeypatch, failure):
     """Production helper + real public SDK + discovered provider, entirely scripted."""
     agent = tmp_path / "agent"
     extensions = agent / "extensions"
@@ -115,6 +133,7 @@ def test_actual_sdk_loads_provider_extension_and_makes_one_completion(tmp_path, 
     (extensions / "scripted.ts").write_text('''
 import { createAssistantMessageEventStream, getCurrentTools } from "@earendil-works/pi-ai/compat";
 export default function(pi) {
+  let attempts = 0;
   pi.registerProvider("scripted-sdk", {
     api: "claude-compat-messages", apiKey: "synthetic-no-network", baseUrl: "https://invalid.example",
     models: [{ id: "model", name: "scripted", reasoning: true, input: ["text"],
@@ -137,17 +156,49 @@ export default function(pi) {
   });
 }
 ''')
+    extension = extensions / "scripted.ts"
+    if failure:
+        condition = "++attempts === 1" if failure == "transient" else "++attempts > 0"
+        message = "503 overloaded" if failure != "non-retryable" else "400 invalid request"
+        message += " Bearer synthetic-sensitive-token sk-synthetic-sensitive-key eyJsynthetic.eyJpayloadxx.syntheticSignature"
+        extension.write_text(extension.read_text().replace('        stream.push({ type: "start", partial: message });', f'''
+        if ({condition}) {{
+          message.stopReason = "error"; message.errorMessage = {json.dumps(message)};
+          stream.push({{ type: "error", reason: "error", error: message }}); stream.end(); return;
+        }}
+        stream.push({{ type: "start", partial: message }});'''))
+    log = Path(pi.__file__).resolve().parents[2] / "software-change/logs/pi-helper-errors.log"
+    old_lines = len(log.read_text().splitlines()) if log.exists() else 0
+    monkeypatch.setattr(pi, "RETRY_BASE_DELAY_SECONDS", 0)
     monkeypatch.setenv("PI_CODING_AGENT_DIR", str(agent))
     async def run():
         m = get_model("pi/scripted-sdk/model", memoize=False, config=GenerateConfig(reasoning_effort="medium", max_retries=0, timeout=30))
         try:
-            output = await m.generate("SDK probe", tools=[TOOL], tool_choice=ToolFunction(name="lookup"))
-            assert output.message.tool_calls[0].id == "sdk-call"
-            assert output.message.tool_calls[0].arguments == {"key": "sdk"}
-            assert output.usage.total_tokens == 10
+            if failure in ("non-retryable", "exhausted"):
+                with pytest.raises(Exception) as error:
+                    await m.generate("SDK probe", tools=[TOOL], tool_choice=ToolFunction(name="lookup"))
+                assert "sensitive" not in str(error.value)
+                assert m.api.process is None
+                if failure == "non-retryable":
+                    from evalcore.target import ModelError
+                    assert isinstance(error.value, ModelError)
+                else:
+                    from evalcore.target import InfrastructureError
+                    assert isinstance(error.value, InfrastructureError)
+            else:
+                output = await m.generate("SDK probe", tools=[TOOL], tool_choice=ToolFunction(name="lookup"))
+                assert output.message.tool_calls[0].id == "sdk-call"
+                assert output.message.tool_calls[0].arguments == {"key": "sdk"}
+                assert output.usage.total_tokens == 10
         finally:
             await m.api.aclose()
     asyncio.run(run())
+    if failure:
+        entries = [json.loads(line) for line in log.read_text().splitlines()[old_lines:]]
+        assert len(entries) == (6 if failure == "exhausted" else 1)
+        assert all(e["timestamp"] and e["model"] == "scripted-sdk/model" for e in entries)
+        assert all("sensitive" not in e["message"] and "eyJ" not in e["message"] for e in entries)
+        assert all("[REDACTED]" in e["message"] for e in entries)
 
 
 def test_node_mapping_tool_result_and_images(tmp_path):

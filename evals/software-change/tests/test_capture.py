@@ -76,3 +76,21 @@ def test_unsafe_archive_is_refused_before_any_container_write(entries):
         validate_archive(path)
     with pytest.raises(ValueError):
         asyncio.run(restore(UnusedEnvironment(), path))
+
+
+def test_capture_keeps_vendored_target_dirs_and_skips_build_caches():
+    """A dir named target is source in vendored crates; only CACHEDIR.TAG dirs are caches."""
+    import subprocess
+    from scevals.image import DEFAULT_IMAGE
+    from scevals.target import CAPTURE_TAR_COMMAND
+    script = (
+        "mkdir -p /workspace/public/repo/vendor/cc/src/target /workspace/public/repo/target/debug /workspace/.cache && "
+        "echo src > /workspace/public/repo/vendor/cc/src/target/parser.rs && "
+        "echo bin > /workspace/public/repo/target/debug/big && "
+        "echo 'Signature: 8a477f597d28d172789f06886806bc55' > /workspace/public/repo/target/CACHEDIR.TAG && "
+        "echo c > /workspace/.cache/x && cd /workspace && " + CAPTURE_TAR_COMMAND + " && tar -tf /tmp/workspace.tar")
+    listed = subprocess.run(["docker", "run", "--rm", DEFAULT_IMAGE, "sh", "-c", script],
+                            capture_output=True, text=True, check=True).stdout.split()
+    assert "./public/repo/vendor/cc/src/target/parser.rs" in listed
+    assert not any(name.startswith("./public/repo/target") for name in listed)
+    assert not any(".cache" in name for name in listed)
