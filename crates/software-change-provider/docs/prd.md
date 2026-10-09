@@ -205,7 +205,7 @@ Minimal, standard and high-rigor all include ordinary and challenge review at al
 |---|---|
 | Intent | solution-agnostic, outside-verifiable, scope-fenced, constraints-are-limits, problem-grounded, acceptance-granularity, owner-comprehensible |
 | Design | intent-faithful, acceptance-covered, structural-not-procedural, decisions-justified, risk-honest, mechanism-forced |
-| Plan | task-sized, context-sufficient, done-observable, decision-free, design-faithful, dependencies-honest |
+| Plan | task-sized, context-sufficient, done-observable, decision-free, design-faithful, dependencies-honest, parallelism-honest |
 | Implementation | tasks-actually-done, no-scope-creep, design-faithful-final |
 | Validation | intent-delivered, docs-integrated, requirement-proof-mapping |
 
@@ -284,3 +284,6 @@ This amendment applies to the supported external-work successor contract, not fr
 - **A11 and Section 11 calibration:** Complete current shipped profile/gate/axis/stage/fixture coverage remains mandatory. Changed PASS/FAIL judging obligations, materiality or fixture meaning need genuine fresh returned judgments; unchanged judging behavior may use explicitly owner/driver-appraised genuine applicable history with actual source/result checks. Preserve originals, row identities, models, failures and pending states. No diagnostic/scripted/oracle-derived output supplies semantic calibration. A rehash/version/format change alone is not semantic invalidation, and no categorical whole-corpus refresh or new classifier is imposed.
 
 Exact incidental CLI grammar/JSON/schema layout belongs to supported protocols/public specifications. This amendment does not make the provider judge semantic truth, own repository/Git lifecycle or launch primary work, and does not rewrite an active bootstrap contract.
+
+### Plan concurrency: LE-184
+The successor profiles minimal-15, standard-15 and high-rigor-15 add parallelism-honest to plan-review and plan-adversarial-review at the same stages, groups and author counts as the other plan axes. It judges the whole dependency graph: independent work bundled or serialized without need, tasks with no dependency path between them whose plan text shows shared writable files or state, and splits that add coordination cost without real concurrent gain. An honest serial chain passes. It does not judge whether one declared predecessor is needed (dependencies-honest) or task size (task-sized). Plan and implementation guidance tell drivers to split work into disjoint tasks, declare only real dependencies, and dispatch tasks with no dependency path between them concurrently by default, giving a reason for serial dispatch. The guidance is advisory; nothing measures actual dispatch. Group membership is enforced for every numeric profile revision of 14 or later. Earlier frozen runs keep their obligations.
