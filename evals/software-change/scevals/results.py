@@ -5,6 +5,9 @@ from evalcore.report import UnsafeReportError, protected_values, scan_results
 from .cases import load_case
 
 
+MIN_LINE_CHARS = 24
+
+
 def hidden_values(cases_path: Path) -> tuple[set[str], set[bytes], int]:
     paths = ([cases_path] if (cases_path / "case.toml").is_file()
              else sorted(p.parent for p in cases_path.glob("*/case.toml")))
@@ -25,10 +28,10 @@ def hidden_values(cases_path: Path) -> tuple[set[str], set[bytes], int]:
                 continue
             if value.strip():
                 text.add(value.strip())
-            # Punctuation-only lines (e.g. a closing brace) are not content
-            # evidence; all nonblank lines containing a letter/digit are searched.
+            # Short lines ("0,", "validation", a state name) are not evidence of
+            # leaked case text and match every report; search distinctive lines only.
             text.update(line.strip() for line in value.splitlines()
-                        if any(c.isalnum() for c in line))
+                        if len(line.strip()) >= MIN_LINE_CHARS and any(c.isalnum() for c in line))
     return text, binary, len(paths)
 
 
