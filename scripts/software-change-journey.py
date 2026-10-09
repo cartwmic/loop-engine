@@ -2,13 +2,14 @@
 """External-driver software-change journey using scripted judgments, not semantic proof."""
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from external_work_driver import process
+from concurrent.futures import ThreadPoolExecutor
 
 ROOT = Path(__file__).resolve().parents[1]
 SUBJECTS = {'intent.json':'intent-good.json', 'design.json':'design-good.json',
@@ -27,7 +28,8 @@ def self_test():
 
 
 # bookends:LE-39 bookends:LE-40 bookends:LE-43 bookends:LE-53 bookends:LE-85 — externally driven fixture artifacts complete under selected, materially different policies without invocation receipts.
-def run(args, profile_source, root, *, configure=None, exercise=None, judgment_reason=None):
+def run(args, profile_source, root, *, configure=None, exercise=None, judgment_reason=None,
+        stop_at=None, capture=False):
     engine, provider = Path(args.engine).resolve(), Path(args.provider).resolve()
     work = Path(tempfile.mkdtemp(prefix='software-external-', dir=root))
     artifacts = work / 'artifacts'
@@ -74,8 +76,29 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
     config.write_text(f'[providers.software-change]\ncommand = {json.dumps(str(provider))}\nargs = []\n')
     database = work / 'run.sqlite'
     run_id = 'software-external'
-    def call(*args):
-        return process([engine,'--database',database,'--config',config,'--json',*args],cwd=repository)
+    environment = {key:value for key,value in os.environ.items()
+                   if not key.startswith(('LOOP_', 'XDG_'))}
+    captures = work / 'captures'
+    if capture:
+        captures.mkdir()
+    sequence = 0
+    def invoke(argv, packet=None, *, cwd=repository, allow_rejected=False):
+        nonlocal sequence
+        outcome = subprocess.run([str(arg) for arg in argv],
+                                 input=None if packet is None else json.dumps(packet),
+                                 text=True,capture_output=True,cwd=cwd,env=environment)
+        if capture:
+            sequence += 1
+            (captures / f'{sequence:04d}.json').write_text(json.dumps({
+                'argv':[str(arg) for arg in argv],'cwd':str(cwd),'input':packet,
+                'exit_code':outcome.returncode,'stdout':outcome.stdout,'stderr':outcome.stderr},indent=2))
+        response = json.loads(outcome.stdout)
+        if outcome.returncode and not (allow_rejected and response.get('status') == 'rejected'):
+            raise RuntimeError(f'{argv}: {outcome.returncode}: {outcome.stdout}\n{outcome.stderr}')
+        return response
+    def call(*args, allow_rejected=False):
+        return invoke([engine,'--database',database,'--config',config,'--json',*args],
+                      allow_rejected=allow_rejected)
     def show():
         return call('show','--view','full',run_id)
     def event(name):
@@ -85,7 +108,7 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
         return response
     def checkpoint(phase):
         before = [subprocess.check_output(['git',*argv],cwd=repository) for argv in [['rev-parse','HEAD'],['status','--porcelain']]]
-        result = process([provider,'checkpoint','--phase',phase,'--artifact-root',artifacts,
+        result = invoke([provider,'checkpoint','--phase',phase,'--artifact-root',artifacts,
                          '--working-directory',repository],cwd=repository)
         after = [subprocess.check_output(['git',*argv],cwd=repository) for argv in [['rev-parse','HEAD'],['status','--porcelain']]]
         assert before == after, 'checkpoint mutated Git state'
@@ -101,10 +124,12 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
             handled = exercise(state, {'call':call,'show':show,'event':event,'checkpoint':checkpoint,
                                        'profile':profile,'artifacts':artifacts,'repository':repository,
                                        'provider':provider,'engine':engine,'work':work,'run_id':run_id,
-                                       'database':database,'config':config,'shown':shown})
+                                       'database':database,'config':config,'shown':shown,'invoke':invoke})
             if handled:
                 continue
             shown = show()
+        if state == stop_at:
+            return work
         if state == 'end':
             assert shown['result']['lifecycle'] == 'final' and not shown['result']['has_overrides'], shown
             break
@@ -113,23 +138,9 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
                        else 'plan.json' if state.startswith('plan') else 'implementation-report.json'
                        if state.startswith('implementation') else 'validation-report.json')
             revision = json.loads((artifacts / subject).read_text())['revision']
-            for policy in profile['review_policies'][state]:
-                for index in range(policy.get('required_authors',1)):
-                    assignment = {'gate':state,'stage':policy.get('review_stage','aggregate'),
-                                  'subject':subject,'subject_revision':revision, 'group':policy['group'],
-                                  'author':{'name':f'external-{state}-{index}','kind':'agent'}}
-                    item = {'axis':policy['id'],'result':'pass','findings':'',
-                            'grounds':{'reason':'Scripted current-subject inspection.',
-                                       'evidence':[{'locator':subject+'#/revision'}]}}
-                    packet = {'show':shown,'assignment':assignment,
-                              'author':{'name':f'external-{state}-{index}','kind':'agent'},
-                              'request':{'text':f'Review {subject}.'},'original':{'text':json.dumps({'assessment_id':f'{state}-{shown["result"]["state_visit"]}-{index}', 'judgments':[item]})}}
-                    intake = process([provider,'review-candidates'],packet,cwd=repository)
-                    assert intake.get('records'), intake
-                    # bookends:LE-44 bookends:LE-47 bookends:LE-137 — external author judgments are opaque durable rows; checked progression, not intake, validates configured obligations.
-                    for candidate in intake['records']:
-                        appended = call('append',run_id,'review-evidence',json.dumps(candidate['data']))
-                        assert appended['result']['context']['data'] == candidate['data'], appended
+            append_reviews({'call':call,'invoke':invoke,'shown':shown,'profile':profile,
+                            'repository':repository,'provider':provider,'run_id':run_id},
+                           state,subject,revision,profile['review_policies'][state])
             if state == 'intent-review' and any(p['id'] == 'intent-sufficient' for p in profile['review_policies'][state]):
                 cold = [r for r in show()['result']['context'] if r['kind'] == 'review-evidence'
                         and r['data'].get('gate') == state and r['data'].get('policy_id') == 'intent-sufficient'
@@ -167,10 +178,10 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
             # bookends:LE-142 — explicit document/behavior comparison is checked before the run leaves reconciliation.
             event('reconciliation-ready')
         elif state == 'validation':
-            commission = process([provider,'commission','--slot','validation-draft'],shown,cwd=repository)
+            commission = invoke([provider,'commission','--slot','validation-draft'],shown,cwd=repository)
             results = []
             for spec in commission['commission']['proof_commands']:
-                identity = process([provider,'source-identity','--working-directory',repository],cwd=repository)
+                identity = invoke([provider,'source-identity','--working-directory',repository],cwd=repository)
                 # bookends:LE-117 — the external proof owner runs each requested command once; reviewers consume its retained actual result.
                 outcome = subprocess.run([spec['command'],*spec['args']],cwd=repository,text=True,capture_output=True)
                 assert outcome.returncode == 0, outcome.stderr
@@ -178,7 +189,7 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
                                 'cwd':str(repository),'exit_code':outcome.returncode,
                                 'stdout':outcome.stdout,'stderr':outcome.stderr,
                                 'producer':{'name':'external-driver','kind':'script'},'source':identity})
-            prepared = process([provider,'prepare-validation'],
+            prepared = invoke([provider,'prepare-validation'],
                                {'show':shown,'working_directory':str(repository),'revision':'external-v1',
                                 'author':{'name':'external-proof-owner','kind':'script'},'command_results':results},cwd=repository)
             # bookends:LE-116 — actual external executions satisfy the fixed index; preparation alone is not progression or a judgment.
@@ -206,6 +217,169 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
         else:
             raise RuntimeError(f'Unexpected workflow state {state}')
     return work
+
+
+def append_reviews(ctx, gate, subject, revision, policies, *, wrong_group=False):
+    """Return scripted external judgments through public intake, preserving group batches."""
+    shown = ctx['shown']
+    for policy in policies:
+        for index in range(policy.get('required_authors',1)):
+            author = {'name':f'external-{gate}-{index}','kind':'agent'}
+            assignment = {'gate':gate,'stage':policy.get('review_stage','aggregate'),
+                          'subject':subject,'subject_revision':revision,'group':policy['group'],
+                          'author':author}
+            item = {'axis':policy['id'],'result':'pass','findings':'',
+                    'grounds':{'reason':'Scripted current-subject inspection.',
+                               'evidence':[{'locator':subject+'#/revision'}]}}
+            packet = {'show':shown,'assignment':assignment,'author':author,
+                      'request':{'text':f'Review {subject}.'},
+                      'original':{'text':json.dumps({
+                          'assessment_id':f'{gate}-{shown["result"]["state_visit"]}-{index}',
+                          'judgments':[item]})}}
+            intake = ctx['invoke']([ctx['provider'],'review-candidates'],packet)
+            assert intake.get('records'), intake
+            # bookends:LE-44 bookends:LE-47 bookends:LE-137 — intake supplies durable rows, not progression authority.
+            for candidate in intake['records']:
+                data = candidate['data']
+                if wrong_group:
+                    # Deliberately mis-tag an otherwise valid individual judgment at append,
+                    # so evaluate (not intake's assignment check) must enforce membership.
+                    data['group'] = gate+'.individual.dependencies-honest'
+                appended = ctx['call']('append',ctx['run_id'],'review-evidence',json.dumps(data))
+                assert appended['result']['context']['data'] == data, appended
+
+
+PLAN_GUIDANCE = ('Split work into tasks that do not share writable files or state unless one '
+                 'depends on the other, and declare a dependency only where a real contract, '
+                 'context or hard-input need exists.')
+IMPLEMENT_GUIDANCE = ('Tasks with no dependency path between them (no chain of declared dependencies '
+                      'in either direction) are dispatched concurrently by default; state a reason '
+                      'when running them serially.')
+PARALLELISM_AXIS = 'parallelism-honest'
+PLAN_GATES = ('plan-review','plan-adversarial-review')
+
+
+# bookends:LE-184 bookends:LE-130 — every successor profile exposes guidance and denies missing plan-axis coverage at every stage.
+def parallelism_traversal(args, profile_source, root):
+    receipts = []
+    def configure(profile, repository, artifacts):
+        assert profile['config_version'] == profile_source.stem+'-15', profile['config_version']
+        for gate in PLAN_GATES:
+            policies = profile['review_policies'][gate]
+            siblings = [p for p in policies if p['id'] == 'dependencies-honest']
+            parallel = [p for p in policies if p['id'] == PARALLELISM_AXIS]
+            assert siblings and len(parallel) == len(siblings), (gate,policies)
+            for sibling in siblings:
+                matching = [p for p in parallel if p['review_stage'] == sibling['review_stage']]
+                assert len(matching) == 1, (gate,sibling,parallel)
+                policy = matching[0]
+                assert policy['required_authors'] == sibling['required_authors'], (gate,policy,sibling)
+                expected_group = (gate+'.individual.'+PARALLELISM_AXIS
+                                  if sibling['review_stage'] == 'individual' else sibling['group'])
+                assert policy['group'] == expected_group, (gate,policy)
+
+    def exercise(state, ctx):
+        shown = ctx['shown']
+        work = ctx['work']
+        if state in ('plan','implement'):
+            guidance = PLAN_GUIDANCE if state == 'plan' else IMPLEMENT_GUIDANCE
+            # bookends:LE-184 — AC-1 observes instructions returned by the real engine/provider, not source literals.
+            (work / f'{state}-show.json').write_text(json.dumps(shown,indent=2))
+            assert guidance in shown['result']['current_state_instructions'], (state,shown)
+        if state not in PLAN_GATES:
+            return False
+        profile = ctx['profile']
+        policies = profile['review_policies'][state]
+        parallel = [p for p in policies if p['id'] == PARALLELISM_AXIS]
+        stages = {p['review_stage'] for p in parallel}
+        revision = json.loads((ctx['artifacts'] / 'plan.json').read_text())['revision']
+        event = 'approved' if any(e['event'] == 'approved' for e in shown['result']['requestable_events']) else 'passed'
+        append_reviews(ctx,state,'plan.json',revision,[p for p in policies if p['id'] != PARALLELISM_AXIS])
+        ctx['call']('append',ctx['run_id'],'finding-ledger',json.dumps({
+            'schema_version':'1','gate':state,'subject':'plan.json','subject_revision':revision,
+            'author':{'name':'external-driver','kind':'agent'},'findings':[]}))
+
+        def refuse(label, expected_stages):
+            ctx['show']()
+            response = ctx['call']('event',ctx['run_id'],event,allow_rejected=True)
+            (work / f'{state}-{label}.json').write_text(json.dumps(response,indent=2))
+            # bookends:LE-130 bookends:LE-184 — rejected envelopes name the missing axis at each configured stage.
+            assert response['status'] == 'rejected', response
+            def diagnostics(value):
+                if isinstance(value,dict):
+                    if value.get('axis') == PARALLELISM_AXIS and 'review_stage' in value:
+                        yield value
+                    for child in value.values():
+                        yield from diagnostics(child)
+                elif isinstance(value,list):
+                    for child in value:
+                        yield from diagnostics(child)
+            axis_diagnostics = list(diagnostics(response))
+            assert {d['review_stage'] for d in axis_diagnostics} == expected_stages, response
+            assert all(any(d.get('category') in ('missing','independence')
+                           for d in axis['diagnostics']) for axis in axis_diagnostics), response
+            after = ctx['show']()
+            assert after['result']['current_state'] == state, after
+            assert after['result']['state_visit'] == shown['result']['state_visit'], after
+            return axis_diagnostics
+
+        missing = refuse('missing-parallelism',stages)
+        if profile['config_version'] == 'high-rigor-15' and state == 'plan-review':
+            aggregate = [p for p in parallel if p['review_stage'] == 'aggregate']
+            individual = [p for p in parallel if p['review_stage'] == 'individual']
+            append_reviews(ctx,state,'plan.json',revision,aggregate)
+            append_reviews(ctx,state,'plan.json',revision,individual,wrong_group=True)
+            # All other evidence, including aggregate parallelism, is now complete.
+            wrong = refuse('wrong-group',{'individual'})
+            assert all(d.get('category') not in ('malformed','unverified')
+                       for axis in wrong for d in axis['diagnostics']), wrong
+            append_reviews(ctx,state,'plan.json',revision,individual)
+            # Finish in the normal individual-then-aggregate order: challenge
+            # clearance re-evaluates each parent group using its latest batch.
+            append_reviews(ctx,state,'plan.json',revision,aggregate)
+        else:
+            append_reviews(ctx,state,'plan.json',revision,parallel)
+        accepted = ctx['event'](event)
+        (work / f'{state}-accepted.json').write_text(json.dumps(accepted,indent=2))
+        after = ctx['show']()
+        assert after['result']['current_state'] != state, after
+        receipts.append({'gate':state,'missing_stages':sorted(stages),'missing_diagnostics':missing,
+                         'wrong_group_refused':profile['config_version'] == 'high-rigor-15' and state == 'plan-review',
+                         'accepted':accepted['status']})
+        return True
+
+    work = run(args,profile_source,root,configure=configure,exercise=exercise,
+               stop_at='implement',capture=True)
+    assert {r['gate'] for r in receipts} == set(PLAN_GATES), receipts
+    (work / 'parallelism-receipts.json').write_text(json.dumps({
+        'profile':profile_source.stem+'-15','bookends':['LE-184','LE-130'],
+        'catalog':str(work / 'run.sqlite'),'receipts':receipts,
+        'guidance_captures':['plan-show.json','implement-show.json'],
+        'stopped_at':'implement'},indent=2))
+    print(f'parallelism traversal passed: {profile_source.stem}-15; receipts: {work}',flush=True)
+    return work
+
+
+# bookends:LE-184 — source proof also checks the template actually shipped by the compiled provider.
+def parallelism_journeys(args, root):
+    data_root = root / 'parallelism-data'
+    outcome = subprocess.run([str(Path(args.provider).resolve()),'data-dump',str(data_root)],
+                             text=True,capture_output=True)
+    (root / 'parallelism-data-dump.json').write_text(json.dumps({
+        'argv':[str(Path(args.provider).resolve()),'data-dump',str(data_root)],
+        'exit_code':outcome.returncode,'stdout':outcome.stdout,'stderr':outcome.stderr},indent=2))
+    assert outcome.returncode == 0, outcome.stderr
+    template = data_root / 'crates/software-change-provider/data/templates/task-packet.md'
+    text = template.read_text()
+    assert PLAN_GUIDANCE in text, template
+    assert IMPLEMENT_GUIDANCE in text, template
+    profiles = [ROOT / f'crates/software-change-provider/data/configs/{name}.json'
+                for name in ('minimal','standard','high-rigor')]
+    # Independent catalogs/repositories; bounded by the existing external-driver run budget.
+    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        works = list(pool.map(lambda profile: parallelism_traversal(args,profile,root),profiles))
+    (root / 'parallelism-receipts.json').write_text(json.dumps({
+        'template':str(template),'profiles':{profile.stem:str(work) for profile,work in zip(profiles,works)}},indent=2))
 
 
 def main():
@@ -236,6 +410,8 @@ def main():
     if args.mode == 'source':
         run(args,ROOT / 'crates/software-change-provider/data/configs/minimal.json',root)
         print('stitched software-change journey passed')
+        parallelism_journeys(args,root)
+    print(f'software-change journey captures retained: {root}')
 
 if __name__ == '__main__':
     main()

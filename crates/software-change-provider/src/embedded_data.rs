@@ -175,6 +175,13 @@ pub static FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/design-layered.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/fixtures/design-layered.json"
+        )),
+    },
+    EmbeddedFile {
         path: "crates/software-change-provider/data/calibration/fixtures/design-overbuilt.json",
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -282,6 +289,13 @@ pub static FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/plan-collision.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/fixtures/plan-collision.json"
+        )),
+    },
+    EmbeddedFile {
         path: "crates/software-change-provider/data/calibration/fixtures/plan-defective.json",
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -293,6 +307,27 @@ pub static FILES: &[EmbeddedFile] = &[
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/data/calibration/fixtures/plan-good.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/plan-missed-parallelism.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/fixtures/plan-missed-parallelism.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/plan-oversplit.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/fixtures/plan-oversplit.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/fixtures/plan-serial-honest.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/fixtures/plan-serial-honest.json"
         )),
     },
     EmbeddedFile {
@@ -530,6 +565,36 @@ fn ensure_parent_paths_are_directories(path: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn embedded_parallelism_fixtures_match_shipped_artifact_schemas() {
+        for (fixture, subject, revision_link) in [
+            ("design-layered", "design.json", "intent_revision"),
+            ("plan-missed-parallelism", "plan.json", "design_revision"),
+            ("plan-collision", "plan.json", "design_revision"),
+            ("plan-oversplit", "plan.json", "design_revision"),
+            ("plan-serial-honest", "plan.json", "design_revision"),
+        ] {
+            let path =
+                format!("crates/software-change-provider/data/calibration/fixtures/{fixture}.json");
+            let file = FILES
+                .iter()
+                .find(|file| file.path == path)
+                .expect("fixture is in FILES");
+            let instance: serde_json::Value = serde_json::from_slice(file.bytes).unwrap();
+            assert_eq!(instance["revision"], "r15", "{fixture}");
+            assert_eq!(instance[revision_link], "r15", "{fixture}");
+            for profile in ["minimal", "standard", "high-rigor"] {
+                let path = format!("crates/software-change-provider/data/configs/{profile}.json");
+                let file = FILES.iter().find(|file| file.path == path).unwrap();
+                let config: serde_json::Value = serde_json::from_slice(file.bytes).unwrap();
+                let schema =
+                    crate::schema::validate_schema(&config["artifact_schemas"][subject]).unwrap();
+                let report = schema.evaluate(&instance);
+                assert!(report.is_valid(), "{profile}/{fixture}: {report:?}");
+            }
+        }
+    }
+
+    #[test]
     fn embedded_profile_inventory_ships_contract_four_explicit_groups() {
         for name in ["minimal", "standard", "high-rigor"] {
             let path = format!("crates/software-change-provider/data/configs/{name}.json");
@@ -539,7 +604,7 @@ mod tests {
                 .expect("profile is in FILES");
             let profile: serde_json::Value = serde_json::from_slice(file.bytes).unwrap();
             assert_eq!(profile["contract_version"], 4);
-            assert_eq!(profile["config_version"], format!("{name}-14"));
+            assert_eq!(profile["config_version"], format!("{name}-15"));
             for entries in profile["review_policies"].as_object().unwrap().values() {
                 for entry in entries.as_array().unwrap() {
                     assert!(entry["group"].is_string());

@@ -1495,6 +1495,47 @@ fn software_change_groups_and_self_review_are_explicit() {
 }
 
 #[test]
+fn setup_refuses_historical_14_profiles_and_accepts_shipped_successors() {
+    let root = TestDir::new();
+    for name in ["minimal", "standard", "high-rigor"] {
+        let source = workspace_integration::package_root("software-change-provider")
+            .join(format!("data/configs/{name}.json"));
+        let mut profile: Value = serde_json::from_slice(&fs::read(&source).unwrap()).unwrap();
+        let historical = root.path.join(format!("{name}-14.json"));
+        profile["config_version"] = json!(format!("{name}-14"));
+        fs::write(&historical, serde_json::to_vec(&profile).unwrap()).unwrap();
+        let output = root.path.join(format!("{name}-profile.json"));
+        let run_setup = |source: &Path| {
+            let mut command = Command::new(workspace_integration::binary("software-change"));
+            command
+                .args(["setup", "--profile"])
+                .arg(source)
+                .arg("--output")
+                .arg(&output)
+                .arg("--decline-advice");
+            command
+                .bounded_output("setup shipped profile identity")
+                .unwrap()
+        };
+        let refused = run_setup(&historical);
+        assert_exit(&refused, 2);
+        assert!(refused.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&refused.stderr)
+            .contains("historical shipped profile IDs cannot be used for new setup"));
+        assert!(!output.exists());
+        assert!(!root
+            .path
+            .join(format!("{name}-profile.json.explain.json"))
+            .exists());
+
+        let accepted = run_setup(&source);
+        assert_exit(&accepted, 0);
+        let profile: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(profile["config_version"], format!("{name}-15"));
+    }
+}
+
+#[test]
 fn software_change_setup_knobs_explain_drift_and_author_counts_cli() {
     let root = TestDir::new();
     let output = root.path.join("profile.json");
@@ -1510,7 +1551,7 @@ fn software_change_setup_knobs_explain_drift_and_author_counts_cli() {
     assert_exit(&run_setup(&[]), 0);
     let explain_path = root.path.join("profile.json.explain.json");
     let mut explain: Value = serde_json::from_slice(&fs::read(&explain_path).unwrap()).unwrap();
-    assert_eq!(explain["base"]["id"], "minimal-14");
+    assert_eq!(explain["base"]["id"], "minimal-15");
     explain["overrides"][1]["base_value"] = json!(7);
     fs::write(&explain_path, serde_json::to_vec(&explain).unwrap()).unwrap();
     assert_exit(
