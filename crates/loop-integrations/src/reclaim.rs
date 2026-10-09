@@ -224,9 +224,15 @@ pub fn apply(database: &Path) -> Result<ReclaimApplied, ReclaimError> {
     connection
         .execute_batch("VACUUM")
         .map_err(|error| classify_on(&connection, "shrink catalog (VACUUM)", error))?;
-    connection
-        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+    let busy: i64 = connection
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
         .map_err(|error| classify_on(&connection, "truncate write-ahead log", error))?;
+    if busy != 0 {
+        return Err(ReclaimError::new(
+            "catalog-busy",
+            "truncate write-ahead log: another connection holds a WAL snapshot; legacy column clearing already committed, but shrinking is incomplete; release the reader and retry reclaim",
+        ));
+    }
     drop(connection);
     Ok(ReclaimApplied {
         database: database.to_path_buf(),

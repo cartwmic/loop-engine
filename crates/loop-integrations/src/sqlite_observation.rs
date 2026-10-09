@@ -1,5 +1,5 @@
-use super::{decode_json, load_required_run, status_read_deadline};
-use loop_core::{PersistenceError, PersistenceFailure, RunId};
+use super::{decode_json, load_required_run, sqlite_failure, status_read_deadline};
+use loop_core::{PersistenceError, RunId};
 use rusqlite::{params, Connection, TransactionBehavior};
 
 const STATUS_INVOCATION_LIMIT: i64 = 20;
@@ -394,8 +394,4 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
         .unwrap_or(0)
-}
-
-fn sqlite_failure(error: impl std::fmt::Display) -> PersistenceError {
-    PersistenceError::failure(PersistenceFailure::new("sqlite", error.to_string()))
 }

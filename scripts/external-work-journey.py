@@ -1538,9 +1538,53 @@ def reclaim_legacy_catalog(args, root, retained_work):
     reclaim_out, _ = reclaim_process.communicate(timeout=300)
     assert reclaim_process.returncode == 0, reclaim_out
     if concurrent.returncode != 0:
-        assert any(word in concurrent.stdout + concurrent.stderr for word in ['locked', 'busy']), concurrent
+        assert 'catalog-busy' in concurrent.stdout and 'retry' in concurrent.stdout, concurrent
     assert call('show', '--view', 'full', 'active-run')['status'] == 'completed'
     print('external-work reclaim alongside a concurrent driver command passed')
+
+    # Pin a reader's WAL snapshot across clearing and VACUUM. A busy checkpoint returns a row,
+    # not a SQLite exception; apply must refuse success until the rewritten pages reach the main file.
+    _seed_legacy_invocations(database, 'terminated-run', 4, 400_000)
+    holder = sqlite3.connect(database, timeout=30, isolation_level=None)
+    assert holder.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0] == 0
+    main_before = database.stat().st_size
+    holder.execute('BEGIN')
+    holder.execute('SELECT inner_workers_json FROM work_slot_invocations').fetchall()
+    active_before = _invocation_columns(database, 'active-run')
+    try:
+        pinned = engine('reclaim', '--apply')
+        assert pinned.returncode != 0, pinned.stdout
+        issue = json.loads(pinned.stdout)
+        assert 'catalog-busy' in json.dumps(issue) and 'retry' in json.dumps(issue), issue
+        assert database.stat().st_size == main_before, 'pinned snapshot keeps the old main file'
+        assert Path(str(database)+'-wal').stat().st_size > 0
+    finally:
+        holder.execute('ROLLBACK')
+        holder.close()
+    assert _invocation_columns(database, 'active-run') == active_before
+    assert sqlite3.connect(database).execute('PRAGMA integrity_check').fetchone() == ('ok',)
+    retried = call('reclaim', '--apply')
+    assert retried['status'] == 'completed', retried
+    assert database.stat().st_size < main_before - 2_000_000
+    assert not Path(str(database)+'-wal').exists() or Path(str(database)+'-wal').stat().st_size == 0
+    assert call('show', 'active-run', '--view', 'full')['status'] == 'completed'
+    print('external-work reclaim refuses a pinned WAL checkpoint and shrinks on retry passed')
+
+    # Ordinary mutation under a write lock must also explain that contention is retryable.
+    holder = sqlite3.connect(database, timeout=30, isolation_level=None)
+    holder.execute('BEGIN IMMEDIATE')
+    try:
+        ordinary_busy = engine('append', 'active-run', 'user-steering',
+                               json.dumps({'target': {'kind': 'all'}, 'instruction': 'held lock probe'}))
+        assert ordinary_busy.returncode != 0, ordinary_busy.stdout
+        issue = json.loads(ordinary_busy.stdout)
+        assert 'catalog-busy' in json.dumps(issue) and 'retry' in json.dumps(issue), issue
+    finally:
+        holder.execute('ROLLBACK')
+        holder.close()
+    assert call('append', 'active-run', 'user-steering',
+                json.dumps({'target': {'kind': 'all'}, 'instruction': 'after held lock'}))['status'] == 'completed'
+    print('external-work ordinary command reports retryable catalog contention passed')
 
     # Another process holds the catalog's write lock: reclaim stops with a clear busy error and changes nothing.
     _seed_legacy_invocations(database, 'terminated-run', 1, 100_000)

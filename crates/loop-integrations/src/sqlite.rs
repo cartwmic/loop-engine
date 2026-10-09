@@ -1356,7 +1356,10 @@ fn update_last_sequence(
         )
         .map_err(sqlite_failure)?;
     if changed != 1 {
-        return Err(sqlite_failure("updating run sequence affected no run"));
+        return Err(PersistenceError::failure(PersistenceFailure::new(
+            "sqlite",
+            "updating run sequence affected no run",
+        )));
     }
     Ok(())
 }
@@ -1915,7 +1918,16 @@ fn status_read_deadline() -> PersistenceError {
     ))
 }
 
-fn sqlite_failure(error: impl std::fmt::Display) -> PersistenceError {
+fn sqlite_failure(error: rusqlite::Error) -> PersistenceError {
+    if matches!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    ) {
+        return PersistenceError::failure(PersistenceFailure::new(
+            "catalog-busy",
+            format!("another process is holding the catalog ({error}); retry the command after it releases the catalog"),
+        ));
+    }
     PersistenceError::failure(PersistenceFailure::new("sqlite", error.to_string()))
 }
 
