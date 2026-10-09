@@ -174,7 +174,11 @@ pub fn evidence(
         "subject_revision": subject_revision,
         "config_version": config_version
     });
-    if config_version.ends_with("-14") {
+    if config_version
+        .rsplit_once('-')
+        .and_then(|(_, suffix)| suffix.parse::<u64>().ok())
+        .is_some_and(|version| version >= 14)
+    {
         value["group"] = json!(if policy_id == "intent-sufficient" {
             format!("{gate}.intent-sufficient")
         } else {
@@ -596,7 +600,11 @@ impl Engine {
                     .unwrap();
             record.data["baseline"] = intent["baseline"].clone();
         }
-        if config_version.ends_with("-14") {
+        if config_version
+            .rsplit_once('-')
+            .and_then(|(_, suffix)| suffix.parse::<u64>().ok())
+            .is_some_and(|version| version >= 14)
+        {
             record.data["group"] = json!(format!(
                 "{gate}.{}",
                 if policy_id == "intent-sufficient" {

@@ -225,7 +225,7 @@ fn resolve(args: &[String]) -> Result<(Value, PathBuf, Value), String> {
     if base["config_version"].as_str().is_some_and(|id| {
         ["minimal", "standard", "high-rigor"]
             .iter()
-            .any(|name| (1..=13).any(|version| id == format!("{name}-{version}")) || id == *name)
+            .any(|name| (1..=14).any(|version| id == format!("{name}-{version}")) || id == *name)
     }) {
         return Err("historical shipped profile IDs cannot be used for new setup".into());
     }
@@ -350,7 +350,37 @@ mod tests {
         assert!(profile.get("work_slot_bindings").is_none());
         assert!(profile.get("advice_command").is_none());
         assert_eq!(profile["contract_version"], 4);
-        assert_eq!(explain["base"]["id"], "standard-14");
+        assert_eq!(explain["base"]["id"], "standard-15");
+    }
+    #[test]
+    fn refuses_standard_14_for_new_setup() {
+        let root = std::env::temp_dir().join(format!(
+            "software-change-setup-historical-{}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let source = root.join("standard-14.json");
+        let bytes = embedded_data::FILES
+            .iter()
+            .find(|file| file.path.ends_with("data/configs/standard.json"))
+            .unwrap()
+            .bytes;
+        let mut profile: Value = serde_json::from_slice(bytes).unwrap();
+        profile["config_version"] = json!("standard-14");
+        fs::write(&source, serde_json::to_vec(&profile).unwrap()).unwrap();
+        let args = vec![
+            "--profile".into(),
+            source.to_string_lossy().into_owned(),
+            "--output".into(),
+            root.join("profile.json").to_string_lossy().into_owned(),
+            "--decline-advice".into(),
+        ];
+        let error = resolve(&args).unwrap_err();
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            error,
+            "historical shipped profile IDs cannot be used for new setup"
+        );
     }
     #[test]
     fn advice_setting_satisfies_explicit_choice_and_conflicts_refuse() {

@@ -107,6 +107,7 @@ fn high_rigor_axes() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
                 "decision-free",
                 "design-faithful",
                 "dependencies-honest",
+                "parallelism-honest",
             ]),
         ),
         (
@@ -283,9 +284,9 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
     for profile in PROFILES {
         let config = load_profile(profile);
         let expected_version = match *profile {
-            "minimal" => "minimal-14",
-            "standard" => "standard-14",
-            "high-rigor" => "high-rigor-14",
+            "minimal" => "minimal-15",
+            "standard" => "standard-15",
+            "high-rigor" => "high-rigor-15",
             _ => unreachable!("unknown profile {profile}"),
         };
         assert_eq!(config["config_version"], expected_version);

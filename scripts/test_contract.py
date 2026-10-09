@@ -684,15 +684,15 @@ class CalibrationPacketCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="calibration-packets-") as temporary:
             output = Path(temporary) / "packets"
             minimal_rows = [
-                "minimal-14|intent-review|solution-agnostic|aggregate|intent-defective",
-                "minimal-14|intent-review|owner-comprehensible|aggregate|intent-owner-unstated-background",
+                "minimal-15|intent-review|solution-agnostic|aggregate|intent-defective",
+                "minimal-15|intent-review|owner-comprehensible|aggregate|intent-owner-unstated-background",
             ]
             self.prepare(output, "minimal", minimal_rows)
             high_rigor_rows = [
-                "high-rigor-14|plan-review|design-faithful|aggregate|plan-good",
-                "high-rigor-14|implementation-review|tasks-actually-done|aggregate|implementation-report-good",
-                "high-rigor-14|validation-review|docs-integrated|aggregate|validation-report-good",
-                "high-rigor-14|validation-review|requirement-proof-mapping|aggregate|validation-report-good",
+                "high-rigor-15|plan-review|design-faithful|aggregate|plan-good",
+                "high-rigor-15|implementation-review|tasks-actually-done|aggregate|implementation-report-good",
+                "high-rigor-15|validation-review|docs-integrated|aggregate|validation-report-good",
+                "high-rigor-15|validation-review|requirement-proof-mapping|aggregate|validation-report-good",
             ]
             self.prepare(output, "high-rigor", high_rigor_rows)
             for case in ("sufficient", "related-insufficient", "implementation-defect"):
@@ -709,7 +709,7 @@ class CalibrationPacketCliTests(unittest.TestCase):
                 metadata_by_key[metadata["row_key"]] = metadata
             defective_key = minimal_rows[0]
             defective_metadata = metadata_by_key[defective_key]
-            self.assertEqual(defective_metadata["input_sha256"], "f2ee894e3783e3c0eec48b9c5fd6a29990f6ef292941e88c33e2ab711bc6a1c9")
+            self.assertEqual(defective_metadata["input_sha256"], "04028f55cbd48590219981e77ab4555cbad47de51a0674c7650f04118f19e3a7")
 
             self.add_dummy_captures(output, packets)
             fresh_result = self.run_consumer(
