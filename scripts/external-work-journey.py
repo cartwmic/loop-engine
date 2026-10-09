@@ -2545,6 +2545,62 @@ def intent_sufficient_comparison(args, root):
                                  ROOT / 'crates/software-change-provider/data/configs/minimal.json',root,configure=configure,exercise=hook)
 
 
+# bookends:LE-184 — observe every software artifact immediately before/after its required adversarial approval exit, including edits made during review.
+def retention_software_approval_exits(args, root):
+    exits = {
+        'intent-adversarial-review': ('approved', 'design', ['intent.json']),
+        'design-adversarial-review': ('approved', 'plan', ['design.json']),
+        'plan-adversarial-review': ('approved', 'implement', ['plan.json']),
+        'implementation-adversarial-review': ('approved', 'validation', ['implementation-report.json', 'reconciliation.json']),
+        'validation-adversarial-review': ('passed', 'end', ['validation-report.json']),
+    }
+    review_edits = {
+        'intent-review': ('intent.json', 'problem'),
+        'design-review': ('design.json', 'approach'),
+        'plan-review': ('plan.json', 'objective'),
+    }
+    approved, pending, observed, edited = [], [], set(), set()
+
+    def observe(phase, ctx):
+        # The previous callback saw the artifact bytes before the exit; this
+        # callback is the first public observation after that actual transition.
+        approved.extend(pending)
+        pending.clear()
+        entries = retained_view(ctx['call'], ctx['run_id'])
+        assert len(entries) == len(approved), (
+            'retention appeared before its owning-phase approval exit', phase,
+            [e['transition'] for e in entries], [e['transition'] for e in approved])
+        for entry, snapshot in zip(entries, approved):
+            assert entry['name'] == snapshot['name'], entry
+            assert entry['transition'] == snapshot['transition'], (
+                'retention used the wrong approval transition', entry, snapshot)
+            assert entry['exit'] == 'checked' and entry['bytes'] == snapshot['bytes'], entry
+        if phase in review_edits:
+            assert phase not in edited
+            name, field = review_edits[phase]
+            path = ctx['artifacts'] / name
+            value = json.loads(path.read_text())
+            value[field] += '\nApproved retention proof bytes authored during ' + phase + '.'
+            path.write_text(json.dumps(value))
+            edited.add(phase)
+        if phase in exits:
+            assert phase not in observed
+            event, target, names = exits[phase]
+            transition = {'source': phase, 'event': event, 'target': target}
+            pending.extend({'name': name, 'transition': transition,
+                            'bytes': (ctx['artifacts'] / name).read_bytes()} for name in names)
+            observed.add(phase)
+        return False
+
+    software_module().run(
+        SimpleNamespace(engine=args.engine, provider=args.software, mode='source', data_root=None),
+        ROOT / 'crates/software-change-provider/data/configs/high-rigor.json', root,
+        exercise=observe)
+    assert observed == set(exits) and edited == set(review_edits)
+    assert not pending and len(approved) == 6, 'every phase exit must be observed after commit'
+    print('external-work software-change exact adversarial approval exits and review-edited bytes passed')
+
+
 def main():
     parser = argparse.ArgumentParser()
     for key in ['engine','software','policy','research','checker','output-root']:
@@ -2596,6 +2652,7 @@ def main():
     retention_provider_runs(args,root)
     retained_work = retention_software_revisions(args,root)
     retention_software_overrides(args,root)
+    retention_software_approval_exits(args,root)
     reclaim_legacy_catalog(args,root,retained_work)
     early_review_briefs(args,root)
     generated = raw([sys.executable,ROOT / 'scripts/generate-prd-journey.py','--mode','source',
