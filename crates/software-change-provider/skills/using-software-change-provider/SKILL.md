@@ -1,6 +1,6 @@
 ---
 name: using-software-change-provider
-description: Use when driving software-change intent, design, plan, implementation, reconciliation and validation with externally performed work, independent reviews and driver-owned finding disposition.
+description: Use when driving software-change phases, optional reviewed narratives and owner checkpoints with externally performed work, independent reviews and driver-owned finding disposition.
 ---
 
 # Using the software-change provider
@@ -59,6 +59,156 @@ Confirm every changed obligation, author floor and advice/Bookends state before 
 Use --bookends only for an explicit opt-in. Read the resulting exact config/contract
 versions; do not apply current contracts to historical runs or silently migrate them.
 Register the absolute provider command under exact alias software-change.
+
+## Optional narratives and owner checkpoints
+
+Use the current source provider for this procedure. Its `minimal-15`, `standard-15`
+and `high-rigor-15` profiles default `extra.narratives` and `extra.checkpoints` to
+empty lists. Installed 0.24.1 and existing `-14` runs retain their earlier capabilities
+and obligations; do not change their runtime or infer these options from this skill.
+
+Choose phases through setup's boolean settings. For all supported phases:
+
+```sh
+software-change setup --rigor standard --decline-advice --output /absolute/profile.json \
+  --set narrative.design=true --set narrative.plan=true --set narrative.validation=true \
+  --set checkpoint.intent=true --set checkpoint.design=true --set checkpoint.plan=true \
+  --set checkpoint.implementation=true --set checkpoint.validation=true
+```
+
+Use `--rigor high` for high-rigor. A setting with `false` removes that phase;
+disabling a narrative also removes its two materialized review gates. Setup writes
+the phase lists under `extra` and `<phase>-narrative-review` /
+`<phase>-narrative-adversarial-review` under `review_policies`. Inspect
+`FILE.explain.json`: `overrides` records each choice and `effective` exposes
+`narratives`, `checkpoints` and review policies. Confirm exact output bytes before
+start. Lists, gates, stages, floors and self-review rules freeze with initial input;
+later profile-file edits have no effect on the active run.
+
+### Write and review the narrative
+
+1. Clear the phase's configured artifact ordinary review, then challenge review.
+   Wait for `<phase>-narrative` before writing prose. Reviewless routes ask for it
+   after their checked artifact exit; they establish no semantic artifact approval.
+   JSON stays authoritative and its bytes must remain unchanged during narrative work.
+2. Read the [writing guide](../../data/templates/narrative.md) and
+   [binding schema](../../data/narrative-schema.json). Write the standalone markdown
+   and canonical JSON binding under the run's `artifact_root`:
+
+   | Phase | Approved artifact | Markdown | Binding/review subject |
+   |---|---|---|---|
+   | design | design.json | design-narrative.md | design-narrative.json |
+   | plan | plan.json | plan-narrative.md | plan-narrative.json |
+   | validation | validation-report.json | validation-narrative.md | validation-narrative.json |
+
+   Use plain English for an engineer without Loop Engine context. Preserve material
+   qualifications, risks and evidence references. Validation prose distinguishes
+   delivered outcomes, successful/failed/missing proof and residual limitations.
+3. Bind the exact artifact subject, revision and lowercase 64-hex SHA-256, the latest
+   approved-artifact context record's actual ID, and markdown filename/hash. Set
+   `revision` to `<exact artifact revision>/<positive counter>` (e.g. `3/1`, no leading
+   zeroes); declare the actual author. The template contains the closed JSON example.
+   On reviewless exits approval may be nested as `data.approved_artifact` in an
+   `artifact-admitted` record; implementation facts may share a `reconciliation-decision`
+   record. Cite the enclosing engine context ID. Do not invent a separate nested ID.
+4. Observe and request the shown `narrative-ready` (or final `passed`). Admission
+   records `narrative-admitted` and pins that single-use revision to the markdown bytes.
+   An admitted revision can never be admitted again, including after restoring old prose.
+5. In `<phase>-narrative-review`, commission with completed full show; for example:
+
+   ```sh
+   software-change commission --slot design-narrative-review --stage aggregate < /absolute/full-show.json
+   ```
+
+   Inspect `missing_inputs`, `review_target`, `review_sources` and `approved_artifact`.
+   Supply the markdown, binding, approved artifact and frozen intent to reviewers.
+   For high-rigor, commission `individual` before `aggregate` with the same two
+   identities; first aggregate sessions receive no individual-stage judgments.
+   Citations must name sources they actually inspected. Follow Per-gate loop intake
+   with genuine requests/returns, `review-candidates`, accepted `review-evidence`
+   and the driver `finding-ledger` for the binding's composite revision.
+6. Cover the materialized `narrative-faithful`, `narrative-intent-aligned` and
+   `narrative-understandable` axes at each configured stage/group/floor. Shipped
+   minimal uses one aggregate author; standard uses two; high-rigor uses two at
+   individual and aggregate stages, preserving the configured author-set rules and
+   peer isolation. Inspect full show and `author-counts` for effective obligations.
+   Zero-review fixtures prove mechanics only and cannot stand in for high-rigor proof.
+7. Clear ordinary findings before commissioning `<phase>-narrative-adversarial-review`.
+   Challenge tests the clean conclusion. Request shown `approved`, or `passed` on
+   the last hop. JSON and markdown must still match the latest admissions and approval.
+
+For prose corrections use the narrative review's check-free `revise`, rewrite with
+an unused counter, and repeat both reviews. For a JSON defect use `revise-design`,
+`revise-plan` or `revise-validation` from the narrative draft/review to its phase draft.
+A new artifact revision needs fresh/appraised permissible artifact review, a fresh
+narrative prefix and a new decision. Preserve accepted findings and evidence history.
+
+### Wait for and record the owner decision
+
+At `<phase>-checkpoint`, commission that exact slot with completed full show.
+Read `owner_approval_view` and its current subject/revision/sources; its
+`owner_approval.status: not-performed` supplies no approval. The subject is the
+narrative binding when enabled, otherwise the artifact. Intent and implementation
+always use their artifacts. Ask the owner about those exact bytes and retain the
+answer verbatim. Follow checkout-root `docs/agent-usage.md` (Owner decision records)
+for the closed `owner-decision` example, ordinary append and checked event forms.
+
+- Approve: append the exact current checkpoint/subject/revision, `decision: approve`,
+  nonblank verbatim `text` and actual `actor`. Omit `target`/`reason` or use null.
+  Observe, then request shown `approved` (final validation uses `passed`).
+- Reject artifact: retain nonblank reason/text and `target: artifact`, even when the
+  checkpoint subject is the narrative. Checked `revise` returns to the phase draft
+  (`explore`, `design`, `plan`, `implement` or `validation`). Use a never-admitted
+  artifact revision and fresh or explicitly re-appraised eligible evidence; judgments
+  recorded before the latest artifact rejection cannot be carried by later applicability.
+  Repeat any enabled narrative review and obtain a fresh owner decision.
+- Reject narrative: retain reason/text and `target: narrative`. Checked
+  `revise-narrative` returns to `<phase>-narrative`; use a never-admitted composite
+  revision, repeat ordinary/challenge narrative reviews and obtain a new decision.
+  The unchanged artifact and its reviews stay valid. This route exists only with a narrative.
+
+The latest well-formed decision for this checkpoint across all revisions controls.
+A later decision for another subject/revision leaves the current checkpoint pending;
+an old approval cannot revive. Malformed decisions are ignored with diagnostics.
+Actor kinds human/agent/script are supported claims; there is no human authentication.
+`intent-comparison` and checkpoint approval satisfy separate obligations. An override
+never supplies approval and remains visible as exceptional completion.
+
+### Freshness, recovery and completion
+
+In option-enabled phases, artifact admission records the current revision/hash at
+the checked artifact-bearing boundary and refuses any previously admitted revision.
+Implementation's `implementation-ready` handoff to reconciliation remains report-free;
+its report admission occurs at the post-reconciliation `reconciliation-ready` hop.
+Finalize report/checkpoint for that reconciled tree before that hop, as required by
+the shown duties. Approving exits require the latest artifact admission and unchanged
+approved bytes; narrative exits also require the latest narrative admission and hash.
+Restoring an older revision or updating a hash under an admitted identity cannot pass.
+
+Checkpoint rejection routes use the recorded approved/admitted identity and matching
+rejection; they do not read prematurely edited files. If files are already changed or
+malformed, record the decision against the commissioned revision and take `revise` or
+`revise-narrative`, then repair in the draft with a new identity. Do not restore old
+bytes to disguise a rewrite or use an override to supply missing review.
+
+The final `passed` into end still checks the complete validation-report index,
+criterion/goal judgments, command evidence, proof/checkpoints, reconciliation and
+Bookends/candidate obligations where enabled. These duties follow the last optional
+narrative or checkpoint hop, including reviewless routes. Owner approval replaces none
+of them. Accepted implementation proof is recorded on the actual hop entering validation.
+Preserve each phase's last reviewed markdown, binding, artifact and context/history;
+retain prior reviewed bytes externally before overwriting a pair. Deleting the artifact
+directory loses its narratives. Share safety/redaction review is outside these options.
+
+## Provider-owned steering shape
+
+Before appending `user-steering`, load checkout-root
+`docs/agent-usage.md#software-change-steering-records` for the closed payload,
+targets, optional fields and exact prior-intent digest format. Retain the owner's
+words in `instruction`; the generic engine `{text}` example is not this provider's
+schema. Keep arbitrary authorization metadata out of this kind. A malformed
+durable record blocks commission and final validation before supersession;
+preserve it and seek authorized replacement, not a history edit or bypass.
 
 ## Cold reconstruction comparison
 
@@ -228,7 +378,11 @@ Execute required proof commands externally, preserving real argv, cwd, exit_code
 stdout/stderr, producer and source identity. Obtain identity with
 `software-change source-identity --working-directory ABS`; do not fabricate results.
 Feed `software-change prepare-validation` stdin with show, working_directory, revision,
-author, command_results and additions. Missing/failed/stale results need correction;
+author, command_results and additions. Before constructing result rows, load
+checkout-root `docs/agent-usage.md#software-change-external-command-results` for
+exact `id`, nested `source`, external attribution and output-reference fields.
+Adapt serialization of retained facts, not results; `proof_id` or `source_identity`
+alone is not the helper's input shape. Missing/failed/stale results need correction;
 the helper launches nothing and supplies no passing verdicts.
 Inspect diagnostics/commands_complete, append genuine addition_candidates and
 command_candidates with their proposed IDs, then complete report_draft.

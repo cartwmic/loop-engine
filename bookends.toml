@@ -4,6 +4,7 @@ prd = "docs/PRD.md"
 pathspecs = [
   "scripts/external-work-journey.py",
   "scripts/software-change-journey.py",
+  "scripts/narrative-checkpoint-journey.py",
   "scripts/policy-document-journey.py",
   "scripts/research-journey.py",
   "scripts/generate-prd-journey.py",

@@ -1,0 +1,17 @@
+{
+  "revision": "r15/1",
+  "author": {
+    "name": "narrative-writer",
+    "kind": "agent"
+  },
+  "artifact": {
+    "subject": "plan.json",
+    "revision": "r15",
+    "sha256": "5947037a7353b11736044a3ca551b55fc4cb973819bf38e71f8af7f6e6cf3f94"
+  },
+  "approved_artifact_record_id": "approved-plan-r15",
+  "markdown": {
+    "file": "plan-narrative.md",
+    "sha256": "e1ea18e15459b3726cf1533965f26d2cad727a51fbdf41c5a028aa36d1056882"
+  }
+}

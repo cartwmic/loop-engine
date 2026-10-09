@@ -2,6 +2,7 @@
 
 mod config;
 mod criterion;
+mod narratives;
 mod overlay;
 mod recovery_contract;
 mod schema;

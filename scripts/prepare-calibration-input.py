@@ -16,6 +16,65 @@ from typing import Any, Iterable
 
 COVERAGE_CASES = ("sufficient", "related-insufficient", "implementation-defect")
 COVERAGE_GATES = ("intent-review", "intent-adversarial-review")
+NARRATIVE_PHASES = ("design", "plan", "validation")
+# Fixture identities are driver metadata, never rendered as reviewer role labels.
+NARRATIVE_PAIRINGS = {
+    "design": {"narrative-faithful": ("narrative-101", "narrative-111"),
+               "narrative-intent-aligned": ("narrative-101", "narrative-113"),
+               "narrative-understandable": ("narrative-101", "narrative-112")},
+    "plan": {"narrative-faithful": ("narrative-102", "narrative-121"),
+             "narrative-intent-aligned": ("narrative-102", "narrative-123"),
+             "narrative-understandable": ("narrative-102", "narrative-122")},
+    "validation": {"narrative-faithful": ("narrative-103", "narrative-131"),
+                   "narrative-intent-aligned": ("narrative-103", "narrative-133"),
+                   "narrative-understandable": ("narrative-103", "narrative-132")},
+}
+
+
+def narrative_pairing(profile: str, phase: str, axis: str) -> tuple[str, str]:
+    """Keep the paired universe; isolate validation seeds by profile family."""
+    pair = NARRATIVE_PAIRINGS.get(phase, {}).get(axis)
+    if pair is None:
+        die(f"unsupported narrative pairing {phase}/{axis}")
+    if profile not in PROFILE_NAMES:
+        die(f"unsupported narrative profile family {profile}")
+    if phase == "validation" and axis == "narrative-faithful":
+        return pair[0], {"minimal": "narrative-131", "standard": "narrative-133", "high-rigor": "narrative-134"}[profile]
+    if phase == "validation" and axis == "narrative-intent-aligned":
+        return pair[0], "narrative-133"
+    return pair
+
+
+def narrative_gate(gate: str) -> bool:
+    return gate in {phase + suffix for phase in NARRATIVE_PHASES
+                    for suffix in ("-narrative-review", "-narrative-adversarial-review")}
+
+
+def narrative_policies(profile: dict[str, Any]) -> Iterable[tuple[str, dict[str, Any]]]:
+    templates = profile.get("extra", {}).get("narrative_review")
+    if not isinstance(templates, dict) or set(templates) != {"ordinary", "challenge"}:
+        die("profile must contain ordinary and challenge narrative templates")
+    for phase in NARRATIVE_PHASES:
+        for kind, suffix in (("ordinary", "-narrative-review"), ("challenge", "-narrative-adversarial-review")):
+            policies = templates[kind]
+            if not isinstance(policies, list) or not policies:
+                die("empty narrative template coverage")
+            seen = set()
+            for policy in policies:
+                if not isinstance(policy, dict) or policy.get("id") not in NARRATIVE_PAIRINGS[phase]:
+                    die("unsupported narrative template axis")
+                stage = policy.get("review_stage")
+                key = (policy["id"], stage)
+                if stage not in ("individual", "aggregate") or key in seen:
+                    die("unsupported or duplicate narrative template stage")
+                seen.add(key)
+            for stage in {stage for _axis, stage in seen}:
+                if any((axis, stage) not in seen for axis in NARRATIVE_PAIRINGS[phase]):
+                    die("missing narrative template axis coverage")
+            for policy in policies:
+                yield phase + suffix, policy
+
+
 PROFILE_NAMES = ("minimal", "standard", "high-rigor")
 SUBJECTS = {
     "intent-review": ("intent.json", "intent.md", ()),
@@ -196,6 +255,13 @@ def reviewer_display_label(
         "example_prompt": "selected review prompt",
         "reviewer-protocol:data/reviewer-protocol.md": "review protocol",
         "request-json": "canonical request JSON",
+        "review-worker-preamble:data/review-worker-preamble.txt": "shipped review-worker preamble",
+        "assignment-json": "frozen narrative assignment",
+        "schema:data/narrative-schema.json": "narrative binding schema",
+        "markdown": f"narrative markdown: {subject.removesuffix('.json')}.md",
+        "approved-artifact": "exact approved artifact",
+        "frozen-intent": "frozen intent: intent.json",
+        "challenge-context": "ordinary review and cleared finding dispositions",
     }
     if label in fixed_labels:
         return fixed_labels[label]
@@ -286,6 +352,12 @@ def manifest_row(manifest: Any, identity: dict[str, str]) -> dict[str, Any]:
 
 
 def policy_prompt(profile: dict[str, Any], gate: str, axis: str, stage: str) -> str:
+    if narrative_gate(gate):
+        matches = [p for g, p in narrative_policies(profile) if g == gate
+                   and p.get("id") == axis and p.get("review_stage") == stage]
+        if len(matches) != 1 or not isinstance(matches[0].get("example_prompt"), str) or not matches[0]["example_prompt"]:
+            die(f"missing or duplicate narrative policy {gate}/{axis}/{stage}")
+        return matches[0]["example_prompt"]
     policies = profile.get("review_policies")
     entries = policies.get(gate) if isinstance(policies, dict) else None
     if not isinstance(entries, list):
@@ -415,10 +487,16 @@ def make_case(
             die(
                 f"profile config_version {profile.get('config_version')!r} does not match row {config_version!r}"
             )
-        if gate not in SUBJECTS:
+        if narrative_gate(gate):
+            phase = gate.split("-", 1)[0]
+            if fixture_id not in narrative_pairing(profile_basename, phase, axis):
+                die("fixture does not belong to narrative axis pairing")
+            subject, template, predecessors = phase + "-narrative.json", "narrative.md", ()
+        elif gate not in SUBJECTS:
             die(f"unsupported calibration gate {gate}")
-        subject, template, _ = SUBJECTS[gate]
-        predecessors = required_predecessors(gate, fixture_id)
+        else:
+            subject, template, _ = SUBJECTS[gate]
+            predecessors = required_predecessors(gate, fixture_id)
         fixture_path = safe_join(
             repository,
             f"crates/software-change-provider/data/calibration/fixtures/{fixture_id}.json",
@@ -455,10 +533,10 @@ def make_case(
     subject_value, subject_bytes = fixture_identity(fixture_path, "subject fixture")
     subject_revision = subject_value["revision"]
     prompt_bytes = prompt.encode("utf-8")
-    schema_value = profile.get("artifact_schemas", {}).get(subject)
+    schema_value = read_json(repository / "crates/software-change-provider/data/narrative-schema.json", "narrative schema") if narrative_gate(gate) else profile.get("artifact_schemas", {}).get(subject)
     if schema_value is None:
         die(f"profile has no artifact schema for {subject}")
-    schema_bytes = canonical_json(schema_value)
+    schema_bytes = read_bytes(repository / "crates/software-change-provider/data/narrative-schema.json", "narrative schema") if narrative_gate(gate) else canonical_json(schema_value)
 
     instruction_bytes = read_bytes(
         repository / "crates/software-change-provider/data/calibration/reviewer-instruction.txt",
@@ -494,6 +572,8 @@ def make_case(
             subject_bytes,
         ),
     ]
+    if narrative_gate(gate):
+        records = narrative_records(repository, profile, identity, subject_value, records)
     for predecessor in predecessors:
         predecessor_path = safe_join(
             repository,
@@ -506,7 +586,7 @@ def make_case(
                 read_bytes(predecessor_path, "predecessor fixture"),
             )
         )
-    if coverage_case is None:
+    if coverage_case is None and not narrative_gate(gate):
         records.extend(calibration_companions(repository, subject_value, gate, axis))
     elif companion_path is not None:
         companion_bytes = read_bytes(companion_path, "companion")
@@ -580,6 +660,9 @@ def make_case(
         "prompt_sha256": hashlib.sha256(prompt_bytes).hexdigest(),
         "instructions_sha256": hashlib.sha256(instructions_bytes).hexdigest(),
     }
+    if narrative_gate(gate):
+        preparation["output_format"] = "review-worker-batch-v3"
+        preparation["challenge_context_provenance"] = "synthetic-corpus-stimulus-not-genuine-review" if gate.endswith("adversarial-review") else "not-supplied"
     preparation.update(coverage_metadata)
     (case_dir / "preparation.json").write_text(
         json.dumps(preparation, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -587,11 +670,68 @@ def make_case(
     return case_dir
 
 
+def narrative_records(repository: Path, profile: dict, identity: dict, binding: dict,
+                      records: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
+    data = repository / "crates/software-change-provider/data"
+    phase = identity["gate"].split("-", 1)[0]
+    fixture = identity["fixture_id"]
+    artifact_id = {"design": "design-good", "plan": "plan-good", "validation": "validation-report-good"}[phase]
+    artifact = read_bytes(data / f"calibration/fixtures/{artifact_id}.json", "approved artifact")
+    markdown = read_bytes(data / f"calibration/fixtures/{fixture}.md", "narrative markdown")
+    if (binding.get("revision") != "r15/1" or binding.get("artifact") != {
+            "subject": SUBJECTS[phase + "-review"][0], "revision": "r15",
+            "sha256": hashlib.sha256(artifact).hexdigest()}
+        or binding.get("markdown") != {"file": phase + "-narrative.md", "sha256": hashlib.sha256(markdown).hexdigest()}
+        or binding.get("approved_artifact_record_id") != "approved-" + phase + "-r15"
+        or set(binding) != {"revision", "author", "artifact", "markdown", "approved_artifact_record_id"}
+        or binding.get("author") != {"name": "narrative-writer", "kind": "agent"}):
+        die("invalid narrative binding identity or exact byte hashes")
+    assignment = {
+        "author": {"name": "calibration-reviewer", "kind": "agent"},
+        "gate": identity["gate"], "review_stage": identity["review_stage"],
+        "axes": [{"id": identity["axis"], "example_prompt": policy_prompt(profile, identity["gate"], identity["axis"], identity["review_stage"])}],
+        "subject": phase + "-narrative.json", "subject_revision": "r15/1",
+        "instructions": "Review only supplied bytes; do not resolve fictional-repo labels or live paths. The shipped preamble governs output: return its batch-v3 object for this one axis and stage, not the older calibration instruction's single review-evidence record. No validation_verdicts: this is narrative review. Use supplied role/file names for locators. Ordinary context when supplied is a controlled corpus stimulus, not actual live-gate fulfillment. Never infer a verdict from its existence.",
+    }
+    # Existing-key streams retain their original instruction and schema records.
+    records.insert(1, ("review-worker-preamble:data/review-worker-preamble.txt", read_bytes(data / "review-worker-preamble.txt", "preamble")))
+    records.insert(2, ("assignment-json", canonical_json(assignment)))
+    records[6] = ("schema:data/narrative-schema.json", read_bytes(data / "narrative-schema.json", "narrative schema"))
+    records.extend([("markdown", markdown), ("approved-artifact", artifact),
+                    ("frozen-intent", read_bytes(data / "calibration/fixtures/intent-good.json", "frozen intent"))])
+    for predecessor in required_narrative_predecessors(phase):
+        records.append((f"required predecessor:data/calibration/fixtures/{predecessor}.json", read_bytes(data / f"calibration/fixtures/{predecessor}.json", "predecessor")))
+    if phase == "validation":
+        records.extend(calibration_companions(repository, read_json(data / f"calibration/fixtures/{artifact_id}.json", "approved artifact"), "validation-review", "intent-delivered"))
+        records.extend(requirement_companions_for_narrative(repository))
+    if identity["gate"].endswith("adversarial-review"):
+        records.append(("challenge-context", read_bytes(data / f"calibration/fixtures/{phase}-narrative-context-{identity['axis']}.json", "ordinary context")))
+    return records
+
+
+def required_narrative_predecessors(phase: str) -> tuple[str, ...]:
+    return {"design": (), "plan": ("design-good",), "validation": ("design-good", "plan-good", "implementation-report-good")}[phase]
+
+
+def requirement_companions_for_narrative(repository: Path) -> list[tuple[str, bytes]]:
+    return [(f"companion:{label}", read_bytes(repository / f"crates/software-change-provider/data/calibration/companions/{label}", "proof companion")) for label in REQUIREMENT_PROOF_COMPANIONS]
+
+
 def prepare_successor_manifest(repository: Path, manifest: list, procedure: bytes) -> list:
-    """Derive complete successor identities, never observations/applicability."""
+    """Derive complete successor identities, never observations/applicability.
+
+    An attested current row is kept only when its recorded input hash equals the
+    freshly derived packet hash; otherwise preparation stops for review."""
+    key_of = lambda row: tuple(row[k] for k in ("config_version", "gate", "axis", "review_stage", "fixture_id"))
     output = [row for row in manifest if not row["config_version"].endswith("-15")]
-    existing = {tuple(row[k] for k in ("config_version", "gate", "axis", "review_stage", "fixture_id")): row
-                for row in manifest if row["config_version"].endswith("-15")}
+    existing = {key_of(row): row for row in manifest if row["config_version"].endswith("-15")}
+    def keep_or_new(row: dict) -> dict:
+        prior = existing.get(key_of(row))
+        if prior and prior["observed"] != "pending":
+            if prior["input_sha256"] != row["input_sha256"]:
+                die("attested current row has changed inputs: " + "|".join(key_of(row)))
+            return prior
+        return row
     for name in PROFILE_NAMES:
         path = repository / f"crates/software-change-provider/data/configs/{name}.json"
         profile = read_json(path, "successor profile")
@@ -607,20 +747,25 @@ def prepare_successor_manifest(repository: Path, manifest: list, procedure: byte
                     sources = [dict(fixture_id=fixture, gate=gate, axis=policy["id"], review_stage=policy["review_stage"], expected=result) for fixture, result in PARALLELISM_FIXTURES]
                 if not sources: die(f"missing predecessor fixtures for {name}/{gate}/{policy['id']}")
                 for source in sources:
-                    row = {k: source[k] for k in ("fixture_id", "gate", "axis", "review_stage", "expected")}
-                    row.update(config_version=profile["config_version"], observed="pending", model="",
-                               attested_by="", invocation="Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.")
-                    key = "|".join(row[k] for k in ("config_version", "gate", "axis", "review_stage", "fixture_id"))
-                    row["input_sha256"] = make_case(repository=repository, procedure=procedure, manifest=[row],
-                        profile_path=path, profile=profile, output_root=repository, identity=parse_row_key(key), hash_only=True)
-                    prior = existing.get(tuple(key.split("|")))
-                    if prior and prior["observed"] != "pending":
-                        if prior["input_sha256"] != row["input_sha256"]: die(f"attested current row has changed inputs: {key}")
-                        row = prior
-                    output.append(row)
-    if not output or len({tuple(row[k] for k in ("config_version", "gate", "axis", "review_stage", "fixture_id")) for row in output}) != len(output):
+                    output.append(keep_or_new(pending_successor(repository, procedure, path, profile, source)))
+        for gate, policy in narrative_policies(profile):
+            phase = gate.split("-", 1)[0]
+            for fixture, result in zip(narrative_pairing(name, phase, policy["id"]), ("pass", "fail")):
+                output.append(keep_or_new(pending_successor(repository, procedure, path, profile,
+                    dict(fixture_id=fixture, gate=gate, axis=policy["id"], review_stage=policy["review_stage"], expected=result))))
+    if not output or len({key_of(row) for row in output}) != len(output):
         die("empty or duplicate calibration universe")
     return output
+
+
+def pending_successor(repository: Path, procedure: bytes, path: Path, profile: dict, source: dict) -> dict:
+    row = {k: source[k] for k in ("fixture_id", "gate", "axis", "review_stage", "expected")}
+    row.update(config_version=profile["config_version"], observed="pending", model="", attested_by="",
+               invocation="Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.")
+    key = "|".join(row[k] for k in ("config_version", "gate", "axis", "review_stage", "fixture_id"))
+    row["input_sha256"] = make_case(repository=repository, procedure=procedure, manifest=[row],
+        profile_path=path, profile=profile, output_root=repository, identity=parse_row_key(key), hash_only=True)
+    return row
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -645,6 +790,10 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     try:
+        repo = args.repository.resolve(strict=True)
+        dest = args.output_root.resolve()
+        if dest == repo or repo in dest.parents:
+            die("packet output root must be isolated outside the checkout")
         if args.prepare_successor_manifest:
             if args.row_key or args.coverage_case or args.profile: die("successor manifest preparation takes no row/coverage/profile selection")
             rows = prepare_successor_manifest(args.repository.resolve(), read_json(args.manifest, "manifest"), read_bytes(args.procedure, "procedure"))
@@ -736,6 +885,15 @@ def main() -> int:
                         coverage_gate=gate,
                     )
                 )
+        inventory = [{"row_key": read_json(case / "preparation.json", "preparation")["row_key"],
+                      "input_sha256": read_json(case / "preparation.json", "preparation")["input_sha256"],
+                      "instructions_path": str(case / "instructions.txt"),
+                      "preparation_path": str(case / "preparation.json"),
+                      "source_paths": [str(case / record["path"]) for record in read_json(case / "preparation.json", "preparation")["source_records"]]}
+                     for case in cases]
+        inventory_path = output_root / ("dispatch-" + hashlib.sha256("|".join(item["row_key"] for item in inventory).encode()).hexdigest()[:16] + ".json")
+        if inventory_path.exists(): die("refusing to replace dispatch inventory")
+        inventory_path.write_text(json.dumps({"cases": inventory}, indent=2) + "\n", encoding="utf-8")
         for case in cases:
             print(f"prepared {case}")
         return 0

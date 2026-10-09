@@ -161,3 +161,122 @@ All v14 rows start pending. All validation-review/validation-adversarial-review 
 ## Successor v15 parallelism coverage
 
 Historical v14 rows are preserved unchanged. Existing v15 axis rows select the original genuine fresh source judgments by explicit owner/owner-delegated driver applicability when judging meaning is unchanged; never chain applicability through a carried v14 row. Current packet hashes and canonical requests use the -15 identity and exact current supplied bytes. The six `parallelism-honest` fixtures and the `plan-serial-honest` predecessor override above apply at every successor profile, gate and stage that configures the axis. Only the new axis requires fresh external judgments for this change; the v14 sufficiency coverage section records its historical preparation, not a new v15 refresh obligation.
+
+## Successor v15 narrative calibration (preparation is not attestation)
+
+Retain all 1976 historical rows, including 420 v14 rows, in order with their
+original bytes, identities, hashes, actual returns, attestations and pending
+states. Append 420 existing-key v15 counterparts with unchanged expectations
+and new mechanical identities. They remain pending until independent driver
+appraisal authorizes direct applicability of an actual original judgment;
+never chain applicability through a v14 applicability claim. Fresh v14 sources
+must match the actual retained return's result, model and input hash. An external
+applicability proposal is not a manifest declaration or attestation.
+
+The current universe additionally derives narrative keys from **both** shipped
+`extra.narrative_review` template arrays, substituting each of design, plan and
+validation into the ordinary/challenge gate. Include every axis and stage, even
+though narratives are off by default. Minimal and standard each have 18 keys;
+high-rigor has 36 (individual and aggregate). Each has two rows: 72 keys and 144
+fresh narrative rows. With the parallelism-honest rows, current totals are
+minimal 156, standard 156, high-rigor 300: 612 rows and 288 keys. No current
+pending row satisfies final proof.
+
+The narrative subject is `<phase>-narrative.json` with composite revision
+`r15/1`; the approved artifact retains `r15`. The provider-owned
+`data/narrative-schema.json` is supplied verbatim, never selected from caller
+artifact_schemas. Bindings cite the exact existing approved good phase artifact
+and the phase markdown filename and hash. Fixture IDs and classifications are
+preparation metadata; reviewer-facing framing uses neutral artifact roles.
+
+Pairings (manual preparation oracle only, not reviewer instructions):
+
+| Phase | Axis | Faithful | Seeded contrast | AC-4 failure kind |
+|---|---|---|---|---|
+| design | faithful | narrative-101 | narrative-111 | contradiction |
+| design | intent-aligned | narrative-101 | narrative-113 | invention/overpromise |
+| design | understandable | narrative-101 | narrative-112 | internal inconsistency |
+| plan | faithful | narrative-102 | narrative-121 | untraceable claims |
+| plan | intent-aligned | narrative-102 | narrative-123 | intent drift |
+| plan | understandable | narrative-102 | narrative-122 | material omission |
+| validation (minimal) | faithful | narrative-103 | narrative-131 | softened uncertainty |
+| validation (standard) | faithful | narrative-103 | narrative-133 | overclaimed delivery |
+| validation (high-rigor) | faithful | narrative-103 | narrative-134 | hidden residuals |
+| validation (all profiles) | intent-aligned | narrative-103 | narrative-133 | overclaimed delivery |
+| validation | understandable | narrative-103 | narrative-132 | unintelligible without Loop context |
+
+Each failure kind is seeded on one natural phase, not copied into every phase.
+There are exactly thirteen narrative cases: three faithful narratives and ten
+separately seeded contrasts. Validation uncertainty, overclaimed delivery and
+hidden residuals each have their own narrative; one FAIL cannot stand for all
+three kinds. The uncertainty contrast discloses the residual but dismisses its
+significance; the delivery contrast claims an installed outcome while retaining
+honest identity/revision limitations; the residual contrast omits those limitations
+without assuring delivery or minimizing a disclosed risk. Profile-family selection
+only changes the seeded fixture for validation faithful keys, preserving all
+ordinary/challenge stages and the two-row pair for every key. Validation
+intent-aligned keys use the delivery contrast because it claims excluded scope.
+Design internal inconsistency gives opposing explanations of independent author counting;
+plan omission removes the dependency, purpose and observable completion links
+that a reader needs, rather than just shortening the text. Every faithful
+narrative is reviewed on all three axes, at all stages and ordinary/challenge
+contexts. These are expectations awaiting independent observation, not verdicts.
+
+### Narrative-only exact source stream and format precedence
+
+The existing-key stream above remains unchanged. For narrative rows use exactly:
+
+1. `system-developer-instruction:data/calibration/reviewer-instruction.txt`
+2. `review-worker-preamble:data/review-worker-preamble.txt` (actual shipped bytes)
+3. `assignment-json` (compact sorted JSON, one assigned axis/stage, author
+   `calibration-reviewer`, supplied-only boundary and explicit format precedence)
+4. `example_prompt` (exact template string, without adaptation)
+5. `reviewer-protocol:data/reviewer-protocol.md`
+6. `template:data/templates/narrative.md`
+7. `schema:data/narrative-schema.json` (exact bytes)
+8. `subject:data/calibration/fixtures/{fixture_id}.json` (binding bytes)
+9. `markdown` (exact selected markdown bytes)
+10. `approved-artifact` (exact existing good phase artifact bytes)
+11. `frozen-intent` (exact intent-good bytes)
+12. Required predecessors: none for design, design-good for plan, design-good,
+    plan-good and implementation-report-good for validation, using the existing
+    `required predecessor:data/calibration/fixtures/{fixture_id}.json` labels.
+13. Validation supplies `companion:validation-evidence.json`, the selected
+    repository-state companion, then the four requirement-proof companions in
+    their existing specified order. No live fictional path resolution.
+14. Challenge only: `challenge-context` with exact phase/axis corpus ordinary
+    review and empty cleared finding-ledger bytes. The preparation metadata
+    explicitly declares `synthetic-corpus-stimulus-not-genuine-review`: these
+    controlled clean-conclusion accounts with concrete grounds/locators are
+    **not** actual reviewer returns, ordinary clearance or driver attestation.
+15. `request-json` (the unchanged six-field canonical framing, narrative subject
+    and `r15/1` revision).
+
+Hash all labels and bytes with the same u64 framing; no second hash inventory.
+The assignment explicitly resolves the old calibration instruction's
+single-record wording: the **actual shipped preamble** governs narrative output.
+Return one raw batch-v3 object with exactly author, review_contract_version,
+review_stage and judgments; exactly one assigned-axis fresh judgment with its
+actual result, findings and grounds. Do not return validation_verdicts for
+narrative review. No formatter may manufacture gate/result/reason fields or
+silently substitute a single-record protocol. Preserve raw batch output and
+select the actual matching judgment at intake.
+
+The producer refuses in-checkout output and replacement packet directories,
+and emits dispatch inventories naming row/input identity, instructions and exact
+source paths. Graders receive only supplied instructions/material, not manifest,
+procedure, preparation metadata, dispatch identities or this pairing oracle.
+`assert-calibration-capture.py --preparation-only` verifies packets without
+returns; it establishes no semantic judgment. Narrative captures are checked
+against actual shipped current sources and the assigned raw batch. Unsupported
+oracle metadata, altered bytes, wrong format or mismatched axes are rejected.
+
+Filled fresh current rows require `result_ref` to an immutable retained JSON
+entry with actual row_key, model, input_sha256 and unmodified raw output. A11
+checks those identities and the actual assigned result; pending rows have no
+result_ref. Historical return files remain untouched. Store newly commissioned
+returns only after genuine calls; an empty driver-owned preparation returns file
+is explicitly pending and is not evidence. Parent independently reviews the
+reuse proposal, commissions fresh narrative judgments after packet inspection,
+inspects actual returns and records owner-delegated attestation. The ignored
+no-pending gate remains required and must reject this pending preparation.

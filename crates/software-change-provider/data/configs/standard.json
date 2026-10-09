@@ -1426,6 +1426,62 @@
         "review-round-departure",
         "final-completion"
       ]
+    },
+    "narratives": [],
+    "checkpoints": [],
+    "narrative_review": {
+      "ordinary": [
+        {
+          "id": "narrative-faithful",
+          "description": "Compare the markdown with the exact approved JSON artifact named by the binding, not with a remembered draft. Reject a material contradiction of the artifact, material omission, invention or overpromise, softened uncertainty, untraceable claims, or internal inconsistency. Preserve qualifications, limits, decisions and risks that affect the stated outcome. Each material claim must be traceable to the artifact or its cited evidence. For a validation narrative also reject overclaimed delivery and hidden residuals: distinguish what was actually delivered and proved from plans, failed or missing checks, accepted risks and remaining limitations.",
+          "example_prompt": "Judge narrative-faithful only. Compare the markdown with the exact approved JSON artifact named by the binding, not with a remembered draft. Reject a material contradiction of the artifact, material omission, invention or overpromise, softened uncertainty, untraceable claims, or internal inconsistency. Preserve qualifications, limits, decisions and risks that affect the stated outcome. Each material claim must be traceable to the artifact or its cited evidence. For a validation narrative also reject overclaimed delivery and hidden residuals: distinguish what was actually delivered and proved from plans, failed or missing checks, accepted risks and remaining limitations. Judge only material defects affecting the stated outcome or a reader's understanding of it. Summarizing is allowed if it preserves that meaning; do not demand every JSON field, stylistic preferences, length or readability-score rules, or invented requirements. Cite the conflicting or missing meaning and its source. Writing guide: crates/software-change-provider/data/templates/narrative.md.",
+          "required_authors": 2,
+          "review_stage": "aggregate",
+          "group": "{phase}-narrative-review.aggregate"
+        },
+        {
+          "id": "narrative-intent-aligned",
+          "description": "Compare the markdown and the described artifact with the frozen intent, including its outcome, acceptance criteria, constraints, non-goals and operating_context. Reject material drift from the frozen intent: do not add promises, change the scope or present an excluded or unmet outcome as required or delivered. Accepted risks never waive acceptance criteria or outside obligations.",
+          "example_prompt": "Judge narrative-intent-aligned only. Compare the markdown and the described artifact with the frozen intent, including its outcome, acceptance criteria, constraints, non-goals and operating_context. Reject material drift from the frozen intent: do not add promises, change the scope or present an excluded or unmet outcome as required or delivered. Accepted risks never waive acceptance criteria or outside obligations. Judge only material defects affecting the stated outcome or a reader's understanding of it. Summarizing is allowed if it preserves that meaning; do not demand every JSON field, stylistic preferences, length or readability-score rules, or invented requirements. Cite the conflicting or missing meaning and its source. Writing guide: crates/software-change-provider/data/templates/narrative.md.",
+          "required_authors": 2,
+          "review_stage": "aggregate",
+          "group": "{phase}-narrative-review.aggregate"
+        },
+        {
+          "id": "narrative-understandable",
+          "description": "Read the markdown as an engineer without Loop Engine context. Reject a narrative not understandable to that engineer because unexplained specialist terms, workflow jargon, missing connections or ambiguous claims prevent them from following what is proposed or delivered, why, and with what limitations. Explain necessary terms in plain language; file names and record IDs alone are not explanations.",
+          "example_prompt": "Judge narrative-understandable only. Read the markdown as an engineer without Loop Engine context. Reject a narrative not understandable to that engineer because unexplained specialist terms, workflow jargon, missing connections or ambiguous claims prevent them from following what is proposed or delivered, why, and with what limitations. Explain necessary terms in plain language; file names and record IDs alone are not explanations. Judge only material defects affecting the stated outcome or a reader's understanding of it. Summarizing is allowed if it preserves that meaning; do not demand every JSON field, stylistic preferences, length or readability-score rules, or invented requirements. Cite the conflicting or missing meaning and its source. Writing guide: crates/software-change-provider/data/templates/narrative.md.",
+          "required_authors": 2,
+          "review_stage": "aggregate",
+          "group": "{phase}-narrative-review.aggregate"
+        }
+      ],
+      "challenge": [
+        {
+          "id": "narrative-faithful",
+          "description": "Compare the markdown with the exact approved JSON artifact named by the binding, not with a remembered draft. Reject a material contradiction of the artifact, material omission, invention or overpromise, softened uncertainty, untraceable claims, or internal inconsistency. Preserve qualifications, limits, decisions and risks that affect the stated outcome. Each material claim must be traceable to the artifact or its cited evidence. For a validation narrative also reject overclaimed delivery and hidden residuals: distinguish what was actually delivered and proved from plans, failed or missing checks, accepted risks and remaining limitations.",
+          "example_prompt": "Falsify the ordinary narrative-faithful clean conclusion only: find a material defect that remains despite its pass. Use cleared ordinary findings and their dispositions as context, not as unresolved targets. Compare the markdown with the exact approved JSON artifact named by the binding, not with a remembered draft. Reject a material contradiction of the artifact, material omission, invention or overpromise, softened uncertainty, untraceable claims, or internal inconsistency. Preserve qualifications, limits, decisions and risks that affect the stated outcome. Each material claim must be traceable to the artifact or its cited evidence. For a validation narrative also reject overclaimed delivery and hidden residuals: distinguish what was actually delivered and proved from plans, failed or missing checks, accepted risks and remaining limitations. Judge only material defects affecting the stated outcome or a reader's understanding of it. Summarizing is allowed if it preserves that meaning; do not demand every JSON field, stylistic preferences, length or readability-score rules, or invented requirements. Cite the conflicting or missing meaning and its source. Writing guide: crates/software-change-provider/data/templates/narrative.md.",
+          "required_authors": 2,
+          "review_stage": "aggregate",
+          "group": "{phase}-narrative-adversarial-review.aggregate"
+        },
+        {
+          "id": "narrative-intent-aligned",
+          "description": "Compare the markdown and the described artifact with the frozen intent, including its outcome, acceptance criteria, constraints, non-goals and operating_context. Reject material drift from the frozen intent: do not add promises, change the scope or present an excluded or unmet outcome as required or delivered. Accepted risks never waive acceptance criteria or outside obligations.",
+          "example_prompt": "Falsify the ordinary narrative-intent-aligned clean conclusion only: find a material defect that remains despite its pass. Use cleared ordinary findings and their dispositions as context, not as unresolved targets. Compare the markdown and the described artifact with the frozen intent, including its outcome, acceptance criteria, constraints, non-goals and operating_context. Reject material drift from the frozen intent: do not add promises, change the scope or present an excluded or unmet outcome as required or delivered. Accepted risks never waive acceptance criteria or outside obligations. Judge only material defects affecting the stated outcome or a reader's understanding of it. Summarizing is allowed if it preserves that meaning; do not demand every JSON field, stylistic preferences, length or readability-score rules, or invented requirements. Cite the conflicting or missing meaning and its source. Writing guide: crates/software-change-provider/data/templates/narrative.md.",
+          "required_authors": 2,
+          "review_stage": "aggregate",
+          "group": "{phase}-narrative-adversarial-review.aggregate"
+        },
+        {
+          "id": "narrative-understandable",
+          "description": "Read the markdown as an engineer without Loop Engine context. Reject a narrative not understandable to that engineer because unexplained specialist terms, workflow jargon, missing connections or ambiguous claims prevent them from following what is proposed or delivered, why, and with what limitations. Explain necessary terms in plain language; file names and record IDs alone are not explanations.",
+          "example_prompt": "Falsify the ordinary narrative-understandable clean conclusion only: find a material defect that remains despite its pass. Use cleared ordinary findings and their dispositions as context, not as unresolved targets. Read the markdown as an engineer without Loop Engine context. Reject a narrative not understandable to that engineer because unexplained specialist terms, workflow jargon, missing connections or ambiguous claims prevent them from following what is proposed or delivered, why, and with what limitations. Explain necessary terms in plain language; file names and record IDs alone are not explanations. Judge only material defects affecting the stated outcome or a reader's understanding of it. Summarizing is allowed if it preserves that meaning; do not demand every JSON field, stylistic preferences, length or readability-score rules, or invented requirements. Cite the conflicting or missing meaning and its source. Writing guide: crates/software-change-provider/data/templates/narrative.md.",
+          "required_authors": 2,
+          "review_stage": "aggregate",
+          "group": "{phase}-narrative-adversarial-review.aggregate"
+        }
+      ]
     }
   }
 }

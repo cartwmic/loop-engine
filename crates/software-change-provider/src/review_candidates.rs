@@ -346,4 +346,59 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn materialized_narrative_assignments_project_all_shipped_stages_and_groups() {
+        for profile in [
+            include_str!("../data/configs/minimal.json"),
+            include_str!("../data/configs/standard.json"),
+            include_str!("../data/configs/high-rigor.json"),
+        ] {
+            let mut profile: Value = serde_json::from_str(profile).unwrap();
+            for phase in ["design", "plan", "validation"] {
+                for (pass, suffix) in [("ordinary", "review"), ("challenge", "adversarial-review")]
+                {
+                    let gate = format!("{phase}-narrative-{suffix}");
+                    let mut axes = profile["extra"]["narrative_review"][pass].clone();
+                    for axis in axes.as_array_mut().unwrap() {
+                        axis["group"] =
+                            json!(axis["group"].as_str().unwrap().replace("{phase}", phase));
+                    }
+                    profile["review_policies"][&gate] = axes.clone();
+                    for axis in axes.as_array().unwrap() {
+                        let mut packet = input();
+                        packet["show"]["result"]["initial_input"] = profile.clone();
+                        packet["assignment"]["gate"] = json!(gate);
+                        packet["assignment"]["stage"] = axis["review_stage"].clone();
+                        packet["assignment"]["group"] = axis["group"].clone();
+                        packet["assignment"]["subject"] = json!(format!("{phase}-narrative.json"));
+                        packet["assignment"]["subject_revision"] = json!("3/1");
+                        packet["projection"] = json!({"assessment_id":"genuine-return", "judgments":[{
+                            "axis":axis["id"],"result":"pass","findings":"",
+                            "grounds":{"reason":"exact approved sources agree","evidence":[{
+                                "locator":format!("{phase}-narrative.md#L1")}]}}]});
+                        packet["original"] = json!({"text":packet["projection"].to_string()});
+                        let output = project(&packet).unwrap();
+                        assert_eq!(output["records"].as_array().unwrap().len(), 1, "{output}");
+                        assert_eq!(output["items"][0]["diagnostics"], json!([]));
+                        let record = &output["records"][0]["data"];
+                        assert_eq!(record["subject_revision"], "3/1");
+                        assert_eq!(record["review_stage"], axis["review_stage"]);
+                        assert_eq!(record["group"], axis["group"]);
+                        assert_eq!(record["policy_id"], axis["id"]);
+                        assert_eq!(
+                            record["external_review"]["original"]["original"],
+                            packet["original"]["text"]
+                        );
+                        packet["assignment"]["group"] = json!("wrong-group");
+                        let output = project(&packet).unwrap();
+                        assert!(output["records"].as_array().unwrap().is_empty());
+                        assert!(output["items"][0]["diagnostics"]
+                            .to_string()
+                            .contains("assignment group"));
+                    }
+                }
+            }
+        }
+    }
 }

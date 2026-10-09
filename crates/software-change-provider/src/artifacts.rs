@@ -21,6 +21,7 @@ pub(crate) struct ArtifactDocument {
     subject: String,
     path: PathBuf,
     value: Value,
+    bytes: Vec<u8>,
 }
 
 impl ArtifactDocument {
@@ -34,6 +35,11 @@ impl ArtifactDocument {
 
     pub(crate) fn value(&self) -> &Value {
         &self.value
+    }
+
+    /// Exact bytes parsed by this read, not a reserialization of the JSON.
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
 }
 
@@ -249,6 +255,59 @@ pub(crate) fn read_artifact(artifact_root: Option<&Value>, subject: &str) -> Art
         subject: subject.to_owned(),
         path: canonical_target,
         value,
+        bytes: content.into_bytes(),
+    })
+}
+
+/// Read a fixed markdown file with the same containment/error taxonomy as JSON.
+pub(crate) fn read_markdown_bytes(
+    artifact_root: Option<&Value>,
+    subject: &str,
+) -> Result<Vec<u8>, ArtifactReadOutcome> {
+    let root = canonical_root(artifact_root).map_err(ArtifactReadOutcome::EvaluationError)?;
+    let path = fixed_subject_path(&root, subject).map_err(|message| {
+        ArtifactReadOutcome::EvaluationError(ArtifactReadError::new(
+            Some(subject),
+            Some(root.clone()),
+            message,
+        ))
+    })?;
+    let target = fs::canonicalize(&path).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            ArtifactReadOutcome::Deny(ArtifactReadDeny::NotFound {
+                subject: subject.to_owned(),
+                path: path.clone(),
+            })
+        } else {
+            ArtifactReadOutcome::EvaluationError(ArtifactReadError::new(
+                Some(subject),
+                Some(path.clone()),
+                error.to_string(),
+            ))
+        }
+    })?;
+    if !is_contained(&root, &target) {
+        return Err(ArtifactReadOutcome::EvaluationError(
+            ArtifactReadError::new(
+                Some(subject),
+                Some(target),
+                "canonical target escapes artifact root",
+            ),
+        ));
+    }
+    fs::read(&target).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            ArtifactReadOutcome::Deny(ArtifactReadDeny::NotFound {
+                subject: subject.to_owned(),
+                path: target.clone(),
+            })
+        } else {
+            ArtifactReadOutcome::EvaluationError(ArtifactReadError::new(
+                Some(subject),
+                Some(target),
+                error.to_string(),
+            ))
+        }
     })
 }
 
@@ -1134,5 +1193,49 @@ mod tests {
         let _ = read_artifact(Some(&root.path_value()), "intent.json");
         let after = fs::read(root.path.join("intent.json")).unwrap();
         assert_eq!(before, after);
+    }
+    #[test]
+    fn artifact_bytes_are_exact_parse_input_not_reserialized_json() {
+        let root = TestDir::new();
+        let bytes = b"{ \"revision\" : \"1\" }\n";
+        fs::write(root.path.join("design.json"), bytes).unwrap();
+        let ArtifactReadOutcome::Present(document) =
+            read_artifact(Some(&root.path_value()), "design.json")
+        else {
+            panic!("missing artifact")
+        };
+        assert_eq!(document.bytes(), bytes);
+    }
+    #[test]
+    fn markdown_read_preserves_bytes_and_containment_taxonomy() {
+        let root = TestDir::new();
+        let bytes = b"# Narrative\nExact prose.\n";
+        fs::write(root.path.join("design-narrative.md"), bytes).unwrap();
+        assert_eq!(
+            read_markdown_bytes(Some(&root.path_value()), "design-narrative.md").unwrap(),
+            bytes
+        );
+        assert!(matches!(
+            read_markdown_bytes(Some(&root.path_value()), "missing.md"),
+            Err(ArtifactReadOutcome::Deny(_))
+        ));
+        assert!(matches!(
+            read_markdown_bytes(Some(&root.path_value()), "../escape.md"),
+            Err(ArtifactReadOutcome::EvaluationError(_))
+        ));
+        #[cfg(unix)]
+        {
+            let outside = TestDir::new();
+            fs::write(outside.path.join("outside.md"), bytes).unwrap();
+            std::os::unix::fs::symlink(
+                outside.path.join("outside.md"),
+                root.path.join("escape.md"),
+            )
+            .unwrap();
+            assert!(matches!(
+                read_markdown_bytes(Some(&root.path_value()), "escape.md"),
+                Err(ArtifactReadOutcome::EvaluationError(_))
+            ));
+        }
     }
 }

@@ -1,0 +1,37 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["revision", "author", "artifact", "approved_artifact_record_id", "markdown"],
+  "properties": {
+    "revision": {"type": "string", "minLength": 1},
+    "author": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "enum": ["human", "agent", "script"]}
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subject", "revision", "sha256"],
+      "properties": {
+        "subject": {"type": "string", "enum": ["design.json", "plan.json", "validation-report.json"]},
+        "revision": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "minLength": 1}
+      }
+    },
+    "approved_artifact_record_id": {"type": "string", "minLength": 1},
+    "markdown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "sha256"],
+      "properties": {
+        "file": {"type": "string", "enum": ["design-narrative.md", "plan-narrative.md", "validation-narrative.md"]},
+        "sha256": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

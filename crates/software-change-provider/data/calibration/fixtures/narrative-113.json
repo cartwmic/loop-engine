@@ -1,0 +1,17 @@
+{
+  "revision": "r15/1",
+  "author": {
+    "name": "narrative-writer",
+    "kind": "agent"
+  },
+  "artifact": {
+    "subject": "design.json",
+    "revision": "r15",
+    "sha256": "cf80e8dac905d34f9b1660dd697d7c9234179ae0bd4d8a7bb838452b3912d316"
+  },
+  "approved_artifact_record_id": "approved-design-r15",
+  "markdown": {
+    "file": "design-narrative.md",
+    "sha256": "62101e1d235d6c7ed939a0b80b923920a6018af778aa908f132388148c33e034"
+  }
+}

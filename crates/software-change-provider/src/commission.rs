@@ -504,7 +504,303 @@ fn inspect_with_stage_raw(
     }
 }
 
+fn narrative_options(slot: &str) -> Option<&'static crate::workflow::PhaseOptions> {
+    crate::workflow::PHASE_OPTIONS.iter().find(|options| {
+        options
+            .narrative
+            .is_some_and(|n| [n.review, n.challenge].contains(&slot))
+    })
+}
+
+fn checkpoint_options(slot: &str) -> Option<&'static crate::workflow::PhaseOptions> {
+    crate::workflow::PHASE_OPTIONS
+        .iter()
+        .find(|options| options.checkpoint == slot)
+}
+
+// Read only fixed provider filenames, and refuse links escaping the artifact root.
+// Markdown is a real UTF-8 source, not a JSON subject or a fabricated record.
+fn read_option_source(root: &Path, locator: &str, is_json: bool) -> Result<ReviewSource, String> {
+    let path = root.join(locator);
+    let unavailable = |error: &dyn std::fmt::Display| {
+        format!(
+            "mandatory review source `{locator}` is unavailable at {}: {error}",
+            path.display()
+        )
+    };
+    let canonical_root = root.canonicalize().map_err(|e| unavailable(&e))?;
+    let canonical_path = path.canonicalize().map_err(|e| unavailable(&e))?;
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err(format!(
+            "mandatory review source `{locator}` escapes artifact_root"
+        ));
+    }
+    let bytes = std::fs::read(&canonical_path).map_err(|e| unavailable(&e))?;
+    let value = if is_json {
+        serde_json::from_slice(&bytes)
+            .map_err(|e| format!("mandatory review source `{locator}` is not valid JSON: {e}"))?
+    } else {
+        std::str::from_utf8(&bytes).map_err(|e| {
+            format!("mandatory review source `{locator}` is not readable UTF-8: {e}")
+        })?;
+        Value::Null
+    };
+    Ok(ReviewSource {
+        locator: locator.to_owned(),
+        sha256: format!("sha256:{:x}", Sha256::digest(&bytes)),
+        bytes,
+        value,
+    })
+}
+
+fn source_projection(root: &Path, source: &ReviewSource) -> Value {
+    json!({"locator":source.locator,"path":root.join(&source.locator),
+        "sha256":source.sha256,"bytes":source.bytes.len()})
+}
+
+fn phase_identity(context: &[ContextRecord], kind: &str, phase: &str, subject: &str) -> Value {
+    crate::narratives::latest_phase_record(context, kind, phase, subject)
+        .map(|(record, fact)| {
+            json!({"record_id":record.id.as_str(),"record_kind":record.kind,
+            "sequence":record.sequence,"record":record,"fact_kind":kind,"fact":fact})
+        })
+        .unwrap_or(Value::Null)
+}
+
+struct PhaseCommission {
+    phase: &'static str,
+    subject: &'static str,
+    identity: Value,
+    approval: Value,
+    sources: Vec<ReviewSource>,
+    missing: Vec<String>,
+}
+
+fn phase_commission(
+    packet: &Value,
+    slot: &str,
+    root: &Path,
+    options: &'static crate::workflow::PhaseOptions,
+) -> Result<PhaseCommission, String> {
+    use crate::workflow::{
+        self, APPROVED_ARTIFACT_KIND, ARTIFACT_ADMITTED_KIND, NARRATIVE_ADMITTED_KIND,
+    };
+    let phase = options.phase.name;
+    let narrative_enabled =
+        workflow::option_enabled(Some(&packet["initial_input"]), "narratives", phase);
+    let narrative = options.narrative.filter(|_| narrative_enabled);
+    let subject = workflow::checkpoint_subject(options, narrative_enabled);
+    let context: Vec<ContextRecord> =
+        serde_json::from_value(packet["context"].clone()).map_err(|e| e.to_string())?;
+    let approval = phase_identity(
+        &context,
+        APPROVED_ARTIFACT_KIND,
+        phase,
+        options.phase.subject,
+    );
+    let identity = if narrative_enabled {
+        phase_identity(&context, NARRATIVE_ADMITTED_KIND, phase, subject)
+    } else {
+        approval.clone()
+    };
+    let mut missing = Vec::new();
+    if narrative_options(slot).is_some() && !narrative_enabled {
+        missing.push(format!(
+            "narrative phase `{phase}` is not enabled in frozen input"
+        ));
+    }
+    if checkpoint_options(slot).is_some()
+        && !workflow::option_enabled(Some(&packet["initial_input"]), "checkpoints", phase)
+    {
+        missing.push(format!(
+            "checkpoint phase `{phase}` is not enabled in frozen input"
+        ));
+    }
+    let mut locators = vec!["intent.json", options.phase.subject];
+    if let Some(n) = narrative {
+        locators.extend([n.subject, n.markdown]);
+    }
+    locators.dedup();
+    let mut sources = Vec::new();
+    for locator in locators {
+        match read_option_source(root, locator, locator.ends_with(".json")) {
+            Ok(source) => sources.push(source),
+            Err(error) => missing.push(error),
+        }
+    }
+    for (kind, projection) in [
+        (
+            ARTIFACT_ADMITTED_KIND,
+            phase_identity(
+                &context,
+                ARTIFACT_ADMITTED_KIND,
+                phase,
+                options.phase.subject,
+            ),
+        ),
+        (APPROVED_ARTIFACT_KIND, approval.clone()),
+    ] {
+        if projection.is_null() {
+            missing.push(format!("missing latest {kind} for `{phase}`"));
+        } else if let Some(artifact) = sources.iter().find(|s| s.locator == options.phase.subject) {
+            let fact = &projection["fact"];
+            if fact["revision"]
+                .as_str()
+                .is_none_or(|r| r.trim().is_empty())
+                || fact["revision"] != artifact.value["revision"]
+                || fact["sha256"].as_str() != artifact.sha256.strip_prefix("sha256:")
+            {
+                missing.push(format!(
+                    "current artifact must match latest {kind} revision and sha256"
+                ));
+            }
+        }
+    }
+    // Nested boundary facts share one real identity and must agree with each other.
+    if let Some((record, fact)) = crate::narratives::latest_phase_record(
+        &context,
+        APPROVED_ARTIFACT_KIND,
+        phase,
+        options.phase.subject,
+    ) {
+        if let Some(admission) =
+            crate::narratives::phase_record_fact(record, ARTIFACT_ADMITTED_KIND)
+        {
+            if admission["phase"] != phase
+                || ["subject", "revision", "sha256"]
+                    .iter()
+                    .any(|key| admission[key] != fact[key])
+            {
+                missing.push("nested artifact admission and approval facts disagree".to_owned());
+            }
+        }
+    }
+    if let Some(n) = narrative {
+        if identity.is_null() {
+            missing.push(format!("missing latest narrative admission for `{phase}`"));
+        }
+        if let Some(source) = sources.iter().find(|s| s.locator == n.subject) {
+            match crate::narratives::validate_binding(&source.value) {
+                Err(violations) => missing.extend(
+                    violations
+                        .iter()
+                        .map(|v| format!("narrative binding {}: {}", v.path, v.message)),
+                ),
+                Ok(binding) => {
+                    let fact = &approval["fact"];
+                    if binding.artifact.subject != options.phase.subject
+                        || binding.markdown.file != n.markdown
+                        || Some(binding.approved_artifact_record_id)
+                            != approval["record_id"].as_str()
+                        || Some(binding.artifact.revision) != fact["revision"].as_str()
+                        || Some(binding.artifact.sha256) != fact["sha256"].as_str()
+                    {
+                        missing.push("binding must cite latest approved artifact identity and exact phase files".to_owned());
+                    }
+                    if Some(binding.revision) != identity["fact"]["revision"].as_str() {
+                        missing.push(
+                            "binding must match latest admitted narrative revision".to_owned(),
+                        );
+                    }
+                    if let Some(markdown) = sources.iter().find(|s| s.locator == n.markdown) {
+                        let digest = markdown.sha256.strip_prefix("sha256:");
+                        if Some(binding.markdown.sha256) != digest
+                            || identity["fact"]["sha256"].as_str() != digest
+                        {
+                            missing.push(
+                                "markdown must match binding and latest narrative admission sha256"
+                                    .to_owned(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(PhaseCommission {
+        phase,
+        subject,
+        identity,
+        approval,
+        sources,
+        missing,
+    })
+}
+
+/// Optional phase packets use the same review selector; the additional view is
+/// descriptive only. It never records or attests to an owner's approval.
 pub fn inspect_with_stage(
+    input: &Value,
+    requested_slot: Option<&str>,
+    task: Option<&str>,
+    requested_stage: Option<&str>,
+) -> Result<Value, String> {
+    let packet = input.get("result").unwrap_or(input);
+    let slot = requested_slot.or_else(|| packet["slot_id"].as_str());
+    let options = slot.and_then(|s| narrative_options(s).or_else(|| checkpoint_options(s)));
+    let Some(options) = options.filter(|_| input.get("result").is_some()) else {
+        return inspect_review_with_stage(input, requested_slot, task, requested_stage);
+    };
+    if requested_stage.is_some_and(|stage| !matches!(stage, "individual" | "aggregate")) {
+        return Err("commission review stage must be `individual` or `aggregate`".to_owned());
+    }
+    let slot = slot.expect("option slot");
+    let root = packet
+        .get("artifact_root")
+        .or_else(|| packet["initial_input"].get("artifact_root"))
+        .and_then(Value::as_str)
+        .ok_or("missing artifact_root")?;
+    let root = Path::new(root);
+    let phase = phase_commission(packet, slot, root, options)?;
+    let mut output = if phase.missing.is_empty() {
+        inspect_review_with_stage(input, Some(slot), task, requested_stage)?
+    } else {
+        inspect_with_stage_raw(input, Some(slot), task, requested_stage)?
+    };
+    let mut missing = output["missing_inputs"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    missing.extend(phase.missing.iter().map(|s| json!(s)));
+    output["missing_inputs"] = json!(missing);
+    output["artifact_root"] = json!(root);
+    output["commission"]["review_stage"] = json!(requested_stage);
+    output["phase"] = json!(phase.phase);
+    output["approved_artifact"] = phase.approval;
+    let sources = json!(phase
+        .sources
+        .iter()
+        .map(|s| source_projection(root, s))
+        .collect::<Vec<_>>());
+    if checkpoint_options(slot).is_some() {
+        let subject_source = phase
+            .sources
+            .iter()
+            .find(|s| s.locator == phase.subject)
+            .map(|s| source_projection(root, s));
+        let narrative_source = options
+            .narrative
+            .and_then(|n| phase.sources.iter().find(|s| s.locator == n.markdown))
+            .map(|s| source_projection(root, s));
+        output["owner_approval_view"] = json!({
+            "checkpoint":slot,"phase":phase.phase,"subject":phase.subject,
+            "subject_revision":phase.identity["fact"]["revision"],
+            "subject_record_id":phase.identity["record_id"],"subject_identity":phase.identity,
+            "subject_source":subject_source,"narrative_source":narrative_source,"sources":sources,
+            "owner_approval":{"status":"not-performed"},
+            "decision_guidance":"Ask the owner to approve or reject this exact subject revision. Append an owner-decision context record with checkpoint, subject, subject_revision, decision (approve or reject), actor and the owner's nonempty verbatim text. A rejection must name target artifact or, when a narrative is enabled, narrative, and a nonempty reason. Artifact rejection uses revise; narrative rejection uses revise-narrative. This view is not an owner approval; do not paraphrase the owner's text or invent an approval command."
+        });
+    } else {
+        output["review_contract_version"] = json!(3);
+        output["review_target"] = json!({"phase":phase.phase,"subject":phase.subject,
+            "revision":phase.sources.iter().find(|s| s.locator == phase.subject)
+                .and_then(|s| s.value["revision"].as_str()),"admitted_identity":phase.identity});
+        output["review_sources"] = sources;
+    }
+    Ok(output)
+}
+
+fn inspect_review_with_stage(
     input: &Value,
     requested_slot: Option<&str>,
     task: Option<&str>,
@@ -589,7 +885,7 @@ fn review_subject(gate: &str) -> Option<&'static str> {
             Some("implementation-report.json")
         }
         "validation-review" | "validation-adversarial-review" => Some("validation-report.json"),
-        _ => None,
+        _ => narrative_options(gate).and_then(|options| options.narrative.map(|n| n.subject)),
     }
 }
 
@@ -600,11 +896,17 @@ fn parent_gate(gate: &str) -> Option<&'static str> {
         "plan-adversarial-review" => Some("plan-review"),
         "implementation-adversarial-review" => Some("implementation-review"),
         "validation-adversarial-review" => Some("validation-review"),
-        _ => None,
+        _ => narrative_options(gate)
+            .and_then(|options| options.narrative)
+            .filter(|n| n.challenge == gate)
+            .map(|n| n.review),
     }
 }
 
 fn read_review_sources(root: &Path, subject: &str) -> Result<(String, Vec<ReviewSource>), String> {
+    let narrative_subject = crate::workflow::PHASE_OPTIONS
+        .iter()
+        .any(|options| options.narrative.is_some_and(|n| n.subject == subject));
     let mut paths = vec!["intent.json"];
     if subject != "intent.json" {
         paths.push(subject);
@@ -612,6 +914,14 @@ fn read_review_sources(root: &Path, subject: &str) -> Result<(String, Vec<Review
     let mut sources = Vec::new();
     let mut subject_value = None;
     for locator in paths {
+        if narrative_subject {
+            let source = read_option_source(root, locator, true)?;
+            if locator == subject {
+                subject_value = Some(source.value.clone());
+            }
+            sources.push(source);
+            continue;
+        }
         let path = root.join(locator);
         let bytes = std::fs::read(&path).map_err(|error| {
             format!(
@@ -631,6 +941,19 @@ fn read_review_sources(root: &Path, subject: &str) -> Result<(String, Vec<Review
             bytes,
             value,
         });
+    }
+    if let Some(narrative) = crate::workflow::PHASE_OPTIONS
+        .iter()
+        .filter_map(|options| options.narrative.map(|n| (options, n)))
+        .find(|(_, n)| n.subject == subject)
+    {
+        for locator in [narrative.1.markdown, narrative.0.phase.subject] {
+            sources.push(read_option_source(
+                root,
+                locator,
+                locator.ends_with(".json"),
+            )?);
+        }
     }
     let revision = subject_value
         .as_ref()
@@ -1057,7 +1380,7 @@ fn project_review_context(
             // Commission keeps the cited original for focused confirmation.
         }
     }
-    let validation_ids = if gate.starts_with("validation-") {
+    let validation_ids = if matches!(gate, "validation-review" | "validation-adversarial-review") {
         validation_record_ids(root, records)
     } else {
         BTreeMap::new()
@@ -1102,7 +1425,7 @@ fn project_review_context(
             continue;
         }
         if record.kind == "evidence-applicability" {
-            if gate.starts_with("validation-")
+            if matches!(gate, "validation-review" | "validation-adversarial-review")
                 && validation_ids
                     .get("evidence-applicability")
                     .is_some_and(|ids| ids.contains(record.id.as_str()))
@@ -2435,5 +2758,317 @@ mod tests {
             .contains("no content quota"));
         assert!(info.get("initial_limit_bytes").is_none());
         assert!(info.get("calls").is_none());
+    }
+
+    fn narrative_fixture(phase: &str, nested: bool) -> (Value, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "commission-narrative-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let mut profile: Value =
+            serde_json::from_str(include_str!("../data/configs/high-rigor.json")).unwrap();
+        profile["artifact_root"] = json!(root);
+        profile["extra"]["narratives"] = json!([phase]);
+        profile["extra"]["checkpoints"] =
+            json!(["intent", "design", "plan", "implementation", "validation"]);
+        for (pass, suffix) in [("ordinary", "review"), ("challenge", "adversarial-review")] {
+            let mut axes = profile["extra"]["narrative_review"][pass].clone();
+            for axis in axes.as_array_mut().unwrap() {
+                axis["group"] = json!(axis["group"].as_str().unwrap().replace("{phase}", phase));
+            }
+            profile["review_policies"][format!("{phase}-narrative-{suffix}")] = axes;
+        }
+        let options = crate::workflow::PHASE_OPTIONS
+            .iter()
+            .find(|o| o.phase.name == phase)
+            .unwrap();
+        let n = options.narrative.unwrap();
+        std::fs::write(
+            root.join("intent.json"),
+            br#"{"revision":"1","outcome":"frozen outcome"}"#,
+        )
+        .unwrap();
+        let artifact = br#"{"revision":"3","author":{"name":"writer","kind":"agent"}}"#;
+        std::fs::write(root.join(options.phase.subject), artifact).unwrap();
+        let markdown = b"# Proposed outcome\nThe approved artifact describes a bounded change.\n";
+        std::fs::write(root.join(n.markdown), markdown).unwrap();
+        let artifact_hash = format!("{:x}", Sha256::digest(artifact));
+        let markdown_hash = format!("{:x}", Sha256::digest(markdown));
+        let binding = json!({"revision":"3/1","author":{"name":"writer","kind":"agent"},
+            "artifact":{"subject":options.phase.subject,"revision":"3","sha256":artifact_hash},
+            "approved_artifact_record_id":if nested {"admission"} else {"approval"},
+            "markdown":{"file":n.markdown,"sha256":markdown_hash}});
+        std::fs::write(root.join(n.subject), serde_json::to_vec(&binding).unwrap()).unwrap();
+        let approval = binding["artifact"].clone();
+        let mut admission = approval.clone();
+        admission["phase"] = json!(phase);
+        if nested {
+            admission["approved_artifact"] = approval.clone();
+        }
+        let mut context = vec![typed_record("admission", "artifact-admitted", 1, admission)];
+        if !nested {
+            context.push(typed_record("approval", "approved-artifact", 2, approval));
+        }
+        context.push(typed_record(
+            "narrative",
+            "narrative-admitted",
+            3,
+            json!({"phase":phase,"revision":"3/1","sha256":markdown_hash}),
+        ));
+        let graph =
+            serde_json::to_value(crate::workflow::describe_workflow(Some(&profile)).unwrap())
+                .unwrap();
+        (
+            json!({"operation":"show","status":"completed","result":{"workflow_id":"software-change",
+            "artifact_root":root,"initial_input":profile,"context":context,"work_slots":graph["work_slots"]}}),
+            root,
+        )
+    }
+
+    #[test]
+    fn narrative_commissions_expose_four_accessible_sources_and_composite_identity() {
+        for phase in ["design", "plan", "validation"] {
+            for nested in [false, true] {
+                let (input, root) = narrative_fixture(phase, nested);
+                for stage in ["individual", "aggregate"] {
+                    let gate = format!("{phase}-narrative-review");
+                    let before = input.clone();
+                    let output =
+                        inspect_with_stage(&input, Some(&gate), None, Some(stage)).unwrap();
+                    assert_eq!(input, before);
+                    assert_eq!(output["missing_inputs"], json!([]), "{output}");
+                    assert_eq!(output["commission"]["review_stage"], stage);
+                    assert_eq!(output["review_target"]["revision"], "3/1");
+                    assert_eq!(output["review_target"]["phase"], phase);
+                    assert_eq!(output["review_sources"].as_array().unwrap().len(), 4);
+                    for source in output["review_sources"].as_array().unwrap() {
+                        let bytes = std::fs::read(source["path"].as_str().unwrap()).unwrap();
+                        assert_eq!(
+                            source["sha256"],
+                            format!("sha256:{:x}", Sha256::digest(&bytes))
+                        );
+                    }
+                    assert_eq!(
+                        output["approved_artifact"]["record_id"],
+                        if nested { "admission" } else { "approval" }
+                    );
+                    assert_eq!(
+                        output["approved_artifact"]["record"]["kind"],
+                        if nested {
+                            "artifact-admitted"
+                        } else {
+                            "approved-artifact"
+                        }
+                    );
+                }
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn narrative_challenge_uses_only_current_parent_aggregate_grounds() {
+        let (mut input, root) = narrative_fixture("design", false);
+        let parent_gate = "design-narrative-review";
+        for (i, axis) in [
+            "narrative-faithful",
+            "narrative-intent-aligned",
+            "narrative-understandable",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let data = json!({"gate":parent_gate,"subject":"design-narrative.json","subject_revision":"3/1",
+                "review_stage":"aggregate","policy_id":axis,"author":{"name":"reviewer","kind":"agent"},
+                "result":"pass","findings":"","review_contract_version":3,
+                "grounds":{"reason":"inspected exact sources","evidence":[{"locator":"design-narrative.md#L1-L2"}]}});
+            input["result"]["context"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!(typed_record(
+                    &format!("parent-{i}"),
+                    "review-evidence",
+                    4 + i as u64,
+                    data
+                )));
+        }
+        let gate = "design-narrative-adversarial-review";
+        for stage in ["individual", "aggregate"] {
+            let output = inspect_with_stage(&input, Some(gate), None, Some(stage)).unwrap();
+            assert_eq!(output["missing_inputs"], json!([]));
+            assert_eq!(output["context"].as_array().unwrap().len(), 3);
+            assert_eq!(output["context"][0]["id"], "parent-0");
+        }
+        input["result"]["context"].as_array_mut().unwrap().pop();
+        let output = inspect_with_stage(&input, Some(gate), None, Some("aggregate")).unwrap();
+        assert!(output["missing_inputs"]
+            .to_string()
+            .contains("narrative-understandable"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_view_uses_admission_identity_not_mutated_binding_revision() {
+        let (input, root) = narrative_fixture("design", true);
+        let output = inspect(&input, Some("design-checkpoint"), None).unwrap();
+        let view = &output["owner_approval_view"];
+        assert_eq!(view["subject"], "design-narrative.json");
+        assert_eq!(view["subject_revision"], "3/1");
+        assert_eq!(view["subject_record_id"], "narrative");
+        assert_eq!(view["narrative_source"]["locator"], "design-narrative.md");
+        assert_eq!(view["owner_approval"]["status"], "not-performed");
+        assert!(view["decision_guidance"]
+            .as_str()
+            .unwrap()
+            .contains("verbatim"));
+        let mut binding: Value =
+            serde_json::from_slice(&std::fs::read(root.join("design-narrative.json")).unwrap())
+                .unwrap();
+        binding["revision"] = json!("3/2");
+        std::fs::write(
+            root.join("design-narrative.json"),
+            serde_json::to_vec(&binding).unwrap(),
+        )
+        .unwrap();
+        let output = inspect(&input, Some("design-checkpoint"), None).unwrap();
+        assert_eq!(output["owner_approval_view"]["subject_revision"], "3/1");
+        assert!(output["missing_inputs"]
+            .to_string()
+            .contains("latest admitted narrative revision"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_checkpoint_views_keep_actual_nested_reconciliation_identity() {
+        let (mut input, root) = narrative_fixture("design", false);
+        input["result"]["initial_input"]["extra"]["narratives"] = json!([]);
+        for phase in ["intent", "design", "plan", "implementation", "validation"] {
+            let options = checkpoint_options(&format!("{phase}-checkpoint")).unwrap();
+            let artifact = br#"{"revision":"4"}"#;
+            std::fs::write(root.join(options.phase.subject), artifact).unwrap();
+            let hash = format!("{:x}", Sha256::digest(artifact));
+            let admission =
+                json!({"phase":phase,"subject":options.phase.subject,"revision":"4","sha256":hash});
+            let approval = json!({"subject":options.phase.subject,"revision":"4","sha256":hash});
+            input["result"]["context"] = json!([typed_record(
+                "real-reconciliation",
+                "reconciliation-decision",
+                1,
+                json!({"revision":"reconciliation-r2","documents":{"intent":"1"},
+                    "artifact_admitted":admission,"approved_artifact":approval})
+            )]);
+            let output = inspect(&input, Some(options.checkpoint), None).unwrap();
+            assert_eq!(output["missing_inputs"], json!([]), "{output}");
+            let view = &output["owner_approval_view"];
+            assert_eq!(view["subject"], options.phase.subject);
+            assert_eq!(view["subject_revision"], "4");
+            assert_eq!(view["subject_record_id"], "real-reconciliation");
+            assert_eq!(
+                view["subject_identity"]["record"]["data"]["revision"],
+                "reconciliation-r2"
+            );
+            assert_eq!(
+                view["subject_identity"]["record"]["data"]["documents"]["intent"],
+                "1"
+            );
+            assert!(view["narrative_source"].is_null());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn narrative_missing_and_stale_inputs_are_visible_without_claiming_approval() {
+        for (file, replacement, expected) in [
+            ("design-narrative.md", None, "unavailable"),
+            ("design-narrative.json", None, "unavailable"),
+            ("intent.json", None, "unavailable"),
+            ("design.json", None, "unavailable"),
+            (
+                "design-narrative.md",
+                Some("changed prose"),
+                "markdown must match",
+            ),
+            (
+                "design.json",
+                Some(r#"{"revision":"3","changed":true}"#),
+                "current artifact must match",
+            ),
+            ("design-narrative.json", Some("{}"), "narrative binding"),
+        ] {
+            let (input, root) = narrative_fixture("design", false);
+            if let Some(bytes) = replacement {
+                std::fs::write(root.join(file), bytes).unwrap();
+            } else {
+                std::fs::remove_file(root.join(file)).unwrap();
+            }
+            for slot in [
+                "design-narrative-review",
+                "design-narrative-adversarial-review",
+                "design-checkpoint",
+            ] {
+                let output = inspect(&input, Some(slot), None).unwrap();
+                assert!(
+                    output["missing_inputs"].to_string().contains(expected),
+                    "{file}: {output}"
+                );
+                if slot.ends_with("checkpoint") {
+                    assert_eq!(
+                        output["owner_approval_view"]["owner_approval"]["status"],
+                        "not-performed"
+                    );
+                    assert_eq!(output["owner_approval_view"]["subject_revision"], "3/1");
+                }
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
+        let (mut input, root) = narrative_fixture("design", false);
+        input["result"]["context"] = json!([]);
+        let output = inspect(&input, Some("design-checkpoint"), None).unwrap();
+        assert!(output["owner_approval_view"]["subject_revision"].is_null());
+        assert!(output["missing_inputs"]
+            .to_string()
+            .contains("missing latest"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn options_off_and_extension_slots_preserve_existing_projection() {
+        let (mut input, root) = narrative_fixture("design", false);
+        input["result"]["work_slots"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(WorkSlot::new(
+                "extension-review",
+                "extension-review",
+                "approved"
+            )
+            .with_stdin_context_kinds(vec!["review-evidence".into()])));
+        for slot in [
+            "design-review",
+            "intent-review",
+            "design-draft",
+            "extension-review",
+        ] {
+            let current = inspect_with_stage(&input, Some(slot), None, Some("aggregate")).unwrap();
+            let prior =
+                inspect_review_with_stage(&input, Some(slot), None, Some("aggregate")).unwrap();
+            assert_eq!(current, prior);
+            assert!(current.get("phase").is_none());
+        }
+        let mut filter = input["result"].clone();
+        filter["slot_id"] = json!("design-narrative-review");
+        let output = inspect(&filter, None, None).unwrap();
+        assert_eq!(
+            output,
+            inspect_review_with_stage(&filter, None, None, None).unwrap()
+        );
+        assert!(output.get("record_ids").is_some());
+        assert!(output.get("review_sources").is_none());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

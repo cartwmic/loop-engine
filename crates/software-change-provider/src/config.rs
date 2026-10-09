@@ -28,6 +28,12 @@ pub(crate) const GATE_IDS: &[&str] = &[
     "implementation-adversarial-review",
     "validation-review",
     "validation-adversarial-review",
+    "design-narrative-review",
+    "design-narrative-adversarial-review",
+    "plan-narrative-review",
+    "plan-narrative-adversarial-review",
+    "validation-narrative-review",
+    "validation-narrative-adversarial-review",
 ];
 
 /// Artifact subject names accepted in `artifact_schemas` and revision links.
@@ -38,7 +44,17 @@ pub(crate) const SUBJECT_NAMES: &[&str] = &[
     "reconciliation.json",
     "implementation-report.json",
     "validation-report.json",
+    "design-narrative.json",
+    "plan-narrative.json",
+    "validation-narrative.json",
 ];
+
+fn is_narrative_subject(subject: &str) -> bool {
+    matches!(
+        subject,
+        "design-narrative.json" | "plan-narrative.json" | "validation-narrative.json"
+    )
+}
 const RECONCILIATION_SUBJECT: &str = "reconciliation.json";
 
 const TOP_LEVEL_KEYS: &[&str] = &[
@@ -212,6 +228,9 @@ impl ValidatedConfig {
     pub(crate) fn schema(&self, subject: &str) -> Option<&ValidatedSchema> {
         if subject == RECONCILIATION_SUBJECT {
             return Some(reconciliation_schema());
+        }
+        if is_narrative_subject(subject) {
+            return Some(crate::narratives::binding_schema());
         }
         self.schemas_by_subject.get(subject)
     }
@@ -682,6 +701,8 @@ pub(crate) fn parse_initial_input(
         }
     };
 
+    validate_narrative_extra(root.get("extra"), contract_version, &mut violations);
+
     let mut axes_by_gate = BTreeMap::new();
     let mut staged_axes_by_gate = BTreeMap::new();
     if !root.contains_key("review_policies") {
@@ -750,6 +771,102 @@ pub(crate) fn validate_config(
     initial_input: &Value,
 ) -> Result<ValidatedConfig, ConfigValidationError> {
     parse_initial_input(initial_input)
+}
+
+/// Recognize only the new option/template keys; unrelated and non-object
+/// `extra` values retain their historical opaque interpretation. Phase lists
+/// are unique strings, absent or empty means off. The inert review template is
+/// {ordinary: [policy entries], challenge: [policy entries]}; its explicit
+/// groups use `{phase}` as the sole setup substitution in shipped profiles.
+fn validate_narrative_extra(
+    extra: Option<&Value>,
+    contract_version: u64,
+    violations: &mut Vec<ConfigViolation>,
+) {
+    let Some(extra) = extra.and_then(Value::as_object) else {
+        return;
+    };
+    for (key, allowed) in [
+        ("narratives", crate::narratives::NARRATIVE_PHASES),
+        ("checkpoints", crate::narratives::CHECKPOINT_PHASES),
+    ] {
+        let Some(value) = extra.get(key) else {
+            continue;
+        };
+        let Some(phases) = value.as_array() else {
+            violations.push(ConfigViolation::SemanticContract {
+                message: format!("extra.{key} must be an array of unique phase names"),
+            });
+            continue;
+        };
+        let mut seen = BTreeSet::new();
+        for (index, value) in phases.iter().enumerate() {
+            let Some(phase) = value.as_str() else {
+                violations.push(ConfigViolation::SemanticContract {
+                    message: format!("extra.{key}[{index}] must be a phase name string"),
+                });
+                continue;
+            };
+            if !allowed.contains(&phase) {
+                violations.push(ConfigViolation::SemanticContract {
+                    message: format!(
+                        "extra.{key}[{index}] unknown phase `{phase}`; allowed: {}",
+                        allowed.join(", ")
+                    ),
+                });
+            }
+            if !seen.insert(phase) {
+                violations.push(ConfigViolation::SemanticContract {
+                    message: format!("extra.{key} duplicate phase `{phase}`"),
+                });
+            }
+        }
+    }
+    let Some(template) = extra.get("narrative_review") else {
+        return;
+    };
+    let Some(template) = template.as_object() else {
+        violations.push(ConfigViolation::SemanticContract {
+            message:
+                "extra.narrative_review must be an object with ordinary and challenge policy lists"
+                    .to_owned(),
+        });
+        return;
+    };
+    for key in template.keys() {
+        if !["ordinary", "challenge"].contains(&key.as_str()) {
+            violations.push(ConfigViolation::SemanticContract {
+                message: format!("extra.narrative_review unknown key `{key}`"),
+            });
+        }
+    }
+    let mut policies = Map::new();
+    for (key, gate) in [
+        ("ordinary", "design-narrative-review"),
+        ("challenge", "design-narrative-adversarial-review"),
+    ] {
+        match template.get(key) {
+            Some(value) => {
+                policies.insert(gate.to_owned(), value.clone());
+            }
+            None => violations.push(ConfigViolation::SemanticContract {
+                message: format!("extra.narrative_review missing `{key}` policy list"),
+            }),
+        }
+    }
+    let mut template_violations = Vec::new();
+    parse_review_policies(
+        &Value::Object(policies),
+        contract_version,
+        &mut BTreeMap::new(),
+        &mut BTreeMap::new(),
+        &mut template_violations,
+    );
+    for violation in template_violations {
+        violations.push(ConfigViolation::SemanticContract {
+            message: format!("extra.narrative_review: {violation}"),
+        });
+    }
 }
 
 fn parse_review_policies(
@@ -1102,6 +1219,11 @@ fn validate_subject_metadata(
             continue;
         }
         let subject = gate_subject(gate).expect("all parsed policy gates are known");
+        // Narrative metadata comes from the canonical provider-owned schema,
+        // not a setup-injected or caller-replaceable artifact schema.
+        if is_narrative_subject(subject) {
+            continue;
+        }
         let Some(schema) = raw_schemas.get(subject) else {
             violations.push(ConfigViolation::AxesRequireSchema {
                 gate: gate.clone(),
@@ -1272,6 +1394,15 @@ fn gate_subject(gate: &str) -> Option<&'static str> {
             Some("implementation-report.json")
         }
         "validation-review" | "validation-adversarial-review" => Some("validation-report.json"),
+        "design-narrative-review" | "design-narrative-adversarial-review" => {
+            Some("design-narrative.json")
+        }
+        "plan-narrative-review" | "plan-narrative-adversarial-review" => {
+            Some("plan-narrative.json")
+        }
+        "validation-narrative-review" | "validation-narrative-adversarial-review" => {
+            Some("validation-narrative.json")
+        }
         _ => None,
     }
 }
@@ -1336,6 +1467,212 @@ mod tests {
             .iter()
             .map(ConfigViolation::class)
             .collect()
+    }
+
+    #[test]
+    fn successor_profiles_keep_narrative_templates_inert_and_preserve_stage_floors() {
+        for (name, source) in [
+            ("minimal", include_str!("../data/configs/minimal.json")),
+            ("standard", include_str!("../data/configs/standard.json")),
+            (
+                "high-rigor",
+                include_str!("../data/configs/high-rigor.json"),
+            ),
+        ] {
+            let value: Value = serde_json::from_str(source).unwrap();
+            let parsed = validate_config(&value).unwrap();
+            assert_eq!(parsed.config_version(), format!("{name}-15"));
+            assert_eq!(value["extra"]["narratives"], json!([]));
+            assert_eq!(value["extra"]["checkpoints"], json!([]));
+            for (pass, base) in [
+                ("ordinary", "design-review"),
+                ("challenge", "design-adversarial-review"),
+            ] {
+                let entries = value["extra"]["narrative_review"][pass].as_array().unwrap();
+                let base_floors = value["review_policies"][base]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|axis| {
+                        (
+                            axis["review_stage"].as_str().unwrap(),
+                            axis["required_authors"].as_u64().unwrap(),
+                        )
+                    })
+                    .collect::<BTreeSet<_>>();
+                let template_floors = entries
+                    .iter()
+                    .map(|axis| {
+                        (
+                            axis["review_stage"].as_str().unwrap(),
+                            axis["required_authors"].as_u64().unwrap(),
+                        )
+                    })
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(template_floors, base_floors, "{name}/{pass}");
+                assert_eq!(entries.len(), base_floors.len() * 3);
+                for axis in entries {
+                    assert!(axis["group"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("{phase}-narrative-"));
+                    let prompt = axis["example_prompt"].as_str().unwrap();
+                    assert!(prompt.contains("length"));
+                    if axis["id"] == "narrative-faithful" {
+                        for defect in [
+                            "contradiction of the artifact",
+                            "material omission",
+                            "invention or overpromise",
+                            "softened uncertainty",
+                            "untraceable claims",
+                            "internal inconsistency",
+                            "overclaimed delivery",
+                            "hidden residuals",
+                        ] {
+                            assert!(prompt.contains(defect), "{name}/{pass}: {defect}");
+                        }
+                        assert!(prompt.contains("For a validation narrative"));
+                    } else if axis["id"] == "narrative-intent-aligned" {
+                        assert!(prompt.contains("drift from the frozen intent"));
+                    } else {
+                        assert_eq!(axis["id"], "narrative-understandable");
+                        assert!(prompt.contains("engineer without Loop Engine context"));
+                    }
+                }
+            }
+            for phase in crate::narratives::NARRATIVE_PHASES {
+                for suffix in ["review", "adversarial-review"] {
+                    assert!(parsed
+                        .axes_for_gate(&format!("{phase}-narrative-{suffix}"))
+                        .is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn narrative_options_accept_allowed_phases_and_reject_malformed_lists() {
+        let mut value = empty_config();
+        value["extra"] = json!({
+            "narratives": crate::narratives::NARRATIVE_PHASES,
+            "checkpoints": crate::narratives::CHECKPOINT_PHASES,
+            "unrelated": {"opaque": true}
+        });
+        assert!(validate_config(&value).is_ok());
+        for key in ["narratives", "checkpoints"] {
+            for bad in [
+                json!(null),
+                json!(true),
+                json!("design"),
+                json!({}),
+                json!([true]),
+                json!([null]),
+                json!([""]),
+                json!(["Design"]),
+                json!(["unknown"]),
+                json!(["design", "design"]),
+            ] {
+                let mut invalid = value.clone();
+                invalid["extra"][key] = bad;
+                let error = validate_config(&invalid).unwrap_err();
+                assert!(
+                    error.to_string().contains(&format!("extra.{key}")),
+                    "{error}"
+                );
+            }
+        }
+        for phase in ["intent", "implementation"] {
+            value["extra"]["narratives"] = json!([phase]);
+            assert!(validate_config(&value).is_err());
+        }
+        for extra in [
+            json!(null),
+            json!("opaque"),
+            json!([]),
+            json!({"future": false}),
+            json!({"narratives": [], "checkpoints": []}),
+        ] {
+            value["extra"] = extra;
+            assert!(validate_config(&value).is_ok());
+        }
+    }
+
+    #[test]
+    fn narrative_gates_use_fixed_provider_owned_subject_schema() {
+        let mut value: Value =
+            serde_json::from_str(include_str!("../data/configs/high-rigor.json")).unwrap();
+        for phase in crate::narratives::NARRATIVE_PHASES {
+            for (pass, suffix) in [("ordinary", "review"), ("challenge", "adversarial-review")] {
+                let gate = format!("{phase}-narrative-{suffix}");
+                value["review_policies"][&gate] = value["extra"]["narrative_review"][pass].clone();
+                assert_eq!(
+                    gate_subject(&gate),
+                    Some(format!("{phase}-narrative.json").as_str())
+                );
+            }
+            // Accepted namespace, but a caller cannot weaken the binding schema.
+            value["artifact_schemas"][format!("{phase}-narrative.json")] =
+                json!({"type": "object"});
+        }
+        let config = validate_config(&value).unwrap();
+        for phase in crate::narratives::NARRATIVE_PHASES {
+            let subject = format!("{phase}-narrative.json");
+            assert!(!config
+                .schema(&subject)
+                .unwrap()
+                .evaluate(&json!({}))
+                .is_valid());
+            for suffix in ["review", "adversarial-review"] {
+                let gate = format!("{phase}-narrative-{suffix}");
+                for stage in [ReviewStage::Individual, ReviewStage::Aggregate] {
+                    assert_eq!(config.axes_for_stage(&gate, stage).unwrap().len(), 3);
+                }
+            }
+        }
+        value["review_policies"]["intent-narrative-review"] = json!([]);
+        assert!(validate_config(&value)
+            .unwrap_err()
+            .is_class("unknown-gate-name"));
+    }
+
+    #[test]
+    fn narrative_template_reuses_policy_validation_without_activating_gates() {
+        let original: Value =
+            serde_json::from_str(include_str!("../data/configs/standard.json")).unwrap();
+        for bad in [
+            json!(null),
+            json!([]),
+            json!({}),
+            json!({"ordinary": [], "challenge": [], "unknown": []}),
+            json!({"ordinary": {}, "challenge": []}),
+            json!({"ordinary": [null], "challenge": []}),
+        ] {
+            let mut value = original.clone();
+            value["extra"]["narrative_review"] = bad;
+            assert!(validate_config(&value)
+                .unwrap_err()
+                .to_string()
+                .contains("extra.narrative_review"));
+        }
+        for (field, bad) in [
+            ("required_authors", json!(0)),
+            ("review_stage", json!("unknown")),
+            ("group", json!("")),
+            ("self_review", json!("yes")),
+            ("id", json!(1)),
+            ("description", json!(null)),
+        ] {
+            let mut value = original.clone();
+            value["extra"]["narrative_review"]["ordinary"][0][field] = bad;
+            assert!(validate_config(&value).is_err(), "{field}");
+        }
+        let mut value = original;
+        let duplicate = value["extra"]["narrative_review"]["ordinary"][0].clone();
+        value["extra"]["narrative_review"]["ordinary"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        assert!(validate_config(&value).is_err());
     }
 
     #[test]

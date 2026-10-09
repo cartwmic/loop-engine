@@ -1,0 +1,36 @@
+{
+  "ordinary_review": {
+    "kind": "review-evidence",
+    "data": {
+      "gate": "validation-narrative-review",
+      "policy_id": "narrative-understandable",
+      "review_stage": "aggregate",
+      "result": "pass",
+      "findings": "",
+      "subject": "validation-narrative.json",
+      "subject_revision": "r15/1",
+      "author": {
+        "name": "ordinary-reader",
+        "kind": "agent"
+      },
+      "grounds": {
+        "reason": "An engineer can follow the proposed or delivered outcome, its reason and limitations from the narrative without prior workflow knowledge.",
+        "evidence": [
+          {
+            "locator": "validation-narrative.md#L1"
+          }
+        ]
+      }
+    }
+  },
+  "finding_ledger": {
+    "author": {
+      "name": "corpus-driver",
+      "kind": "script"
+    },
+    "gate": "validation-narrative-review",
+    "subject": "validation-narrative.json",
+    "subject_revision": "r15/1",
+    "findings": []
+  }
+}

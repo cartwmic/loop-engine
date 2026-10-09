@@ -50,13 +50,145 @@ pub(crate) enum EvaluationOutcome {
 /// remain owned by `main.rs`; this function only returns result JSON or an
 /// evaluation-error diagnostic.
 pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
-    // Trust the snapshotted (source, event, target, kind) tuple for routing.
-    // Duties come from the source state's phase-table row, not from a static
-    // combinatorial ROUTES table of every rewired target.
     let Some(duties) = duties_for_snapshotted_transition(request) else {
         return EvaluationOutcome::Response(unsupported_response());
     };
+    let options =
+        workflow::phase_options_for_state(request.transition.source.as_str()).filter(|o| {
+            workflow::option_enabled(Some(&request.initial_input), "narratives", o.phase.name)
+                || workflow::option_enabled(
+                    Some(&request.initial_input),
+                    "checkpoints",
+                    o.phase.name,
+                )
+        });
+    let empty = BTreeSet::new();
+    let Some(options) = options.filter(|_| duties != TransitionDuties::CheckFree) else {
+        let outcome = evaluate_base(request, duties, &empty, false);
+        return preserve_accepted_proof(request, outcome);
+    };
+    if request.initial_input["contract_version"].as_u64() == Some(2) {
+        return EvaluationOutcome::Response(unsupported_response());
+    }
+    let effective = if overlay::enabled(&request.initial_input) {
+        overlay::apply(&request.initial_input)
+    } else {
+        request.initial_input.clone()
+    };
+    let effective = software_change_provider::author_counts::resolve(
+        &effective,
+        &serde_json::to_value(&request.context).expect("context JSON"),
+    )
+    .effective;
+    let config = match parse_initial_input(&effective) {
+        Ok(config) => config,
+        Err(error) => return EvaluationOutcome::EvaluationError(error.to_string()),
+    };
+    let prepared = match crate::option_evaluation::prepare(request, &config, duties, options) {
+        Ok(prepared) => prepared,
+        Err(outcome) => return outcome,
+    };
+    if let Some(response) = prepared.immediate.as_ref() {
+        return EvaluationOutcome::Response(response.clone());
+    }
+    let outcome = evaluate_base(
+        request,
+        prepared.duties,
+        &prepared.excluded_applicability,
+        true,
+    );
+    let EvaluationOutcome::Response(response) = outcome else {
+        return outcome;
+    };
+    if response["result"] != "allow" {
+        return EvaluationOutcome::Response(response);
+    }
+    let exit = workflow::phase_exit_duties(
+        request.transition.source.as_str(),
+        request.transition.event.as_str(),
+        request.transition.target.as_str(),
+    );
+    if request.transition.source.as_str() == workflow::RECONCILIATION_STATE {
+        // Option-enabled implementation admission is post-reconciliation.
+        // Validate the report/checkpoint on this actual artifact-bearing boundary.
+        let report = evaluate_base(
+            request,
+            TransitionDuties::Checked {
+                subject: options.phase.subject,
+                gate: None,
+            },
+            &empty,
+            true,
+        );
+        if !matches!(&report, EvaluationOutcome::Response(value) if value["result"] == "allow") {
+            return report;
+        }
+    }
+    if let Some(subject) = exit.completion_subject {
+        if !matches!(
+            prepared.duties,
+            TransitionDuties::Checked {
+                subject: "validation-report.json",
+                ..
+            }
+        ) {
+            let completion = evaluate_base(
+                request,
+                TransitionDuties::Checked {
+                    subject,
+                    gate: None,
+                },
+                &empty,
+                true,
+            );
+            if !matches!(&completion, EvaluationOutcome::Response(value) if value["result"] == "allow")
+            {
+                return completion;
+            }
+        }
+    }
+    preserve_accepted_proof(
+        request,
+        EvaluationOutcome::Response(prepared.finish(response)),
+    )
+}
 
+/// Side effects run only after every prerequisite on the exact stored hop.
+fn preserve_accepted_proof(
+    request: &EvaluateRequest,
+    outcome: EvaluationOutcome,
+) -> EvaluationOutcome {
+    if !matches!(&outcome, EvaluationOutcome::Response(response) if response["result"] == "allow")
+        || !workflow::phase_exit_duties(
+            request.transition.source.as_str(),
+            request.transition.event.as_str(),
+            request.transition.target.as_str(),
+        )
+        .record_accepted_implementation_proof
+    {
+        return outcome;
+    }
+    let Some(root) = request.initial_input["artifact_root"].as_str() else {
+        return EvaluationOutcome::Response(checkpoint_deny(
+            request,
+            "artifact_root is required to preserve accepted implementation proof".to_owned(),
+        ));
+    };
+    match checkpoint::record_accepted_implementation_from_cwd(std::path::Path::new(root)) {
+        Ok(()) => outcome,
+        Err(error) => EvaluationOutcome::EvaluationError(error),
+    }
+}
+
+fn evaluate_base(
+    request: &EvaluateRequest,
+    duties: TransitionDuties,
+    excluded_applicability: &BTreeSet<String>,
+    force_document: bool,
+) -> EvaluationOutcome {
+    // Trust the snapshotted (source, event, target, kind) tuple for routing.
+    // Duties come from the source state's phase-table row, not from a static
+    // combinatorial ROUTES table of every rewired target.
     // §9.3: config validation is obligation-independent and artifact_root is
     // deliberately untouched by parse_initial_input. Overlay injection is
     // evaluate-time only and does not mutate the frozen initial_input.
@@ -142,7 +274,12 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     // requiring artifact_root and without consulting context, except that
     // implementation and validation phases still require their independent
     // repository checkpoint.
-    if schema.is_none() && links.is_empty() && staged_axes.is_none() && !checkpoint_required {
+    if schema.is_none()
+        && links.is_empty()
+        && staged_axes.is_none()
+        && !checkpoint_required
+        && !force_document
+    {
         if overlay_on && is_passed(request) && !bookends_is_green(bookends_report.as_ref()) {
             return EvaluationOutcome::Response(bookends_red_deny(
                 request,
@@ -156,7 +293,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
 
     // §9.5: only an actual schema/link read requires artifact_root.  The
     // artifact reader owns canonical containment and the §6 I/O taxonomy.
-    let document = if schema.is_some() || !links.is_empty() {
+    let document = if schema.is_some() || !links.is_empty() || force_document {
         match read_artifact(config.artifact_root(), subject) {
             ArtifactReadOutcome::Present(document) => Some(document),
             ArtifactReadOutcome::Deny(deny) => {
@@ -407,7 +544,13 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                 Some(Value::Object(details)),
             ));
         }
-        let mut challenge_context = request.context.clone();
+        let eligible_context: Vec<_> = request
+            .context
+            .iter()
+            .filter(|r| !excluded_applicability.contains(r.id.as_str()))
+            .cloned()
+            .collect();
+        let mut challenge_context = eligible_context.clone();
         if let Some(parent) = gate
             .strip_suffix("-adversarial-review")
             .map(|prefix| format!("{prefix}-review"))
@@ -461,7 +604,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                                 )
                             })
                         });
-                        let ordinary = crate::evidence::evaluate_staged_evidence_with_dispositions(
+                        let ordinary = crate::evidence::evaluate_staged_evidence_excluding(
                             &request.context,
                             &parent,
                             subject,
@@ -473,9 +616,10 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                             config.artifact_root(),
                             parent_ledger.current_snapshot(),
                             config.contract_version() >= 3,
+                            excluded_applicability,
                         );
                         retain_challenges_after_clearance(
-                            &request.context,
+                            &eligible_context,
                             &mut challenge_context,
                             &parent,
                             gate,
@@ -521,7 +665,7 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
             )
         });
         if let Some(evidence) = evidence {
-            if !evidence.is_satisfied() && challenge_context.len() != request.context.len() {
+            if !evidence.is_satisfied() && challenge_context.len() != eligible_context.len() {
                 return EvaluationOutcome::Response(deny_response(EVIDENCE_DENY_CODE, "challenge-before-ordinary-clearance: retained early challenge is non-qualifying", Some(evidence.details_value())));
             }
             if !evidence.is_satisfied() {
@@ -561,21 +705,6 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
                     Some(json!({"diagnostic":diagnostic})),
                 ));
             }
-        }
-    }
-
-    if subject == "implementation-report.json" && request.transition.target.as_str() == "validation"
-    {
-        let Some(root) = config.artifact_root().and_then(Value::as_str) else {
-            return EvaluationOutcome::Response(checkpoint_deny(
-                request,
-                "artifact_root is required to preserve accepted implementation proof".to_owned(),
-            ));
-        };
-        if let Err(error) =
-            checkpoint::record_accepted_implementation_from_cwd(std::path::Path::new(root))
-        {
-            return EvaluationOutcome::EvaluationError(error);
         }
     }
 
@@ -1160,10 +1289,8 @@ fn verify_post_reconciliation_checkpoint(
     };
     let root = std::path::Path::new(root);
     checkpoint::verify_from_cwd(checkpoint::CheckpointPhase::Implementation, root)?;
-    // Reviewless v3 graphs skip the implementation-report transition that used
-    // to record accepted implementation proof. Preserve that proof boundary
-    // without making reconciliation write or replace the checkpoint itself.
-    checkpoint::record_accepted_implementation_from_cwd(root)
+    // The exact allowing entry hop records accepted proof after its checks.
+    Ok(())
 }
 
 fn reconciliation_deny(request: &EvaluateRequest, diagnostic: String) -> Value {

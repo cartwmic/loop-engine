@@ -525,6 +525,11 @@ fn prd_traceability_schema() -> Value {
 fn inject_axes(policies: &mut Map<String, Value>, contract_v3: bool, semantic_coverage: bool) {
     let gates: Vec<String> = policies.keys().cloned().collect();
     for gate in gates {
+        // Narrative truth/readability is judged against the artifact and intent,
+        // not PRD-ID dispositions. Preserve the materialized policy verbatim.
+        if gate.ends_with("-narrative-review") || gate.ends_with("-narrative-adversarial-review") {
+            continue;
+        }
         let Some(axes) = policies.get_mut(&gate).and_then(Value::as_array_mut) else {
             continue;
         };
@@ -632,6 +637,45 @@ mod tests {
             .flatten()
             .filter_map(|axis| axis.get("id").and_then(Value::as_str))
             .collect()
+    }
+
+    #[test]
+    fn bookends_leaves_all_narrative_gates_unchanged() {
+        for source in [
+            include_str!("../data/configs/minimal.json"),
+            include_str!("../data/configs/standard.json"),
+            include_str!("../data/configs/high-rigor.json"),
+        ] {
+            let mut input: Value = serde_json::from_str(source).unwrap();
+            input["extra"]["bookends"] = json!({"enabled": true});
+            for phase in ["design", "plan", "validation"] {
+                for (pass, suffix) in [("ordinary", "review"), ("challenge", "adversarial-review")]
+                {
+                    let gate = format!("{phase}-narrative-{suffix}");
+                    input["review_policies"][&gate] =
+                        input["extra"]["narrative_review"][pass].clone();
+                }
+            }
+            let overlayed = apply(&input);
+            for phase in ["design", "plan", "validation"] {
+                for suffix in ["review", "adversarial-review"] {
+                    let gate = format!("{phase}-narrative-{suffix}");
+                    assert_eq!(
+                        overlayed["review_policies"][&gate],
+                        input["review_policies"][&gate]
+                    );
+                    assert!(
+                        !axis_ids(&overlayed["review_policies"], &gate).contains(&"ids-grounded")
+                    );
+                }
+            }
+            assert!(
+                axis_ids(&overlayed["review_policies"], "design-review").contains(&"ids-grounded")
+            );
+            assert!(axis_ids(&overlayed["review_policies"], "validation-review")
+                .contains(&"bypass-not-green"));
+            assert_eq!(overlayed["extra"], input["extra"]);
+        }
     }
 
     #[test]

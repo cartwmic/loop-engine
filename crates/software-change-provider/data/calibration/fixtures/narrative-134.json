@@ -1,0 +1,17 @@
+{
+  "revision": "r15/1",
+  "author": {
+    "name": "narrative-writer",
+    "kind": "agent"
+  },
+  "artifact": {
+    "subject": "validation-report.json",
+    "revision": "r15",
+    "sha256": "1b119352ceb9ea92621bf4839e41eb6706c2875b7e67f19c6a089e22fe4b3cb6"
+  },
+  "approved_artifact_record_id": "approved-validation-r15",
+  "markdown": {
+    "file": "validation-narrative.md",
+    "sha256": "b710e9456ce668527c56c084b0a30e08f32fba2415dcd98625957f0ebf597e82"
+  }
+}

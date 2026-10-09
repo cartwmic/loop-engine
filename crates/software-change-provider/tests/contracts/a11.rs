@@ -19,7 +19,7 @@ const HISTORICAL_V10_ROW_COUNT: usize = 368;
 const HISTORICAL_V11_ROW_COUNT: usize = 396;
 const HISTORICAL_ROW_COUNT: usize =
     HISTORICAL_V10_ROW_COUNT + HISTORICAL_V11_ROW_COUNT + 396 + 396 + 420;
-const CURRENT_ROW_COUNT: usize = 468;
+const CURRENT_ROW_COUNT: usize = 612;
 const PARALLELISM_FIXTURES: &[&str] = &[
     "plan-good",
     "plan-defective",
@@ -32,7 +32,7 @@ const HISTORICAL_V10_AXIS_KEYS: usize = 184;
 const HISTORICAL_V11_AXIS_KEYS: usize = 196;
 const HISTORICAL_AXIS_KEYS: usize =
     HISTORICAL_V10_AXIS_KEYS + HISTORICAL_V11_AXIS_KEYS + 196 + 196 + 208;
-const CURRENT_AXIS_KEYS: usize = 216;
+const CURRENT_AXIS_KEYS: usize = 288;
 const EXPECTED_AXIS_KEYS: usize = HISTORICAL_AXIS_KEYS + CURRENT_AXIS_KEYS;
 const HISTORICAL_MANIFEST_CANONICAL_SHA256: &str =
     "d4ccae56ee7d3fb13fc280c51f83e623200c9ae7bd329393605a4555818eb658";
@@ -69,10 +69,19 @@ fn profile_name(config_version: &str) -> &'static str {
 fn gate_family(gate: &str) -> &'static str {
     match gate {
         "intent-review" | "intent-adversarial-review" => "intent",
-        "design-review" | "design-adversarial-review" => "design",
-        "plan-review" | "plan-adversarial-review" => "plan",
+        "design-review"
+        | "design-adversarial-review"
+        | "design-narrative-review"
+        | "design-narrative-adversarial-review" => "design",
+        "plan-review"
+        | "plan-adversarial-review"
+        | "plan-narrative-review"
+        | "plan-narrative-adversarial-review" => "plan",
         "implementation-review" | "implementation-adversarial-review" => "implementation",
-        "validation-review" | "validation-adversarial-review" => "validation",
+        "validation-review"
+        | "validation-adversarial-review"
+        | "validation-narrative-review"
+        | "validation-narrative-adversarial-review" => "validation",
         other => panic!("unknown calibration gate {other}"),
     }
 }
@@ -82,6 +91,14 @@ fn is_adversarial_gate(gate: &str) -> bool {
 }
 
 fn parent_gate(gate: &str) -> &'static str {
+    if is_narrative_gate(gate) {
+        return match gate_family(gate) {
+            "design" => "design-narrative-review",
+            "plan" => "plan-narrative-review",
+            "validation" => "validation-narrative-review",
+            _ => unreachable!(),
+        };
+    }
     match gate_family(gate) {
         "intent" => "intent-review",
         "design" => "design-review",
@@ -93,6 +110,14 @@ fn parent_gate(gate: &str) -> &'static str {
 }
 
 fn subject_for_gate(gate: &str) -> &'static str {
+    if is_narrative_gate(gate) {
+        return match gate_family(gate) {
+            "design" => "design-narrative.json",
+            "plan" => "plan-narrative.json",
+            "validation" => "validation-narrative.json",
+            _ => unreachable!(),
+        };
+    }
     match gate_family(gate) {
         "intent" => "intent.json",
         "design" => "design.json",
@@ -584,6 +609,9 @@ fn request_value(input: &CalibrationInput) -> Value {
 fn source_records_for_entry(entry: &Map<String, Value>) -> CalibrationInput {
     let fixture_id = string_field(entry, "fixture_id");
     let gate = string_field(entry, "gate");
+    if is_narrative_gate(gate) {
+        return narrative_source_records(entry);
+    }
     let axis = string_field(entry, "axis");
     let review_stage = string_field(entry, "review_stage");
     let config_version = string_field(entry, "config_version");
@@ -708,10 +736,7 @@ fn required_current_row_keys(entries: &[Value]) -> Result<BTreeSet<CalibrationRo
             ));
         };
         let predecessor = format!("{base}{PREDECESSOR_CONFIG_SUFFIX}");
-        let policies = config["review_policies"]
-            .as_object()
-            .ok_or_else(|| format!("{profile} profile has no review_policies object"))?;
-        for (gate, axes) in policies {
+        for (gate, axes) in calibration_policies(&config)? {
             let axes = axes
                 .as_array()
                 .ok_or_else(|| format!("{profile} {gate} policies are not an array"))?;
@@ -727,13 +752,18 @@ fn required_current_row_keys(entries: &[Value]) -> Result<BTreeSet<CalibrationRo
                     .filter_map(Value::as_object)
                     .filter(|entry| {
                         string_field(entry, "config_version") == predecessor
-                            && string_field(entry, "gate") == gate
+                            && string_field(entry, "gate") == gate.as_str()
                             && string_field(entry, "axis") == axis_id
                             && string_field(entry, "review_stage") == stage
                     })
                     .map(|entry| string_field(entry, "fixture_id").to_owned())
                     .collect();
-                if matches!(axis_id, "intent-sufficient" | "acceptance-sufficient") {
+                if is_narrative_gate(&gate) {
+                    fixtures = narrative_pairing(profile, gate_family(&gate), axis_id)?
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect();
+                } else if matches!(axis_id, "intent-sufficient" | "acceptance-sufficient") {
                     fixtures =
                         BTreeSet::from([format!("{axis_id}-good"), format!("{axis_id}-defective")]);
                 }
@@ -876,6 +906,12 @@ fn validate_applicability(entry: &Map<String, Value>, entries: &[Value]) -> Resu
     if selected["model"] != source["model"] {
         return Err("prior returned model disagrees with source row".into());
     }
+    if selected
+        .get("input_sha256")
+        .is_some_and(|hash| Some(hash) != source.get("input_sha256"))
+    {
+        return Err("actual prior return input hash disagrees with source row".into());
+    }
     let output = selected["output"]
         .as_str()
         .ok_or("prior return raw output is unavailable")?;
@@ -940,6 +976,26 @@ fn validate_current_corpus(entries: &[Value]) -> Result<(), String> {
             continue;
         }
         let key = row_key(entry);
+        let allowed: BTreeSet<_> = [
+            "fixture_id",
+            "gate",
+            "axis",
+            "review_stage",
+            "expected",
+            "observed",
+            "config_version",
+            "model",
+            "invocation",
+            "attested_by",
+            "input_sha256",
+            "applicability",
+            "result_ref",
+        ]
+        .into_iter()
+        .collect();
+        if entry.keys().any(|field| !allowed.contains(field.as_str())) {
+            return Err(format!("unsupported current calibration fields: {key:?}"));
+        }
         if !actual.insert(key.clone()) {
             return Err(format!("duplicate current calibration row {key:?}"));
         }
@@ -955,6 +1011,8 @@ fn validate_current_corpus(entries: &[Value]) -> Result<(), String> {
             validate_applicability(entry, entries)?;
         } else if entry.contains_key("applicability") {
             return Err("applicability must use its distinct invocation literal".into());
+        } else {
+            validate_fresh_return(entry)?;
         }
         if string_field(entry, "attested_by").trim().is_empty()
             || !matches!(
@@ -1006,7 +1064,7 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
         let config = support::load_profile(profile);
         let version = config["config_version"].as_str().unwrap().to_owned();
         assert!(version.ends_with(CURRENT_CONFIG_SUFFIX));
-        for (gate, axes) in config["review_policies"].as_object().unwrap() {
+        for (gate, axes) in calibration_policies(&config).unwrap() {
             for axis in axes.as_array().unwrap() {
                 current_expected_keys.insert((
                     version.clone(),
@@ -1451,6 +1509,7 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
             assert!(
                 fixture.ends_with("-good")
                     || (axis == "parallelism-honest" && fixture == "plan-serial-honest")
+                    || is_narrative_gate(gate)
             );
             let rows: Vec<_> = entries
                 .iter()
@@ -1468,7 +1527,7 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
         }
     }
     assert_eq!(
-        counterpart_keys, 598,
+        counterpart_keys, 738,
         "all historical and current ordinary/challenge counterpart keys"
     );
 }
@@ -1481,6 +1540,9 @@ fn implementation_rows_have_total_commit_mapped_companion_coverage() {
     for entry in &entries {
         let entry = entry.as_object().expect("manifest row object");
         let gate = string_field(entry, "gate");
+        if is_narrative_gate(gate) {
+            continue;
+        }
         let axis = string_field(entry, "axis");
         let subject = indexed_evidence(&fixture_value(string_field(entry, "fixture_id")));
         let records = companion_records(&subject, gate, axis);
@@ -2198,6 +2260,9 @@ fn source_record_identity_preserves_pairing_and_neutral_request() {
         }
         let fixture_id = string_field(entry, "fixture_id");
         let gate = string_field(entry, "gate");
+        if is_narrative_gate(gate) {
+            continue;
+        }
         let review_stage = string_field(entry, "review_stage");
         let input = source_records_for_entry(entry);
         assert_eq!(request_value(&input)["subject_revision"], NEUTRAL_REVISION);
@@ -2272,7 +2337,7 @@ fn source_record_identity_preserves_pairing_and_neutral_request() {
 
     assert_eq!(
         pairs.len(),
-        CURRENT_AXIS_KEYS,
+        CURRENT_AXIS_KEYS - 72,
         "expected current configured keys to form pairs"
     );
     for (key, pair) in pairs {
@@ -2651,8 +2716,9 @@ fn current_calibration_gate_requires_complete_attested_nonempty_v15_corpus() {
         entry["invocation"] = Value::String(CURRENT_INVOCATION.to_owned());
         entry["model"] = Value::String("test-only fresh reviewer fixture".to_owned());
     }
-    validate_current_corpus(&fully_attested_fixture)
-        .expect("historical pending rows do not block complete v15 current rows");
+    let error = validate_current_corpus(&fully_attested_fixture)
+        .expect_err("attestation strings alone must not replace actual retained returns");
+    assert!(error.contains("result_ref"), "{error}");
 
     let no_current: Vec<_> = entries
         .iter()
@@ -2744,13 +2810,17 @@ fn sufficiency_packets_supply_neutral_subjects_and_stage_specific_companions() {
             assert_eq!(entry["model"], "");
             assert_eq!(entry["attested_by"], "");
             assert_eq!(entry["invocation"], "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.");
+            assert!(entry.get("applicability").is_none());
         } else {
             assert!(matches!(entry["observed"].as_str(), Some("pass" | "fail")));
             assert!(!entry["attested_by"].as_str().unwrap().is_empty());
-        }
-        if entry.get("applicability").is_some() {
-            validate_applicability(entry.as_object().unwrap(), &entries)
-                .expect("valid sufficiency applicability");
+            if entry.get("applicability").is_some() {
+                validate_applicability(row, &entries)
+                    .expect("sufficiency packet requires valid direct historical applicability");
+            } else {
+                validate_fresh_return(row)
+                    .expect("sufficiency packet requires valid actual fresh evidence");
+            }
         }
         let identity = row_key(row);
         let key = format!(
@@ -2953,4 +3023,588 @@ print('all 48 parallelism packets verified with scripted retained captures')
         "{}",
         String::from_utf8_lossy(&checked.stderr)
     );
+}
+
+fn is_narrative_gate(gate: &str) -> bool {
+    gate.contains("-narrative-")
+}
+
+fn narrative_pairing(profile: &str, phase: &str, axis: &str) -> Result<[&'static str; 2], String> {
+    match (phase, axis) {
+        ("design", "narrative-faithful") => Ok(["narrative-101", "narrative-111"]),
+        ("design", "narrative-intent-aligned") => Ok(["narrative-101", "narrative-113"]),
+        ("design", "narrative-understandable") => Ok(["narrative-101", "narrative-112"]),
+        ("plan", "narrative-faithful") => Ok(["narrative-102", "narrative-121"]),
+        ("plan", "narrative-intent-aligned") => Ok(["narrative-102", "narrative-123"]),
+        ("plan", "narrative-understandable") => Ok(["narrative-102", "narrative-122"]),
+        ("validation", "narrative-faithful") => {
+            let seeded = match profile {
+                "minimal" => "narrative-131",
+                "standard" => "narrative-133",
+                "high-rigor" => "narrative-134",
+                _ => return Err(format!("unsupported narrative profile {profile}")),
+            };
+            Ok(["narrative-103", seeded])
+        }
+        ("validation", "narrative-intent-aligned") => Ok(["narrative-103", "narrative-133"]),
+        ("validation", "narrative-understandable") => Ok(["narrative-103", "narrative-132"]),
+        _ => Err(format!("unsupported narrative pairing {phase}/{axis}")),
+    }
+}
+
+fn calibration_policies(config: &Value) -> Result<BTreeMap<String, Value>, String> {
+    let mut policies: BTreeMap<String, Value> = config["review_policies"]
+        .as_object()
+        .ok_or("missing review policies")?
+        .iter()
+        .map(|(g, a)| (g.clone(), a.clone()))
+        .collect();
+    let templates = config["extra"]["narrative_review"]
+        .as_object()
+        .ok_or("missing narrative templates")?;
+    if templates.len() != 2 {
+        return Err("unsupported narrative template fields".into());
+    }
+    for phase in ["design", "plan", "validation"] {
+        for (kind, suffix) in [
+            ("ordinary", "-narrative-review"),
+            ("challenge", "-narrative-adversarial-review"),
+        ] {
+            let axes = templates
+                .get(kind)
+                .and_then(Value::as_array)
+                .ok_or("missing narrative template list")?;
+            if axes.is_empty() {
+                return Err("empty narrative template coverage".into());
+            }
+            let mut seen = BTreeSet::new();
+            for axis in axes {
+                let id = axis["id"].as_str().ok_or("missing narrative axis")?;
+                narrative_pairing(
+                    profile_name(
+                        config["config_version"]
+                            .as_str()
+                            .ok_or("missing config version")?,
+                    ),
+                    phase,
+                    id,
+                )?;
+                let stage = axis["review_stage"]
+                    .as_str()
+                    .ok_or("missing narrative stage")?;
+                if !matches!(stage, "individual" | "aggregate") || !seen.insert((id, stage)) {
+                    return Err("unsupported or duplicate narrative stage".into());
+                }
+            }
+            // All three axes at every template stage, never a sampled subset.
+            for stage in seen
+                .iter()
+                .map(|(_, stage)| *stage)
+                .collect::<BTreeSet<_>>()
+            {
+                for id in [
+                    "narrative-faithful",
+                    "narrative-intent-aligned",
+                    "narrative-understandable",
+                ] {
+                    if !seen.contains(&(id, stage)) {
+                        return Err("missing narrative axis coverage".into());
+                    }
+                }
+            }
+            policies.insert(format!("{phase}{suffix}"), Value::Array(axes.clone()));
+        }
+    }
+    Ok(policies)
+}
+
+fn narrative_source_records(entry: &Map<String, Value>) -> CalibrationInput {
+    let gate = string_field(entry, "gate");
+    let phase = gate_family(gate);
+    let axis = string_field(entry, "axis");
+    let stage = string_field(entry, "review_stage");
+    let version = string_field(entry, "config_version");
+    let fixture = string_field(entry, "fixture_id");
+    assert!(narrative_pairing(profile_name(version), phase, axis)
+        .unwrap()
+        .contains(&fixture));
+    let profile = support::load_profile(profile_name(version));
+    let policies = calibration_policies(&profile).unwrap();
+    let prompt = policies[gate]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == axis && p["review_stage"] == stage)
+        .unwrap()["example_prompt"]
+        .as_str()
+        .unwrap();
+    let subject = subject_for_gate(gate);
+    let artifact_id = match phase {
+        "design" => "design-good",
+        "plan" => "plan-good",
+        "validation" => "validation-report-good",
+        _ => unreachable!(),
+    };
+    let artifact = read_data(&format!("calibration/fixtures/{artifact_id}.json"));
+    let markdown = read_data(&format!("calibration/fixtures/{fixture}.md"));
+    let binding = fixture_value(fixture);
+    let hash = |bytes: &[u8]| -> String {
+        Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    assert_eq!(binding["revision"], "r15/1");
+    assert_eq!(
+        binding["artifact"]["subject"],
+        subject_for_gate(&format!("{phase}-review"))
+    );
+    assert_eq!(binding["artifact"]["revision"], "r15");
+    assert_eq!(binding["artifact"]["sha256"], hash(&artifact));
+    assert_eq!(binding["markdown"]["file"], format!("{phase}-narrative.md"));
+    assert_eq!(binding["markdown"]["sha256"], hash(&markdown));
+    assert_eq!(
+        binding["approved_artifact_record_id"],
+        format!("approved-{phase}-r15")
+    );
+    let assignment = json!({
+        "author":{"name":"calibration-reviewer","kind":"agent"}, "gate":gate, "review_stage":stage,
+        "axes":[{"id":axis,"example_prompt":prompt}], "subject":subject,"subject_revision":"r15/1",
+        "instructions":"Review only supplied bytes; do not resolve fictional-repo labels or live paths. The shipped preamble governs output: return its batch-v3 object for this one axis and stage, not the older calibration instruction's single review-evidence record. No validation_verdicts: this is narrative review. Use supplied role/file names for locators. Ordinary context when supplied is a controlled corpus stimulus, not actual live-gate fulfillment. Never infer a verdict from its existence."
+    });
+    let mut records = vec![
+        (
+            "system-developer-instruction:data/calibration/reviewer-instruction.txt".to_owned(),
+            read_data("calibration/reviewer-instruction.txt"),
+        ),
+        (
+            "review-worker-preamble:data/review-worker-preamble.txt".into(),
+            read_data("review-worker-preamble.txt"),
+        ),
+        (
+            "assignment-json".into(),
+            serde_json::to_vec(&sorted_json(&assignment)).unwrap(),
+        ),
+        ("example_prompt".into(), prompt.as_bytes().to_vec()),
+        (
+            "reviewer-protocol:data/reviewer-protocol.md".into(),
+            read_data("reviewer-protocol.md"),
+        ),
+        (
+            "template:data/templates/narrative.md".into(),
+            read_data("templates/narrative.md"),
+        ),
+        (
+            "schema:data/narrative-schema.json".into(),
+            read_data("narrative-schema.json"),
+        ),
+        (
+            format!("subject:data/calibration/fixtures/{fixture}.json"),
+            read_data(&format!("calibration/fixtures/{fixture}.json")),
+        ),
+        ("markdown".into(), markdown),
+        ("approved-artifact".into(), artifact),
+        (
+            "frozen-intent".into(),
+            read_data("calibration/fixtures/intent-good.json"),
+        ),
+    ];
+    let predecessors: &[&str] = match phase {
+        "design" => &[],
+        "plan" => &["design-good"],
+        "validation" => &["design-good", "plan-good", "implementation-report-good"],
+        _ => unreachable!(),
+    };
+    for predecessor in predecessors {
+        records.push((
+            format!("required predecessor:data/calibration/fixtures/{predecessor}.json"),
+            read_data(&format!("calibration/fixtures/{predecessor}.json")),
+        ));
+    }
+    if phase == "validation" {
+        let value = fixture_value(artifact_id);
+        records.extend(
+            companion_records(&value, "validation-review", "intent-delivered")
+                .into_iter()
+                .map(|r| (r.label, r.content)),
+        );
+        records.extend(
+            requirement_proof_companion_records("validation-review", "requirement-proof-mapping")
+                .into_iter()
+                .map(|r| (r.label, r.content)),
+        );
+    }
+    if is_adversarial_gate(gate) {
+        records.push((
+            "challenge-context".into(),
+            read_data(&format!(
+                "calibration/fixtures/{phase}-narrative-context-{axis}.json"
+            )),
+        ));
+    }
+    let request = canonical_request_json(gate, axis, stage, subject, "r15/1", version);
+    records.push(("request-json".into(), request.clone()));
+    CalibrationInput {
+        source_records: records
+            .into_iter()
+            .map(|(label, content)| Record { label, content })
+            .collect(),
+        request,
+    }
+}
+
+fn retained_return(reference: &str) -> Result<Value, String> {
+    let (file, pointer) = reference
+        .split_once('#')
+        .ok_or("result_ref requires JSON Pointer")?;
+    let file = Path::new(file);
+    if file.is_absolute()
+        || file
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        return Err("result_ref must be repository-relative".into());
+    }
+    let root = workspace_integration::repository_root()
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let path = root
+        .join(file)
+        .canonicalize()
+        .map_err(|e| format!("actual return unavailable: {e}"))?;
+    if !path.starts_with(root) {
+        return Err("return escapes repository".into());
+    }
+    let value: Value = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    value
+        .pointer(pointer)
+        .cloned()
+        .ok_or("return selector missing".into())
+}
+
+fn validate_fresh_return(entry: &Map<String, Value>) -> Result<(), String> {
+    let reference = entry
+        .get("result_ref")
+        .and_then(Value::as_str)
+        .ok_or("fresh current judgment requires result_ref to actual retained raw return")?;
+    validate_fresh_selected(entry, &retained_return(reference)?)
+}
+
+fn validate_fresh_selected(entry: &Map<String, Value>, selected: &Value) -> Result<(), String> {
+    for field in ["model", "input_sha256"] {
+        if selected.get(field) != entry.get(field) {
+            return Err(format!("actual fresh return {field} mismatch"));
+        }
+    }
+    let key = row_key(entry);
+    if selected["row_key"] != format!("{}|{}|{}|{}|{}", key.0, key.1, key.2, key.3, key.4) {
+        return Err("actual fresh return row identity mismatch".into());
+    }
+    let raw = selected["output"]
+        .as_str()
+        .ok_or("missing raw fresh return")?;
+    if is_narrative_gate(string_field(entry, "gate")) {
+        let returned: Value =
+            serde_json::from_str(raw).map_err(|e| format!("raw narrative batch invalid: {e}"))?;
+        let allowed: BTreeSet<_> = [
+            "review_contract_version",
+            "review_stage",
+            "author",
+            "judgments",
+        ]
+        .into_iter()
+        .collect();
+        if returned
+            .as_object()
+            .is_none_or(|o| o.keys().any(|k| !allowed.contains(k.as_str())))
+            || returned["review_contract_version"] != 3
+            || returned["review_stage"] != entry["review_stage"]
+            || returned["author"] != json!({"name":"calibration-reviewer","kind":"agent"})
+        {
+            return Err("raw narrative batch contract/assignment mismatch".into());
+        }
+        let judgments = returned["judgments"]
+            .as_array()
+            .ok_or("missing batch judgments")?;
+        if judgments.len() != 1 {
+            return Err("missing or extra narrative axes".into());
+        }
+        let judgment = &judgments[0];
+        if judgment.as_object().is_none_or(|o| {
+            o.len() != 4
+                || o.keys()
+                    .any(|k| !["axis", "result", "findings", "grounds"].contains(&k.as_str()))
+        }) || judgment["grounds"].as_object().is_none_or(|o| {
+            o.len() != 2
+                || o.keys()
+                    .any(|k| !["reason", "evidence"].contains(&k.as_str()))
+        }) {
+            return Err("unsupported raw narrative judgment fields".into());
+        }
+        if judgment["axis"] != entry["axis"]
+            || judgment["result"] != entry["observed"]
+            || judgment["findings"].as_str().is_none_or(|f| {
+                if entry["observed"] == "fail" {
+                    f.trim().is_empty()
+                } else {
+                    !f.is_empty()
+                }
+            })
+            || judgment["grounds"]["reason"]
+                .as_str()
+                .is_none_or(|r| r.trim().is_empty())
+            || judgment["grounds"]["evidence"].as_array().is_none_or(|e| {
+                e.is_empty()
+                    || e.iter().any(|v| {
+                        v.as_object()
+                            .is_none_or(|o| o.len() != 1 || !o.contains_key("locator"))
+                            || v["locator"].as_str().is_none_or(|s| s.trim().is_empty())
+                    })
+            })
+        {
+            return Err("actual narrative judgment mismatch or incomplete grounds".into());
+        }
+    } else {
+        let returned = parse_retained_return(raw)?;
+        let data = returned.get("data").unwrap_or(&returned);
+        if data["subject"] != subject_for_gate(string_field(entry, "gate"))
+            || data["subject_revision"] != NEUTRAL_REVISION
+            || data["author"]["name"]
+                .as_str()
+                .is_none_or(|n| n.trim().is_empty())
+            || !matches!(
+                data["author"]["kind"].as_str(),
+                Some("human" | "agent" | "script")
+            )
+            || data["findings"].as_str().is_none_or(|f| {
+                if entry["observed"] == "fail" {
+                    f.trim().is_empty()
+                } else {
+                    !f.is_empty()
+                }
+            })
+        {
+            return Err("actual fresh return incomplete or wrong subject identity".into());
+        }
+        for (field, source) in [
+            ("result", "observed"),
+            ("gate", "gate"),
+            ("policy_id", "axis"),
+            ("review_stage", "review_stage"),
+            ("config_version", "config_version"),
+        ] {
+            if data.get(field) != entry.get(source) {
+                return Err(format!("actual fresh {field} mismatch"));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn narrative_templates_packets_and_raw_batch_checks_cover_every_stage() {
+    let entries = manifest();
+    let repository = workspace_integration::repository_root();
+    let temporary = support::TestDir::new("narrative-calibration-packets");
+    let mut counts = BTreeMap::new();
+    for entry in entries
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|e| !is_historical_entry(e) && is_narrative_gate(string_field(e, "gate")))
+    {
+        let key = row_key(entry);
+        let key_string = format!("{}|{}|{}|{}|{}", key.0, key.1, key.2, key.3, key.4);
+        *counts
+            .entry((key.0.clone(), key.3.clone()))
+            .or_insert(0usize) += 1;
+        let output = Command::new("python3")
+            .arg(repository.join("scripts/prepare-calibration-input.py"))
+            .arg("--repository")
+            .arg(&repository)
+            .arg("--procedure")
+            .arg(data_path("calibration/PROCEDURE.md"))
+            .arg("--manifest")
+            .arg(data_path("calibration/manifest.json"))
+            .arg("--profile")
+            .arg(data_path(&format!("configs/{}.json", profile_name(&key.0))))
+            .arg("--output-root")
+            .arg(temporary.path())
+            .arg("--row-key")
+            .arg(&key_string)
+            .bounded_output("prepare narrative calibration packet")
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let packet = temporary.path().join(&key_string);
+        let prep: Value =
+            serde_json::from_slice(&fs::read(packet.join("preparation.json")).unwrap()).unwrap();
+        let input = source_records_for_entry(entry);
+        assert_eq!(prep["input_sha256"], digest(&input));
+        assert_eq!(entry["input_sha256"], digest(&input));
+        for (actual, expected) in prep["source_records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(&input.source_records)
+        {
+            assert_eq!(actual["label"], expected.label);
+            assert_eq!(
+                fs::read(packet.join(actual["path"].as_str().unwrap())).unwrap(),
+                expected.content
+            );
+        }
+        let instructions = fs::read(packet.join("instructions.txt")).unwrap();
+        assert_no_reviewer_visible_leak(&instructions, "narrative packet");
+        assert!(!String::from_utf8_lossy(&instructions).contains(&key.4));
+        assert_eq!(prep["output_format"], "review-worker-batch-v3");
+        for i in 0..input.source_records.len() {
+            let mut changed = input.clone();
+            changed.source_records[i].content.push(b'x');
+            assert_ne!(digest(&input), digest(&changed));
+        }
+    }
+    assert_eq!(
+        counts,
+        BTreeMap::from([
+            (("minimal-15".to_owned(), "aggregate".to_owned()), 36),
+            (("standard-15".to_owned(), "aggregate".to_owned()), 36),
+            (("high-rigor-15".to_owned(), "individual".to_owned()), 36),
+            (("high-rigor-15".to_owned(), "aggregate".to_owned()), 36),
+        ])
+    );
+    let mut row = entries
+        .iter()
+        .find(|e| e["config_version"] == "minimal-15" && e["axis"] == "narrative-faithful")
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone();
+    row.insert("observed".into(), json!("pass"));
+    row.insert("model".into(), json!("test-only"));
+    let key = row_key(&row);
+    let batch = json!({"review_contract_version":3,"review_stage":row["review_stage"],"author":{"name":"calibration-reviewer","kind":"agent"},"judgments":[{"axis":row["axis"],"result":"pass","findings":"","grounds":{"reason":"test-only rationale","evidence":[{"locator":"design-narrative.md#L1"}]}}]});
+    let selected = json!({"row_key":format!("{}|{}|{}|{}|{}",key.0,key.1,key.2,key.3,key.4),"model":"test-only","input_sha256":row["input_sha256"],"output":batch.to_string()});
+    assert!(validate_fresh_selected(&row, &selected).is_ok());
+    for field in ["row_key", "model", "input_sha256", "output"] {
+        let mut changed = selected.clone();
+        changed[field] = json!("wrong");
+        assert!(validate_fresh_selected(&row, &changed).is_err());
+    }
+    for pointer in [
+        "/review_stage",
+        "/judgments/0/axis",
+        "/judgments/0/grounds/reason",
+    ] {
+        let mut changed_batch = batch.clone();
+        *changed_batch.pointer_mut(pointer).unwrap() = json!("");
+        let mut changed = selected.clone();
+        changed["output"] = json!(changed_batch.to_string());
+        assert!(validate_fresh_selected(&row, &changed).is_err());
+    }
+    let mut changed_batch = batch.clone();
+    changed_batch["judgments"][0]["grounds"]["evidence"][0]["oracle"] = json!("unsupported");
+    let mut changed = selected.clone();
+    changed["output"] = json!(changed_batch.to_string());
+    assert!(validate_fresh_selected(&row, &changed).is_err());
+    let checked = Command::new("python3")
+        .arg("-c")
+        .arg(r#"
+import copy, importlib.util, json, pathlib, sys
+repo, root = (pathlib.Path(p).resolve() for p in sys.argv[1:])
+spec = importlib.util.spec_from_file_location('consumer', repo / 'scripts/assert-calibration-capture.py')
+c = importlib.util.module_from_spec(spec); spec.loader.exec_module(c)
+count = 0
+for prep_path in root.glob('*/preparation.json'):
+    prep = json.loads(prep_path.read_bytes()); row = c.parse_row_key(prep['row_key'])
+    c.verify_preparation(root, prep_path.parent, prep, row); count += 1
+assert count == 144
+for field in ['oracle', 'expected', 'observed', 'seed_label', 'unknown_oracle_field', 'input_sha256']:
+    bad = copy.deepcopy(prep); bad[field] = 'wrong'
+    try: c.verify_preparation(root, prep_path.parent, bad, row)
+    except ValueError: pass
+    else: raise AssertionError(field)
+print('consumer verified 144 packets and refused oracle/unknown fields and stale identity')
+"#)
+        .arg(&repository).arg(temporary.path())
+        .bounded_output("verify narrative packets through actual consumer").unwrap();
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let mut profile = support::load_profile("minimal");
+    profile["extra"]["narrative_review"]["ordinary"] = json!([]);
+    assert!(calibration_policies(&profile).is_err());
+}
+
+#[test]
+fn narrative_corpus_has_three_faithful_and_ten_separately_seeded_cases() {
+    let mut cases: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    for row in manifest()
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|row| !is_historical_entry(row) && is_narrative_gate(string_field(row, "gate")))
+    {
+        // Expected is preparation metadata; it never enters reviewer instructions.
+        cases
+            .entry(if row["expected"] == "pass" {
+                "faithful"
+            } else {
+                "seeded"
+            })
+            .or_default()
+            .insert(string_field(row, "fixture_id").to_owned());
+    }
+    assert_eq!(cases["faithful"].len(), 3);
+    assert_eq!(cases["seeded"].len(), 10);
+    let faithful = String::from_utf8(read_data("calibration/fixtures/narrative-103.md")).unwrap();
+    let uncertainty =
+        String::from_utf8(read_data("calibration/fixtures/narrative-131.md")).unwrap();
+    let delivery = String::from_utf8(read_data("calibration/fixtures/narrative-133.md")).unwrap();
+    let residuals = String::from_utf8(read_data("calibration/fixtures/narrative-134.md")).unwrap();
+    let uncertainty_clause = "dishonest material edits without a revision bump remain undetectable and require external process controls.";
+    assert_eq!(uncertainty, faithful.replace(uncertainty_clause,
+        "dishonest material edits without a revision bump remain undetectable, but that possibility is merely theoretical and need not affect an operator's trust in reviewed outcomes."));
+    assert_eq!(delivery, faithful
+        .replace("No hostile-user or multi-tenant protection, new workflow states, or standalone installed packaging is delivered or required", "No hostile-user or multi-tenant protection or new workflow states are delivered or required")
+        .replace("Passing supplied checks does not remove those limitations or turn planned packaging into delivered packaging.", "The provider has also been delivered as a standalone installed distribution; the supplied workspace tests and public CLI journey fully prove its installed behavior. Passing those checks does not remove the identity and revision limitations above."));
+    assert_eq!(residuals, faithful.replace("The program checks claimed identities but does not authenticate them. Immaterial same-revision edits remain an accepted claim-trust residual; dishonest material edits without a revision bump remain undetectable and require external process controls. ", ""));
+    for id in ["narrative-131", "narrative-133", "narrative-134"] {
+        assert!(cases["seeded"].contains(id));
+        for phase in ["design", "plan"] {
+            for profile in PROFILES {
+                for axis in [
+                    "narrative-faithful",
+                    "narrative-intent-aligned",
+                    "narrative-understandable",
+                ] {
+                    assert!(!narrative_pairing(profile, phase, axis)
+                        .unwrap()
+                        .contains(&id));
+                }
+            }
+        }
+    }
+    assert_eq!(
+        narrative_pairing("minimal", "validation", "narrative-faithful").unwrap()[1],
+        "narrative-131"
+    );
+    assert_eq!(
+        narrative_pairing("standard", "validation", "narrative-faithful").unwrap()[1],
+        "narrative-133"
+    );
+    assert_eq!(
+        narrative_pairing("high-rigor", "validation", "narrative-faithful").unwrap()[1],
+        "narrative-134"
+    );
+    for profile in PROFILES {
+        assert_eq!(
+            narrative_pairing(profile, "validation", "narrative-intent-aligned").unwrap()[1],
+            "narrative-133"
+        );
+    }
 }

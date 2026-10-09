@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """External-driver software-change journey using scripted judgments, not semantic proof."""
 import argparse
+import hashlib
+import os
 import json
 import os
 import re
@@ -12,9 +14,113 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = Path(__file__).resolve().parents[1]
+PREDECESSOR = '506d6cce47a68496afd842e3388044341a68b667'
+
+
+class CommandLog:
+    """Append metadata immediately; retain exact payload bytes in separate files."""
+    def __init__(self, root):
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.rows = []
+        self.index = self.root / 'commands.jsonl'
+        if self.index.exists():
+            raise ValueError('Command capture index already exists; use a fresh root')
+        self.environment = {k: v for k, v in os.environ.items()
+                            if not k.startswith(('LOOP_', 'XDG_'))}
+
+    def execute(self, argv, packet=None, *, cwd=None, raw=False):
+        argv = [str(value) for value in argv]
+        stdin = None if packet is None else json.dumps(packet).encode('utf-8')
+        captured = subprocess.run(argv, input=stdin, cwd=cwd, env=self.environment,
+                                  capture_output=True)
+        command_id = f'{len(self.rows) + 1:06d}'
+        def retain(stream, content):
+            if content is None:
+                return None
+            path = self.root / f'{command_id}.{stream}'
+            with path.open('xb') as output:
+                output.write(content)
+                output.flush()
+                os.fsync(output.fileno())
+            return {'path':path.name, 'bytes':len(content),
+                    'sha256':hashlib.sha256(content).hexdigest()}
+        row = {'command_id':command_id,
+               'fixture_label':'SCRIPTED DUMMY BACKENDS; actual external command outcome',
+               'argv': argv, 'cwd': str(Path(cwd or Path.cwd()).resolve()),
+               'stdin':retain('stdin', stdin), 'exit_code':captured.returncode,
+               'stdout':retain('stdout', captured.stdout), 'stderr':retain('stderr', captured.stderr)}
+        with self.index.open('a', encoding='utf-8') as index:
+            index.write(json.dumps(row) + '\n')
+            index.flush()
+            os.fsync(index.fileno())
+        self.rows.append(row)
+        # Decode only for consumers; raw files above preserve even non-UTF8 bytes
+        # and CRLF without subprocess universal-newline conversion. Invalid UTF8
+        # still fails closed, but now its exact failure evidence is retained first.
+        try:
+            result = subprocess.CompletedProcess(argv, captured.returncode,
+                        captured.stdout.decode('utf-8'), captured.stderr.decode('utf-8'))
+        except UnicodeDecodeError as error:
+            raise RuntimeError(f'Non-UTF8 command response: {row}') from error
+        if raw:
+            return result
+        try:
+            value = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f'Non-JSON command response: {row}') from error
+        if result.returncode and value.get('status') != 'rejected':
+            raise RuntimeError(f'Unexpected failed command: {row}')
+        return value
+
+    def finalize(self):
+        """Optional small metadata-only convenience index; JSONL is authoritative."""
+        (self.root / 'commands.json').write_text(json.dumps(self.rows, indent=2))
+
+    def identity(self, engine, provider, *extra_providers):
+        binaries = {str(Path(p).resolve()): hashlib.sha256(Path(p).read_bytes()).hexdigest()
+                    for p in (engine, provider, *extra_providers)}
+        source = self.execute(['git', 'rev-parse', 'HEAD'], cwd=ROOT, raw=True)
+        diff = self.execute(['git', 'diff', '--binary'], cwd=ROOT, raw=True)
+        files = self.execute(['git', 'ls-files', '--modified', '--others', '--exclude-standard'],
+                             cwd=ROOT, raw=True)
+        hashes = {p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest()
+                  for p in files.stdout.splitlines() if (ROOT / p).is_file()}
+        (self.root / 'identity.json').write_text(json.dumps(
+            {'binaries': binaries, 'source_head': source.stdout.strip(),
+             'source_diff': diff.stdout, 'modified_and_untracked_sha256': hashes}, indent=2))
+
+
 SUBJECTS = {'intent.json':'intent-good.json', 'design.json':'design-good.json',
             'plan.json':'plan-good.json', 'implementation-report.json':'implementation-report-good.json',
             'validation-report.json':'validation-report-good.json'}
+
+
+def append_scripted_intent_comparison(call, show, run_id, intent, cold):
+    """Use the existing owner-authorized agent convention, never human approval."""
+    steering = {'target':{'kind':'slots', 'ids':['intent-review']},
+                'instruction':'SCRIPTED DUMMY BACKENDS: a simulated owner authorizes the '
+                              'scripted agent driver to compare every current cold reconstruction '
+                              'against this exact frozen intent baseline. Mechanical fixture only; '
+                              'not real owner authorization or semantic approval.'}
+    authorization = call('append', run_id, 'user-steering', json.dumps(steering))
+    assert authorization['status'] == 'completed', authorization
+    source = authorization['result']['context']
+    assert source['kind'] == 'user-steering' and source['data'] == steering, source
+    retained = next(r for r in show()['result']['context'] if r['id'] == source['id'])
+    assert retained == source, retained
+    comparison = {'subject_revision':intent['revision'], 'baseline':intent['baseline'],
+                  'reconstruction_ids':[r['id'] for r in cold],
+                  'actor':{'name':'scripted-owner-authorized-driver', 'kind':'agent'},
+                  'authority':source['id'],
+                  'dispositions':[{'reconstruction_id':r['id'],
+                                   'alternative':'Scripted fixture reconstruction; no material alternative supplied.',
+                                   'disposition':'implementation-freedom',
+                                   'note':'Scripted mechanical comparison only, not semantic judgment.'} for r in cold]}
+    appended = call('append', run_id, 'intent-comparison', json.dumps(comparison))
+    assert appended['status'] == 'completed', appended
+    assert appended['result']['context']['data'] == comparison, appended
+    return comparison
 
 
 def self_test():
@@ -24,13 +130,96 @@ def self_test():
     violations = [str(path.relative_to(ROOT)) for path in paths if retired.search(path.read_text())]
     if violations:
         raise RuntimeError('external-work skill/root policy assertions failed: ' + ', '.join(violations))
-    print('external-work skill/root policy assertions passed')
+    # Regression for the validator's permitted agent + explicit authorization
+    # convention. IDs below are emitted by the stub append, not chosen by helper.
+    records, calls = [], []
+    intent = {'revision':'fixture-r1', 'baseline':{'kind':'git','repository_scope':'primary','commit':'exact-fixture-baseline'}}
+    cold = [{'id':f'stub-retained-cold-{i}', 'author':{'name':f'reviewer-{i}'}} for i in range(2)]
+    def append_stub(*argv):
+        calls.append(argv)
+        assert argv[:2] == ('append','stub-run')
+        record = {'id':f'stub-append-emitted-{len(records)+1}', 'kind':argv[2],
+                  'data':json.loads(argv[3]), 'sequence':len(records)+1}
+        records.append(record)
+        return {'status':'completed', 'result':{'context':record}}
+    comparison = append_scripted_intent_comparison(append_stub,
+        lambda:{'result':{'context':records}}, 'stub-run', intent, cold)
+    assert [r['kind'] for r in records] == ['user-steering','intent-comparison']
+    assert records[0]['data']['target'] == {'kind':'slots','ids':['intent-review']}
+    assert set(records[0]['data']) == {'target','instruction'}
+    assert 'SCRIPTED DUMMY BACKENDS' in records[0]['data']['instruction']
+    assert comparison['actor']['kind'] == 'agent'
+    assert comparison['authority'] == records[0]['id'] and comparison['authority'] != 'owner'
+    assert set(comparison) == {'subject_revision','baseline','reconstruction_ids','actor','authority','dispositions'}
+    assert comparison['baseline'] == intent['baseline'] and comparison['subject_revision'] == intent['revision']
+    assert comparison['reconstruction_ids'] == [r['id'] for r in cold]
+    assert [d['reconstruction_id'] for d in comparison['dispositions']] == [r['id'] for r in cold]
+    # Exact bytes (including CRLF/non-UTF8 stderr) and append-only metadata; no
+    # repeated final-index serialization, even with large command responses.
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory(prefix='software-recorder-interface-') as directory:
+        log = CommandLog(directory)
+        stdout = b'{"status":"completed","padding":"' + b'x'*65536 + b'"}\r\n'
+        stderr = b'scripted stderr\r\n\x00'
+        completed = subprocess.CompletedProcess(['stub'], 0, stdout, stderr)
+        packet = {'label':'SCRIPTED fixture', 'non_ascii':'\u2014'}
+        with patch.object(subprocess, 'run', return_value=completed) as stub:
+            log.execute(['stub'], packet, cwd=directory)
+            assert stub.call_args.kwargs['input'] == json.dumps(packet).encode('utf-8')
+            assert 'text' not in stub.call_args.kwargs
+            prefix = log.index.read_bytes()
+            first = log.rows[0]
+            for _ in range(19):
+                log.execute(['stub'], packet, cwd=directory)
+        assert log.index.read_bytes().startswith(prefix) and log.rows[0] == first
+        assert (log.root / first['stdout']['path']).read_bytes() == stdout
+        assert (log.root / first['stderr']['path']).read_bytes() == stderr
+        assert (log.root / first['stdin']['path']).read_bytes() == json.dumps(packet).encode('utf-8')
+        assert len(log.rows) == 20 and len(log.index.read_bytes()) < len(stdout)
+        assert not (log.root / 'commands.json').exists()
+        error = subprocess.CompletedProcess(['stub'], 1, b'{"status":"error"}', b'failed\r\n')
+        with patch.object(subprocess, 'run', return_value=error):
+            try:
+                log.execute(['stub-error'])
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError('Unexpected command error accepted')
+        rows = [json.loads(line) for line in log.index.read_text().splitlines()]
+        assert rows == log.rows and rows[-1]['exit_code'] == 1
+        assert (log.root / rows[-1]['stderr']['path']).read_bytes() == b'failed\r\n'
+        invalid_utf8 = subprocess.CompletedProcess(['stub'], 0, b'{"status":"completed"}', b'\xff\r\n')
+        with patch.object(subprocess, 'run', return_value=invalid_utf8):
+            try:
+                log.execute(['stub-invalid-utf8'])
+            except RuntimeError as error:
+                assert 'Non-UTF8' in str(error)
+            else:
+                raise AssertionError('Invalid UTF8 command response accepted')
+        rows = [json.loads(line) for line in log.index.read_text().splitlines()]
+        assert rows == log.rows and (log.root / rows[-1]['stderr']['path']).read_bytes() == b'\xff\r\n'
+        log.finalize()
+        assert json.loads((log.root / 'commands.json').read_text()) == rows
+        assert (log.root / 'commands.json').stat().st_size < len(stdout)
+        payload_bytes = sum(row[stream]['bytes'] for row in rows
+                            for stream in ('stdin','stdout','stderr') if row[stream] is not None)
+        print(f'SCRIPTED recorder stub: {len(rows)} commands; payload_bytes={payload_bytes}; '
+              f'append_only_index_bytes={log.index.stat().st_size}; '
+              f'final_metadata_index_bytes={(log.root / "commands.json").stat().st_size}')
+    print('external-work skill/root policy and scripted comparison/append-only recorder assertions passed')
 
 
 # bookends:LE-39 bookends:LE-40 bookends:LE-43 bookends:LE-53 bookends:LE-85 — externally driven fixture artifacts complete under selected, materially different policies without invocation receipts.
 def run(args, profile_source, root, *, configure=None, exercise=None, judgment_reason=None,
-        stop_at=None, capture=False):
+        stop_at=None, capture=False, command_log=None):
     engine, provider = Path(args.engine).resolve(), Path(args.provider).resolve()
+    log = command_log or CommandLog(Path(root) / 'commands')
+    invoke = log.execute
+    def raw(argv, *, cwd=None, check=True):
+        result = invoke(argv, cwd=cwd, raw=True)
+        if check and result.returncode:
+            raise RuntimeError(f'Command failed: {argv}: {result.stderr}')
+        return result
     work = Path(tempfile.mkdtemp(prefix='software-external-', dir=root))
     artifacts = work / 'artifacts'
     artifacts.mkdir()
@@ -38,15 +227,15 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
     repository.mkdir()
     for command in [['git','init','-q'],['git','config','user.name','Journey'],
                     ['git','config','user.email','journey@example.invalid']]:
-        subprocess.run(command,cwd=repository,check=True,capture_output=True)
+        raw(command, cwd=repository)
     (repository / 'helper.py').write_text('def helper(value):\n    return value\n')
-    subprocess.run(['git','add','helper.py'],cwd=repository,check=True)
-    subprocess.run(['git','commit','-qm','fixture'],cwd=repository,check=True)
+    raw(['git','add','helper.py'], cwd=repository)
+    raw(['git','commit','-qm','fixture'], cwd=repository)
     data_root = Path(args.data_root or ROOT).resolve()
     if args.mode == 'packaged':
         if not args.data_root or (data_root.exists() and any(data_root.iterdir())):
             raise ValueError('Packaged mode requires an empty --data-root.')
-        subprocess.run([str(provider),'data-dump',str(data_root)],check=True,capture_output=True)
+        raw([provider,'data-dump',data_root])
         # bookends:LE-106 — packaged execution uses only data materialized by the compiled provider, not the source checkout.
         profile_source = data_root / 'crates/software-change-provider/data/configs' / Path(profile_source).name
         assert profile_source.is_file(), profile_source
@@ -67,38 +256,29 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
     intent_path = artifacts / 'intent.json'
     intent = json.loads(intent_path.read_text())
     intent['baseline'] = {'kind':'git','repository_scope':'primary',
-                          'commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=repository,text=True).strip()}
+                          'commit':raw(['git','rev-parse','HEAD'],cwd=repository).stdout.strip()}
     intent_path.write_text(json.dumps(intent))
     if configure:
         configure(profile, repository, artifacts)
     selected.write_text(json.dumps(profile))
+    (work / 'fixture-declaration.json').write_text(json.dumps({
+        'label':'SCRIPTED DUMMY BACKENDS: mechanical proof only; no semantic review or human approval',
+        'artifact_sources':{target:str(fixtures / source) for target, source in SUBJECTS.items()},
+        'changes':'Scratch helper repository; real helper-test proof; current Git baseline; prepared full validation index',
+        'actual_command_outcomes':str(log.index), 'command_payload_root':str(log.root),
+        'frozen_profile':profile}, indent=2))
     config = work / 'providers.toml'
     config.write_text(f'[providers.software-change]\ncommand = {json.dumps(str(provider))}\nargs = []\n')
     database = work / 'run.sqlite'
     run_id = 'software-external'
-    environment = {key:value for key,value in os.environ.items()
-                   if not key.startswith(('LOOP_', 'XDG_'))}
-    captures = work / 'captures'
-    if capture:
-        captures.mkdir()
-    sequence = 0
-    def invoke(argv, packet=None, *, cwd=repository, allow_rejected=False):
-        nonlocal sequence
-        outcome = subprocess.run([str(arg) for arg in argv],
-                                 input=None if packet is None else json.dumps(packet),
-                                 text=True,capture_output=True,cwd=cwd,env=environment)
-        if capture:
-            sequence += 1
-            (captures / f'{sequence:04d}.json').write_text(json.dumps({
-                'argv':[str(arg) for arg in argv],'cwd':str(cwd),'input':packet,
-                'exit_code':outcome.returncode,'stdout':outcome.stdout,'stderr':outcome.stderr},indent=2))
-        response = json.loads(outcome.stdout)
-        if outcome.returncode and not (allow_rejected and response.get('status') == 'rejected'):
-            raise RuntimeError(f'{argv}: {outcome.returncode}: {outcome.stdout}\n{outcome.stderr}')
-        return response
     def call(*args, allow_rejected=False):
-        return invoke([engine,'--database',database,'--config',config,'--json',*args],
-                      allow_rejected=allow_rejected)
+        # CommandLog retains every command and returns rejected envelopes as values;
+        # allow_rejected is accepted for parallelism callers that expect a denial.
+        if args[0] in ('append', 'event'):
+            show()  # One driver: EACH mutation gets a new arming observation.
+        return invoke([engine,'--database',database,'--config',config,'--json',*args],cwd=repository)
+    def invoke_here(argv, packet=None, *, cwd=repository, allow_rejected=False):
+        return invoke(argv, packet, cwd=cwd)
     def append(kind, data, record_id=None):
         argv = ['append']
         if record_id:
@@ -116,24 +296,27 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
         assert response['status'] == 'completed', response
         return response
     def checkpoint(phase):
-        before = [subprocess.check_output(['git',*argv],cwd=repository) for argv in [['rev-parse','HEAD'],['status','--porcelain']]]
+        before = [raw(['git',*argv],cwd=repository).stdout for argv in [['rev-parse','HEAD'],['status','--porcelain']]]
         result = invoke([provider,'checkpoint','--phase',phase,'--artifact-root',artifacts,
                          '--working-directory',repository],cwd=repository)
-        after = [subprocess.check_output(['git',*argv],cwd=repository) for argv in [['rev-parse','HEAD'],['status','--porcelain']]]
+        after = [raw(['git',*argv],cwd=repository).stdout for argv in [['rev-parse','HEAD'],['status','--porcelain']]]
         assert before == after, 'checkpoint mutated Git state'
         return result
     call('start','--id',run_id,'software-change','@'+str(selected),'external software')
-    while True:
+    visited = []
+    for _ in range(1000):
         shown = show()
         # bookends:LE-41 bookends:LE-42 — fresh-process inspection recovers the exact frozen review policies.
         assert shown['result']['initial_input']['review_policies'] == profile['review_policies'], shown
         state = shown['result']['current_state']
+        visited.append(state)
+        (work / 'states.json').write_text(json.dumps(visited))
         print('external software state:',state,flush=True)
         if exercise:
             handled = exercise(state, {'call':call,'show':show,'event':event,'checkpoint':checkpoint,
                                        'profile':profile,'artifacts':artifacts,'repository':repository,
                                        'provider':provider,'engine':engine,'work':work,'run_id':run_id,
-                                       'database':database,'config':config,'shown':shown,'invoke':invoke,'append':append})
+                                       'database':database,'config':config,'shown':shown,'invoke':invoke_here,'append':append})
             if handled:
                 continue
             shown = show()
@@ -147,19 +330,15 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
                        else 'plan.json' if state.startswith('plan') else 'implementation-report.json'
                        if state.startswith('implementation') else 'validation-report.json')
             revision = json.loads((artifacts / subject).read_text())['revision']
-            append_reviews({'call':call,'append':append,'invoke':invoke,'shown':shown,'profile':profile,
+            append_reviews({'call':call,'append':append,'invoke':invoke_here,'shown':shown,'profile':profile,
                             'repository':repository,'provider':provider,'run_id':run_id},
                            state,subject,revision,profile['review_policies'][state])
             if state == 'intent-review' and any(p['id'] == 'intent-sufficient' for p in profile['review_policies'][state]):
                 cold = [r for r in show()['result']['context'] if r['kind'] == 'review-evidence'
                         and r['data'].get('gate') == state and r['data'].get('policy_id') == 'intent-sufficient'
                         and r['data'].get('subject_revision') == revision]
-                append('intent-comparison',{
-                    'subject_revision':revision,'baseline':json.loads((artifacts / subject).read_text())['baseline'],
-                    'reconstruction_ids':[r['id'] for r in cold],
-                    'actor':{'name':'fixture-owner','kind':'human'},'authority':'owner',
-                    'dispositions':[{'reconstruction_id':r['id'],'alternative':'Scripted fixture reconstruction; no material alternative supplied.',
-                                     'disposition':'implementation-freedom','note':'Scripted mechanical comparison only, not semantic judgment.'} for r in cold]})
+                append_scripted_intent_comparison(call, show, run_id,
+                    json.loads((artifacts / subject).read_text()), cold)
             ledger = {'schema_version':'1','gate':state,'subject':subject,'subject_revision':revision,
                       'author':{'name':'external-driver','kind':'agent'},'findings':[]}
             call('append',run_id,'finding-ledger',json.dumps(ledger))
@@ -192,7 +371,7 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
             for spec in commission['commission']['proof_commands']:
                 identity = invoke([provider,'source-identity','--working-directory',repository],cwd=repository)
                 # bookends:LE-117 — the external proof owner runs each requested command once; reviewers consume its retained actual result.
-                outcome = subprocess.run([spec['command'],*spec['args']],cwd=repository,text=True,capture_output=True)
+                outcome = raw([spec['command'],*spec['args']],cwd=repository)
                 assert outcome.returncode == 0, outcome.stderr
                 results.append({'id':spec['id'],'command':spec['command'],'args':spec['args'],
                                 'cwd':str(repository),'exit_code':outcome.returncode,
@@ -208,7 +387,13 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
             checkpoint('validation')
             for candidate in prepared['command_candidates']:
                 append(candidate['kind'],candidate['data'],candidate['record_id'])
-            for index, batch in enumerate(prepared['judgment_batches']):
+            judgments_handled = exercise and exercise('validation-judgments', {
+                'call':call,'show':show,'event':event,'checkpoint':checkpoint,
+                'profile':profile,'artifacts':artifacts,'repository':repository,
+                'provider':provider,'engine':engine,'work':work,'run_id':run_id,
+                'database':database,'config':config,'shown':show(),'report':report,
+                'prepared':prepared,'invoke':invoke})
+            for index, batch in enumerate([] if judgments_handled else prepared['judgment_batches']):
                 verdict = {'subject':'validation-report.json','subject_revision':report['revision'],
                            'checkpoint':'validation-checkpoint.json',
                            'author':{'name':f'external-judge-{index}','kind':'agent'},
@@ -221,10 +406,17 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
                 exercise('validation-prepared', {'call':call,'show':show,'event':event,'checkpoint':checkpoint,
                                                 'profile':profile,'artifacts':artifacts,'repository':repository,
                                                 'provider':provider,'engine':engine,'work':work,'run_id':run_id,
-                                                'database':database,'config':config,'shown':show(),'report':report})
+                                                'database':database,'config':config,'shown':show(),'report':report,'invoke':invoke})
             event('validation-ready' if any(e['event'] == 'validation-ready' for e in shown['result']['requestable_events']) else 'passed')
         else:
             raise RuntimeError(f'Unexpected workflow state {state}')
+    else:
+        raise RuntimeError('Journey exceeded transition budget without reaching end')
+    history = call('history', run_id)
+    assert history['status'] == 'completed', history
+    (work / 'history.json').write_text(json.dumps(history, indent=2))
+    (work / 'terminal.json').write_text(json.dumps(shown, indent=2))
+    log.finalize()
     return work
 
 
@@ -243,7 +435,7 @@ def append_reviews(ctx, gate, subject, revision, policies, *, wrong_group=False)
             packet = {'show':shown,'assignment':assignment,'author':author,
                       'request':{'text':f'Review {subject}.'},
                       'original':{'text':json.dumps({
-                          'assessment_id':f'{gate}-{shown["result"]["state_visit"]}-{index}',
+                          'assessment_id':f'{gate}-{policy.get("review_stage","aggregate")}-{shown["result"]["state_visit"]}-{index}',
                           'judgments':[item]})}}
             intake = ctx['invoke']([ctx['provider'],'review-candidates'],packet)
             assert intake.get('records'), intake
@@ -358,7 +550,8 @@ def parallelism_traversal(args, profile_source, root):
         return True
 
     work = run(args,profile_source,root,configure=configure,exercise=exercise,
-               stop_at='implement',capture=True)
+               stop_at='implement',capture=True,
+               command_log=CommandLog(Path(root) / f'commands-parallelism-{profile_source.stem}'))
     assert {r['gate'] for r in receipts} == set(PLAN_GATES), receipts
     (work / 'parallelism-receipts.json').write_text(json.dumps({
         'profile':profile_source.stem+'-15','bookends':['LE-184','LE-130'],
@@ -391,11 +584,60 @@ def parallelism_journeys(args, root):
         'template':str(template),'profiles':{profile.stem:str(work) for profile,work in zip(profiles,works)}},indent=2))
 
 
+def compare_off(args, profile_source, root, log):
+    """Change-specific AC-1 proof pending LE-185 reconciliation; no live ID claim."""
+    source = Path(profile_source).resolve()
+    current = json.loads(source.read_text())
+    assert current['extra'].get('narratives', []) == []
+    assert current['extra'].get('checkpoints', []) == []
+    assert current['config_version'].endswith('-15'), current['config_version']
+    predecessor_args = argparse.Namespace(**vars(args))
+    historical = bool(args.predecessor_provider)
+    if historical:
+        predecessor_args.provider = str(Path(args.predecessor_provider).resolve())
+        version = log.execute([predecessor_args.provider, '--version'], cwd=ROOT, raw=True)
+        assert version.returncode == 0 and version.stdout.strip().split()[-1] == '0.24.1', version.stdout
+        dumped = Path(root) / f'{source.stem}-predecessor-data'
+        assert not dumped.exists(), 'Predecessor dump destination already exists'
+        response = log.execute([predecessor_args.provider, 'data-dump', dumped], cwd=ROOT, raw=True)
+        assert response.returncode == 0, response.stderr
+        old_bytes = (dumped / 'crates/software-change-provider/data/configs' / source.name).read_bytes()
+    else:
+        # Explicit profile-only mechanics, NOT full historical AC-1 proof.
+        relative = source.relative_to(ROOT)
+        original = log.execute(['git', 'show', f'{PREDECESSOR}:{relative}'], cwd=ROOT, raw=True)
+        assert original.returncode == 0, original.stderr
+        old_bytes = original.stdout.encode()
+    predecessor = json.loads(old_bytes)
+    assert predecessor['config_version'] == current['config_version'].replace('-15', '-14')
+    assert predecessor['review_policies'] == current['review_policies']
+    old = Path(root) / f'{source.stem}-14.json'
+    old.write_bytes(old_bytes)
+    graphs = [log.execute([binary], {'operation':'describe', 'initial_input':p}, cwd=ROOT)
+              for binary, p in ((predecessor_args.provider, predecessor), (args.provider, current))]
+    assert graphs[0] == graphs[1], 'Options-off stitched workflow changed'
+    old_work = run(predecessor_args, old, root, command_log=log)
+    new_work = run(args, source, root, command_log=log)
+    states = [json.loads((w / 'states.json').read_text()) for w in (old_work, new_work)]
+    assert states[0] == states[1], 'Options-off public progression changed'
+    assert not any('narrative' in s or s.endswith('-checkpoint') for s in states[1])
+    (Path(root) / f'{source.stem}-off-comparison.json').write_text(json.dumps(
+        {'scripted_dummy_backends':True, 'historical_binary_comparison':historical,
+         'ac1_historical_mechanical_proof':historical,
+         'predecessor_provider':predecessor_args.provider,
+         'predecessor_ref':None if historical else PREDECESSOR,
+         'limitation':None if historical else 'Profile-only parity on the current binary; NOT complete historical AC-1 proof',
+         'graphs_equal':True, 'review_policies_equal':True, 'states':states[1],
+         'actual_command_outcomes':str(log.index), 'command_payload_root':str(log.root),
+         'terminal_runs':[str(old_work),str(new_work)]}, indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode',choices=['source','packaged'],default='source')
     parser.add_argument('--engine')
     parser.add_argument('--provider')
+    parser.add_argument('--predecessor-provider', help='Explicit installed 0.24.1 provider for historical AC-1 parity; no guessing/fallback')
     parser.add_argument('--profile')
     parser.add_argument('--data-root')
     parser.add_argument('--work-root')
@@ -413,14 +655,29 @@ def main():
     if args.jobs < 1:
         parser.error('--jobs must be positive')
     root = Path(args.work_root).resolve() if args.work_root else Path(tempfile.mkdtemp(prefix='software-external-root-'))
+    if root == ROOT or root.is_relative_to(ROOT):
+        parser.error('--work-root must be outside the checkout')
+    if args.work_root and root.exists() and any(root.iterdir()):
+        parser.error('Use a new/empty external work root; receipts are never overwritten')
     root.mkdir(parents=True,exist_ok=True)
-    run(args,args.profile,root)
-    print('full software-change journey passed')
-    if args.mode == 'source':
-        run(args,ROOT / 'crates/software-change-provider/data/configs/minimal.json',root)
-        print('stitched software-change journey passed')
-        parallelism_journeys(args,root)
-    print(f'software-change journey captures retained: {root}')
+    print(f'Retained software-change proof root: {root}; SCRIPTED DUMMY BACKENDS', flush=True)
+    log = CommandLog(root / 'captures')
+    log.identity(args.engine, args.provider, *([args.predecessor_provider] if args.predecessor_provider else []))
+    try:
+        if args.mode == 'source' and Path(args.profile).resolve().parent == ROOT / 'crates/software-change-provider/data/configs':
+            compare_off(args, args.profile, root, log)
+            scope = 'historical-binary AC-1 mechanics' if args.predecessor_provider else 'profile-only parity; NOT complete historical AC-1 proof'
+            print(f'options-off predecessor/successor journeys reached end ({scope}; SCRIPTED DUMMY BACKENDS)')
+        elif args.mode == 'source':
+            run(args,args.profile,root,command_log=log)
+            print('full software-change journey passed (SCRIPTED DUMMY BACKENDS)')
+        else:
+            run(args,args.profile,root,command_log=log)
+            print('full packaged software-change journey passed (SCRIPTED DUMMY BACKENDS)')
+        if args.mode == 'source':
+            parallelism_journeys(args,root)
+    finally:
+        log.finalize()
 
 if __name__ == '__main__':
     main()

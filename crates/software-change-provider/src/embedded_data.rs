@@ -21,6 +21,41 @@ pub struct EmbeddedFile {
 /// data file requires adding its include here, and the drift-guard test catches
 /// omissions or stale bytes.
 pub static FILES: &[EmbeddedFile] = &[
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-133.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-133.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-133.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-133.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-134.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-134.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-134.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-134.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/design-narrative-context-narrative-faithful.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/design-narrative-context-narrative-faithful.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/design-narrative-context-narrative-intent-aligned.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/design-narrative-context-narrative-intent-aligned.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/design-narrative-context-narrative-understandable.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/design-narrative-context-narrative-understandable.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-101.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-101.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-101.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-101.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-102.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-102.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-102.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-102.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-103.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-103.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-103.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-103.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-111.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-111.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-111.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-111.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-112.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-112.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-112.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-112.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-113.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-113.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-113.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-113.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-121.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-121.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-121.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-121.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-122.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-122.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-122.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-122.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-123.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-123.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-123.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-123.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-131.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-131.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-131.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-131.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-132.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-132.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-132.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-132.md")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/plan-narrative-context-narrative-faithful.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/plan-narrative-context-narrative-faithful.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/plan-narrative-context-narrative-intent-aligned.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/plan-narrative-context-narrative-intent-aligned.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/plan-narrative-context-narrative-understandable.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/plan-narrative-context-narrative-understandable.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/validation-narrative-context-narrative-faithful.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/validation-narrative-context-narrative-faithful.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/validation-narrative-context-narrative-intent-aligned.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/validation-narrative-context-narrative-intent-aligned.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/validation-narrative-context-narrative-understandable.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/validation-narrative-context-narrative-understandable.json")) },
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/acceptance-sufficient-good.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/acceptance-sufficient-good.json")) },
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/intent-sufficient-good.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/intent-sufficient-good.json")) },
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/intent-sufficient-defective.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/intent-sufficient-defective.json")) },
@@ -39,6 +74,14 @@ pub static FILES: &[EmbeddedFile] = &[
     EmbeddedFile {
         path: "crates/software-change-provider/data/validation-report-schema.json",
         bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/validation-report-schema.json")),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/narrative-schema.json",
+        bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/narrative-schema.json")),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/templates/narrative.md",
+        bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/templates/narrative.md")),
     },
     EmbeddedFile {
         path: "crates/software-change-provider/data/reconciliation-schema.json",
@@ -396,6 +439,27 @@ pub static FILES: &[EmbeddedFile] = &[
         )),
     },
     EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/returned-v15-r1.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/returned-v15-r1.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/returned-v15-r2.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/returned-v15-r2.json"
+        )),
+    },
+    EmbeddedFile {
+        path: "crates/software-change-provider/data/calibration/returned-v15-r3.json",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/calibration/returned-v15-r3.json"
+        )),
+    },
+    EmbeddedFile {
         path: "crates/software-change-provider/data/configs/high-rigor.json",
         bytes: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -602,6 +666,27 @@ mod tests {
     }
 
     #[test]
+    fn embedded_narrative_contract_matches_source_bytes() {
+        for (path, source) in [
+            (
+                "crates/software-change-provider/data/narrative-schema.json",
+                include_bytes!("../data/narrative-schema.json").as_slice(),
+            ),
+            (
+                "crates/software-change-provider/data/templates/narrative.md",
+                include_bytes!("../data/templates/narrative.md").as_slice(),
+            ),
+        ] {
+            let matches = FILES
+                .iter()
+                .filter(|file| file.path == path)
+                .collect::<Vec<_>>();
+            assert_eq!(matches.len(), 1, "{path}");
+            assert_eq!(matches[0].bytes, source, "{path}");
+        }
+    }
+
+    #[test]
     fn embedded_profile_inventory_ships_contract_four_explicit_groups() {
         for name in ["minimal", "standard", "high-rigor"] {
             let path = format!("crates/software-change-provider/data/configs/{name}.json");
@@ -612,6 +697,8 @@ mod tests {
             let profile: serde_json::Value = serde_json::from_slice(file.bytes).unwrap();
             assert_eq!(profile["contract_version"], 4);
             assert_eq!(profile["config_version"], format!("{name}-15"));
+            assert_eq!(profile["extra"]["narratives"], serde_json::json!([]));
+            assert_eq!(profile["extra"]["checkpoints"], serde_json::json!([]));
             for entries in profile["review_policies"].as_object().unwrap().values() {
                 for entry in entries.as_array().unwrap() {
                     assert!(entry["group"].is_string());
