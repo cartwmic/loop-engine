@@ -119,7 +119,7 @@ def prove(root: Path) -> int:
     # Names exercise final measurement obligations, but the script explicitly
     # labels its output synthetic. The real benchmark comparison stays T14-owned.
     ids = ["focused-proof", "benchmark-final-serial", "benchmark-final-parallel", "benchmark-compare"]
-    later = ["commit-and-push", "hosted-exact-commit-preflight", "later-real-dogfood"]
+    later = ["commit-and-push", "hosted-exact-commit-push-ci", "later-real-dogfood"]
     matrix = {"schema_version": 1, "plan_revision": "5", "local_final": [
         {"id": i, "command": sys.executable,
          "args": ["-c", "import sys; print('synthetic proof completed'); print('diagnostic capture', file=sys.stderr)"],
@@ -258,7 +258,7 @@ def prove(root: Path) -> int:
     case("missing-required-marker", 1, m=value, diagnostic="required local proof is failed")
     for state in ("passed", "failed"):
         value = copy.deepcopy(report)
-        value["validation"][-2]["proof"] = "hosted-exact-commit-preflight: " + state
+        value["validation"][-2]["proof"] = "hosted-exact-commit-push-ci: " + state
         case("hosted-not-local-" + state, 1, r=value, diagnostic="after-authorization")
     value = copy.deepcopy(report)
     value["validation"].append({"proof": "implementation-report-check: passed"})

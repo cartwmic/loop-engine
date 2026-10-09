@@ -19,6 +19,8 @@ Preserve review groups, self-review declarations, author counts and amendments. 
 
 Use `describe`/`evaluate`, `checkpoint`, `commission`, `review-candidates`, `prepare-validation`, `source-identity`, `author-counts`, and `data-dump`. `setup` edits policy only with `--set`, `--add-axis`, `--remove-axis`; use explain/drift to inspect policy changes. Tools prepare or evaluate data, not external execution. Keep frozen run obligations and original runtime; no active-run migration is authorized.
 
-## Workspace Rust test and preflight path
+## Workspace validation
 
-Use scripts/run-nextest.py and scripts/run-central-tests.py for ordered fresh handoff and the independent stock-Cargo compatibility gate. The proof owner supplies local cache/tool startup before compilation. Retain exact argv, Git identity and outcomes; a missing matrix blocks final proof. CI startup is not a local setup script.
+From the checkout root, the final-proof owner runs `scripts/baseline.sh` plus the union of boundary commands in checkout-root `AGENTS.md`. Workers use `cargo test -p <crate> <filter>` for focused unit tests or `python3 scripts/run-central-tests.py --filter NAME` for focused central integration tests. Inspect active catalogs before rebuilding frozen provider paths; retain exact argv, source identity and outcomes. Missing required proof blocks completion.
+
+Draft or audit README/AGENTS through policy-document under the root guide's document procedure; target edits require fresh digest-bound evidence. Release generation uses only `python3 scripts/generate-release.py` and read-only `python3 scripts/generate-release.py --check`, followed by the independent strict graph assertions in the root release procedure. Git, dispatch and publication remain separately owner-authorized.

@@ -22,6 +22,10 @@ fn run() -> i32 {
     let mut args = std::env::args_os();
     let _ = args.next();
     if let Some(command) = args.next() {
+        if command == "--version" || command == "-V" {
+            println!("policy-document {}", env!("CARGO_PKG_VERSION"));
+            return 0;
+        }
         if command == "setup" {
             let rest: Vec<String> = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
             return loop_integrations::profile_setup::run(

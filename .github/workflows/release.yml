@@ -39,7 +39,6 @@ permissions:
 # If there's a prerelease-style suffix to the version, then the release(s)
 # will be marked as a prerelease.
 on:
-  pull_request:
   workflow_dispatch:
     inputs:
       tag:
@@ -131,10 +130,45 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
-      - uses: swatinem/rust-cache@v2
+      - name: "Require successful push CI for this exact commit"
+        id: "exact-commit-ci"
+        run: |
+          set -euo pipefail
+          runs="$(mktemp)"
+          trap 'rm -f "$runs"' EXIT
+          if ! gh api --method GET --paginate --slurp \
+            "repos/$RELEASE_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f event=push -f head_sha="$RELEASE_SHA" -f status=success -f per_page=100 > "$runs"; then
+            echo "::error::Cannot verify push CI for $RELEASE_SHA: GitHub API request failed"
+            exit 1
+          fi
+          if ! jq -e --arg sha "$RELEASE_SHA" \
+            'any(.[].workflow_runs[]; .head_sha == $sha and .event == "push" and .conclusion == "success")' \
+            "$runs" > /dev/null; then
+            echo "::error::Release refused: no successful ci.yml push run for exact commit $RELEASE_SHA"
+            exit 1
+          fi
+          echo "Successful ci.yml push run verified for exact commit $RELEASE_SHA"
+        shell: "bash"
+        env:
+          "RELEASE_REPOSITORY": "${{ github.repository }}"
+          "RELEASE_SHA": "${{ github.sha }}"
+      - name: "Install pinned native dist before generation check"
+        id: "install-native-dist"
+        run: "${{ matrix.install_dist.run }}"
+        shell: "bash"
+      - name: "Check reproducible strict release generation"
+        id: "check-release-generation"
+        run: |
+          set -euo pipefail
+          test "$(dist --version)" = "cargo-dist 0.32.0"
+          python3 scripts/generate-release.py --check
+        shell: "bash"
+      - name: "Cache Rust build artifacts"
+        uses: "swatinem/rust-cache@v2"
         with:
-          key: ${{ join(matrix.targets, '-') }}
-          cache-provider: ${{ matrix.cache_provider }}
+          "cache-provider": "${{ matrix.cache_provider }}"
+          "key": "${{ join(matrix.targets, '-') }}"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest
@@ -219,14 +253,24 @@ jobs:
           path: |
             ${{ steps.cargo-dist.outputs.paths }}
             ${{ env.BUILD_MANIFEST_NAME }}
+
+  custom-archive-check:
+    needs:
+      - plan
+      - build-local-artifacts
+    uses: ./.github/workflows/archive-check.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
   # Determines if we should publish/announce
   host:
     needs:
       - plan
       - build-local-artifacts
       - build-global-artifacts
+      - custom-archive-check
     # Only run if we're "publishing", and only if plan, local and global didn't fail (skipped is fine)
-    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.build-local-artifacts.result == 'skipped' || needs.build-local-artifacts.result == 'success') }}
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && needs.custom-archive-check.result == 'success' && (needs.build-local-artifacts.result == 'skipped' || needs.build-local-artifacts.result == 'success') }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     runs-on: "ubuntu-22.04"

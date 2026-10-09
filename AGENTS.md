@@ -15,8 +15,10 @@ Each source governs its named scope:
 3. [docs/PRD.md](docs/PRD.md): living engine product requirements.
 4. Frozen provider requirements and protocols: provider requirements and protocol contracts.
 5. Provider README: that provider's public contract.
-6. Provider skill: driving procedure.
+6. Engine and provider skills: driving procedure.
 7. [docs/agent-usage.md](docs/agent-usage.md): generic CLI forms and loop operations.
+
+Catalog selection follows the [engine skill’s Deterministic setup](skills/using-loop-engine/SKILL.md#deterministic-setup); README examples are not current-session owner authorization for production isolation.
 
 README.md is the human overview. Requirement changes need exact owner acceptance and an authorized commit. Unrelated recovery drafts remain drafts. Source integration alone establishes no requirement authority or semantic approval.
 
@@ -43,81 +45,55 @@ Before rebuilding or replacing a provider executable, inspect active runs in eac
 
 ## Workflow
 
-Run from the repository root. Load the engine and active provider skills. Use policy-document for README/AGENTS authoring or assessment. Requirement changes require owner acceptance. Choose proof by source identity: for uncommitted source or without an exact authorized main-push preflight, the designated final-proof owner uses the local route below. For an authorized committed main push, require successful hosted [production preflight](.github/workflows/preflight.yml) for that exact commit; its collected journeys and Bookends gate satisfy the matrix without redundant local reruns. CI startup is not a local shell script. Local proof requires Rust/Cargo and Python 3.14.6 provisioned through an approved environment, plus an unused driver-owned sccache server port. Install pinned tools only into the new proof-owned root below; obtain approval before changing persistent user tooling. Keep this shell's variables for subsequent proof commands:
+Run from the repository root with Rust/Cargo and Python 3 (CI uses 3.14.6). Load the engine and active provider skills; use policy-document for README/AGENTS authoring or assessment. The final-proof owner runs the baseline plus the boundary checks below on the current source. Workers run focused checks; missing required proof blocks completion.
+
+```sh
+scripts/baseline.sh
+```
+
+Keep its check list identical to [ci.yml](.github/workflows/ci.yml): fmt, locked all-target Clippy, locked workspace build, workspace tests, five bare journey self-tests, Bookends with bypass unset. Local Bookends checks the working tree; push CI checks every introduced commit from main's previous tip. Bare journeys and `--self-test` prove collection/interface mechanics, not end-to-end progression. Full journeys in [journeys.yml](.github/workflows/journeys.yml) are informational and never gate Release; local boundary proof remains required.
+
+Before parameterized journeys, build current source and resolve the actual Cargo target directory. Inspect active catalogs before any rebuild as required above. Use an external directory owned by the proof driver for journey output, not user state:
 
 ```sh
 set -eu
-PROOF_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/loop-proof.XXXXXX")"
-export PATH="$PROOF_ROOT/tools/bin:$PATH"
+: "${PROOF_ROOT:?absolute driver-owned proof directory outside the checkout}"
+cargo build --workspace --all-targets --locked
 BIN_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"] + "/debug")')"
-cargo install cargo-dist --version 0.32.0 --locked --root "$PROOF_ROOT/tools"
-cargo install cargo-nextest --version 0.9.143 --locked --root "$PROOF_ROOT/tools"
-cargo install cargo-machete --version 0.9.2 --locked --root "$PROOF_ROOT/tools"
-cargo install sccache --version 0.17.0 --locked --root "$PROOF_ROOT/tools"
-: "${SCCACHE_SERVER_PORT:?set an unused port owned by this proof driver}"
-export SCCACHE_SERVER_PORT SCCACHE_DIR="$PROOF_ROOT/cache" SCCACHE_IDLE_TIMEOUT=0
-unset SCCACHE_GHA_ENABLED
-export RUSTC_WRAPPER="$PROOF_ROOT/tools/bin/sccache"
-sccache --start-server
-sccache --zero-stats
-python3 scripts/assert-nextest.py
-python3 scripts/dependency-audit.py
-dist generate --check
-dist plan --output-format=json > "$PROOF_ROOT/dist-plan.json"
-python3 scripts/assert-dist-plan.py "$PROOF_ROOT/dist-plan.json"
-python3 scripts/assert-release-gates.py
-python3 scripts/assert-push-main-preflight.py
-python3 scripts/run-nextest.py
-python3 scripts/prove-nextest-timeout.py --report "$PROOF_ROOT/nextest-timeout.json"
-python3 scripts/run-central-tests.py --no-run --compiler-artifacts "$PROOF_ROOT/central-artifacts.jsonl" --handoff-output "$PROOF_ROOT/handoff.json"
-python3 scripts/assert-test-topology.py --compiler-artifacts "$PROOF_ROOT/central-artifacts.jsonl"
-python3 scripts/assert-test-inventory.py --compiler-artifacts "$PROOF_ROOT/central-artifacts.jsonl" --current-only
-LOOP_ENGINE_TEST_BINARY_HANDOFF="$PROOF_ROOT/handoff.json" cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --all -- --check
-sccache --show-stats --stats-format=json > "$PROOF_ROOT/sccache-final.json"
 ```
 
-Do not stop another driver's cache server or clean unrelated state. Retain the proof root and its receipts; a missing prerequisite blocks proof. For local proof, run the source journeys below and the Bookends gate in addition to this matrix. Cargo may select a non-default target directory via environment/config: use the metadata-resolved BIN_DIR above, never stale hard-coded target/debug paths. Workers run focused checks only. Missing proof blocks completion.
+### Boundary checks
 
-```sh
-cargo build --workspace --all-targets
-RESEARCH_PROVIDER="$BIN_DIR/research" python3 scripts/assert-generate-prd-profile.py
-python3 scripts/external-work-journey.py --engine "$BIN_DIR"/loop-engine --software "$BIN_DIR"/software-change --policy "$BIN_DIR"/policy-document --research "$BIN_DIR"/research --checker "$BIN_DIR"/bookends-check --output-root "$PROOF_ROOT/external-work"
-python3 scripts/software-change-journey.py --mode source --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/software-change --profile crates/software-change-provider/data/configs/high-rigor.json --traversal-depth full --jobs 2
-for mode in draft audit; do
-  python3 scripts/policy-document-journey.py --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/policy-document --profile crates/policy-document-provider/data/readme.json --mode "$mode"
-done
-python3 scripts/research-journey.py --mode source --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/research --profile crates/research-provider/data/configs/standard.json
-python3 scripts/generate-prd-journey.py --mode source --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/research --checker "$BIN_DIR"/bookends-check --profile crates/research-provider/data/configs/generate-prd.json
-```
+Every change runs the baseline. Changes touching several areas run the union of their rows. The commands use the metadata-resolved `BIN_DIR` and external `PROOF_ROOT` above; do not select stale installed binaries or hard-code a target directory. Research source proof requires cargo-dist 0.32.0 already provisioned in an approved environment (`dist --version`); a missing prerequisite blocks the journey. Obtain approval before changing persistent tooling; any disposable tool root must be driver-owned and external.
 
-Bare journey invocations and `--self-test` prove collection/interface mechanics only; parameterized commands above exercise end-to-end progression. Before research source journeys, use preflight's “Install dist” setup (cargo-dist 0.32.0); do not report a journey complete if `dist` is unavailable. Obtain approval for persistent tool installation, or use a disposable driver-owned tool root without changing unrelated user state.
+| Changed area | Additional required commands |
+|---|---|
+| Engine (`loop-cli`, `loop-core`, `loop-integrations`) | `python3 scripts/external-work-journey.py --engine "$BIN_DIR"/loop-engine --software "$BIN_DIR"/software-change --policy "$BIN_DIR"/policy-document --research "$BIN_DIR"/research --checker "$BIN_DIR"/bookends-check --output-root "$PROOF_ROOT/external-work"`<br>`python3 scripts/software-change-journey.py --mode source --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/software-change --profile crates/software-change-provider/data/configs/high-rigor.json --traversal-depth full --jobs 2`<br>`python3 scripts/policy-document-journey.py --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/policy-document --profile crates/policy-document-provider/data/readme.json --mode draft`<br>`python3 scripts/policy-document-journey.py --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/policy-document --profile crates/policy-document-provider/data/readme.json --mode audit`<br>`python3 scripts/research-journey.py --mode source --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/research --profile crates/research-provider/data/configs/standard.json`<br>`python3 scripts/generate-prd-journey.py --mode source --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/research --checker "$BIN_DIR"/bookends-check --profile crates/research-provider/data/configs/generate-prd.json` |
+| software-change provider | `python3 scripts/software-change-journey.py --mode source --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/software-change --profile crates/software-change-provider/data/configs/high-rigor.json --traversal-depth full --jobs 2`<br>`python3 scripts/external-work-journey.py --engine "$BIN_DIR"/loop-engine --software "$BIN_DIR"/software-change --policy "$BIN_DIR"/policy-document --research "$BIN_DIR"/research --checker "$BIN_DIR"/bookends-check --output-root "$PROOF_ROOT/external-work"` |
+| policy-document provider | `python3 scripts/policy-document-journey.py --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/policy-document --profile crates/policy-document-provider/data/readme.json --mode draft`<br>`python3 scripts/policy-document-journey.py --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/policy-document --profile crates/policy-document-provider/data/readme.json --mode audit`<br>`python3 scripts/external-work-journey.py --engine "$BIN_DIR"/loop-engine --software "$BIN_DIR"/software-change --policy "$BIN_DIR"/policy-document --research "$BIN_DIR"/research --checker "$BIN_DIR"/bookends-check --output-root "$PROOF_ROOT/external-work"` |
+| research provider (including generate-PRD) | `python3 scripts/research-journey.py --mode source --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/research --profile crates/research-provider/data/configs/standard.json`<br>`python3 scripts/generate-prd-journey.py --mode source --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/research --checker "$BIN_DIR"/bookends-check --profile crates/research-provider/data/configs/generate-prd.json`<br>`python3 scripts/external-work-journey.py --engine "$BIN_DIR"/loop-engine --software "$BIN_DIR"/software-change --policy "$BIN_DIR"/policy-document --research "$BIN_DIR"/research --checker "$BIN_DIR"/bookends-check --output-root "$PROOF_ROOT/external-work"` |
+| bookends-check | `python3 scripts/generate-prd-journey.py --mode source --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/research --checker "$BIN_DIR"/bookends-check --profile crates/research-provider/data/configs/generate-prd.json`<br>`python3 scripts/external-work-journey.py --engine "$BIN_DIR"/loop-engine --software "$BIN_DIR"/software-change --policy "$BIN_DIR"/policy-document --research "$BIN_DIR"/research --checker "$BIN_DIR"/bookends-check --output-root "$PROOF_ROOT/external-work"` |
+| Packaging/release (dist metadata, workflows, release scripts) | `python3 scripts/generate-release.py --check`<br>`python3 scripts/assert-release-gates.py`<br>`python3 scripts/archive-version-check.py --self-test`<br>`python3 scripts/research-journey.py --mode source --engine "$BIN_DIR"/loop-engine --provider "$BIN_DIR"/research --profile crates/research-provider/data/configs/standard.json` (LE-69 dist-plan proof) |
+| Docs/scripts only (outside the release or other boundaries above) | Baseline only |
 
-For tests, use `python3 scripts/run-central-tests.py --filter NAME` for focused central integration tests and `python3 scripts/run-nextest.py` for ordinary nextest plus doctests; both own fresh production/fixture binary handoffs. Direct test invocation is not a substitute for this verified handoff. For final topology/inventory and stock-Cargo compatibility, run preflight's “Build central target for structure and inventory assertions”, “Assert one integration target and current test inventory”, and “Run stock Cargo compatibility gate” steps in order with the same retained handoff and compiler-artifact files.
+For focused unit tests use `cargo test -p <crate> <filter>`; for focused central integration tests use `python3 scripts/run-central-tests.py --filter NAME`. The central runner builds its required binaries; ordinary final workspace proof is `cargo test --workspace` in the baseline, not a separate handoff matrix.
 
 For packaging boundaries, choose `scripts/packaged-smoke.py --mode archive` when validating release archives, supplying `--archive` and `--checksum`; choose `--mode installed` only for installed executables, supplying `--binary`. Both require actual package identity, expected version, platform and an external output root; use `--help` for their required per-application inputs. Never describe installed identity as archive identity. Keep hand-maintained embedded_data.rs FILES inventories current. Register central integration modules in tests/workspace-integration/tests/workspace.rs before using the central runner. Public tests need eligible bookends.toml pathspecs and recognized CI collection commands.
 
-Before push, build the current checker and require GREEN from the repository gate; BYPASS is not proof, so clear inherited BOOKENDS_BYPASS:
-
-```sh
-CHECKER_BIN_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"] + "/debug")')"
-cargo build --locked -p bookends-check --bin bookends-check
-unset BOOKENDS_BYPASS
-PATH="$CHECKER_BIN_DIR:$PATH" scripts/bookends-check-gate.sh </dev/null | tee "$PROOF_ROOT/bookends.log"
-grep -qx GREEN "$PROOF_ROOT/bookends.log"
-```
+The baseline builds and selects the current checker and clears inherited Bookends bypass/update-stream settings for ordinary local proof. BYPASS is not proof. Do not substitute an installed checker for the current source build.
 
 ## Document and Git safety
 
 - Draft or revise README.md/AGENTS.md through policy-document using a copied `readme-4`/`agents-4` profile with `mode: "draft"`. Use `mode: "audit"` for assessment. Load the policy-document skill for profile preparation and evidence rules. Local references must remain within the target directory; normalized paths such as `docs/../exists.md` are allowed, but escapes outside the directory are rejected. For root guidance in crate documents, use an explicit checkout-root-relative prose path instead of an escaping markdown link.
 - After implementation triage, obtain the explicit human Git checkpoint decision before pre-review proof. A repository checkpoint does not create a commit. Workers never stage or commit independently. Authorized Git identity changes require fresh applicable proof; do not relabel receipts.
 - Ask before committing, pushing, destructive actions or worktree lifecycle changes. Before a commit, inspect `git diff --cached --name-status` and `git diff --cached`; this checkout has no tracked secret/runtime-artifact detection hook. Never commit secrets, machine-local provider TOML, run databases or captures. These markdown boundaries are advisory, not an enforcement mechanism; inspect staged contents and retain sensitive/runtime artifacts outside the checkout.
-- Never hand-edit `.github/workflows/release.yml`. Change dist metadata and regenerate. Direct pushes to main run read-only preflight. Publication uses the separately authorized sequence below. Do not force-push main.
+- Never hand-edit `.github/workflows/release.yml`. Change dist metadata and generate only with `python3 scripts/generate-release.py`; use `python3 scripts/generate-release.py --check` for read-only reproduction. Direct pushes to main run blocking CI and separate informational journeys, not branch/PR CI. Publication uses the separately authorized sequence below. Do not force-push main.
 
 ### Authorized release sequence
 
-Only after owner authorization, replace `X.Y.Z` with the approved version (without `v`). [prepare-release.sh](scripts/prepare-release.sh) requires a clean tree and owns version/lockfile preparation, locked builds and release assertions:
+The only normal generation/check path is `python3 scripts/generate-release.py` / `python3 scripts/generate-release.py --check`, using pinned cargo-dist 0.32.0. The wrapper reproduces stock output in an external disposable copy, tightening exactly one archive-check host clause to success-only. ONLY the vendor's stock CI-byte comparison is replaced (`allow-dirty = ["ci"]`), because pinned dist checks those bytes internally during plan/build/host. Wrapper exact reproduction and independent `python3 scripts/assert-release-gates.py` strict graph proof remain mandatory; other generation/version checks remain intact. Failed, skipped, cancelled or missing archive-check results block host on both dry-run and publishing dispatches.
+
+Only after owner authorization, replace `X.Y.Z` with the approved version (without `v`). [prepare-release.sh](scripts/prepare-release.sh) requires a clean tree and owns version/lockfile preparation, locked builds, ordinary Bookends, fmt, wrapper reproduction before dist plan, plan assertions and strict graph assertions. It does not regenerate release.yml:
 
 ```sh
 VERSION="X.Y.Z"
@@ -126,28 +102,30 @@ test ! -e /tmp/loop-engine-dist-plan.json || { echo "Release plan destination al
 scripts/prepare-release.sh "$VERSION"
 ```
 
-Review the result and obtain separate authorization for the Git commit, tag and push. After those actions, locate preflight for the exact committed HEAD:
+Review the prepared result and obtain separate authorization for commit/push. Committing, pushing and any manual tagging require explicit owner authorization; preparation grants none. After the authorized push to main, require completed successful push-event CI for the EXACT SHA to be dispatched:
 
 ```sh
 set -eu
 COMMIT="$(git rev-parse HEAD)"
-PREFLIGHT_RUN="$(gh run list --workflow push-to-main.yml --branch main --event push --commit "$COMMIT" --limit 1 --json databaseId,status,conclusion --jq '.[] | select(.status == "completed" and .conclusion == "success") | .databaseId')"
-test -n "$PREFLIGHT_RUN" || { echo "Exact-commit preflight is missing, pending or failed" >&2; exit 1; }
-gh run view "$PREFLIGHT_RUN" --json headSha,status,conclusion,url
-PREFLIGHT_LOG="$(mktemp)"
-FINAL_CACHE_LOG="$(mktemp)"
-gh run view "$PREFLIGHT_RUN" --log >"$PREFLIGHT_LOG"
-grep -F 'Start credential-free sccache GHA backend' "$PREFLIGHT_LOG" >/dev/null
-grep -F 'Emit hosted sccache statistics and total preflight wall time' "$PREFLIGHT_LOG" >"$FINAL_CACHE_LOG"
-grep -E 'preflight_total_wall_seconds=[0-9]+$' "$FINAL_CACHE_LOG"
-grep -F '"cache_hits"' "$FINAL_CACHE_LOG" >/dev/null
-printf 'Retain release evidence: %s %s\n' "$PREFLIGHT_LOG" "$FINAL_CACHE_LOG"
+CI_RUN="$(gh run list --workflow ci.yml --branch main --event push --commit "$COMMIT" --limit 1 --json databaseId,status,conclusion --jq '.[] | select(.status == "completed" and .conclusion == "success") | .databaseId')"
+test -n "$CI_RUN" || { echo "Exact-commit push CI is missing, pending or failed" >&2; exit 1; }
+gh run view "$CI_RUN" --json headSha,status,conclusion,url
+CI_SHA="$(gh run view "$CI_RUN" --json headSha --jq .headSha)"
+test "$CI_SHA" = "$COMMIT"
 ```
 
-The commit filter selects the approved HEAD; require the displayed `headSha` to match it. These commands fail on missing successful preflight or required current log markers. Inspect and retain the logs as release evidence. Only after this check and publication authorization:
+Retain that run URL and logs. Dispatch uses the prepared main tip: if main moves, stop and obtain current exact-SHA proof and authorization rather than dispatching a different tree. Only after a separate owner-authorized dry-run dispatch:
+
+```sh
+test "$(gh api 'repos/{owner}/{repo}/commits/main' --jq .sha)" = "$COMMIT"
+gh workflow run release.yml --ref main -f tag=dry-run
+```
+
+Inspect the new Release run's `headSha` with `gh run view RUN_ID --json headSha,status,conclusion,url`; require it to equal `COMMIT` and the dispatch to complete successfully, including archive checking. Retain its URL/logs. Informational journeys need not succeed or finish before Release. Publication is a separate owner decision, not implied by a successful dry run. Only after that authorization, using the same prepared SHA and owner-approved version:
 
 ```sh
 : "${TAG:?set TAG from the owner-approved VERSION}"
+test "$(gh api 'repos/{owner}/{repo}/commits/main' --jq .sha)" = "$COMMIT"
 gh workflow run release.yml --ref main -f "tag=$TAG"
 ```
 

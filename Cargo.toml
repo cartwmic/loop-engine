@@ -28,7 +28,11 @@ installers = ["shell"]
 auto-includes = true
 checksum = "sha256"
 dispatch-releases = true
-pr-run-mode = "upload"
+pr-run-mode = "skip"
+github-build-setup = "release-gate-steps.yml"
+global-artifacts-jobs = ["./archive-check"]
+# The checked wrapper replaces only stock CI comparison, not other generation checks.
+allow-dirty = ["ci"]
 
 [profile.dist]
 inherits = "release"

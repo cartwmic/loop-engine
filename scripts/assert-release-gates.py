@@ -1,220 +1,176 @@
 #!/usr/bin/env python3
-"""Prove cargo-dist's generated release dependency graph fails closed.
+"""Assert the generated Release graph, including success-only archive admission.
 
-cargo-dist 0.32 renders host's reusable-job results with ``success || skipped``
-conditions. Its supported custom-job hooks do not expose a custom ``if`` or
-``needs`` expression. This repository therefore puts every proof hook in
-``global-artifacts-jobs`` and keeps those generated jobs unconditional: after
-successful publishing plan/local matrix jobs, each hook must execute. The
-assertion below proves that graph, rather than trusting skipped as success.
+This checks admission independently of the reproducibility wrapper: unsafe
+reproduced bytes cannot pass. Failed, skipped, cancelled or absent archive-check
+results must reject publication for every other prerequisite result combination.
 """
 
 from __future__ import annotations
 
+import argparse
+import ast
+import itertools
+import json
 import re
-import sys
+import subprocess
 from pathlib import Path
-from typing import Dict, NoReturn, Set
 
 ROOT = Path(__file__).resolve().parents[1]
-CARGO_TOML = ROOT / "Cargo.toml"
-RELEASE_WORKFLOW = ROOT / ".github/workflows/release.yml"
-ARCHIVE_SMOKE_WORKFLOW = ROOT / ".github/workflows/archive-smoke.yml"
-REQUIRED_JOBS = {
-    "build-local-artifacts",
-    "build-global-artifacts",
-    "custom-preflight",
-    "custom-archive-smoke",
-    "host",
-}
-REQUIRED_GATES = {
-    "build-local-artifacts",
-    "build-global-artifacts",
-    "custom-preflight",
-    "custom-archive-smoke",
-}
 
 
-def fail(message: str) -> NoReturn:
+def fail(message: str) -> None:
     raise SystemExit(f"release gate assertion failed: {message}")
 
 
-def job_blocks(workflow: str) -> Dict[str, str]:
-    try:
-        jobs = workflow.split("\njobs:\n", 1)[1]
-    except IndexError:
+def job_blocks(workflow: str) -> dict[str, str]:
+    if "\njobs:\n" not in workflow:
         fail("generated workflow has no jobs section")
+    jobs = workflow.split("\njobs:\n", 1)[1]
     matches = list(re.finditer(r"^  ([A-Za-z0-9_-]+):\n", jobs, re.MULTILINE))
-    if not matches:
-        fail("generated workflow has no jobs")
-    blocks: Dict[str, str] = {}
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(jobs)
-        blocks[match.group(1)] = jobs[match.start() : end]
-    return blocks
+    return {
+        match.group(1): jobs[match.start():matches[i + 1].start() if i + 1 < len(matches) else len(jobs)]
+        for i, match in enumerate(matches)
+    }
 
 
-def needs(block: str) -> Set[str]:
+def needs(block: str) -> set[str]:
     match = re.search(r"^    needs:\n((?:^      - [^\n]+\n)+)", block, re.MULTILINE)
-    if not match:
-        return set()
-    return {line.strip()[2:].strip() for line in match.group(1).splitlines()}
+    return {line.strip()[2:].strip() for line in match.group(1).splitlines()} if match else set()
 
 
-def has_job_if(block: str) -> bool:
-    return re.search(r"^    if:", block, re.MULTILINE) is not None
-
-
-def host_gate_condition(block: str, job: str) -> bool:
-    return (
-        f"needs.{job}.result == 'skipped'" in block
-        and f"needs.{job}.result == 'success'" in block
-    )
-
-
-def graph_allows_publish(statuses: Dict[str, str]) -> bool:
-    """Evaluate only statuses reachable through generated cargo-dist graph."""
-    if statuses.get("plan") != "success" or statuses.get("publishing") != "true":
-        return False
-
-    # Publishing plan has a non-null matrix, so built-in local matrix `if`
-    # evaluates true. A skipped matrix is not reachable in this path.
-    if statuses.get("build-local-artifacts") != "success":
-        return False
-
-    # Global artifact and both global hooks have no generated `if`; with local
-    # success they execute. Failure or skip cannot satisfy publication.
-    return all(
-        statuses.get(job) == "success"
-        for job in ("build-global-artifacts", "custom-preflight", "custom-archive-smoke")
-    )
-
-
-def assert_negative(statuses: Dict[str, str], label: str) -> None:
-    if graph_allows_publish(statuses):
-        fail(f"{label} status was accepted as publishable: {statuses}")
+def admits_host(expression: str, statuses: dict[str, str], publishing: str = "true") -> bool:
+    """Evaluate the actual supported generated condition, not an invented graph."""
+    text = expression.removeprefix("${{ ").removesuffix(" }}")
+    text = re.sub(r"needs\.([\w-]+)\.result", lambda match: repr(statuses.get(match[1], "")), text)
+    text = text.replace("needs.plan.outputs.publishing", repr(publishing))
+    text = text.replace("always()", "True").replace("&&", " and ").replace("||", " or ")
+    def evaluate(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, (str, bool)):
+            return node.value
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, (ast.And, ast.Or)):
+            values = [bool(evaluate(value)) for value in node.values]
+            return all(values) if isinstance(node.op, ast.And) else any(values)
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.Eq):
+            return evaluate(node.left) == evaluate(node.comparators[0])
+        fail("unsupported host admission expression")
+    try:
+        return bool(evaluate(ast.parse(text, mode="eval").body))
+    except SyntaxError:
+        fail("malformed host admission expression")
 
 
 def main() -> int:
-    try:
-        cargo = CARGO_TOML.read_text(encoding="utf-8")
-        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-        archive_smoke = ARCHIVE_SMOKE_WORKFLOW.read_text(encoding="utf-8")
-    except OSError as error:
-        fail(f"could not read generated release inputs: {error}")
-
-    if 'cargo-dist-version = "0.32.0"' not in cargo:
-        fail("Cargo.toml must pin supported cargo-dist 0.32.0")
-    if 'global-artifacts-jobs = ["./preflight", "./archive-smoke"]' not in cargo:
-        fail("both proof hooks must be cargo-dist global-artifacts jobs")
-    if "plan-jobs" in cargo:
-        fail("preflight must not be a plan job: plan hooks gate local builds and create skip cascades")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("workflow", nargs="?", type=Path, default=ROOT / ".github/workflows/release.yml")
+    parser.add_argument("--plan", type=Path, help="use an already generated dist plan")
+    args = parser.parse_args()
+    workflow = args.workflow.read_text()
+    cargo = (ROOT / "Cargo.toml").read_text()
+    for entry in ('cargo-dist-version = "0.32.0"', 'pr-run-mode = "skip"',
+                  'github-build-setup = "release-gate-steps.yml"',
+                  'global-artifacts-jobs = ["./archive-check"]', 'allow-dirty = ["ci"]'):
+        if entry not in cargo:
+            fail(f"missing dist metadata: {entry}")
     if not workflow.startswith("# This file was autogenerated by dist:"):
-        fail("release.yml lost cargo-dist generated ownership")
-    if "  workflow_dispatch:" not in workflow or re.search(r"^  push:", workflow, re.MULTILINE):
-        fail("release workflow must be dispatch-only, without tag-push trigger")
-    if 'python3 "$GITHUB_WORKSPACE/scripts/packaged-smoke.py"' not in archive_smoke:
-        fail("archive smoke must invoke the shared packaged entry point")
-    for token in ('--mode archive', '--expected-version', '--platform', '--output-root',
-                  '--package-identity', '--checksum', '--archive', 'app_version', 'if: always()'):
-        if token not in archive_smoke:
-            fail(f"archive smoke missing explicit input/capture contract: {token}")
-    shared = (ROOT / 'scripts/packaged-smoke.py').read_text(encoding='utf-8')
-    for token in ('scripts/software-change-journey.py', 'scripts/policy-document-journey.py',
-                  'scripts/research-journey.py', 'checked-prefix', '("draft", "audit")',
-                  'data-dump', 'ROOT in output.parents', 'cwd=cwd', 'checksum/provenance mismatch'):
-        if token not in shared:
-            fail(f"shared packaged smoke lost journey/input contract: {token}")
-    if 'bookends-check' in shared:
-        fail('packaged smoke must not invent a distributed Bookends checker')
-    for name, reusable in (("preflight", ROOT / ".github/workflows/preflight.yml"),
-                           ("archive smoke", ARCHIVE_SMOKE_WORKFLOW)):
-        try:
-            reusable_text = reusable.read_text(encoding="utf-8")
-        except OSError as error:
-            fail(f"could not read {name} workflow: {error}")
-        if re.search(r"^    if:", reusable_text, re.MULTILINE):
-            fail(f"{name} reusable workflow added a skippable job")
-
+        fail("release.yml lost generated ownership")
+    trigger = re.search(r"^on:\n(.*?)\n(?:jobs:)", workflow, re.MULTILINE | re.DOTALL)
+    if not trigger or re.findall(r"^  ([\w_]+):", trigger.group(1), re.MULTILINE) != ["workflow_dispatch"]:
+        fail("workflow_dispatch must be the only release trigger")
     blocks = job_blocks(workflow)
-    missing = REQUIRED_JOBS.difference(blocks)
-    if missing:
-        fail(f"generated release workflow missing jobs: {sorted(missing)}")
-
+    for job in ("plan", "build-local-artifacts", "build-global-artifacts", "custom-archive-check", "host"):
+        if job not in blocks:
+            fail(f"missing generated job: {job}")
+    local = blocks["build-local-artifacts"]
+    gate_match = re.search(r'id: "?exact-commit-ci"?', local)
+    gate = gate_match.start() if gate_match else -1
+    build = local.find("name: Build artifacts")
+    if gate < 0 or build < 0 or gate >= build:
+        fail("exact-commit CI gate must be injected before local artifact build")
+    gate_end = local.find("\n      - ", gate)
+    gate_block = local[gate:gate_end if gate_end >= 0 else len(local)]
+    for token in ('gh api', 'actions/workflows/ci.yml/runs', '-f event=push',
+                  '-f head_sha=', '.head_sha == $sha', '.conclusion == "success"',
+                  'GitHub API request failed', '${{ github.sha }}'):
+        if token not in gate_block:
+            fail(f"exact-commit gate missing {token}")
+    if re.search(r"^        (if|continue-on-error):", gate_block, re.MULTILINE):
+        fail("exact-commit gate must be mandatory")
+    install_match = re.search(r'id: "?install-native-dist"?', local)
+    check_match = re.search(r'id: "?check-release-generation"?', local)
+    if not install_match or not check_match or not gate < install_match.start() < check_match.start() < build:
+        fail("mandatory pinned native dist install and wrapper check must precede local build")
+    for match, required in (
+        (install_match, ('${{ matrix.install_dist.run }}',)),
+        (check_match, ('dist --version', 'cargo-dist 0.32.0', 'python3 scripts/generate-release.py --check')),
+    ):
+        end = local.find("\n      - ", match.start())
+        step = local[match.start():end if end >= 0 else len(local)]
+        if any(token not in step for token in required):
+            fail("mandatory pinned native dist install or wrapper check missing required command")
+        if re.search(r"^        (if|continue-on-error):", step, re.MULTILINE):
+            fail("native dist install and wrapper check must be mandatory")
     expected_needs = {
         "build-local-artifacts": {"plan"},
         "build-global-artifacts": {"plan", "build-local-artifacts"},
-        "custom-preflight": {"plan", "build-local-artifacts"},
-        "custom-archive-smoke": {"plan", "build-local-artifacts"},
+        "custom-archive-check": {"plan", "build-local-artifacts"},
+        "host": {"plan", "build-local-artifacts", "build-global-artifacts", "custom-archive-check"},
     }
     for job, required in expected_needs.items():
-        actual = needs(blocks[job])
-        if actual != required:
-            fail(f"{job} needs exactly {sorted(required)}, generated needs are {sorted(actual)}")
-
-    host_needs = needs(blocks["host"])
-    expected_host_needs = {"plan"} | REQUIRED_GATES
-    if host_needs != expected_host_needs:
-        fail(
-            f"host must directly need exactly all gates, generated needs are {sorted(host_needs)}"
-        )
-    if "needs.plan.result == 'success'" not in blocks["host"]:
-        fail("host must require successful plan")
-    if "needs.plan.outputs.publishing == 'true'" not in blocks["host"]:
-        fail("host must restrict publication to real dispatch")
-    for job in REQUIRED_GATES:
-        if not host_gate_condition(blocks["host"], job):
-            fail(f"host condition lost generated result check for {job}")
-
-    # No custom gate may independently skip after plan/local success. This is
-    # cargo-dist 0.32's supported composition boundary; arbitrary job if/needs
-    # expressions are not available in metadata configuration.
-    for job in ("build-global-artifacts", "custom-preflight", "custom-archive-smoke"):
-        if has_job_if(blocks[job]):
-            fail(f"{job} gained an independent if condition and can skip a required gate")
-    local_block = blocks["build-local-artifacts"]
-    if not has_job_if(local_block):
-        fail("local matrix lost its generated conditional")
-    if "artifacts_matrix.include != null" not in local_block:
-        fail("local matrix conditional lost plan-matrix presence guard")
-    if "needs.plan.outputs.publishing == 'true'" not in local_block:
-        fail("local matrix conditional lost publishing guard")
-
-    base = {
-        "plan": "success",
-        "publishing": "true",
-        "build-local-artifacts": "success",
-        "build-global-artifacts": "success",
-        "custom-preflight": "success",
-        "custom-archive-smoke": "success",
-    }
-    if not graph_allows_publish(base):
-        fail("all-success release graph was rejected")
-
-    # Every required gate failure must block host. These cases catch a future
-    # generated condition that accidentally omits one dependency.
-    for job in REQUIRED_GATES:
-        failed = dict(base)
-        failed[job] = "failure"
-        assert_negative(failed, f"failed {job}")
-
-    # A skipped gate is never accepted by graph proof. In particular, this
-    # catches the original preflight-failure cascade where local/global/smoke
-    # were skipped and host's skip-tolerant expression published anyway.
-    for job in REQUIRED_GATES:
-        skipped = dict(base)
-        skipped[job] = "skipped"
-        assert_negative(skipped, f"skipped {job}")
-    cascade = dict(base)
-    for job in REQUIRED_GATES:
-        cascade[job] = "skipped"
-    assert_negative(cascade, "all required gates skipped")
-
-    print(
-        "cargo-dist 0.32 release gates ok: "
-        "global hooks unconditional, host depends on preflight/local/global/smoke, "
-        "failure and skipped paths blocked"
-    )
+        if needs(blocks[job]) != required:
+            fail(f"{job} must directly need {sorted(required)}")
+    custom = blocks["custom-archive-check"]
+    if "uses: ./.github/workflows/archive-check.yml" not in custom or "plan: ${{ needs.plan.outputs.val }}" not in custom:
+        fail("archive checker must receive the dist plan")
+    if re.search(r"^    (if|continue-on-error):", custom, re.MULTILINE):
+        fail("archive checker call must be unconditional")
+    archive = (ROOT / ".github/workflows/archive-check.yml").read_text()
+    if re.search(r"^    if:|^        (if|continue-on-error):", archive, re.MULTILINE):
+        fail("archive checker jobs and steps must be mandatory")
+    for token in ('x86_64-unknown-linux-gnu', 'ubuntu-22.04', 'aarch64-apple-darwin',
+                  'macos-14', 'scripts/archive-version-check.py', '--plan', '--target'):
+        if token not in archive:
+            fail(f"archive workflow missing {token}")
+    if "matrix: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix }}" not in local:
+        fail("release build must use the full dist matrix")
+    if args.plan:
+        plan = json.loads(args.plan.read_text())
+    else:
+        checked = subprocess.run(["python3", str(ROOT / "scripts/generate-release.py"), "--check"],
+                                 cwd=ROOT, capture_output=True, text=True)
+        if checked.returncode:
+            fail(f"release wrapper check failed: {checked.stderr.strip()}")
+        result = subprocess.run(["dist", "plan", "--output-format=json"], cwd=ROOT,
+                                capture_output=True, text=True)
+        if result.returncode:
+            fail(f"dist plan failed: {result.stderr.strip()}")
+        plan = json.loads(result.stdout)
+    research = [release for release in plan["releases"] if release["app_name"] == "research-provider"]
+    if len(research) != 1:
+        fail("research must be in the release plan")
+    for target in ("aarch64-apple-darwin", "x86_64-unknown-linux-gnu"):
+        if f"research-provider-{target}.tar.xz" not in research[0]["artifacts"]:
+            fail(f"research missing release archive for {target}")
+    print("Release structure OK: dispatch-only, exact-SHA gate before build, native archive dependency, research included", flush=True)
+    host = blocks["host"]
+    condition = re.search(r"^    if: (.*)$", host, re.MULTILINE)
+    if not condition:
+        fail("host has no admission condition")
+    expression = condition.group(1)
+    if "needs.plan.result == 'success'" not in expression or "needs.plan.outputs.publishing == 'true'" not in expression:
+        fail("host must require a successful publishing plan")
+    if "needs.custom-archive-check.result == 'success'" not in expression:
+        fail("host must require archive-check SUCCESS")
+    base = {job: "success" for job in expected_needs["host"]}
+    if not admits_host(expression, base) or admits_host(expression, base, "false"):
+        fail("host must admit exactly a successful publishing path")
+    for result in ("failure", "skipped", "cancelled", ""):
+        for other in itertools.product(("success", "skipped", "failure", "cancelled", ""), repeat=3):
+            statuses = dict(zip(("plan", "build-local-artifacts", "build-global-artifacts"), other))
+            statuses["custom-archive-check"] = result
+            if admits_host(expression, statuses):
+                fail(f"host admits archive-check {result or 'missing'}; only SUCCESS is allowed")
+    print("Release gates OK: archive SUCCESS required; failure/skipped/cancelled/missing rejected")
     return 0
 
 

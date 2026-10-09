@@ -1,8 +1,8 @@
 //! Public publication-history regressions for backlog T08.
 //!
 //! These tests drive the shipped checker CLI, a shallow clone, and the actual
-//! pre-push hook.  They intentionally use temporary repositories and a local
-//! bare remote so no external service is part of the proof.
+//! update-stream gate used by publication CI. They intentionally use temporary
+//! repositories and a local bare remote so no external service is part of the proof.
 
 use std::env;
 use std::fs;
@@ -119,7 +119,7 @@ fn one_receipt(root: &Path) -> String {
     fs::read_to_string(path).expect("receipt text")
 }
 
-struct HookFixture {
+struct GateFixture {
     root: tempfile::TempDir,
     checkout: PathBuf,
     bare: PathBuf,
@@ -127,7 +127,7 @@ struct HookFixture {
     bin_dir: PathBuf,
 }
 
-fn hook_fixture(with_obsolete_ref: bool) -> HookFixture {
+fn gate_fixture(with_obsolete_ref: bool, shallow: bool) -> GateFixture {
     let root = tempfile::tempdir().expect("tempdir");
     let source = init_repo(root.path());
     enable_graph(&source, &live("LE-1", "One"), "# bookends:LE-1\n");
@@ -170,10 +170,13 @@ fn hook_fixture(with_obsolete_ref: bool) -> HookFixture {
     }
 
     let checkout = root.path().join("checkout");
-    let clone = Command::new("git")
+    let mut clone_command = Command::new("git");
+    clone_command.args(["clone", "-q"]);
+    if shallow {
+        clone_command.args(["--depth", "1"]);
+    }
+    let clone = clone_command
         .args([
-            "clone",
-            "-q",
             &format!("file://{}", bare.display()),
             checkout.to_str().expect("checkout path"),
         ])
@@ -184,35 +187,19 @@ fn hook_fixture(with_obsolete_ref: bool) -> HookFixture {
         "{}",
         String::from_utf8_lossy(&clone.stderr)
     );
-    git(&checkout, &["config", "user.name", "Bookends T08 hook"]);
+    git(&checkout, &["config", "user.name", "Bookends T08 gate"]);
     git(
         &checkout,
-        &["config", "user.email", "t08-hook@example.invalid"],
+        &["config", "user.email", "t08-gate@example.invalid"],
     );
     git(&checkout, &["config", "commit.gpgsign", "false"]);
 
     let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let hooks = checkout.join(".githooks");
     let scripts = checkout.join("scripts");
-    fs::create_dir_all(&hooks).expect("hooks directory");
     fs::create_dir_all(&scripts).expect("scripts directory");
-    fs::copy(
-        source_root.join(".githooks/pre-push"),
-        hooks.join("pre-push"),
-    )
-    .expect("copy hook");
-    fs::copy(
-        source_root.join("scripts/bookends-check-gate.sh"),
-        scripts.join("bookends-check-gate.sh"),
-    )
-    .expect("copy gate");
-    for path in [
-        hooks.join("pre-push"),
-        scripts.join("bookends-check-gate.sh"),
-    ] {
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("executable hook");
-    }
-    git(&checkout, &["config", "core.hooksPath", ".githooks"]);
+    let gate = scripts.join("bookends-check-gate.sh");
+    fs::copy(source_root.join("scripts/bookends-check-gate.sh"), &gate).expect("copy gate");
+    fs::set_permissions(gate, fs::Permissions::from_mode(0o755)).expect("executable gate");
 
     let bin_dir = root.path().join("bin");
     fs::create_dir_all(&bin_dir).expect("bin directory");
@@ -221,7 +208,7 @@ fn hook_fixture(with_obsolete_ref: bool) -> HookFixture {
     fs::set_permissions(&checker_path, fs::Permissions::from_mode(0o755))
         .expect("checker executable");
 
-    HookFixture {
+    GateFixture {
         root,
         checkout,
         bare,
@@ -230,27 +217,83 @@ fn hook_fixture(with_obsolete_ref: bool) -> HookFixture {
     }
 }
 
-fn hook_push(fixture: &HookFixture, args: &[String]) -> Output {
+fn run_gate(fixture: &GateFixture, updates: &str, receipt_name: &str) -> Output {
     let path = format!(
         "{}:{}",
         fixture.bin_dir.display(),
         env::var("PATH").expect("PATH")
     );
-    Command::new("git")
+    let mut child = Command::new(fixture.checkout.join("scripts/bookends-check-gate.sh"))
         .current_dir(&fixture.checkout)
-        .args(["push", "origin"])
-        .args(args)
         .env("PATH", path)
+        .env("BOOKENDS_UPDATE_STREAM", "1")
+        .env("BOOKENDS_REMOTE", "origin")
+        .env_remove("BOOKENDS_BYPASS")
+        .env_remove("BOOKENDS_MAX_COMMITS")
         .env("XDG_STATE_HOME", fixture.root.path().join("state"))
         .env(
             "BOOKENDS_RECEIPT_ROOT",
-            fixture.root.path().join("receipts"),
+            fixture.root.path().join(receipt_name),
         )
-        .output()
-        .expect("hook push")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn update-stream gate");
+    child
+        .stdin
+        .take()
+        .expect("gate stdin")
+        .write_all(updates.as_bytes())
+        .expect("write gate updates");
+    child.wait_with_output().expect("wait gate")
 }
 
-fn hook_output(output: &Output) -> String {
+fn assert_gate_updates(fixture: &GateFixture, receipt_name: &str, updates: &str) {
+    let root = fixture.root.path().join(receipt_name);
+    assert!(
+        root.is_dir(),
+        "update stream receipt missing: {}",
+        root.display()
+    );
+    let receipt = one_receipt(&root);
+    assert!(receipt.contains("remote: origin"), "{receipt}");
+    assert!(receipt.contains("complete: true"), "{receipt}");
+    let recorded = receipt
+        .split_once("\nupdates:\n")
+        .and_then(|(_, rest)| rest.split_once("\nranges:"))
+        .expect("update stream receipt fields missing")
+        .0;
+    // Compare the public receipt's update section, not ranges (which repeat
+    // these fields). Normalize YAML quoting, including all-zero deletion OIDs.
+    let actual: Vec<(&str, &str)> = recorded
+        .lines()
+        .map(|line| {
+            let (key, value) = line
+                .trim()
+                .trim_start_matches("- ")
+                .split_once(": ")
+                .expect("receipt update field");
+            (key, value.trim_matches(['\'', '"']))
+        })
+        .collect();
+    let expected: Vec<(&str, &str)> = updates
+        .lines()
+        .flat_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            assert_eq!(fields.len(), 4, "fixture update protocol");
+            ["local_ref", "new_oid", "remote_ref", "old_oid"]
+                .into_iter()
+                .zip(fields)
+        })
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "update stream was not processed exactly: {receipt}"
+    );
+}
+
+fn gate_output(output: &Output) -> String {
     format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -258,11 +301,11 @@ fn hook_output(output: &Output) -> String {
     )
 }
 
-fn assert_hook_marker(output: &Output, marker: &str) {
-    let text = hook_output(output);
+fn assert_gate_marker(output: &Output, marker: &str) {
+    let text = gate_output(output);
     assert!(
         text.lines().any(|line| line == marker),
-        "missing {marker} hook result: {text}"
+        "missing {marker} gate result: {text}"
     );
 }
 
@@ -729,141 +772,64 @@ fn backlog_t08_missing_history_and_limit_are_red_and_bypass_is_recorded() {
 }
 
 #[test]
-fn backlog_t08_pre_push_hook_notes_intermediate_when_tip_is_clean() {
-    let root = tempfile::tempdir().expect("tempdir");
-    let source = init_repo(root.path());
-    enable_graph(&source, &live("LE-1", "One"), "# bookends:LE-1\n");
-    let base = commit(&source, "base");
-
-    let bare = root.path().join("remote.git");
-    let bare_output = Command::new("git")
-        .args([
-            "init",
-            "-q",
-            "--bare",
-            "--initial-branch=main",
-            bare.to_str().expect("bare path"),
-        ])
-        .output()
-        .expect("init bare");
-    assert!(bare_output.status.success());
-    git(
-        &source,
-        &["remote", "add", "origin", bare.to_str().expect("bare path")],
-    );
-    git(
-        &source,
-        &["push", "-q", "origin", &format!("{base}:refs/heads/main")],
-    );
-
-    let checkout = root.path().join("checkout");
-    let clone = Command::new("git")
-        .args([
-            "clone",
-            "-q",
-            "--depth",
-            "1",
-            &format!("file://{}", bare.display()),
-            checkout.to_str().expect("checkout path"),
-        ])
-        .output()
-        .expect("clone checkout");
-    assert!(
-        clone.status.success(),
-        "{}",
-        String::from_utf8_lossy(&clone.stderr)
-    );
-    git(&checkout, &["config", "user.name", "Bookends T08"]);
-    git(&checkout, &["config", "user.email", "t08@example.invalid"]);
-
-    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let hooks = checkout.join(".githooks");
-    let scripts = checkout.join("scripts");
-    fs::create_dir_all(&hooks).expect("hooks directory");
-    fs::create_dir_all(&scripts).expect("scripts directory");
-    fs::copy(
-        source_root.join(".githooks/pre-push"),
-        hooks.join("pre-push"),
-    )
-    .expect("copy hook");
-    fs::copy(
-        source_root.join("scripts/bookends-check-gate.sh"),
-        scripts.join("bookends-check-gate.sh"),
-    )
-    .expect("copy gate");
-    for path in [
-        hooks.join("pre-push"),
-        scripts.join("bookends-check-gate.sh"),
-    ] {
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("hook executable");
-    }
-    git(&checkout, &["config", "core.hooksPath", ".githooks"]);
-
-    let bin_dir = root.path().join("bin");
-    fs::create_dir_all(&bin_dir).expect("bin directory");
-    let bin = bin_dir.join("bookends-check");
-    fs::copy(checker(), &bin).expect("copy checker");
-    fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).expect("checker executable");
-    let path = format!(
-        "{}:{}",
-        bin_dir.display(),
-        std::env::var("PATH").expect("PATH")
-    );
-    let state = root.path().join("hook-state");
-
+fn backlog_t08_gate_notes_intermediate_when_tip_is_clean() {
+    let fixture = gate_fixture(false, true);
     write_file(
-        &checkout,
+        &fixture.checkout,
         "docs/PRD.md",
         &(live("LE-1", "One") + &live("LE-2", "Uncovered")),
     );
-    let noted = commit(&checkout, "uncovered middle commit");
+    let noted = commit(&fixture.checkout, "uncovered middle commit");
     write_file(
-        &checkout,
+        &fixture.checkout,
         "docs/PRD.md",
         &(live("LE-1", "One") + &tombstone("LE-2", "Uncovered")),
     );
-    let tip = commit(&checkout, "tip tombstones LE-2");
-    let noted_push = Command::new("git")
-        .current_dir(&checkout)
-        .args(["push", "origin", "main"])
-        .env("PATH", &path)
-        .env("XDG_STATE_HOME", &state)
-        .output()
-        .expect("push tip-clean range");
-    assert!(noted_push.status.success(), "{}", hook_output(&noted_push));
-    assert_hook_marker(&noted_push, "GREEN");
+    let tip = commit(&fixture.checkout, "tip tombstones LE-2");
+    let updates = format!("refs/heads/main {tip} refs/heads/main {}\n", fixture.base);
+    let noted_gate = run_gate(&fixture, &updates, "noted-receipts");
+    // The fixture publishes only after the public gate accepts. CI itself
+    // checks an already-published range; it does not undo a remote push.
+    if noted_gate.status.success() {
+        git(&fixture.checkout, &["push", "origin", "main"]);
+    }
+    assert_gate_updates(&fixture, "noted-receipts", &updates);
+    assert!(noted_gate.status.success(), "{}", gate_output(&noted_gate));
+    assert_gate_marker(&noted_gate, "GREEN");
     // bookends:LE-133 — tip-only coverage timing: the intermediate gap is a
     // visible note, not a block, when the pushed tip is independently clean.
     assert!(
-        hook_output(&noted_push).contains(&noted),
+        gate_output(&noted_gate).contains(&noted),
         "{}",
-        hook_output(&noted_push)
+        gate_output(&noted_gate)
     );
-    assert_eq!(git(&bare, &["rev-parse", "refs/heads/main"]), tip);
+    assert_eq!(git(&fixture.bare, &["rev-parse", "refs/heads/main"]), tip);
 
-    write_file(&checkout, "tests/extra.py", "ordinary untagged support\n");
-    let pushed = commit(&checkout, "valid publication");
-    let accepted = Command::new("git")
-        .current_dir(&checkout)
-        .args(["push", "origin", "main"])
-        .env("PATH", &path)
-        .env("XDG_STATE_HOME", &state)
-        .output()
-        .expect("push accepted range");
-    assert!(
-        accepted.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&accepted.stdout),
-        String::from_utf8_lossy(&accepted.stderr)
+    write_file(
+        &fixture.checkout,
+        "tests/extra.py",
+        "ordinary untagged support\n",
     );
-    assert_eq!(git(&bare, &["rev-parse", "refs/heads/main"]), pushed);
+    let pushed = commit(&fixture.checkout, "valid publication");
+    let updates = format!("refs/heads/main {pushed} refs/heads/main {tip}\n");
+    let accepted = run_gate(&fixture, &updates, "accepted-receipts");
+    if accepted.status.success() {
+        git(&fixture.checkout, &["push", "origin", "main"]);
+    }
+    assert_gate_updates(&fixture, "accepted-receipts", &updates);
+    assert!(accepted.status.success(), "{}", gate_output(&accepted));
+    assert_gate_marker(&accepted, "GREEN");
+    assert_eq!(
+        git(&fixture.bare, &["rev-parse", "refs/heads/main"]),
+        pushed
+    );
 }
 
 #[test]
-fn backlog_t08_hook_accepts_direct_sha_and_head_updates() {
-    // bookends:LE-133 — real pre-push updates using a direct SHA and HEAD are
-    // accepted after the hook checks each published range and its tip content.
-    let fixture = hook_fixture(false);
+fn backlog_t08_gate_accepts_direct_sha_and_head_updates() {
+    // bookends:LE-133 — real gate updates using a direct SHA and HEAD are
+    // accepted after checking each published range and its tip content.
+    let fixture = gate_fixture(false, false);
 
     write_file(
         &fixture.checkout,
@@ -871,10 +837,20 @@ fn backlog_t08_hook_accepts_direct_sha_and_head_updates() {
         "direct SHA publication\n",
     );
     let direct_sha = commit(&fixture.checkout, "direct SHA publication");
-    let direct_ref = format!("{direct_sha}:refs/heads/main");
-    let direct = hook_push(&fixture, &[direct_ref]);
-    assert!(direct.status.success(), "{}", hook_output(&direct));
-    assert_hook_marker(&direct, "GREEN");
+    let updates = format!(
+        "{direct_sha} {direct_sha} refs/heads/main {}\n",
+        fixture.base
+    );
+    let direct = run_gate(&fixture, &updates, "direct-receipts");
+    if direct.status.success() {
+        git(
+            &fixture.checkout,
+            &["push", "origin", &format!("{direct_sha}:refs/heads/main")],
+        );
+    }
+    assert_gate_updates(&fixture, "direct-receipts", &updates);
+    assert!(direct.status.success(), "{}", gate_output(&direct));
+    assert_gate_marker(&direct, "GREEN");
     assert_eq!(
         ref_oid(&fixture.bare, "refs/heads/main"),
         Some(direct_sha.clone())
@@ -882,42 +858,69 @@ fn backlog_t08_hook_accepts_direct_sha_and_head_updates() {
 
     write_file(&fixture.checkout, "tests/head.py", "HEAD publication\n");
     let head = commit(&fixture.checkout, "HEAD publication");
-    let head_push = hook_push(&fixture, &["HEAD:refs/heads/main".to_owned()]);
-    assert!(head_push.status.success(), "{}", hook_output(&head_push));
-    assert_hook_marker(&head_push, "GREEN");
+    let updates = format!("HEAD {head} refs/heads/main {direct_sha}\n");
+    let head_gate = run_gate(&fixture, &updates, "head-receipts");
+    if head_gate.status.success() {
+        git(
+            &fixture.checkout,
+            &["push", "origin", "HEAD:refs/heads/main"],
+        );
+    }
+    assert_gate_updates(&fixture, "head-receipts", &updates);
+    assert!(head_gate.status.success(), "{}", gate_output(&head_gate));
+    assert_gate_marker(&head_gate, "GREEN");
     assert_eq!(ref_oid(&fixture.bare, "refs/heads/main"), Some(head));
 }
 
 #[test]
-fn backlog_t08_hook_accepts_deletion_only_and_mixed_valid_updates() {
-    // bookends:LE-133 — real hook acceptance of deletion-only and mixed
+fn backlog_t08_gate_accepts_deletion_only_and_mixed_valid_updates() {
+    // bookends:LE-133 — real gate acceptance of deletion-only and mixed
     // publication/deletion updates preserves deletion semantics while checking
     // the published range and tip in the same update stream.
-    let deletion_fixture = hook_fixture(true);
-    let deletion = hook_push(
-        &deletion_fixture,
-        &["--delete".to_owned(), "obsolete".to_owned()],
+    let deletion_fixture = gate_fixture(true, false);
+    let zero = "0".repeat(40);
+    let updates = format!(
+        "(delete) {zero} refs/heads/obsolete {}\n",
+        deletion_fixture.base
     );
-    assert!(deletion.status.success(), "{}", hook_output(&deletion));
-    assert_hook_marker(&deletion, "GREEN");
+    let deletion = run_gate(&deletion_fixture, &updates, "deletion-receipts");
+    if deletion.status.success() {
+        git(
+            &deletion_fixture.checkout,
+            &["push", "origin", "--delete", "obsolete"],
+        );
+    }
+    assert_gate_updates(&deletion_fixture, "deletion-receipts", &updates);
+    assert!(deletion.status.success(), "{}", gate_output(&deletion));
+    assert_gate_marker(&deletion, "GREEN");
     assert_eq!(ref_oid(&deletion_fixture.bare, "refs/heads/obsolete"), None);
 
-    let mixed_fixture = hook_fixture(true);
+    let mixed_fixture = gate_fixture(true, false);
     write_file(
         &mixed_fixture.checkout,
         "tests/mixed.py",
         "mixed publication\n",
     );
     let published = commit(&mixed_fixture.checkout, "mixed publication");
-    let mixed = hook_push(
-        &mixed_fixture,
-        &[
-            format!("{published}:refs/heads/main"),
-            ":refs/heads/obsolete".to_owned(),
-        ],
+    let updates = format!(
+        "{published} {published} refs/heads/main {base}\n(delete) {zero} refs/heads/obsolete {base}\n",
+        base = mixed_fixture.base,
     );
-    assert!(mixed.status.success(), "{}", hook_output(&mixed));
-    assert_hook_marker(&mixed, "GREEN");
+    let mixed = run_gate(&mixed_fixture, &updates, "mixed-receipts");
+    if mixed.status.success() {
+        git(
+            &mixed_fixture.checkout,
+            &[
+                "push",
+                "origin",
+                &format!("{published}:refs/heads/main"),
+                ":refs/heads/obsolete",
+            ],
+        );
+    }
+    assert_gate_updates(&mixed_fixture, "mixed-receipts", &updates);
+    assert!(mixed.status.success(), "{}", gate_output(&mixed));
+    assert_gate_marker(&mixed, "GREEN");
     assert_eq!(
         ref_oid(&mixed_fixture.bare, "refs/heads/main"),
         Some(published)
@@ -926,27 +929,38 @@ fn backlog_t08_hook_accepts_deletion_only_and_mixed_valid_updates() {
 }
 
 #[test]
-fn backlog_t08_hook_rejects_mixed_invalid_update_without_remote_mutation() {
+fn backlog_t08_gate_rejects_mixed_invalid_update_without_remote_mutation() {
     // bookends:LE-133 — a mixed stream with an invalid published transition is
-    // rejected before deletion is applied, preserving range continuity and
-    // leaving every remote ref unchanged.
-    let fixture = hook_fixture(true);
+    // rejected before the fixture publishes or applies deletion, preserving
+    // range continuity and leaving every remote ref unchanged.
+    let fixture = gate_fixture(true, false);
     write_file(
         &fixture.checkout,
         "docs/PRD.md",
         &(live("LE-1", "One") + &live("LE-2", "Uncovered")),
     );
     let invalid = commit(&fixture.checkout, "invalid mixed publication");
-    let rejected = hook_push(
-        &fixture,
-        &[
-            format!("{invalid}:refs/heads/main"),
-            ":refs/heads/obsolete".to_owned(),
-        ],
+    let zero = "0".repeat(40);
+    let updates = format!(
+        "{invalid} {invalid} refs/heads/main {base}\n(delete) {zero} refs/heads/obsolete {base}\n",
+        base = fixture.base,
     );
-    let output = hook_output(&rejected);
+    let rejected = run_gate(&fixture, &updates, "rejected-receipts");
+    if rejected.status.success() {
+        git(
+            &fixture.checkout,
+            &[
+                "push",
+                "origin",
+                &format!("{invalid}:refs/heads/main"),
+                ":refs/heads/obsolete",
+            ],
+        );
+    }
+    assert_gate_updates(&fixture, "rejected-receipts", &updates);
+    let output = gate_output(&rejected);
     assert!(!rejected.status.success(), "{output}");
-    assert_hook_marker(&rejected, "RED");
+    assert_gate_marker(&rejected, "RED");
     assert!(output.contains("RED"), "{output}");
     assert!(output.contains(&invalid), "{output}");
     assert_eq!(

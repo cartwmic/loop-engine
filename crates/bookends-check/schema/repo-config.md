@@ -12,7 +12,7 @@ prd = "docs/PRD.md"
 
 [classes.e2e_journey]
 pathspecs = ["tests/**", "scripts/**", "crates/**/src/**"]
-required_ci_jobs = ["baseline-and-source-journey"]
+required_ci_jobs = ["tests"]
 ```
 
 - `prd` is a repo-relative markdown path to the living git PRD. It is not an
@@ -60,7 +60,7 @@ uses the same keys as `[classes.e2e_journey]`:
 ```toml
 [classes.contract]
 pathspecs = ["contracts/**"]
-required_ci_jobs = ["baseline-and-source-journey"]
+required_ci_jobs = ["tests"]
 ```
 
 Omitting `[classes.contract]` means the class is undeclared and unenforced.

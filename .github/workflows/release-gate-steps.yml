@@ -1,0 +1,40 @@
+- name: Require successful push CI for this exact commit
+  id: exact-commit-ci
+  shell: bash
+  env:
+    RELEASE_SHA: ${{ github.sha }}
+    RELEASE_REPOSITORY: ${{ github.repository }}
+  run: |
+    set -euo pipefail
+    runs="$(mktemp)"
+    trap 'rm -f "$runs"' EXIT
+    if ! gh api --method GET --paginate --slurp \
+      "repos/$RELEASE_REPOSITORY/actions/workflows/ci.yml/runs" \
+      -f event=push -f head_sha="$RELEASE_SHA" -f status=success -f per_page=100 > "$runs"; then
+      echo "::error::Cannot verify push CI for $RELEASE_SHA: GitHub API request failed"
+      exit 1
+    fi
+    if ! jq -e --arg sha "$RELEASE_SHA" \
+      'any(.[].workflow_runs[]; .head_sha == $sha and .event == "push" and .conclusion == "success")' \
+      "$runs" > /dev/null; then
+      echo "::error::Release refused: no successful ci.yml push run for exact commit $RELEASE_SHA"
+      exit 1
+    fi
+    echo "Successful ci.yml push run verified for exact commit $RELEASE_SHA"
+- name: Install pinned native dist before generation check
+  id: install-native-dist
+  shell: bash
+  run: ${{ matrix.install_dist.run }}
+- name: Check reproducible strict release generation
+  id: check-release-generation
+  shell: bash
+  run: |
+    set -euo pipefail
+    test "$(dist --version)" = "cargo-dist 0.32.0"
+    python3 scripts/generate-release.py --check
+# github-build-setup replaces dist's default setup; retain its ordinary Rust cache.
+- name: Cache Rust build artifacts
+  uses: swatinem/rust-cache@v2
+  with:
+    key: ${{ join(matrix.targets, '-') }}
+    cache-provider: ${{ matrix.cache_provider }}

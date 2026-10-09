@@ -849,7 +849,7 @@ Review-state routing is explicit in this reference graph: external review operat
 
 ### 10.1 Run-Configured Semantic Review Policies
 
-The software-change provider's shipped review contract remains external and deterministic at its boundary. Binaries built from this candidate source expose identity through `--help`/`-h` and `--version`/`-V` before stdin; public v0.2.2 binaries predate those flags. Direct pushes to `main` reuse read-only production preflight at the pushed SHA. Calibration fixtures are supplied-material-only and use stable fictional path labels with shipped companions, so review does not resolve labels against a live checkout. Stale evidence is recovery context under `details.informational`; current unsatisfied obligations remain under blocking `details.diagnostics`.
+The software-change provider's shipped review contract remains external and deterministic at its boundary. Binaries built from this candidate source expose identity through `--help`/`-h` and `--version`/`-V` before stdin; public v0.2.2 binaries predate those flags. Direct pushes to `main` run blocking CI (`ci.yml`) at the pushed SHA. Calibration fixtures are supplied-material-only and use stable fictional path labels with shipped companions, so review does not resolve labels against a live checkout. Stale evidence is recovery context under `details.informational`; current unsatisfied obligations remain under blocking `details.diagnostics`.
 
 At run creation, the software-change workflow may receive semantic review policies in immutable initial input. These policies configure what must be reviewed at the live review gates. A present `review_policies` object is applied at `describe`: only nonempty gate lists keep those review states, and start snapshots that live graph. Core does not interpret `review_policies`. The snapshotted topology for an existing run does not change during that run.
 
@@ -1415,9 +1415,13 @@ For an LE-166-enabled run, provider unavailability is still not a check-free gat
 - Status: live
 - Coverage: e2e/journey
 
+**Lean CI/release amendment:** The exact heading above is retained solely as historical requirement identity text. It does not require the retired pipeline; this body supersedes the heading's former operative pipeline description. Blocking CI in `ci.yml` runs only on pushes to `main` and requires formatting checks, all-target workspace Clippy with `-D warnings`, a locked workspace build, workspace tests, the bare self-tests of all five journey scripts (external-work, software-change, policy-document, research and generate-PRD), and the Bookends gate over every introduced reachable commit from main's tip before the push (`before`) through the pushed tip (`after`), not merely the pushed tip against its own parent. Bookends retains the history and continuity obligations of LE-125 and LE-133. A separate informational workflow runs the full source journeys on the same main pushes and exposes their pass or fail; it never gates Release, including when failed or still running.
+
 ### LE-69: cargo-dist plan and release-gate assertions include the research binary.
 - Status: live
 - Coverage: e2e/journey
+
+**Lean CI/release amendment:** Release is dispatch-only, with no push or pull-request trigger. Every dispatch, including dry-run, requires a prior successful push-event `ci.yml` run for the exact dispatched commit before artifact compilation; absent or unsuccessful exact-commit proof stops the already dispatched workflow before artifact compilation. On every dispatch, every executable in every built native release archive for macOS arm64 (`aarch64-apple-darwin`) and Linux x86_64 (`x86_64-unknown-linux-gnu`) must exit 0 for `--version` and report exactly one whole version token equal to that archive's release version, not a substring or prefix match. Publication is admitted only when archive-check succeeds; failed, skipped, cancelled or missing archive-check results cannot admit publication. The research binary remains included in cargo-dist plan and release-gate assertions and in the native release matrix for both targets.
 
 ### LE-70: The provider does not fetch, invoke models, or judge semantic truth.
 - Status: live
@@ -1811,7 +1815,7 @@ The driver-owned pointer refuses content mismatches, preserves pending versus ob
 - Status: live
 - Coverage: e2e/journey
 
-Live-ID disappearance, tombstone removal, reassignment and revival are refused in both full and CI-equivalent shallow clones. The gate obtains required parent history or fails closed, while genuine first adoption remains valid; publication checks cover the introduced history required by LE-133.
+Live-ID disappearance, tombstone removal, reassignment and revival are refused in both full and CI-equivalent shallow clones. The gate obtains required parent history or fails closed, while genuine first adoption remains valid; required push-to-main CI checks cover the introduced history required by LE-133.
 
 ### LE-126: Bookends bypass permission requires durable local invocation evidence and remains distinct from GREEN.
 - Status: live
@@ -1878,7 +1882,7 @@ The resulting exact effective policy, bindings, selected-file bytes/hash, Booken
 - Status: live
 - Coverage: e2e/journey
 
-Pre-push and required CI inspect every commit introduced by each updated ref, including merged branch commits, and check continuity against each relevant parent. Per-commit continuity (no silent removal, reassignment, revival, adoption removal, or tombstone games) still blocks wherever it appears, and incomplete history still fails closed. Coverage-timing findings on intermediate commits (eligible citations landing later in the same pushed range) are retained as visible diagnostics instead of blocking, provided the pushed tip tree is independently clean. Legitimate first adoption and permanent tombstones retain their meaning. Coverage of the published tip is checked against that tip's content. Known residual: landing an uncovered live ID then tombstoning it in the same range passes; tombstones are permanent and review-visible.
+Required push-to-main CI inspects every commit introduced by the main ref update, starting from main's tip before the push (`before`) through the pushed tip (`after`), including merged branch commits, and checks continuity against each relevant parent. For a generic supplied update stream, Bookends inspects every supplied updated ref using that ref's own old/new range and checks every introduced reachable commit, including merged branch commits, against each relevant parent. No installed local Git hook or retired hosted workflow is required. Per-commit continuity (no silent removal, reassignment, revival, adoption removal, or tombstone games) still blocks wherever it appears, and incomplete history still fails closed. Coverage-timing findings on intermediate commits (eligible citations landing later in the same pushed range) are retained as visible diagnostics instead of blocking, provided the pushed tip tree is independently clean. Legitimate first adoption and permanent tombstones retain their meaning. Coverage of the published tip is checked against that tip's content. Known residual: landing an uncovered live ID then tombstoning it in the same range passes; tombstones are permanent and review-visible.
 
 Local and hosted checks obtain required history before claiming complete coverage. Equivalent available history produces the same decision in full and shallow clones. Missing history, incomplete enumeration, interruption or a resource limit cannot produce complete GREEN. A new ref cannot use a guessed baseline to omit its ancestry. Explicit bypass retains its reason and durable invocation evidence under LE-126.
 

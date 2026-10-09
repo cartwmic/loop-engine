@@ -1,0 +1,94 @@
+name: Source journeys (informational)
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Separate from CI: failures remain visible, but no Release gate queries this workflow.
+jobs:
+  source-journeys:
+    runs-on: ubuntu-22.04
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14.6"
+      - uses: Swatinem/rust-cache@v2
+      - name: Install dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh | sh
+          test "$(dist --version)" = 'cargo-dist 0.32.0'
+      - name: Build current workspace binaries
+        run: cargo build --workspace --all-targets --locked
+      - name: Resolve current binary and journey paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"] + "/debug")')"
+          JOURNEY_ROOT="$(mktemp -d "$RUNNER_TEMP/source-journeys.XXXXXX")"
+          printf 'BIN_DIR=%s\nJOURNEY_ROOT=%s\nTMPDIR=%s\n' "$BIN_DIR" "$JOURNEY_ROOT" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: External-work source journey
+        shell: bash
+        run: |
+          python3 scripts/external-work-journey.py \
+            --engine "$BIN_DIR/loop-engine" \
+            --software "$BIN_DIR/software-change" \
+            --policy "$BIN_DIR/policy-document" \
+            --research "$BIN_DIR/research" \
+            --checker "$BIN_DIR/bookends-check" \
+            --output-root "$JOURNEY_ROOT/external-work"
+      - name: Full software-change source journey
+        shell: bash
+        run: |
+          python3 scripts/software-change-journey.py \
+            --mode source \
+            --engine "$BIN_DIR/loop-engine" \
+            --provider "$BIN_DIR/software-change" \
+            --profile crates/software-change-provider/data/configs/high-rigor.json \
+            --traversal-depth full \
+            --jobs 2
+      - name: Policy-document draft source journey
+        shell: bash
+        run: |
+          python3 scripts/policy-document-journey.py \
+            --engine "$BIN_DIR/loop-engine" \
+            --provider "$BIN_DIR/policy-document" \
+            --profile crates/policy-document-provider/data/readme.json \
+            --mode draft
+      - name: Policy-document audit source journey
+        shell: bash
+        run: |
+          python3 scripts/policy-document-journey.py \
+            --engine "$BIN_DIR/loop-engine" \
+            --provider "$BIN_DIR/policy-document" \
+            --profile crates/policy-document-provider/data/readme.json \
+            --mode audit
+      - name: Research source journey
+        shell: bash
+        run: |
+          python3 scripts/research-journey.py \
+            --mode source \
+            --engine "$BIN_DIR/loop-engine" \
+            --provider "$BIN_DIR/research" \
+            --profile crates/research-provider/data/configs/standard.json
+      - name: Generate-PRD source journey
+        shell: bash
+        run: |
+          python3 scripts/generate-prd-journey.py \
+            --mode source \
+            --engine "$BIN_DIR/loop-engine" \
+            --provider "$BIN_DIR/research" \
+            --checker "$BIN_DIR/bookends-check" \
+            --profile crates/research-provider/data/configs/generate-prd.json
