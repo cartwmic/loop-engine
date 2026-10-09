@@ -12,20 +12,30 @@ const PROFILES: &[&str] = &["minimal", "standard", "high-rigor"];
 const CURRENT_INVOCATION: &str = "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.";
 const PENDING_INVOCATION: &str = "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.";
 const NEUTRAL_REVISION: &str = "r15";
-const HISTORICAL_CONFIG_SUFFIXES: &[&str] = &["-10", "-11", "-12", "-13"];
-const PREDECESSOR_CONFIG_SUFFIX: &str = "-13";
-const CURRENT_CONFIG_SUFFIX: &str = "-14";
+const HISTORICAL_CONFIG_SUFFIXES: &[&str] = &["-10", "-11", "-12", "-13", "-14"];
+const PREDECESSOR_CONFIG_SUFFIX: &str = "-14";
+const CURRENT_CONFIG_SUFFIX: &str = "-15";
 const HISTORICAL_V10_ROW_COUNT: usize = 368;
 const HISTORICAL_V11_ROW_COUNT: usize = 396;
-const HISTORICAL_ROW_COUNT: usize = HISTORICAL_V10_ROW_COUNT + HISTORICAL_V11_ROW_COUNT + 396 + 396;
-const CURRENT_ROW_COUNT: usize = 420;
+const HISTORICAL_ROW_COUNT: usize =
+    HISTORICAL_V10_ROW_COUNT + HISTORICAL_V11_ROW_COUNT + 396 + 396 + 420;
+const CURRENT_ROW_COUNT: usize = 468;
+const PARALLELISM_FIXTURES: &[&str] = &[
+    "plan-good",
+    "plan-defective",
+    "plan-serial-honest",
+    "plan-missed-parallelism",
+    "plan-collision",
+    "plan-oversplit",
+];
 const HISTORICAL_V10_AXIS_KEYS: usize = 184;
 const HISTORICAL_V11_AXIS_KEYS: usize = 196;
-const HISTORICAL_AXIS_KEYS: usize = HISTORICAL_V10_AXIS_KEYS + HISTORICAL_V11_AXIS_KEYS + 196 + 196;
-const CURRENT_AXIS_KEYS: usize = 208;
+const HISTORICAL_AXIS_KEYS: usize =
+    HISTORICAL_V10_AXIS_KEYS + HISTORICAL_V11_AXIS_KEYS + 196 + 196 + 208;
+const CURRENT_AXIS_KEYS: usize = 216;
 const EXPECTED_AXIS_KEYS: usize = HISTORICAL_AXIS_KEYS + CURRENT_AXIS_KEYS;
 const HISTORICAL_MANIFEST_CANONICAL_SHA256: &str =
-    "6ec6b03ff04fe76407f9e7b575814e049c67581fff41d6ff863228a3862006b3";
+    "d4ccae56ee7d3fb13fc280c51f83e623200c9ae7bd329393605a4555818eb658";
 const IMPLEMENTATION_COMPANION_LABEL: &str =
     "companion:fictional-repo/implementation-evidence/repository-state.txt";
 const REQUIREMENT_PROOF_SCRIPT_DATA_PATH: &str =
@@ -49,9 +59,9 @@ fn read_data(relative: &str) -> Vec<u8> {
 
 fn profile_name(config_version: &str) -> &'static str {
     match config_version {
-        "minimal-14" => "minimal",
-        "standard-14" => "standard",
-        "high-rigor-14" => "high-rigor",
+        "minimal-15" => "minimal",
+        "standard-15" => "standard",
+        "high-rigor-15" => "high-rigor",
         other => panic!("current calibration source records do not accept {other}"),
     }
 }
@@ -104,10 +114,11 @@ fn template_for_gate(gate: &str) -> &'static str {
     }
 }
 
-fn required_predecessors(gate: &str) -> &'static [&'static str] {
+fn required_predecessors(gate: &str, fixture_id: &str) -> &'static [&'static str] {
     match gate_family(gate) {
         "intent" => &[],
         "design" => &["intent-good"],
+        "plan" if fixture_id == "plan-serial-honest" => &["intent-good", "design-layered"],
         "plan" => &["intent-good", "design-good"],
         "implementation" => &["intent-good", "design-good", "plan-good"],
         "validation" => &[
@@ -632,7 +643,7 @@ fn source_records_for_entry(entry: &Map<String, Value>) -> CalibrationInput {
             content: read_data(&format!("calibration/fixtures/{fixture_id}.json")),
         },
     ];
-    for predecessor in required_predecessors(gate) {
+    for predecessor in required_predecessors(gate, fixture_id) {
         source_records.push(Record {
             label: format!("required predecessor:data/calibration/fixtures/{predecessor}.json"),
             content: read_data(&format!("calibration/fixtures/{predecessor}.json")),
@@ -681,7 +692,8 @@ fn row_key(entry: &Map<String, Value>) -> CalibrationRowKey {
 }
 
 /// Derive the successor's full row-key universe from every current shipped
-/// profile axis/stage and the predecessor corpus's selected fixture identities.
+/// profile axis/stage and the predecessor corpus's selected fixture identities,
+/// with the new parallelism axis's explicit six-fixture set.
 /// Historical verdicts, hashes, models, and attestations are never used here.
 fn required_current_row_keys(entries: &[Value]) -> Result<BTreeSet<CalibrationRowKey>, String> {
     let mut required = BTreeSet::new();
@@ -692,7 +704,7 @@ fn required_current_row_keys(entries: &[Value]) -> Result<BTreeSet<CalibrationRo
             .ok_or_else(|| format!("{profile} profile has no config_version"))?;
         let Some(base) = version.strip_suffix(CURRENT_CONFIG_SUFFIX) else {
             return Err(format!(
-                "{profile} profile is not a v14 successor: {version}"
+                "{profile} profile is not a v15 successor: {version}"
             ));
         };
         let predecessor = format!("{base}{PREDECESSOR_CONFIG_SUFFIX}");
@@ -724,6 +736,12 @@ fn required_current_row_keys(entries: &[Value]) -> Result<BTreeSet<CalibrationRo
                 if matches!(axis_id, "intent-sufficient" | "acceptance-sufficient") {
                     fixtures =
                         BTreeSet::from([format!("{axis_id}-good"), format!("{axis_id}-defective")]);
+                }
+                if axis_id == "parallelism-honest" {
+                    fixtures = PARALLELISM_FIXTURES
+                        .iter()
+                        .map(|fixture| (*fixture).to_owned())
+                        .collect();
                 }
                 if fixtures.is_empty() {
                     return Err(format!(
@@ -1145,7 +1163,7 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
 }
 
 #[test]
-fn historic_v10_v11_v12_v13_rows_remain_unchanged_and_v14_packets_use_fresh_keys() {
+fn historic_v10_v11_v12_v13_v14_rows_remain_unchanged_and_v15_packets_use_fresh_keys() {
     let entries = manifest();
     let historical: Vec<Value> = entries
         .iter()
@@ -1235,7 +1253,7 @@ fn historic_v10_v11_v12_v13_rows_remain_unchanged_and_v14_packets_use_fresh_keys
         .to_path_buf();
     let temporary = support::TestDir::new("calibration-history");
     let output_root = temporary.path().join("packets");
-    let row_key = "minimal-14|intent-review|solution-agnostic|aggregate|intent-good";
+    let row_key = "minimal-15|intent-review|solution-agnostic|aggregate|intent-good";
     let mut prepare = Command::new("python3");
     prepare
         .current_dir(&repository)
@@ -1266,7 +1284,7 @@ fn historic_v10_v11_v12_v13_rows_remain_unchanged_and_v14_packets_use_fresh_keys
         &fs::read(case_dir.join("preparation.json")).expect("preparation metadata"),
     )
     .expect("preparation JSON");
-    assert_eq!(preparation["config_version"], "minimal-14");
+    assert_eq!(preparation["config_version"], "minimal-15");
     assert_eq!(preparation["row_key"], row_key);
     for forbidden in ["expected", "observed", "attested_by", "oracle"] {
         assert!(
@@ -1276,7 +1294,7 @@ fn historic_v10_v11_v12_v13_rows_remain_unchanged_and_v14_packets_use_fresh_keys
     }
     let current_row = current
         .iter()
-        .find(|entry| entry["config_version"] == "minimal-14")
+        .find(|entry| entry["config_version"] == "minimal-15")
         .and_then(|entry| {
             (entry["gate"] == "intent-review"
                 && entry["axis"] == "solution-agnostic"
@@ -1348,7 +1366,13 @@ print('nested calibration receipt: positive and five refusals passed')
         String::from_utf8_lossy(&checked.stderr)
     );
 
-    for legacy_version in ["minimal-10", "minimal-11", "minimal-12"] {
+    for legacy_version in [
+        "minimal-10",
+        "minimal-11",
+        "minimal-12",
+        "minimal-13",
+        "minimal-14",
+    ] {
         let refused = Command::new("python3")
             .current_dir(&repository)
             .arg(repository.join("scripts/prepare-calibration-input.py"))
@@ -1391,20 +1415,21 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
             string_field(entry, "review_stage").to_owned(),
         );
         by_key.entry(key).or_default().insert(
-            string_field(entry, "expected").to_owned(),
             string_field(entry, "fixture_id").to_owned(),
+            string_field(entry, "expected").to_owned(),
         );
     }
 
     let mut counterpart_keys = 0usize;
-    for ((config_version, gate, axis, review_stage), classes) in &by_key {
+    for ((config_version, gate, axis, review_stage), fixtures) in &by_key {
         if !is_adversarial_gate(gate) {
             continue;
         }
         counterpart_keys += 1;
         assert!(
-            classes.contains_key("pass") && classes.contains_key("fail"),
-            "counterpart key {config_version}/{gate}/{axis} must have good and fail fixtures"
+            fixtures.values().any(|result| result == "pass")
+                && fixtures.values().any(|result| result == "fail"),
+            "counterpart key {config_version}/{gate}/{axis} must have pass and fail fixtures"
         );
         let parent = (
             config_version.clone(),
@@ -1412,63 +1437,39 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
             axis.clone(),
             review_stage.clone(),
         );
-        let parent_classes = by_key.get(&parent).unwrap_or_else(|| {
+        let parent_fixtures = by_key.get(&parent).unwrap_or_else(|| {
             panic!("counterpart {config_version}/{gate}/{axis} lacks parent key {parent:?}")
         });
         assert_eq!(
-            classes.get("pass"),
-            parent_classes.get("pass"),
-            "good fixture must be shared with parent for {config_version}/{gate}/{axis}"
+            fixtures, parent_fixtures,
+            "all fixtures and expectations must be shared with parent"
         );
-        assert_eq!(
-            classes.get("fail"),
-            parent_classes.get("fail"),
-            "fail fixture must be shared with parent for {config_version}/{gate}/{axis}"
-        );
-        let parent_pass_fixture = parent_classes
-            .get("pass")
-            .expect("parent good fixture")
-            .as_str();
-        assert!(
-            parent_pass_fixture.ends_with("-good"),
-            "parent pass fixture must be a good subject"
-        );
-        let parent_pass_rows: Vec<_> = entries
-            .iter()
-            .filter(|entry| {
-                entry["config_version"] == *config_version
-                    && entry["gate"] == parent.1
-                    && entry["axis"] == *axis
-                    && entry["review_stage"] == *review_stage
-                    && entry["fixture_id"] == parent_pass_fixture
-            })
-            .collect();
-        let adversarial_pass_rows: Vec<_> = entries
-            .iter()
-            .filter(|entry| {
-                entry["config_version"] == *config_version
-                    && entry["gate"] == *gate
-                    && entry["axis"] == *axis
-                    && entry["review_stage"] == *review_stage
-                    && entry["fixture_id"] == parent_pass_fixture
-            })
-            .collect();
-        assert_eq!(parent_pass_rows.len(), 1);
-        assert_eq!(adversarial_pass_rows.len(), 1);
-        assert_eq!(parent_pass_rows[0]["expected"], "pass");
-        assert_eq!(
-            adversarial_pass_rows[0]["expected"], "pass",
-            "good fixture that passes parent must also pass adversarial {config_version}/{gate}/{axis}"
-        );
-        assert!(
-            adversarial_pass_rows[0]["observed"] == "pass"
-                || adversarial_pass_rows[0]["observed"] == "pending",
-            "adversarial good fixture must be honestly attested or pending"
-        );
+        for (fixture, result) in fixtures {
+            if result != "pass" {
+                continue;
+            }
+            assert!(
+                fixture.ends_with("-good")
+                    || (axis == "parallelism-honest" && fixture == "plan-serial-honest")
+            );
+            let rows: Vec<_> = entries
+                .iter()
+                .filter(|entry| {
+                    entry["config_version"] == *config_version
+                        && entry["gate"] == *gate
+                        && entry["axis"] == *axis
+                        && entry["review_stage"] == *review_stage
+                        && entry["fixture_id"] == *fixture
+                })
+                .collect();
+            assert_eq!(rows.len(), 1);
+            assert!(rows[0]["observed"] == "pass" || rows[0]["observed"] == "pending",
+                "parent passing fixture must also be honestly attested or pending on the counterpart");
+        }
     }
     assert_eq!(
-        counterpart_keys, 490,
-        "all three v3 profiles carry ordinary/challenge counterpart keys"
+        counterpart_keys, 598,
+        "all historical and current ordinary/challenge counterpart keys"
     );
 }
 
@@ -1538,12 +1539,12 @@ fn implementation_rows_have_total_commit_mapped_companion_coverage() {
             );
         }
     }
-    assert_eq!(implementation_rows, 240);
+    assert_eq!(implementation_rows, 288);
     assert_eq!(
         commits,
         BTreeMap::from([
-            ("repo-state-2026-08-12".to_owned(), 120usize),
-            ("repo-state-2026-08-13".to_owned(), 120usize),
+            ("repo-state-2026-08-12".to_owned(), 144usize),
+            ("repo-state-2026-08-13".to_owned(), 144usize),
         ])
     );
 }
@@ -1610,7 +1611,7 @@ fn implementation_companion_mutation_changes_digest() {
         .find(|entry| {
             entry["gate"] == "implementation-review"
                 && entry["fixture_id"] == "implementation-report-good"
-                && entry["config_version"] == "standard-14"
+                && entry["config_version"] == "standard-15"
         })
         .expect("current implementation row");
     let input = source_records_for_entry(entry.as_object().expect("manifest row object"));
@@ -1643,6 +1644,11 @@ const SUBJECT_FIXTURES: &[&str] = &[
     "design-overbuilt",
     "plan-good",
     "plan-defective",
+    "plan-serial-honest",
+    "plan-missed-parallelism",
+    "plan-collision",
+    "plan-oversplit",
+    "design-layered",
     "implementation-report-good",
     "implementation-report-defective",
     "validation-report-good",
@@ -1912,8 +1918,8 @@ fn validation_docs_coverage_has_exact_mapped_companion_bytes() {
         }
     }
     assert_eq!(
-        docs_rows, 80,
-        "expected v10/v11/v12 history and v14 good/defective docs rows on parent and adversarial validation gates"
+        docs_rows, 96,
+        "expected v10/v11/v12/v13/v14 history and v15 good/defective docs rows on parent and adversarial validation gates"
     );
 }
 
@@ -1970,8 +1976,8 @@ fn validation_intent_delivered_has_inspectable_repository_state_companion() {
         }
     }
     assert_eq!(
-        intent_delivered_rows, 80,
-        "expected v10/v11/v12 history and v14 good/defective intent-delivered rows across shipped validation gates"
+        intent_delivered_rows, 96,
+        "expected v10/v11/v12/v13/v14 history and v15 good/defective intent-delivered rows across shipped validation gates"
     );
 }
 
@@ -2032,8 +2038,8 @@ fn validation_requirement_proof_mapping_has_inspectable_public_proof_companions(
         }
     }
     assert_eq!(
-        rows, 80,
-        "expected v10/v11/v12 history and v14 parent/adversarial good/defective proof rows"
+        rows, 96,
+        "expected v10/v11/v12/v13/v14 history and v15 parent/adversarial good/defective proof rows"
     );
 }
 
@@ -2270,7 +2276,16 @@ fn source_record_identity_preserves_pairing_and_neutral_request() {
         "expected current configured keys to form pairs"
     );
     for (key, pair) in pairs {
-        if key.0.ends_with(CURRENT_CONFIG_SUFFIX)
+        if key.2 == "parallelism-honest" {
+            assert_eq!(pair.len(), PARALLELISM_FIXTURES.len());
+            for (fixture, input) in &pair {
+                let expected: Vec<_> = required_predecessors(&key.1, fixture)
+                    .iter()
+                    .map(|predecessor| format!("data/calibration/fixtures/{predecessor}.json"))
+                    .collect();
+                assert_eq!(labels_with_prefix(input, "required predecessor:"), expected);
+            }
+        } else if key.0.ends_with(CURRENT_CONFIG_SUFFIX)
             && matches!(
                 key.2.as_str(),
                 "acceptance-granularity" | "owner-comprehensible"
@@ -2455,7 +2470,7 @@ fn canonical_source_records_have_exact_order_and_labels() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-14"
+                && entry["config_version"] == "standard-15"
         })
         .expect("docs-integrated current row");
     let entry = entry.as_object().expect("manifest row object");
@@ -2519,7 +2534,7 @@ fn every_supplied_source_record_mutation_changes_digest() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-14"
+                && entry["config_version"] == "standard-15"
         })
         .expect("docs-integrated current row");
     let entry = entry.as_object().expect("manifest row object");
@@ -2577,7 +2592,7 @@ fn explicit_applicability_checks_real_retained_returns_without_relabeling_histor
     let mut current = entries
         .iter()
         .find(|row| {
-            row["config_version"] == "minimal-14"
+            row["config_version"] == "minimal-15"
                 && row["gate"] == source["gate"]
                 && row["axis"] == source["axis"]
                 && row["fixture_id"] == source["fixture_id"]
@@ -2622,7 +2637,7 @@ fn explicit_applicability_checks_real_retained_returns_without_relabeling_histor
 }
 
 #[test]
-fn current_calibration_gate_requires_complete_attested_nonempty_v14_corpus() {
+fn current_calibration_gate_requires_complete_attested_nonempty_v15_corpus() {
     let entries = manifest();
     let mut fully_attested_fixture = entries.clone();
     for entry in fully_attested_fixture.iter_mut().filter(|entry| {
@@ -2637,7 +2652,7 @@ fn current_calibration_gate_requires_complete_attested_nonempty_v14_corpus() {
         entry["model"] = Value::String("test-only fresh reviewer fixture".to_owned());
     }
     validate_current_corpus(&fully_attested_fixture)
-        .expect("pending v10/v11 history does not block complete v12 current rows");
+        .expect("historical pending rows do not block complete v15 current rows");
 
     let no_current: Vec<_> = entries
         .iter()
@@ -2656,7 +2671,7 @@ fn current_calibration_gate_requires_complete_attested_nonempty_v14_corpus() {
                 .unwrap()
                 .ends_with(CURRENT_CONFIG_SUFFIX)
         })
-        .expect("one v12 current row");
+        .expect("one v15 current row");
     missing.remove(index);
     assert!(
         validate_current_corpus(&missing).is_err(),
@@ -2672,7 +2687,7 @@ fn current_calibration_gate_requires_complete_attested_nonempty_v14_corpus() {
                 .unwrap()
                 .ends_with(CURRENT_CONFIG_SUFFIX)
         })
-        .expect("one v12 current row");
+        .expect("one v15 current row");
     current["observed"] = Value::String("pending".to_owned());
     current["attested_by"] = Value::String(String::new());
     current["invocation"] = Value::String(PENDING_INVOCATION.to_owned());
@@ -2690,7 +2705,7 @@ fn current_calibration_gate_requires_complete_attested_nonempty_v14_corpus() {
                 .unwrap()
                 .ends_with(CURRENT_CONFIG_SUFFIX)
         })
-        .expect("one v12 current row");
+        .expect("one v15 current row");
     current["attested_by"] = Value::String(String::new());
     assert!(
         validate_current_corpus(&unattested).is_err(),
@@ -2733,7 +2748,10 @@ fn sufficiency_packets_supply_neutral_subjects_and_stage_specific_companions() {
             assert!(matches!(entry["observed"].as_str(), Some("pass" | "fail")));
             assert!(!entry["attested_by"].as_str().unwrap().is_empty());
         }
-        assert!(entry.get("applicability").is_none());
+        if entry.get("applicability").is_some() {
+            validate_applicability(entry.as_object().unwrap(), &entries)
+                .expect("valid sufficiency applicability");
+        }
         let identity = row_key(row);
         let key = format!(
             "{}|{}|{}|{}|{}",
@@ -2799,4 +2817,140 @@ fn sufficiency_packets_supply_neutral_subjects_and_stage_specific_companions() {
         assert!(text.contains("=== supplied material: canonical request JSON ==="));
     }
     assert_eq!(count, 24);
+}
+
+#[test]
+fn parallelism_packets_preserve_six_fixtures_and_serial_predecessor_override() {
+    let entries = manifest();
+    let repository = workspace_integration::repository_root();
+    let temporary = support::TestDir::new("parallelism-calibration-packets");
+    let mut keys = Vec::new();
+    for entry in entries.iter().filter(|entry| {
+        entry["config_version"]
+            .as_str()
+            .unwrap()
+            .ends_with(CURRENT_CONFIG_SUFFIX)
+            && entry["axis"] == "parallelism-honest"
+    }) {
+        let row = entry.as_object().unwrap();
+        let identity = row_key(row);
+        assert!(PARALLELISM_FIXTURES.contains(&identity.4.as_str()));
+        let expected = if matches!(identity.4.as_str(), "plan-good" | "plan-serial-honest") {
+            "pass"
+        } else {
+            "fail"
+        };
+        assert_eq!(entry["expected"], expected);
+        let key = format!(
+            "{}|{}|{}|{}|{}",
+            identity.0, identity.1, identity.2, identity.3, identity.4
+        );
+        let profile = profile_name(&identity.0);
+        let output = Command::new("python3")
+            .arg(repository.join("scripts/prepare-calibration-input.py"))
+            .arg("--repository")
+            .arg(&repository)
+            .arg("--procedure")
+            .arg(data_path("calibration/PROCEDURE.md"))
+            .arg("--manifest")
+            .arg(data_path("calibration/manifest.json"))
+            .arg("--profile")
+            .arg(data_path(&format!("configs/{profile}.json")))
+            .arg("--output-root")
+            .arg(temporary.path())
+            .arg("--row-key")
+            .arg(&key)
+            .bounded_output("prepare parallelism calibration packet")
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let packet = temporary.path().join(&key);
+        let prepared: Value =
+            serde_json::from_slice(&fs::read(packet.join("preparation.json")).unwrap()).unwrap();
+        assert_eq!(prepared["input_sha256"], entry["input_sha256"]);
+        assert_eq!(
+            prepared["input_sha256"],
+            digest(&source_records_for_entry(row))
+        );
+        let labels: Vec<_> = prepared["source_records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|record| record["label"].as_str())
+            .filter(|label| label.starts_with("required predecessor:"))
+            .collect();
+        let expected_labels: Vec<_> = required_predecessors(&identity.1, &identity.4)
+            .iter()
+            .map(|fixture| format!("required predecessor:data/calibration/fixtures/{fixture}.json"))
+            .collect();
+        assert_eq!(labels, expected_labels);
+        let instructions = fs::read(packet.join("instructions.txt")).unwrap();
+        assert_no_reviewer_visible_leak(&instructions, "parallelism instructions");
+        let text = std::str::from_utf8(&instructions).unwrap();
+        assert!(
+            !text.contains(&identity.4),
+            "subject fixture identity leaked to reviewer"
+        );
+        if identity.4 == "plan-serial-honest" {
+            assert!(text.contains("=== supplied material: required predecessor design ==="));
+            assert!(!text.contains("design-layered"));
+        }
+        keys.push(key);
+    }
+    assert_eq!(
+        keys.len(),
+        48,
+        "six fixtures for eight successor axis/stage keys"
+    );
+
+    // Scripted retained returns prove only public packet/capture mechanics.
+    // No external reviewer is invoked or semantic attestation invented.
+    let checked = Command::new("python3").arg("-c").arg(r#"
+import hashlib, json, pathlib, subprocess, sys
+repo, root = map(pathlib.Path, sys.argv[1:3])
+keys = sys.argv[3:]
+index = {'owner_attestation': 'pending', 'cases': []}
+for key in keys:
+    case = root / key
+    prep = json.loads((case / 'preparation.json').read_text())
+    attempt = case / 'scripted-capture'
+    attempt.mkdir()
+    returned = b'{"result":"pass","findings":""}\n'
+    out, err = attempt / 'worker.stdout', attempt / 'worker.stderr'
+    out.write_bytes(returned)
+    err.write_bytes(b'')
+    (attempt / 'returned-output').write_bytes(returned)
+    (attempt / 'stderr').write_bytes(b'')
+    args = ['--print', '--no-context-files', '--tools', '', '--model', 'scripted', '--thinking', 'high']
+    worker = {'command': 'scripted-worker', 'args': args, 'exit_code': 0,
+              'stdout_path': str(out), 'stderr_path': str(err)}
+    (attempt / 'stdout').write_text(json.dumps({'workers': [worker]}))
+    receipt = {'case': key, 'command': ['loop-engine', 'fan-out', '--worker',
+               json.dumps({'command': worker['command'], 'args': args})],
+               'model': 'scripted', 'thinking': 'high', 'exit_code': 0,
+               'owner_attestation': 'pending', 'semantic_disposition': 'pending-driver-inspection',
+               'instructions_sha256': prep['instructions_sha256'],
+               'returned_output_sha256': hashlib.sha256(returned).hexdigest(),
+               'captured_stdout': str(out), 'captured_stderr': str(err)}
+    receipt_path = attempt / 'receipt.json'
+    receipt_path.write_text(json.dumps(receipt))
+    index['cases'].append({'case': key, 'receipt': str(receipt_path)})
+(root / 'driver-capture-index-scripted.json').write_text(json.dumps(index))
+command = [sys.executable, str(repo / 'scripts/assert-calibration-capture.py'), '--root', str(root)]
+for key in keys:
+    command.extend(['--row-key', key])
+result = subprocess.run(command, capture_output=True, text=True)
+assert result.returncode == 0, result.stderr
+assert len(json.loads(result.stdout)['cases']) == 48
+print('all 48 parallelism packets verified with scripted retained captures')
+"#).arg(&repository).arg(temporary.path()).args(&keys)
+        .bounded_output("verify parallelism captures through public CLI").unwrap();
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
 }

@@ -4,7 +4,7 @@
     "required_authors": 2,
     "goal_required_authors": 2
   },
-  "config_version": "standard-14",
+  "config_version": "standard-15",
   "review_policies": {
     "intent-review": [
       {
@@ -304,6 +304,14 @@
         "review_stage": "aggregate",
         "required_authors": 2,
         "group": "plan-review.aggregate"
+      },
+      {
+        "id": "parallelism-honest",
+        "description": "The dependency graph exposes the concurrency the work allows: independent work is not bundled or serialized without need, tasks with no dependency path between them do not share writable files or state, and splits buy real concurrent gain.",
+        "example_prompt": "Judge parallelism-honest only. Judge the whole dependency graph, not single edges or single tasks. Fail material missed parallelism: independent work bundled into one task, or a serial spine that makes independent work wait even when each edge looks locally plausible. Fail tasks with no dependency path between them (no chain of declared dependencies in either direction) whose objectives, deliverables, sources or handoffs show that they write the same files or state. Fail over-splitting whose pieces must coordinate on the same file, interface or state, so the split adds coordination cost without real concurrent gain. Pass an honest serial chain in which each dependency is a real contract, context or hard-input need, and pass a well-decomposed parallel plan. Do not judge whether one declared predecessor is needed (dependencies-honest) or whether a task is bounded and small enough (task-sized); a single needless edge is a dependencies-honest finding. Judge collisions only from what the plan text reveals. Template: crates/software-change-provider/data/templates/task-packet.md. Schema: crates/software-change-provider/data/configs/standard.json#/artifact_schemas/plan.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "review_stage": "aggregate",
+        "required_authors": 2,
+        "group": "plan-review.aggregate"
       }
     ],
     "plan-adversarial-review": [
@@ -351,6 +359,14 @@
         "id": "dependencies-honest",
         "description": "Falsify the parent `dependencies-honest` pass claim against that named obligation: Dependencies represent real contract and hard-input needs.",
         "example_prompt": "Falsify dependencies-honest only. Attack the parent pass claim against that named obligation: a declared predecessor is unneeded, or a needed contract or hard input is undeclared, including ownership-unsafe parallel fan-out. Declare the context and hard inputs needed to prove the affected user or operator path without prescribing a replaceable mechanism. Template: crates/software-change-provider/data/templates/task-packet.md. Schema: crates/software-change-provider/data/configs/standard.json#/artifact_schemas/plan.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
+        "required_authors": 2,
+        "review_stage": "aggregate",
+        "group": "plan-adversarial-review.aggregate"
+      },
+      {
+        "id": "parallelism-honest",
+        "description": "Falsify the parent `parallelism-honest` pass claim against that named obligation: The dependency graph exposes the concurrency the work allows without collisions or needless splitting.",
+        "example_prompt": "Falsify parallelism-honest only. Attack the parent pass claim against that named obligation: the graph bundles or serializes independent work without need, leaves tasks with no dependency path between them that the plan text shows writing the same files or state, or splits work so pieces must coordinate without real concurrent gain. Do not attack a single needless edge (dependencies-honest) or task size (task-sized). Template: crates/software-change-provider/data/templates/task-packet.md. Schema: crates/software-change-provider/data/configs/standard.json#/artifact_schemas/plan.json. Before judging, inspect the frozen intent's operating_context (operators, environment, threat_boundary, accepted_risks, and outside_obligations). Judge within that boundary: do not demand speculative hostile-user or multi-tenant hardening excluded by threat_boundary unless the change invalidates the boundary or an outside obligation requires it. An accepted risk never waives a stated outcome or outside obligation. Deny only a material defect plausibly affecting change success against intent; minor blemishes, style, length/count proxies, silence, and invented norms are not findings. Do not waive material finding. Materiality guard: silence is not a finding; check omissions only against the named acceptance/requirements set \u2014 do not hunt for unlisted omissions; do not invent norms; length/count proxies are not findings.",
         "required_authors": 2,
         "review_stage": "aggregate",
         "group": "plan-adversarial-review.aggregate"

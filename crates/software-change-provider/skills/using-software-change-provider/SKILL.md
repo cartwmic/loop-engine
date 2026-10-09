@@ -120,6 +120,7 @@ stay in validation; repository-state mismatch uses shown revise-implementation.
 
 1. Observe action/full. Perform the draft externally, then check schema/links before
    collecting judgments whose subject might otherwise change.
+   Tasks with no dependency path between them (no chain of declared dependencies in either direction) are dispatched concurrently by default; state a reason when running them serially.
 2. Pipe completed full show to `software-change commission --slot SLOT`; select
    --stage where needed. Read missing_inputs and supply them before launch.
    Preserve frozen operating context, selected steering, ledger and original sources.
