@@ -46,6 +46,22 @@ SUBJECTS = {
     ),
 }
 
+PARALLELISM_FIXTURES = (
+    ("plan-good", "pass"),
+    ("plan-defective", "fail"),
+    ("plan-serial-honest", "pass"),
+    ("plan-missed-parallelism", "fail"),
+    ("plan-collision", "fail"),
+    ("plan-oversplit", "fail"),
+)
+
+
+def required_predecessors(gate: str, fixture_id: str) -> tuple[str, ...]:
+    if gate in ("plan-review", "plan-adversarial-review") and fixture_id == "plan-serial-honest":
+        return ("intent-good", "design-layered")
+    return SUBJECTS[gate][2]
+
+
 IMPLEMENTATION_COMPANION_LABEL = "companion:fictional-repo/implementation-evidence/repository-state.txt"
 IMPLEMENTATION_COMPANIONS = {
     "repo-state-2026-08-12": "calibration/companions/fictional-repo/implementation-evidence/repo-state-2026-08-12.txt",
@@ -192,6 +208,7 @@ def reviewer_display_label(
     predecessor_labels = {
         "required predecessor:data/calibration/fixtures/intent-good.json": "required predecessor: intent",
         "required predecessor:data/calibration/fixtures/design-good.json": "required predecessor: design",
+        "required predecessor:data/calibration/fixtures/design-layered.json": "required predecessor design",
         "required predecessor:data/calibration/fixtures/plan-good.json": "required predecessor: plan",
         "required predecessor:data/calibration/fixtures/implementation-report-good.json": "required predecessor: implementation report",
     }
@@ -400,7 +417,8 @@ def make_case(
             )
         if gate not in SUBJECTS:
             die(f"unsupported calibration gate {gate}")
-        subject, template, predecessors = SUBJECTS[gate]
+        subject, template, _ = SUBJECTS[gate]
+        predecessors = required_predecessors(gate, fixture_id)
         fixture_path = safe_join(
             repository,
             f"crates/software-change-provider/data/calibration/fixtures/{fixture_id}.json",
@@ -571,20 +589,22 @@ def make_case(
 
 def prepare_successor_manifest(repository: Path, manifest: list, procedure: bytes) -> list:
     """Derive complete successor identities, never observations/applicability."""
-    output = [row for row in manifest if not row["config_version"].endswith("-14")]
+    output = [row for row in manifest if not row["config_version"].endswith("-15")]
     existing = {tuple(row[k] for k in ("config_version", "gate", "axis", "review_stage", "fixture_id")): row
-                for row in manifest if row["config_version"].endswith("-14")}
+                for row in manifest if row["config_version"].endswith("-15")}
     for name in PROFILE_NAMES:
         path = repository / f"crates/software-change-provider/data/configs/{name}.json"
         profile = read_json(path, "successor profile")
-        if profile["config_version"] != name + "-14": die("successor preparation requires v14 profiles")
+        if profile["config_version"] != name + "-15": die("successor preparation requires v15 profiles")
         for gate, policies in profile["review_policies"].items():
             for policy in policies:
-                sources = [row for row in manifest if row["config_version"] == name + "-13"
+                sources = [row for row in manifest if row["config_version"] == name + "-14"
                            and row["gate"] == gate and row["axis"] == policy["id"]
                            and row["review_stage"] == policy["review_stage"]]
                 if policy["id"] in ("intent-sufficient", "acceptance-sufficient"):
                     sources = [dict(fixture_id=policy["id"] + "-" + quality, gate=gate, axis=policy["id"], review_stage=policy["review_stage"], expected=result) for quality, result in (("good", "pass"), ("defective", "fail"))]
+                if policy["id"] == "parallelism-honest":
+                    sources = [dict(fixture_id=fixture, gate=gate, axis=policy["id"], review_stage=policy["review_stage"], expected=result) for fixture, result in PARALLELISM_FIXTURES]
                 if not sources: die(f"missing predecessor fixtures for {name}/{gate}/{policy['id']}")
                 for source in sources:
                     row = {k: source[k] for k in ("fixture_id", "gate", "axis", "review_stage", "expected")}

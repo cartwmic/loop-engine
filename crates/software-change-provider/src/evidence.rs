@@ -835,7 +835,11 @@ pub(crate) fn evaluate_staged_evidence_excluding(
                 }
             }
             if let Some(group) = policy.group() {
-                if config_version.ends_with("-14") {
+                if config_version
+                    .rsplit_once('-')
+                    .and_then(|(_, suffix)| suffix.parse::<u64>().ok())
+                    .is_some_and(|version| version >= 14)
+                {
                     let matches_group = |author: &AuthorIdentity| {
                         latest
                             .get(&(
@@ -3081,6 +3085,99 @@ mod tests {
         );
         assert!(result.is_satisfied());
         assert!(result.diagnostics().is_empty());
+    }
+
+    fn assert_singleton_individual_group_membership(
+        config_version: &str,
+        wrong_group_counts: bool,
+    ) {
+        const PLAN_GATE: &str = "plan-review";
+        const PLAN_SUBJECT: &str = "plan.json";
+        const PLAN_AXIS: &str = "parallelism-honest";
+        const PLAN_GROUP: &str = "plan-review.individual.parallelism-honest";
+        let config = parse_initial_input(&json!({
+            "contract_version": 4,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+            "config_version": config_version,
+            "review_policies": {
+                PLAN_GATE: [{
+                    "id": PLAN_AXIS,
+                    "description": "whole-graph concurrency",
+                    "review_stage": "individual",
+                    "group": PLAN_GROUP
+                }]
+            },
+            "artifact_schemas": {PLAN_SUBJECT: metadata_schema()}
+        }))
+        .expect("singleton individual group config valid");
+        let reviewer = author("reviewer", "agent");
+        let owner = author("owner", "human");
+        let mut judgment = evidence(
+            PLAN_GATE,
+            PLAN_AXIS,
+            "pass",
+            "",
+            &reviewer,
+            PLAN_SUBJECT,
+            "1",
+            config_version,
+        );
+        judgment["review_stage"] = json!("individual");
+        judgment["group"] = json!("plan-review.individual.dependencies-honest");
+        let evaluate_judgment = |judgment| {
+            evaluate_staged_evidence_with_dispositions(
+                &[context_record(1, judgment)],
+                PLAN_GATE,
+                PLAN_SUBJECT,
+                "1",
+                &owner,
+                config.config_version(),
+                config.staged_axes_for_gate(PLAN_GATE).unwrap(),
+                config.axis_namespace(),
+                config.artifact_root(),
+                None,
+                true,
+            )
+        };
+        let result = evaluate_judgment(judgment.clone());
+        assert_eq!(
+            result.is_satisfied(),
+            wrong_group_counts,
+            "{config_version}"
+        );
+        if !wrong_group_counts {
+            assert_eq!(result.diagnostics().len(), 1);
+            assert_eq!(axis(&result).review_stage, "individual");
+            assert_eq!(axis(&result).axis, PLAN_AXIS);
+            assert_eq!(
+                axis(&result).diagnostics,
+                vec![EvidenceDiagnostic::Independence {
+                    required: 1,
+                    distinct_present: 0,
+                }]
+            );
+        }
+
+        judgment["group"] = json!(PLAN_GROUP);
+        assert!(
+            evaluate_judgment(judgment).is_satisfied(),
+            "{config_version}"
+        );
+    }
+
+    #[test]
+    fn successor_15_singleton_individual_group_rejects_wrong_group() {
+        assert_singleton_individual_group_membership("high-rigor-15", false);
+    }
+
+    #[test]
+    fn revision_14_singleton_individual_group_still_rejects_wrong_group() {
+        assert_singleton_individual_group_membership("high-rigor-14", false);
+    }
+
+    #[test]
+    fn custom_singleton_individual_group_still_counts_wrong_group() {
+        assert_singleton_individual_group_membership("custom-profile", true);
     }
 
     #[test]

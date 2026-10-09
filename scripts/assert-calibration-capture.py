@@ -102,6 +102,7 @@ def reviewer_display_label(
     predecessor_labels = {
         "required predecessor:data/calibration/fixtures/intent-good.json": "required predecessor: intent",
         "required predecessor:data/calibration/fixtures/design-good.json": "required predecessor: design",
+        "required predecessor:data/calibration/fixtures/design-layered.json": "required predecessor design",
         "required predecessor:data/calibration/fixtures/plan-good.json": "required predecessor: plan",
         "required predecessor:data/calibration/fixtures/implementation-report-good.json": "required predecessor: implementation report",
     }
@@ -148,7 +149,7 @@ def expected_specs(args: argparse.Namespace) -> list[dict[str, str]]:
     specs = [parse_row_key(value) for value in args.row_key]
     for case in args.coverage_case:
         for gate in COVERAGE_GATES:
-            config = "high-rigor-14"
+            config = "high-rigor-15"
             fixture = f"requirement-coverage-{case}"
             specs.append(
                 {
@@ -185,6 +186,22 @@ def preparation_for(root: Path, spec: dict[str, str]) -> tuple[Path, dict[str, A
             f"expected one preparation for {spec['row_key']}, found {len(candidates)}"
         )
     return candidates[0]
+
+
+def required_predecessors(gate: str, fixture_id: str) -> tuple[str, ...]:
+    family = gate.split("-", 1)[0]
+    predecessors = {
+        "intent": (),
+        "design": ("intent-good",),
+        "plan": ("intent-good", "design-good"),
+        "implementation": ("intent-good", "design-good", "plan-good"),
+        "validation": ("intent-good", "design-good", "plan-good", "implementation-report-good"),
+    }
+    if family == "plan" and fixture_id == "plan-serial-honest":
+        return ("intent-good", "design-layered")
+    if family not in predecessors:
+        fail(f"unsupported calibration gate: {gate}")
+    return predecessors[family]
 
 
 def verify_preparation(root: Path, case_dir: Path, metadata: dict[str, Any], spec: dict[str, str]) -> dict[str, Any]:
@@ -244,6 +261,13 @@ def verify_preparation(root: Path, case_dir: Path, metadata: dict[str, Any], spe
         if not isinstance(label, str) or not label:
             fail(f"source record label is not non-empty: {path}")
         records.append((label, content))
+    predecessor_labels = [label for label, _ in records if label.startswith("required predecessor:")]
+    expected_predecessor_labels = [
+        f"required predecessor:data/calibration/fixtures/{fixture}.json"
+        for fixture in required_predecessors(spec["gate"], spec["fixture_id"])
+    ]
+    if predecessor_labels != expected_predecessor_labels:
+        fail(f"required predecessor selection mismatch: {case_dir}")
     if records[0][0] != "system-developer-instruction:data/calibration/reviewer-instruction.txt":
         fail(f"reviewer instruction is not first source record: {case_dir}")
     if records[-1][0] != "request-json":
