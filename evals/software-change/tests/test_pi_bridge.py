@@ -17,9 +17,15 @@ from evalcore import pi
 from scevals.image import DEFAULT_IMAGE
 
 
-@pytest.mark.parametrize("transient", [False, True])
-def test_pi_scripted_helper_through_real_pi_trial_role(tmp_path, monkeypatch, transient):
+@pytest.mark.parametrize("backend", ["model", "transient", "signed-replay", "signed-drop"])
+def test_pi_scripted_helper_through_real_pi_trial_role(tmp_path, monkeypatch, backend):
+    transient = backend == "transient"
     monkeypatch.setattr(pi, "RETRY_BASE_DELAY_SECONDS", 0)
+    if backend == "signed-drop":
+        original_request = pi.message_request
+        # Simulate lost/evicted host replay state without changing the real Pi
+        # client or bridge. Unknown signed history must fail closed.
+        monkeypatch.setattr(pi, "message_request", lambda message, originals=None: original_request(message, {}))
     helper = Path(__file__).resolve().parents[2] / "core/tests/scripted_pi_helper.py"
     requests = tmp_path / "requests.jsonl"
 
@@ -27,7 +33,7 @@ def test_pi_scripted_helper_through_real_pi_trial_role(tmp_path, monkeypatch, tr
     def probe():
         async def solve(state, generate):
             env = sandbox()
-            model = get_model("pi/scripted/transient" if transient else "pi/scripted/model", role="role-driver", memoize=False,
+            model = get_model(f"pi/scripted/{backend}", role="role-driver", memoize=False,
                               helper_command=[sys.executable, str(helper), str(requests)],
                               config=GenerateConfig(reasoning_effort="medium", max_retries=0))
             try:
@@ -65,15 +71,29 @@ def test_pi_scripted_helper_through_real_pi_trial_role(tmp_path, monkeypatch, tr
     sample = logs[0].samples[0]
     assert sample.error is None, "scripted sandbox sample failed"
     calls = [json.loads(line) for line in requests.read_text().splitlines()]
-    assert len(calls) == (3 if transient else 2)
+    assert len(calls) == (3 if backend in ("transient", "signed-replay", "signed-drop") else 2)
     if transient:
         assert calls[0] == calls[1]  # same host request resent, agent sees no error
         calls = calls[1:]
     assert all(c["options"]["reasoning"] == "medium" for c in calls)
     assert not any(m["role"] == "tool" for m in calls[0]["messages"])
     assert any(m["role"] == "tool" and "pi-tool-proof" in str(m["content"]) for m in calls[1]["messages"])
+    if backend == "signed-replay":
+        # Captured host requests are what the real container Pi replayed. Native
+        # blocks restore whitespace/signatures/redacted data and their exact order.
+        for request in calls[1:]:
+            assistants = [m for m in request["messages"] if m["role"] == "assistant"]
+            assert all(m["native"]["content"][0]["thinking"].encode() == " \nπ signed text\t \n".encode() for m in assistants)
+            assert all(m["native"]["content"][2]["redacted"] is True for m in assistants)
+            assert all(m["native"]["content"][2]["thinkingSignature"] == "synthetic-redacted-data" for m in assistants)
+    if backend == "signed-drop":
+        for request in calls[1:]:
+            assistants = [m for m in request["messages"] if m["role"] == "assistant"]
+            assert all(m["native"] is None for m in assistants)
+            assert all(b["type"] != "reasoning" for m in assistants for b in m["content"])
     usage = sample.role_usage["role-driver"]
-    assert usage.total_tokens == 48 and usage.input_tokens_cache_read == 14 and usage.input_tokens_cache_write == 4
-    receipt = {**sample.metadata["pi_scripted_bridge"], "backend_calls": 3 if transient else 2, "thinking_level": "medium",
+    turns = 3 if backend in ("signed-replay", "signed-drop") else 2
+    assert usage.total_tokens == 24 * turns and usage.input_tokens_cache_read == 7 * turns and usage.input_tokens_cache_write == 2 * turns
+    receipt = {**sample.metadata["pi_scripted_bridge"], "backend_calls": len(calls) + int(transient), "thinking_level": "medium",
                "role_usage": usage.model_dump()}
     (capture / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")

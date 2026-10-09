@@ -4,9 +4,15 @@ The JSONL helper owns OAuth and provider extensions. No credentials cross this
 protocol, and no agent loop or host tools are ever run by the helper.
 """
 import asyncio
+from collections import OrderedDict
+from copy import deepcopy
+import hashlib
 import json
 import shutil
 from pathlib import Path
+from weakref import WeakKeyDictionary
+
+from inspect_ai.log import transcript
 
 from inspect_ai.model import (ChatCompletionChoice, ChatMessageAssistant, ContentReasoning,
                               ContentText, GenerateConfig, ModelAPI, ModelOutput, ModelUsage, modelapi)
@@ -36,11 +42,28 @@ def helper_command() -> list[str]:
     return [node, str(Path(__file__).with_name("pi_helper.mjs")), str(sdk)]
 
 
-def message_request(message):
+def replay_key(message):
+    """Bridge-stable identity; never key on the lossy <think> serialization."""
+    if message.tool_calls:
+        identity = [{"id": call.id, "function": call.function, "arguments": call.arguments}
+                    for call in message.tool_calls]
+    else:
+        identity = message.content if isinstance(message.content, str) else "".join(
+            block.text for block in message.content if isinstance(block, ContentText))
+        identity = identity.strip()
+    return hashlib.sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).digest()
+
+
+def message_request(message, originals=None):
     data = message.model_dump(mode="json", exclude_none=True)
-    # Preserve native signed thinking/text/tool blocks for multi-turn replay.
     if message.role == "assistant":
-        data["native"] = (message.metadata or {}).get("pi_message")
+        key = replay_key(message)
+        native = ((originals or {}).get(key) if originals is not None and key in originals
+                  else (message.metadata or {}).get("pi_message"))
+        data["native"] = deepcopy(native)
+        if native is None and isinstance(data["content"], list):
+            # Unknown/evicted/ambiguous originals must never replay altered signatures.
+            data["content"] = [b for b in data["content"] if b["type"] != "reasoning"]
     return data
 
 
@@ -62,6 +85,8 @@ class PiAPI(ModelAPI):
         self.command = helper_command or globals()["helper_command"]()
         self.process = None
         self.lock = asyncio.Lock()
+        # Sample-local histories: no cross-trial tool-id collision or unbounded retention.
+        self.originals = WeakKeyDictionary()
 
     async def _stop(self):
         process, self.process = self.process, None
@@ -86,6 +111,11 @@ class PiAPI(ModelAPI):
                     response = json.loads(await self.process.stdout.readline())
                     if isinstance(response, dict) and response.get("error") == "retryable":
                         raise RetryableCompletionError()
+                    if isinstance(response, dict) and response.get("error") == "infrastructure":
+                        reason = response.get("reason")
+                        if reason not in ("provider policy block", "provider rejected bridged request"):
+                            raise ValueError()
+                        raise InfrastructureError(reason)
                     if isinstance(response, dict) and response.get("error") == "non_retryable":
                         raise ModelError("Pi host non-retryable completion failed; check host error log")
                     if not isinstance(response, dict) or "message" not in response:
@@ -93,7 +123,7 @@ class PiAPI(ModelAPI):
                     return response["message"]
             except RetryableCompletionError:
                 raise
-            except ModelError:
+            except (ModelError, InfrastructureError):
                 await self._stop()
                 raise
             except asyncio.CancelledError:
@@ -118,8 +148,9 @@ class PiAPI(ModelAPI):
             "temperature": config.temperature, "topP": config.top_p,
             "maxRetries": 0,  # This provider owns bounded retries; SDK retries disabled.
         }.items() if value is not None}
+        originals = self.originals.setdefault(transcript(), OrderedDict())
         request = {"provider": self.provider, "model": self.pi_model,
-                   "messages": [message_request(m) for m in input],
+                   "messages": [message_request(m, originals) for m in input],
                    "tools": [t.model_dump(mode="json", exclude_none=True) for t in tools],
                    "tool_choice": choice, "options": options}
         try:
@@ -153,9 +184,19 @@ class PiAPI(ModelAPI):
                 else:
                     raise ValueError()
             usage = native["usage"]
+            message = ChatMessageAssistant(content=content or "", tool_calls=calls or None,
+                                           metadata={"pi_message": native})
+            key = replay_key(message)
+            # A repeated identity with different content is ambiguous: fail closed.
+            saved = deepcopy(native)
+            if key in originals and originals[key] != saved:
+                saved = None
+            originals[key] = saved
+            originals.move_to_end(key)
+            while len(originals) > 512:
+                originals.popitem(last=False)
             return ModelOutput(model=self.model_name, choices=[ChatCompletionChoice(
-                message=ChatMessageAssistant(content=content or "", tool_calls=calls or None,
-                                             metadata={"pi_message": native}),
+                message=message,
                 stop_reason={"stop": "stop", "length": "max_tokens", "toolUse": "tool_calls"}[native["stopReason"]])],
                 usage=ModelUsage(input_tokens=usage["input"], output_tokens=usage["output"],
                                  input_tokens_cache_read=usage["cacheRead"], input_tokens_cache_write=usage["cacheWrite"],

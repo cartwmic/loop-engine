@@ -54,6 +54,32 @@ def provider_connection_failed():
     return bool(calls) and bool(calls[-1].error) and str(calls[-1].error).startswith(CONNECTION_ERRORS)
 
 
+def provider_route_failure():
+    """Fixed reason from the last workflow call's trusted provider-error channel."""
+    from inspect_ai.log import transcript
+    calls = [e for e in transcript().events
+             if type(e).__name__ == "ModelEvent" and e.role in ("role-driver", "role-implementer", "role-reviewer")]
+    if not calls or not calls[-1].error:
+        return None
+    error = str(calls[-1].error)
+    for reason in ("provider policy block", "provider rejected bridged request"):
+        if error in (f"InfrastructureError('{reason}')", f"InfrastructureError: {reason}",
+                     f'InfrastructureError("{reason}")'):
+            return reason
+    # Some provider exceptions expose .message, which Inspect records without
+    # the type prefix. Require their HTTP-error envelope (or exact route-policy
+    # opening), never an ordinary model failure/refusal or worker completion.
+    provider_envelope = re.match(r"(?:Error code:\s*4\d\d\b|4\d\d\b|This request was blocked\b)", error, re.I)
+    if not provider_envelope and not error.startswith(("ModelGenerateError", "BadRequestError", "APIStatusError")):
+        return None
+    if re.search(r"request was blocked.*Terms of Service restrictions on reverse engineering or duplicating model outputs", error, re.I | re.S):
+        return "provider policy block"
+    if (re.search(r"\b4\d\d\b|invalid_request_error|bad_request", error, re.I) and
+            re.search(r"invalid\s+[`'\"]?signature|malformed request|invalid request|invalid.*thinking.*block", error, re.I)):
+        return "provider rejected bridged request"
+    return None
+
+
 CONNECTION_ERRORS = ("RemoteProtocolError", "ReadError", "WriteError", "ConnectError", "APIConnectionError")
 
 # Skip build caches only: directories tagged with CACHEDIR.TAG (cargo's target/)
@@ -405,12 +431,17 @@ class SoftwareChangeTarget:
         finally:
             # Capture even a bridge/driver crash, before interpreting engine output.
             with anyio.CancelScope(shield=True):
+                reason = provider_route_failure()
+                if reason:
+                    evidence["provider_route_failure"] = reason
                 await self.capture_raw(trial, context, prior)
         if provider_connection_failed():
             raise InfrastructureError("model provider connection failed")
         if inject_infrastructure:
             raise InfrastructureError("scripted infrastructure stop")
         archive, meta = read_capture(self.capture_for(context))
+        if captured_lifecycle(archive) not in ("final", "terminated") and reason:
+            raise InfrastructureError(reason)
         return TrialExecution(terminal=False, data=(archive, meta))
 
     async def inspect_capture(self, trial):
@@ -506,6 +537,9 @@ class SoftwareChangeTarget:
     async def score(self, state, execution, context):
         archive, meta = execution.data
         execution.terminal = captured_lifecycle(archive) in ("final", "terminated")
+        reason = meta.get("evidence", {}).get("provider_route_failure")
+        if not execution.terminal and reason in ("provider policy block", "provider rejected bridged request"):
+            raise InfrastructureError(reason)
         # Scripted fault injection is deliberately outside score_capture so replay
         # always exercises the exact same scorer as a healthy campaign.
         if (getattr(self, "operation", "campaign") != "rescore" and

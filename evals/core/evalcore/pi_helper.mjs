@@ -23,6 +23,19 @@ export function logProviderError(model, message) {
   chmodSync(path, 0o600);
 }
 
+export function providerInfrastructureReason(message) {
+  // Only called on provider error payloads, never model completion/refusal text.
+  const text = String(message);
+  if (/request was blocked.*Terms of Service restrictions on reverse engineering or duplicating model outputs/is.test(text)) {
+    return "provider policy block";
+  }
+  if (/(?:\b4\d\d\b|invalid_request_error|bad_request)/i.test(text) &&
+      /invalid\s+[`'"]?signature|malformed request|invalid request|invalid.*thinking.*block|invalid request field in bridged request/i.test(text)) {
+    return "provider rejected bridged request";
+  }
+  return null;
+}
+
 const write = process.stdout.write.bind(process.stdout);
 process.stdout.write = () => true;
 process.stderr.write = () => true;
@@ -57,7 +70,9 @@ export function messagesForPi(request, model) {
     if (message.role === "assistant") {
       if (message.native?.provider === model.provider && message.native?.model === model.id) return message.native;
       return { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp,
-        content: [...blocks(message.content), ...(message.tool_calls ?? []).map((call) => ({
+        // Without a matching original, the bridge's signed reasoning is untrusted:
+        // its whitespace, block boundaries and order may already have changed.
+        content: [...blocks(message.content).filter((block) => block.type !== "thinking"), ...(message.tool_calls ?? []).map((call) => ({
           type: "toolCall", id: call.id, name: call.function, arguments: call.arguments }))],
         usage: zeroUsage(), stopReason: message.tool_calls?.length ? "toolUse" : "stop" };
     }
@@ -113,7 +128,9 @@ async function main() {
         const result = await runtime.completeSimple(model, messagesForPi(request, model), options);
         if (result.stopReason === "error") {
           logProviderError(modelName, result.errorMessage ?? "Unknown provider error");
-          write(JSON.stringify({ error: isRetryableAssistantError(result) ? "retryable" : "non_retryable" }) + "\n");
+          const reason = providerInfrastructureReason(result.errorMessage);
+          write(JSON.stringify(reason ? { error: "infrastructure", reason } :
+            { error: isRetryableAssistantError(result) ? "retryable" : "non_retryable" }) + "\n");
         } else if (["aborted", "pending", "deferred"].includes(result.stopReason)) {
           throw new Error(`Pi completion ${result.stopReason}`);
         } else {
@@ -121,7 +138,8 @@ async function main() {
         }
       } catch (error) {
         logProviderError(modelName, error?.message ?? String(error));
-        write(JSON.stringify({ error: "non_retryable" }) + "\n");
+        const reason = providerInfrastructureReason(error?.message);
+        write(JSON.stringify(reason ? { error: "infrastructure", reason } : { error: "non_retryable" }) + "\n");
       }
     }
   } finally {

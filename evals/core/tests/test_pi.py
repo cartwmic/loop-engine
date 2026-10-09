@@ -122,7 +122,7 @@ def test_pi_auth_is_protected(tmp_path, monkeypatch, role):
             scan_results([value], protected_values({}, settings.provider_config_paths))
 
 
-@pytest.mark.parametrize("failure", [None, "transient", "non-retryable", "exhausted"])
+@pytest.mark.parametrize("failure", [None, "transient", "non-retryable", "exhausted", "policy", "signature", "malformed"])
 def test_actual_sdk_loads_provider_extension_and_makes_one_completion(tmp_path, monkeypatch, failure):
     """Production helper + real public SDK + discovered provider, entirely scripted."""
     agent = tmp_path / "agent"
@@ -159,7 +159,10 @@ export default function(pi) {
     extension = extensions / "scripted.ts"
     if failure:
         condition = "++attempts === 1" if failure == "transient" else "++attempts > 0"
-        message = "503 overloaded" if failure != "non-retryable" else "400 invalid request"
+        message = {"non-retryable": "400 content refusal", "policy":
+                   "400 This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs",
+                   "signature": "400 messages.1.content.288: Invalid `signature` in `thinking` block",
+                   "malformed": "400 malformed request"}.get(failure, "503 overloaded")
         message += " Bearer synthetic-sensitive-token sk-synthetic-sensitive-key eyJsynthetic.eyJpayloadxx.syntheticSignature"
         extension.write_text(extension.read_text().replace('        stream.push({ type: "start", partial: message });', f'''
         if ({condition}) {{
@@ -174,7 +177,7 @@ export default function(pi) {
     async def run():
         m = get_model("pi/scripted-sdk/model", memoize=False, config=GenerateConfig(reasoning_effort="medium", max_retries=0, timeout=30))
         try:
-            if failure in ("non-retryable", "exhausted"):
+            if failure in ("non-retryable", "exhausted", "policy", "signature", "malformed"):
                 with pytest.raises(Exception) as error:
                     await m.generate("SDK probe", tools=[TOOL], tool_choice=ToolFunction(name="lookup"))
                 assert "sensitive" not in str(error.value)
@@ -185,6 +188,8 @@ export default function(pi) {
                 else:
                     from evalcore.target import InfrastructureError
                     assert isinstance(error.value, InfrastructureError)
+                    if failure != "exhausted":
+                        assert str(error.value) == ("provider policy block" if failure == "policy" else "provider rejected bridged request")
             else:
                 output = await m.generate("SDK probe", tools=[TOOL], tool_choice=ToolFunction(name="lookup"))
                 assert output.message.tool_calls[0].id == "sdk-call"
@@ -221,3 +226,61 @@ writeSync(1, "mapping passed\\n");
     result = subprocess.run(["node", str(script)], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, "Node mapping failed"
     assert "mapping passed" in result.stdout
+
+
+def test_signed_replay_and_drop_through_public_bridge_real_sdk(tmp_path, monkeypatch):
+    from inspect_ai.agent import agent_bridge
+    from openai import AsyncOpenAI
+    agent = tmp_path / "agent"
+    extensions = agent / "extensions"
+    extensions.mkdir(parents=True)
+    (agent / "auth.json").write_text("{}")
+    (agent / "settings.json").write_text("{}")
+    (extensions / "signed.ts").write_text(Path(__file__).with_name("scripted_signed_pi.ts").read_text())
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(agent))
+
+    async def run():
+        m = get_model("pi/signed-sdk/model", memoize=False,
+                      config=GenerateConfig(reasoning_effort="medium", max_retries=0, timeout=30))
+        try:
+            with m:
+                async with agent_bridge(web_search=False, code_execution=False, client_mcp_servers=False) as bridge:
+                    bridge.model_aliases = {"inspect/probe": m}
+                    async with AsyncOpenAI(api_key="synthetic-no-network", max_retries=0) as client:
+                        messages = [{"role": "user", "content": "signed probe"}]
+                        tools = [{"type": "function", "function": TOOL.model_dump(mode="json", exclude_none=True)}]
+                        for n in range(3):
+                            out = await client.chat.completions.create(model="inspect/probe", messages=messages, tools=tools)
+                            msg = out.choices[0].message
+                            if n < 2:
+                                assert msg.tool_calls[0].id == f"signed-call-{n}"
+                                messages += [msg.model_dump(exclude_none=True), {"role": "tool", "tool_call_id": f"signed-call-{n}", "content": "found"}]
+                            else:
+                                assert msg.content.strip() == "scripted-replay-accepted"
+                        # Evict all originals: the very same lossy bridge history must
+                        # now safely omit thinking, not attempt a guessed signature.
+                        m.api.originals.clear()
+                        messages[0]["content"] = "drop probe"
+                        out = await client.chat.completions.create(model="inspect/probe", messages=messages, tools=tools)
+                        assert out.choices[0].message.content.strip() == "scripted-replay-accepted"
+        finally:
+            await m.api.aclose()
+    asyncio.run(run())
+
+
+def test_replay_cache_is_byte_exact_immutable_and_collision_safe(tmp_path):
+    from inspect_ai.model import ChatMessageAssistant, ContentReasoning, ContentText
+    from inspect_ai.tool import ToolCall
+    original = {"content": [{"type": "thinking", "thinking": " \nπ\t ", "thinkingSignature": "signature"}]}
+    message = ChatMessageAssistant(content=[ContentReasoning(reasoning="π", signature="altered"), ContentText(text="text")],
+                                   tool_calls=[ToolCall(id="c", function="lookup", arguments={"key": "x"})])
+    cache = {pi.replay_key(message): original}
+    request = pi.message_request(message, cache)
+    assert json.dumps(request["native"], ensure_ascii=False).encode() == json.dumps(original, ensure_ascii=False).encode()
+    request["native"]["content"][0]["thinking"] = "mutated"
+    assert original["content"][0]["thinking"] == " \nπ\t "
+    cache[pi.replay_key(message)] = None
+    message.metadata = {"pi_message": original}
+    request = pi.message_request(message, cache)
+    assert request["native"] is None
+    assert all(b["type"] != "reasoning" for b in request["content"])

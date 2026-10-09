@@ -24,7 +24,34 @@ for line in sys.stdin:
         continue
     results = [m for m in request["messages"] if m["role"] == "tool"]
     names = [t["name"] for t in request["tools"]]
-    if names and not results and request["tool_choice"] != "none":
+    if request["model"] in ("signed-replay", "signed-drop"):
+        # Nontrivial whitespace, multiple/redacted blocks and interleaved text:
+        # Inspect's text bridge cannot preserve this signed native sequence.
+        for assistant in (m for m in request["messages"] if m["role"] == "assistant"):
+            original = assistant.get("native")
+            if request["model"] == "signed-drop":
+                assert original is None
+                assert not any(b["type"] == "reasoning" for b in assistant["content"])
+                continue
+            assert original is not None, "signed history must be restored"
+            assert original["content"][0] == {"type": "thinking", "thinking": " \nπ signed text\t \n",
+                                               "thinkingSignature": "synthetic-signature-" + original["content"][-1]["id"]}
+            assert original["content"][2] == {"type": "thinking", "thinking": "[Reasoning redacted]",
+                                               "thinkingSignature": "synthetic-redacted-data", "redacted": True}
+        if len(results) < 2:
+            call_id = "pi-call-" + str(len(results) + 1)
+            name = "bash" if "bash" in names else names[0]
+            arguments = {"command": "printf pi-tool-proof"} if name == "bash" else {"key": "example"}
+            content = [{"type": "thinking", "thinking": " \nπ signed text\t \n", "thinkingSignature": "synthetic-signature-" + call_id},
+                       {"type": "text", "text": "Interleaved text "},
+                       {"type": "thinking", "thinking": "[Reasoning redacted]", "thinkingSignature": "synthetic-redacted-data", "redacted": True},
+                       {"type": "thinking", "thinking": "second signed block\n", "thinkingSignature": "synthetic-second-signature"},
+                       {"type": "toolCall", "id": call_id, "name": name, "arguments": arguments}]
+            stop = "toolUse"
+        else:
+            content = [{"type": "text", "text": "pi-scripted-completed"}]
+            stop = "stop"
+    elif names and not results and request["tool_choice"] != "none":
         name = request["tool_choice"].get("name") if isinstance(request["tool_choice"], dict) else ("bash" if "bash" in names else names[0])
         assert name in names
         arguments = {"command": "printf pi-tool-proof"} if name == "bash" else {"key": "example"}
