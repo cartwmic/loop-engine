@@ -32,6 +32,8 @@ target/debug/loop-engine --help
 
 Use root `README.md` for a first-run catalog example and root `AGENTS.md` for repository operations (paths relative to the checkout root). Follow the [local agent guide](AGENTS.md) when editing this crate.
 
+Runs started with this provider retain the approved document in the catalog: when semantic review passes, the target's exact bytes are stored as a `retained-artifacts` context record, readable from full `show` after the file is deleted or changed.
+
 ## Validation
 
 From the repository root:

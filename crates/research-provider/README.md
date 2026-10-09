@@ -34,6 +34,8 @@ target/debug/loop-engine --help
 
 Use root `README.md` for a first-run catalog example and root `AGENTS.md` for repository operations (paths relative to the checkout root). Follow the [local agent guide](AGENTS.md) when editing this crate.
 
+Runs started with this provider retain approved artifacts in the catalog: `scoped`, `gathered`, `verified` and `completed` store the exact bytes of brief.json, sources.json, verification.json and report.json as `retained-artifacts` context records, readable from full `show` after the artifact files are deleted.
+
 ## Validation
 
 From the repository root:

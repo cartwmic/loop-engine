@@ -93,6 +93,9 @@ explicitly enabled for eligible authors by the frozen profile. Declared current 
 then count once as labeled self-review, not independent or cold review. Required counts
 change only through authorized durable author-count amendment.
 
+Passing semantic review retains the target's exact bytes as an engine-committed
+`retained-artifacts` record; keep the target unchanged until the event completes.
+
 ## Explicit historical review context
 
 No selection means no historical findings attachment. With full show on stdin,

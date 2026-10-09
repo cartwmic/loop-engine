@@ -4,6 +4,7 @@
 //! errors use exit 1, and a successfully written result uses exit 0.
 
 mod artifacts;
+mod capture;
 mod checkpoint;
 mod config;
 mod criterion;
@@ -249,6 +250,7 @@ fn run_protocol() -> i32 {
     match operation.as_str() {
         "describe" => describe(request),
         "evaluate" => evaluate(request),
+        "capture" => capture_operation(request),
         other => protocol_error(format!("unsupported provider operation `{other}`")),
     }
 }
@@ -302,7 +304,7 @@ fn bookends_preview_from_args(args: &[String]) -> i32 {
 }
 
 fn provider_help() -> i32 {
-    println!("software-change\n\nCommands: author-counts, data-dump, bookends-preview, setup, advice-request, checkpoint, review-candidates, prepare-validation, commission, source-identity\nStdin operations: describe, evaluate\nsetup (--rigor minimal|standard|high | --profile FILE) --output FILE (--enable-advice | --decline-advice) [--bookends]");
+    println!("software-change\n\nCommands: author-counts, data-dump, bookends-preview, setup, advice-request, checkpoint, review-candidates, prepare-validation, commission, source-identity\nStdin operations: describe, evaluate, capture\nsetup (--rigor minimal|standard|high | --profile FILE) --output FILE (--enable-advice | --decline-advice) [--bookends]");
     0
 }
 
@@ -421,8 +423,21 @@ fn describe(request: Value) -> i32 {
         }
     }
     match workflow::describe_workflow(request.initial_input.as_ref()) {
-        Ok(workflow) => write_json(&workflow),
+        Ok(workflow) => write_json(&workflow.with_capture(true)),
         Err(message) => protocol_error(message),
+    }
+}
+
+fn capture_operation(request: Value) -> i32 {
+    let request =
+        match serde_json::from_value::<loop_integrations::retention::CaptureRequest>(request) {
+            Ok(request) if request.operation == "capture" => request,
+            Ok(_) => return protocol_error("capture request has the wrong operation".into()),
+            Err(error) => return protocol_error(format!("invalid capture request: {error}")),
+        };
+    match capture::capture(&request) {
+        Ok(response) => write_json(&response),
+        Err(message) => evaluation_error(&message),
     }
 }
 

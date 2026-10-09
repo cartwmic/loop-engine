@@ -827,6 +827,11 @@ pub struct Workflow {
     pub transitions: Vec<Transition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub work_slots: Vec<WorkSlot>,
+    /// The provider supports the optional `capture` operation for this
+    /// workflow. Frozen with the workflow at start, so runs started against an
+    /// older provider are never asked to capture.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub capture: bool,
 }
 
 impl Workflow {
@@ -842,6 +847,7 @@ impl Workflow {
             states,
             transitions,
             work_slots: Vec::new(),
+            capture: false,
         }
     }
 
@@ -849,6 +855,24 @@ impl Workflow {
         self.work_slots = slots;
         self
     }
+
+    /// Declare that the provider answers the optional `capture` operation.
+    pub fn with_capture(mut self, capture: bool) -> Self {
+        self.capture = capture;
+        self
+    }
+}
+
+/// How a checked transition is being committed when the engine asks the
+/// provider for a capture effect.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CaptureExit {
+    /// The provider allowed the checked transition.
+    Checked,
+    /// An owner override is committing the checked transition without
+    /// provider evaluation.
+    Override,
 }
 
 /// An opaque caller/provider-selected provider name or alias.

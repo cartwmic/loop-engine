@@ -72,6 +72,10 @@ returns gather and revise-brief returns scope; synthesize revise returns verify,
 revise-sources returns gather and revise-brief returns scope. Verification-local or
 report-local corrections stay in their owning state and retry its checked event.
 
+Each forward exit retains its artifact's exact bytes as an engine-committed
+`retained-artifacts` record; finish the artifact before the event and do not append
+these records yourself.
+
 ## Per-gate loop
 
 1. Read action/full and author the subject externally. Request its checked event;

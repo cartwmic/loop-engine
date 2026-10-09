@@ -32,7 +32,7 @@ pub use execution_contract::{
 };
 pub use invocation::project_invocation_status;
 pub use model::{
-    check_known_output_conflicts, AllowResponse, AssignmentLabel, CompletionMode,
+    check_known_output_conflicts, AllowResponse, AssignmentLabel, CaptureExit, CompletionMode,
     ContextAppendEffect, ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation,
     DurableEvaluationResult, EvaluationFeedback, EvaluationRequest, EvaluationResult, EventId,
     FanOutRecoveryAdapterUsage, FanOutRecoveryApproval, FanOutRecoveryDerivation,

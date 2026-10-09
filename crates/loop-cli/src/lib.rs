@@ -6,6 +6,7 @@
 //! and integration crates respectively.
 
 pub mod monitor;
+mod reclaim;
 mod targeted_read;
 mod terminal_explorer;
 mod visibility;
@@ -1003,6 +1004,9 @@ where
     let operation_started_at = std::time::Instant::now();
     let args = args.into_iter().map(Into::into).collect::<Vec<String>>();
     if let Some(execution) = targeted_read::dispatch(&args) {
+        return execution;
+    }
+    if let Some(execution) = reclaim::dispatch(&args) {
         return execution;
     }
     let json_requested = args.iter().enumerate().any(|(index, arg)| {
@@ -2302,7 +2306,7 @@ fn usage(command: Option<&str>) -> String {
         Some("explore") => "Usage: loop-engine [--database DB] explore RUN_ID\n\nRead-only interactive workflow navigator. Requires a TTY; arrows or j/k move the one-column list, [ and ] scroll detail, g/G jump, and q exits.\n".to_owned(),
         Some("terminate") => "Usage: loop-engine [options] terminate <run-id>\n".to_owned(),
         Some("list") => "Usage: loop-engine [options] list\n".to_owned(),
-        _ => "Usage: loop-engine [options] COMMAND\n\nCommands:\n  start PROVIDER JSON [LABEL]\n  list\n  show RUN_ID\n  append RUN_ID KIND JSON\n  event RUN_ID EVENT\n  history RUN_ID\n  terminate RUN_ID\n  read RUN_ID --kind KIND\n  explore RUN_ID\n  monitor --run RUN_ID --database PATH\n\nGlobal options:\n  --json, -j\n  --database PATH\n  --config PATH\n  --timeout-ms MILLISECONDS\n  --help, -h\n  --version, -V\n".to_owned(),
+        _ => "Usage: loop-engine [options] COMMAND\n\nCommands:\n  start PROVIDER JSON [LABEL]\n  list\n  show RUN_ID\n  append RUN_ID KIND JSON\n  event RUN_ID EVENT\n  history RUN_ID\n  terminate RUN_ID\n  read RUN_ID --kind KIND\n  explore RUN_ID\n  monitor --run RUN_ID --database PATH\n  reclaim [--apply]\n\nGlobal options:\n  --json, -j\n  --database PATH\n  --config PATH\n  --timeout-ms MILLISECONDS\n  --help, -h\n  --version, -V\n".to_owned(),
     }
 }
 #[cfg(test)]

@@ -545,6 +545,12 @@ impl Persistence for SqlitePersistence {
                 "provider context append effects require a checked transition",
             )));
         }
+        if request.capture_append.is_some() && request.transition.kind.is_check_free() {
+            return Err(PersistenceError::failure(PersistenceFailure::new(
+                "sqlite-invalid-context-effect",
+                "provider capture effects require a checked transition",
+            )));
+        }
 
         let mut connection = self.lock()?;
         let transaction = begin_immediate(&mut connection)?;
@@ -571,8 +577,18 @@ impl Persistence for SqlitePersistence {
             let first_sequence = next_sequence(run.last_sequence)?;
             let revision = next_revision(run.control_revision)?;
             let occurred_at = current_timestamp()?;
-            let transition_sequence = if let Some(effect) = request.context_append.as_ref() {
-                let record_id = generated_context_effect_id(&request.run_id, first_sequence);
+            // Provider effects (allow effect, then capture effect) each take one
+            // semantic sequence before the transition, in this transaction.
+            let mut transition_sequence = first_sequence;
+            for effect in [
+                request.context_append.as_ref(),
+                request.capture_append.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let sequence = transition_sequence;
+                let record_id = generated_context_effect_id(&request.run_id, sequence);
                 let data_json = encode_json(&effect.data, "context effect data")?;
                 transaction
                     .execute(
@@ -582,7 +598,7 @@ impl Persistence for SqlitePersistence {
                         params![
                             request.run_id.as_str(),
                             record_id.as_str(),
-                            to_sqlite_i64(first_sequence.as_u64(), "semantic sequence")?,
+                            to_sqlite_i64(sequence.as_u64(), "semantic sequence")?,
                             effect.kind,
                             data_json,
                             occurred_at.as_unix_millis(),
@@ -590,12 +606,10 @@ impl Persistence for SqlitePersistence {
                     )
                     .map_err(sqlite_failure)?;
                 let context_history =
-                    HistoryEntry::context_appended(first_sequence, occurred_at, record_id);
+                    HistoryEntry::context_appended(sequence, occurred_at, record_id);
                 insert_history(&transaction, &request.run_id, &context_history)?;
-                next_sequence(first_sequence)?
-            } else {
-                first_sequence
-            };
+                transition_sequence = next_sequence(sequence)?;
+            }
             let history = HistoryEntry::transition(
                 transition_sequence,
                 occurred_at,
@@ -2105,6 +2119,203 @@ mod tests {
         assert!(evaluations[0].is_allow());
         assert_eq!(evaluations[0].sequence.as_u64(), 3);
     }
+
+    struct CapturingGateway {
+        result: EvaluationResult,
+        capture: Result<Option<ContextAppendEffect>, ProviderError>,
+        calls: std::cell::RefCell<Vec<loop_core::CaptureExit>>,
+    }
+
+    impl ProviderGateway for CapturingGateway {
+        fn describe(
+            &self,
+            _provider: &ProviderAssociation,
+            _initial_input: Option<&serde_json::Value>,
+        ) -> Result<Workflow, ProviderError> {
+            Ok(checked_event_workflow().with_capture(true))
+        }
+
+        fn evaluate(
+            &self,
+            _provider: &ProviderAssociation,
+            _request: EvaluationRequest,
+        ) -> Result<EvaluationResult, ProviderError> {
+            Ok(self.result.clone())
+        }
+
+        fn capture(
+            &self,
+            _provider: &ProviderAssociation,
+            _request: EvaluationRequest,
+            exit: loop_core::CaptureExit,
+        ) -> Result<Option<ContextAppendEffect>, ProviderError> {
+            self.calls.borrow_mut().push(exit);
+            self.capture.clone()
+        }
+    }
+
+    fn capture_run(path: &std::path::Path, id: &str, capture: bool) -> SqlitePersistence {
+        let adapter = SqlitePersistence::open(path).expect("open sqlite");
+        let mut request = checked_event_run(id);
+        request.workflow = checked_event_workflow().with_capture(capture);
+        adapter.create_run(request).expect("create run");
+        adapter.load_show_data(&id.into()).expect("observe run");
+        adapter
+    }
+
+    #[test]
+    fn capture_effect_commits_after_allow_effect_and_before_transition() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("capture-allow.sqlite");
+        let adapter = capture_run(&path, "run-capture-allow", true);
+        let allow = ContextAppendEffect::new("allow-effect", json!({"a": 1}));
+        let retained = ContextAppendEffect::new("retained-artifacts", json!({"b": 2}));
+        let gateway = CapturingGateway {
+            result: EvaluationResult::allow_with_context_append(allow.clone()),
+            capture: Ok(Some(retained.clone())),
+            calls: Default::default(),
+        };
+        let outcome = loop_core::operations::event::execute(
+            loop_core::operations::event::Request::new("run-capture-allow", "approve"),
+            &gateway,
+            &adapter,
+        );
+        assert!(outcome.is_completed(), "checked event failed: {outcome:?}");
+        assert_eq!(
+            *gateway.calls.borrow(),
+            vec![loop_core::CaptureExit::Checked]
+        );
+
+        let context = adapter
+            .load_context_records(&"run-capture-allow".into())
+            .expect("context");
+        assert_eq!(context.len(), 2);
+        assert_eq!(
+            (context[0].kind.as_str(), context[0].sequence.as_u64()),
+            ("allow-effect", 2)
+        );
+        assert_eq!(
+            (context[1].kind.as_str(), context[1].sequence.as_u64()),
+            ("retained-artifacts", 3)
+        );
+        assert_eq!(context[1].data, retained.data);
+        let history = adapter
+            .load_history(&"run-capture-allow".into())
+            .expect("history");
+        assert_eq!(history.len(), 4);
+        assert!(matches!(
+            history[3].action,
+            loop_core::HistoryAction::Transition {
+                outcome: loop_core::TransitionHistoryOutcome::Committed,
+                ..
+            }
+        ));
+        let run = adapter
+            .load_authoritative_run(&"run-capture-allow".into())
+            .expect("run");
+        assert_eq!(run.current_state.as_str(), "middle");
+        assert_eq!(run.last_sequence.as_u64(), 4);
+    }
+
+    #[test]
+    fn workflow_without_capture_never_asks_the_provider() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("capture-off.sqlite");
+        let adapter = capture_run(&path, "run-capture-off", false);
+        let gateway = CapturingGateway {
+            result: EvaluationResult::allow(),
+            capture: Ok(Some(ContextAppendEffect::new(
+                "retained-artifacts",
+                json!({}),
+            ))),
+            calls: Default::default(),
+        };
+        let outcome = loop_core::operations::event::execute(
+            loop_core::operations::event::Request::new("run-capture-off", "approve"),
+            &gateway,
+            &adapter,
+        );
+        assert!(outcome.is_completed(), "checked event failed: {outcome:?}");
+        assert!(gateway.calls.borrow().is_empty());
+        assert!(adapter
+            .load_context_records(&"run-capture-off".into())
+            .expect("context")
+            .is_empty());
+    }
+
+    #[test]
+    fn override_of_checked_transition_commits_capture_effect() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("capture-override.sqlite");
+        let adapter = capture_run(&path, "run-capture-override", true);
+        let retained = ContextAppendEffect::new("retained-artifacts", json!({"exit": "override"}));
+        let gateway = CapturingGateway {
+            result: EvaluationResult::deny(loop_core::EvaluationFeedback::new("no", "never asked")),
+            capture: Ok(Some(retained.clone())),
+            calls: Default::default(),
+        };
+        let outcome = loop_core::operations::event::execute(
+            loop_core::operations::event::Request::new("run-capture-override", "approve")
+                .with_override(loop_core::StateVisitAttestation {
+                    state_visit: 0,
+                    owner: "owner".into(),
+                    reason: "test override".into(),
+                }),
+            &gateway,
+            &adapter,
+        );
+        assert!(outcome.is_completed(), "override failed: {outcome:?}");
+        assert_eq!(
+            *gateway.calls.borrow(),
+            vec![loop_core::CaptureExit::Override]
+        );
+        let context = adapter
+            .load_context_records(&"run-capture-override".into())
+            .expect("context");
+        assert_eq!(context.len(), 1);
+        assert_eq!(context[0].data, retained.data);
+        let history = adapter
+            .load_history(&"run-capture-override".into())
+            .expect("history");
+        assert!(matches!(
+            history.last().expect("transition").action,
+            loop_core::HistoryAction::Transition {
+                outcome: loop_core::TransitionHistoryOutcome::Overridden { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn capture_failure_refuses_the_event_and_commits_nothing() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("capture-fail.sqlite");
+        let adapter = capture_run(&path, "run-capture-fail", true);
+        let gateway = CapturingGateway {
+            result: EvaluationResult::allow(),
+            capture: Err(ProviderError::timeout("capture timed out")),
+            calls: Default::default(),
+        };
+        let outcome = loop_core::operations::event::execute(
+            loop_core::operations::event::Request::new("run-capture-fail", "approve"),
+            &gateway,
+            &adapter,
+        );
+        assert!(
+            !outcome.is_completed(),
+            "capture failure must refuse: {outcome:?}"
+        );
+        let run = adapter
+            .load_authoritative_run(&"run-capture-fail".into())
+            .expect("run");
+        assert_eq!(run.current_state.as_str(), "start");
+        assert_eq!(run.control_revision.as_u64(), 0);
+        assert!(adapter
+            .load_context_records(&"run-capture-fail".into())
+            .expect("context")
+            .is_empty());
+    }
+
     #[test]
     fn external_work_opens_legacy_invocations_without_rewriting_rows() {
         let directory = tempdir().expect("tempdir");

@@ -67,12 +67,19 @@ loop-engine --json append --record-id RECORD RUN KIND @/absolute/data.json
 loop-engine --json event RUN EVENT
 loop-engine --json history RUN
 loop-engine --json terminate RUN
+loop-engine --json --database /absolute/loop.db reclaim [--apply]
 ```
 
 start returns result.run.id. Initial input and append data accept inline JSON,
 @FILE or stdin (-). Append stores context, not semantic approval or a transition.
 Use the same resolved database for every operation; pass --database explicitly when
 isolation is authorized. terminate changes workflow state, never cancels external work.
+
+Capturing providers retain each artifact's exact bytes when a new run leaves its owning
+phase (approval or override) as a `retained-artifacts` context record; read them from
+full show (`content` utf-8/base64, `same_as` reference, or `absent`), not from files.
+reclaim previews legacy invocation payloads of finished runs; only `--apply` clears them
+and shrinks the catalog. Run it deliberately; other commands may briefly get busy errors.
 
 The coordinating assistant must post a concise source-backed owner update in the active Pi conversation after a meaningful observed change, before the next wait, inspect, or owner-help decision, and stay quiet for unchanged observations.
 

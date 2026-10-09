@@ -1239,6 +1239,364 @@ def provider_specific(args, root):
 
 
 
+def decode_retained(context):
+    """Every retained artifact entry, in order, with its exact bytes (None when absent)."""
+    import base64
+    by_id = {record['id']: record for record in context}
+    entries = []
+    for record in sorted((r for r in context if r['kind'] == 'retained-artifacts'), key=lambda r: r['sequence']):
+        assert record['data']['schema_version'] == 1, record
+        for entry in record['data']['artifacts']:
+            data = None
+            if not entry.get('absent'):
+                source = entry
+                if 'same_as' in entry:
+                    holder = by_id[entry['same_as']]
+                    source = next(x for x in holder['data']['artifacts'] if x['name'] == entry['name'])
+                    assert 'content' in source, source
+                    assert 'content' not in entry, entry
+                data = source['content'].encode() if source['encoding'] == 'utf-8' else base64.b64decode(source['content'])
+                assert 'sha256:'+hashlib.sha256(data).hexdigest() == entry['sha256'], entry
+                assert len(data) == entry['size'], entry
+            entries.append({'record': record['id'], 'sequence': record['sequence'], 'created_at': record['created_at'],
+                            'transition': record['data']['transition'], 'exit': record['data']['exit'],
+                            'name': entry['name'], 'bytes': data, 'same_as': entry.get('same_as')})
+    return entries
+
+
+def assert_retained_history(call, run_id, entries):
+    """Each retained record is a context entry immediately followed by the transition that retained it."""
+    history = call('history', run_id)['result']
+    by_sequence = {entry['sequence']: entry for entry in history}
+    for entry in entries:
+        appended = by_sequence[entry['sequence']]['action']
+        assert appended == {'kind': 'context_appended', 'context_record_id': entry['record']}, appended
+        following = by_sequence[entry['sequence'] + 1]['action']
+        assert following['kind'] == 'transition', following
+        assert {k: following['transition'][k] for k in ('source', 'event', 'target')} == entry['transition'], following
+        expected = 'overridden' if entry['exit'] == 'override' else 'committed'
+        assert following['outcome']['outcome'] == expected, following
+        assert by_sequence[entry['sequence']]['occurred_at'] == entry['created_at']
+
+
+def retained_view(call, run_id):
+    shown = call('show', '--view', 'full', run_id)
+    entries = decode_retained(shown['result']['context'])
+    assert_retained_history(call, run_id, entries)
+    return entries
+
+
+# bookends:LE-184 — research and policy-document runs retain each owning phase's exact artifact bytes, readable after the files are deleted.
+def retention_provider_runs(args, root):
+    import shutil
+    from external_work_driver import engine_call
+    expectations = {
+        'research': [('scope', 'scoped', 'brief.json'), ('gather', 'gathered', 'sources.json'),
+                     ('verify', 'verified', 'verification.json'), ('synthesize', 'completed', 'report.json')],
+        'policy-document': [('semantic-review', 'passed', 'README.md')],
+    }
+    for kind, exits in expectations.items():
+        work = root / (kind + '-specific')
+        database, config, run_id = work / 'run.sqlite', work / 'providers.toml', kind + '-external-specific'
+        def call(*argv):
+            return engine_call(args.engine, database, config, list(argv))
+        files = {'README.md': work / 'README.md'} if kind == 'policy-document' else {
+            name: work / 'artifacts' / name for _, _, name in exits}
+        before = retained_view(call, run_id)
+        assert [(e['transition']['source'], e['transition']['event'], e['name']) for e in before] == exits, before
+        for entry in before:
+            assert entry['exit'] == 'checked' and entry['same_as'] is None, entry
+            assert entry['bytes'] == files[entry['name']].read_bytes(), entry['name']
+        shutil.rmtree(work / 'artifacts')
+        if kind == 'policy-document':
+            files['README.md'].unlink()
+        after = retained_view(call, run_id)
+        assert [(e['name'], e['bytes'], e['transition']) for e in after] == [(e['name'], e['bytes'], e['transition']) for e in before]
+        print(f'external-work {kind} retained artifacts readable after file deletion passed')
+
+
+class _StopRun(Exception):
+    pass
+
+
+def _empty_review_policies(profile, repository, artifacts):
+    for gate in profile['review_policies']:
+        profile['review_policies'][gate] = []
+
+
+# bookends:LE-184 — software-change retains only phase-exit bytes: drafts excluded, revise-loop re-exits appended, unchanged re-exits stored once and still readable after deletion.
+def retention_software_revisions(args, root):
+    import shutil
+    visits = {'implement': 0}
+    snapshots = {}
+    drafts = []
+    def hook(phase, ctx):
+        plan_path = ctx['artifacts'] / 'plan.json'
+        if phase == 'plan':
+            if visits['implement'] == 2:
+                value = json.loads(plan_path.read_text())
+                for draft in ['draft one', 'draft two']:
+                    value['objective'] = 'Retention journey ' + draft
+                    plan_path.write_text(json.dumps(value))
+                    drafts.append(plan_path.read_bytes())
+                value['objective'] = 'Retention journey final plan'
+                plan_path.write_text(json.dumps(value))
+            snapshots.setdefault('plan', []).append(plan_path.read_bytes())
+            return False
+        if phase == 'implement':
+            visits['implement'] += 1
+            if visits['implement'] <= 2:
+                ctx['event']('revise-plan')
+                return True
+        return False
+    work = software_module().run(SimpleNamespace(engine=args.engine, provider=args.software, mode='source', data_root=None),
+                                 ROOT / 'crates/software-change-provider/data/configs/minimal.json', root,
+                                 configure=_empty_review_policies, exercise=hook)
+    database, config, run_id = work / 'run.sqlite', work / 'providers.toml', 'software-external'
+    from external_work_driver import engine_call
+    def call(*argv):
+        return engine_call(args.engine, database, config, list(argv))
+    artifacts = work / 'artifacts'
+    entries = retained_view(call, run_id)
+    names = [e['name'] for e in entries]
+    assert names == ['intent.json', 'design.json', 'plan.json', 'plan.json', 'plan.json',
+                     'implementation-report.json', 'reconciliation.json', 'validation-report.json'], names
+    plans = [e for e in entries if e['name'] == 'plan.json']
+    assert [e['bytes'] for e in plans] == snapshots['plan'], 'plan exits must retain the bytes present at each exit'
+    assert plans[1]['same_as'] == plans[0]['record'], plans[1]
+    assert plans[2]['same_as'] is None and plans[2]['bytes'] != plans[0]['bytes']
+    retained_bytes = {e['bytes'] for e in entries}
+    assert drafts and not any(draft in retained_bytes for draft in drafts), 'intermediate drafts must not be retained'
+    for entry in entries:
+        assert entry['exit'] == 'checked'
+        if entry['name'] != 'plan.json':
+            assert entry['bytes'] == (artifacts / entry['name']).read_bytes(), entry['name']
+    assert entries[-1]['transition']['target'] == 'end'
+    shutil.rmtree(artifacts)
+    after = retained_view(call, run_id)
+    assert [(e['name'], e['bytes']) for e in after] == [(e['name'], e['bytes']) for e in entries]
+    print('external-work software-change retained exits, drafts, revise loop and unchanged re-exit passed')
+    return work
+
+
+# bookends:LE-184 — owner overrides retain what the run leaves with, visibly marked, and record a missing artifact as absent.
+def retention_software_overrides(args, root):
+    captured = {}
+    def override(ctx, event, reason):
+        shown = ctx['show']()
+        attestation = json.dumps({'state_visit': shown['result']['state_visit'], 'owner': 'journey-owner', 'reason': reason})
+        response = ctx['call']('event', '--override', attestation, ctx['run_id'], event)
+        assert response['status'] == 'completed', response
+    def hook(phase, ctx):
+        if phase == 'explore':
+            captured['intent'] = (ctx['artifacts'] / 'intent.json').read_bytes()
+            override(ctx, 'intent-ready', 'Journey override with the artifact present.')
+            return True
+        if phase == 'design':
+            design = ctx['artifacts'] / 'design.json'
+            saved = design.read_bytes()
+            design.unlink()
+            override(ctx, 'design-ready', 'Journey override with the artifact missing.')
+            design.write_bytes(saved)
+            captured['ctx'] = ctx
+            raise _StopRun()
+        return False
+    try:
+        software_module().run(SimpleNamespace(engine=args.engine, provider=args.software, mode='source', data_root=None),
+                              ROOT / 'crates/software-change-provider/data/configs/minimal.json', root,
+                              configure=_empty_review_policies, exercise=hook)
+    except _StopRun:
+        pass
+    ctx = captured['ctx']
+    entries = retained_view(ctx['call'], ctx['run_id'])
+    assert [(e['name'], e['exit']) for e in entries] == [('intent.json', 'override'), ('design.json', 'override')], entries
+    assert entries[0]['bytes'] == captured['intent']
+    assert entries[1]['bytes'] is None
+    shown = ctx['show']()['result']
+    assert shown['has_overrides'] and shown['override_count'] == 2, shown
+    print('external-work software-change override retention and absent artifact passed')
+
+
+# bookends:LE-184 — a shipped minimal profile with review states retains each phase exactly once at its real exit.
+def retention_minimal_profile(args, work):
+    from external_work_driver import engine_call
+    def call(*argv):
+        return engine_call(args.engine, work / 'run.sqlite', work / 'providers.toml', list(argv))
+    entries = retained_view(call, 'software-external')
+    assert [e['name'] for e in entries] == ['intent.json', 'design.json', 'plan.json', 'implementation-report.json',
+                                            'reconciliation.json', 'validation-report.json'], entries
+    for entry in entries:
+        assert entry['exit'] == 'checked' and entry['bytes'] == (work / 'artifacts' / entry['name']).read_bytes(), entry['name']
+    print('external-work software-change minimal profile retains each phase exit passed')
+
+
+def _seed_legacy_invocations(database, run_id, rows, payload_bytes):
+    """Insert legacy-format work-slot invocation rows with bulky payloads, as earlier releases wrote them."""
+    worker = {'assignment_id': 'worker-0', 'command': '/legacy/bin/pi',
+              'args': ['--print', 'x' * payload_bytes], 'exit_code': 0, 'attempts': []}
+    connection = sqlite3.connect(database, timeout=30)
+    with connection:
+        for index in range(rows):
+            inner = json.dumps([worker])
+            connection.execute(
+                """INSERT INTO work_slot_invocations (run_id, invocation_id, slot_id, binding_json,
+                       instruction_digest, subject, state_visit, waiter_pid, started_at, allowed_time_ms,
+                       status, exit_code, completed_at, capture_dir, inner_workers_json, assignment_selection_json,
+                       invocation_input_json, routed_inputs_json, frozen_run_identity_json, completion_snapshot_json)
+                   VALUES (?, ?, 'legacy-slot', ?, 'sha256:legacy', 'legacy-subject', 0, 0, 1, 1000,
+                           'succeeded', 0, 2, '/legacy/capture', ?, NULL, ?, ?, NULL, ?)""",
+                (run_id, f'legacy-{run_id}-{index}-{time.time_ns()}',
+                 json.dumps({'command': '/legacy/bin/pi', 'args': ['--print']}),
+                 inner, json.dumps({'prompt': 'p' * 1000}), '[]', inner))
+    connection.close()
+
+
+def _invocation_columns(database, run_id):
+    connection = sqlite3.connect(database, timeout=30)
+    try:
+        return connection.execute(
+            """SELECT invocation_id, binding_json, inner_workers_json, completion_snapshot_json, routed_inputs_json,
+                      invocation_input_json, assignment_selection_json, frozen_run_identity_json
+               FROM work_slot_invocations WHERE run_id = ? ORDER BY invocation_id""", (run_id,)).fetchall()
+    finally:
+        connection.close()
+
+
+def _file_digest(path):
+    # A missing write-ahead log and an empty one hold the same catalog content.
+    return hashlib.sha256(path.read_bytes() if path.exists() else b'').hexdigest()
+
+
+# bookends:LE-185 — explicit reclaim previews without writing, clears only finished runs' legacy payloads, keeps cleaned runs listed and showable, leaves active runs advancing, and shrinks the catalog file.
+def reclaim_legacy_catalog(args, root, retained_work):
+    import shutil, signal
+    from external_work_driver import engine_call
+    work = root / 'reclaim'
+    work.mkdir()
+    database = work / 'loop.db'
+    shutil.copyfile(retained_work / 'run.sqlite', database)
+    config = retained_work / 'providers.toml'
+    finished = 'software-external'
+    def call(*argv):
+        return engine_call(args.engine, database, config, list(argv))
+    def engine(*argv):
+        return raw([args.engine, '--database', database, '--config', config, '--json', *argv])
+    profile = json.loads((retained_work / 'profile.json').read_text())
+    active_artifacts = work / 'active-artifacts'
+    active_artifacts.mkdir()
+    shutil.copyfile(retained_work / 'profile.json', work / 'active-profile.json')
+    fixtures = ROOT / 'crates/software-change-provider/data/calibration/fixtures'
+    for target, source in software_module().SUBJECTS.items():
+        shutil.copyfile(fixtures / source, active_artifacts / target)
+    profile['artifact_root'] = str(active_artifacts)
+    (work / 'active-profile.json').write_text(json.dumps(profile))
+    call('start', '--id', 'active-run', 'software-change', '@'+str(work / 'active-profile.json'), 'active during reclaim')
+    call('start', '--id', 'terminated-run', 'software-change', '@'+str(work / 'active-profile.json'), 'terminated before reclaim')
+    call('show', 'terminated-run', '--view', 'action')
+    assert call('terminate', 'terminated-run')['status'] == 'completed'
+    for run_id in [finished, 'terminated-run', 'active-run']:
+        _seed_legacy_invocations(database, run_id, 4, 400_000)
+    retained_before = retained_view(call, finished)
+    for run_id in [finished, 'terminated-run', 'active-run']:
+        assert call('show', '--view', 'full', run_id)['status'] == 'completed'
+    active_before = _invocation_columns(database, 'active-run')
+    digest_before = (_file_digest(database), _file_digest(Path(str(database)+'-wal')))
+    preview = call('reclaim')
+    assert preview['status'] == 'completed' and preview['result']['mode'] == 'preview', preview
+    listed = {run['run_id']: run for run in preview['result']['preview']['runs']}
+    assert set(listed) == {finished, 'terminated-run'}, listed
+    assert all(run['invocation_rows'] == 4 and run['reclaimable_bytes'] > 3_000_000 for run in listed.values()), listed
+    assert (_file_digest(database), _file_digest(Path(str(database)+'-wal'))) == digest_before, 'preview must not write'
+    human = raw([args.engine, '--database', database, 'reclaim'])
+    assert human.returncode == 0 and 'nothing written' in human.stdout, human
+    print('external-work reclaim preview lists only finished runs and writes nothing passed')
+    applied = call('reclaim', '--apply')
+    assert applied['status'] == 'completed', applied
+    result = applied['result']['applied']
+    assert result['invocation_rows_cleared'] == 8, result
+    assert result['after']['file_bytes'] < result['before']['file_bytes'] - 3_000_000, result
+    assert database.stat().st_size == result['after']['file_bytes']
+    for run_id in [finished, 'terminated-run']:
+        for row in _invocation_columns(database, run_id):
+            assert row[2:] == ('[]', '[]', '[]', None, None, None), row
+            assert json.loads(row[1])['command'], row
+    assert _invocation_columns(database, 'active-run') == active_before, 'active run rows must be unchanged'
+    listed_runs = {run['id'] for run in call('list')['result']}
+    assert {finished, 'terminated-run', 'active-run'} <= listed_runs, listed_runs
+    retained_after = retained_view(call, finished)
+    assert [(e['name'], e['bytes']) for e in retained_after] == [(e['name'], e['bytes']) for e in retained_before]
+    call('show', 'active-run', '--view', 'action')
+    assert call('event', 'active-run', 'intent-ready')['status'] == 'completed'
+    assert sqlite3.connect(database).execute('PRAGMA integrity_check').fetchone() == ('ok',)
+    print('external-work reclaim apply clears finished runs only, keeps them showable and shrinks the file passed')
+
+    # Concurrent driver command while reclaim rewrites the file: it completes or fails with a retryable busy error.
+    _seed_legacy_invocations(database, 'terminated-run', 6, 2_000_000)
+    reclaim_process = subprocess.Popen([args.engine, '--database', str(database), '--json', 'reclaim', '--apply'],
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    concurrent = engine('show', 'active-run', '--view', 'full')
+    reclaim_out, _ = reclaim_process.communicate(timeout=300)
+    assert reclaim_process.returncode == 0, reclaim_out
+    if concurrent.returncode != 0:
+        assert any(word in concurrent.stdout + concurrent.stderr for word in ['locked', 'busy']), concurrent
+    assert call('show', '--view', 'full', 'active-run')['status'] == 'completed'
+    print('external-work reclaim alongside a concurrent driver command passed')
+
+    # Another process holds the catalog's write lock: reclaim stops with a clear busy error and changes nothing.
+    _seed_legacy_invocations(database, 'terminated-run', 1, 100_000)
+    holder = sqlite3.connect(database, timeout=30, isolation_level=None)
+    holder.execute('BEGIN IMMEDIATE')
+    busy = raw([args.engine, '--database', database, '--json', 'reclaim', '--apply'])
+    holder.execute('ROLLBACK')
+    holder.close()
+    assert busy.returncode != 0, busy
+    busy_issue = json.loads(busy.stdout)
+    assert 'catalog-busy' in json.dumps(busy_issue) and 'retry' in json.dumps(busy_issue), busy_issue
+    assert any(row[2] != '[]' for row in _invocation_columns(database, 'terminated-run')), 'busy reclaim must not clear rows'
+    print('external-work reclaim reports a held catalog as busy passed')
+
+    # Killed mid-apply: the catalog stays consistent and usable, and reclaim can simply be run again.
+    _seed_legacy_invocations(database, 'terminated-run', 6, 2_000_000)
+    victim = subprocess.Popen([args.engine, '--database', str(database), '--json', 'reclaim', '--apply'],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(0.3)
+    victim.send_signal(signal.SIGKILL)
+    victim.wait()
+    assert sqlite3.connect(database).execute('PRAGMA integrity_check').fetchone() == ('ok',)
+    assert {finished, 'terminated-run', 'active-run'} <= {run['id'] for run in call('list')['result']}
+    assert call('show', '--view', 'full', 'active-run')['status'] == 'completed'
+    rerun = call('reclaim', '--apply')
+    assert rerun['status'] == 'completed', rerun
+    assert all(row[2] == '[]' for row in _invocation_columns(database, 'terminated-run'))
+    print('external-work reclaim interrupted by SIGKILL leaves a consistent catalog passed')
+
+    # Storage runs out while the catalog is rewritten. A POSIX file-size limit makes the real SQLite write path
+    # report full storage deterministically; filling an actual volume needs root or platform disk images.
+    _seed_legacy_invocations(database, 'active-run', 4, 2_000_000)
+    _seed_legacy_invocations(database, 'terminated-run', 1, 50_000)
+    call('show', 'active-run', '--view', 'action')
+    sqlite3.connect(database).execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+    limit = database.stat().st_size + 2048
+    tmp = work / 'tmp'
+    tmp.mkdir()
+    def constrain():
+        import resource
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+    environment = dict(os.environ, TMPDIR=str(tmp), SQLITE_TMPDIR=str(tmp))
+    full = subprocess.run([str(args.engine), '--database', str(database), '--json', 'reclaim', '--apply'],
+                          text=True, capture_output=True, env=environment, preexec_fn=constrain)
+    assert full.returncode != 0, full.stdout
+    full_issue = json.dumps(json.loads(full.stdout))
+    assert 'catalog-storage-full' in full_issue and 'storage' in full_issue, full_issue
+    assert sqlite3.connect(database).execute('PRAGMA integrity_check').fetchone() == ('ok',)
+    assert {finished, 'terminated-run', 'active-run'} <= {run['id'] for run in call('list')['result']}
+    call('show', 'active-run', '--view', 'action')
+    assert call('append', 'active-run', 'user-steering', json.dumps({'target': {'kind': 'all'}, 'instruction': 'after full storage'}))['status'] == 'completed'
+    assert call('reclaim', '--apply')['status'] == 'completed'
+    print('external-work reclaim reports full storage clearly and leaves the catalog usable passed')
+
+
 # bookends:LE-46 bookends:LE-48 bookends:LE-49 bookends:LE-50 bookends:LE-52 bookends:LE-54 — durable denial, provider-unavailable revision and later superseding approval.
 def revision_and_observation(args, root):
     state = {'revised':False, 'observed':False}
@@ -2189,7 +2547,12 @@ def main():
         SimpleNamespace(engine=args.engine,provider=args.software,data_root=str(ROOT),mode='source'),
         ROOT / 'crates/software-change-provider/data/configs/minimal.json',root,
         exercise=owner_update_hook))
+    retention_minimal_profile(args,software_runs[-1])
     provider_specific(args,root)
+    retention_provider_runs(args,root)
+    retained_work = retention_software_revisions(args,root)
+    retention_software_overrides(args,root)
+    reclaim_legacy_catalog(args,root,retained_work)
     early_review_briefs(args,root)
     generated = raw([sys.executable,ROOT / 'scripts/generate-prd-journey.py','--mode','source',
                      '--engine',args.engine,'--provider',args.research,'--checker',args.checker,

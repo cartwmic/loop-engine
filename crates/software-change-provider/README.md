@@ -45,6 +45,8 @@ A configured `<phase>-checkpoint` waits for an `owner-decision` about the curren
 
 Use root `README.md` for a first-run catalog example and root `AGENTS.md` for repository operations (paths relative to the checkout root). Follow the [local agent guide](AGENTS.md) when editing this crate.
 
+Runs started with this provider retain approved artifacts in the catalog: whenever a checked approval or an owner override moves a run out of a phase, the engine stores that phase's exact bytes as a `retained-artifacts` context record (intent.json; design.json; plan.json; implementation-report.json with reconciliation.json; validation-report.json). Drafts between exits are not kept; an unchanged re-exit references the earlier copy. Read them from full `show` after the artifact files are deleted.
+
 ## Validation
 
 From the repository root:

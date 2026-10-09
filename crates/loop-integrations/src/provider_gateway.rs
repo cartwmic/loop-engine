@@ -7,8 +7,8 @@
 
 use crate::provider::ProviderInvocation;
 use loop_core::{
-    AllowResponse, EvaluationFeedback, EvaluationRequest, EvaluationResult, ProviderAssociation,
-    ProviderError, ProviderGateway, Workflow,
+    AllowResponse, CaptureExit, ContextAppendEffect, EvaluationFeedback, EvaluationRequest,
+    EvaluationResult, ProviderAssociation, ProviderError, ProviderGateway, Workflow,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -209,6 +209,68 @@ impl ProviderGateway for SubprocessProviderGateway {
         let stdout = self.call(provider, request)?;
         let value = parse_json_response(&stdout, "evaluate")?;
         parse_evaluation_response(value)
+    }
+
+    fn capture(
+        &self,
+        provider: &ProviderAssociation,
+        request: EvaluationRequest,
+        exit: CaptureExit,
+    ) -> Result<Option<ContextAppendEffect>, ProviderError> {
+        let EvaluateRequest {
+            workflow,
+            initial_input,
+            context,
+            transition,
+            ..
+        } = EvaluateRequest::from_core(request);
+        let request = serde_json::to_vec(&CaptureRequest {
+            operation: "capture",
+            workflow,
+            initial_input,
+            context,
+            transition,
+            exit,
+        })
+        .map_err(|error| {
+            ProviderError::execution(
+                "provider-request-serialization-failed",
+                format!("could not serialize capture request: {error}"),
+            )
+        })?;
+        let stdout = self.call(provider, request)?;
+        let value = parse_json_response(&stdout, "capture")?;
+        parse_capture_response(value)
+    }
+}
+
+/// The optional `capture` wire envelope: the evaluate context plus how the
+/// checked transition is being committed. Providers answer `{}` or
+/// `{"context_append": {kind, data}}`.
+#[derive(Serialize)]
+struct CaptureRequest {
+    operation: &'static str,
+    workflow: Workflow,
+    initial_input: Value,
+    context: Vec<loop_core::ContextRecord>,
+    transition: loop_core::Transition,
+    exit: CaptureExit,
+}
+
+fn parse_capture_response(value: Value) -> Result<Option<ContextAppendEffect>, ProviderError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ProviderError::invalid_response("capture response must be a JSON object"))?;
+    require_allowed_keys(object, &["context_append"], "capture response")?;
+    match object.get("context_append") {
+        None => Ok(None),
+        Some(effect) => serde_json::from_value(effect.clone())
+            .map(Some)
+            .map_err(|error| {
+                ProviderError::invalid_response(format!(
+                    "capture response `context_append` is invalid: {error}"
+                ))
+            }),
     }
 }
 

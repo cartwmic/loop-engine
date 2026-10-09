@@ -303,6 +303,10 @@ not targets to overturn. Disputes over open ordinary findings belong to triage
 reconsideration (step 5), never to challenge. The same sequence applies to reviews
 performed outside a run or gate, such as pre-run intent review, where nothing enforces it.
 
+Each forward phase exit (approval or override) retains that phase's artifact bytes as an
+engine-committed `retained-artifacts` record; write exiting artifacts before the event and
+do not append these records yourself. A capture failure refuses the event; fix and retry.
+
 ## Ledger, applicability and finding routing
 
 Use data/templates/finding-ledger.json. The schema-version-1 snapshot has driver author,

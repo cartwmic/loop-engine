@@ -17,7 +17,7 @@ No model service is built in. Bring your own harness and any service credentials
 
 ## Usage
 
-Primary commands: `start`, `list`, `show`, `append`, `event`, `history`, `terminate`. Additional commands: targeted `read`, terminal `explore`, passive `monitor`. Monitoring observes durable state, not external execution. Active runs retain frozen obligations and provider command/args, not a binary snapshot. Preserve a compatible executable at that stored path; no migration is supplied.
+Primary commands: `start`, `list`, `show`, `append`, `event`, `history`, `terminate`. Additional commands: targeted `read`, terminal `explore`, passive `monitor`, explicit `reclaim` (preview by default, `--apply` to clear finished runs' legacy invocation payloads and shrink the catalog file). Monitoring observes durable state, not external execution. Approved artifacts of capturing providers are retained as `retained-artifacts` context records, readable through full `show` after their files are deleted. Active runs retain frozen obligations and provider command/args, not a binary snapshot. Preserve a compatible executable at that stored path; no migration is supplied.
 
 ```sh
 target/debug/loop-engine --help

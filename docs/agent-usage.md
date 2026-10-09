@@ -2,7 +2,11 @@
 
 ## Public surface
 
-Primary commands: `start`, `list`, `show`, `append`, `event`, `history`, `terminate`. Additional commands: targeted `read`, terminal `explore`, passive `monitor`. Monitoring observes durable state, not external execution. Providers use `describe` and `evaluate` transport.
+Primary commands: `start`, `list`, `show`, `append`, `event`, `history`, `terminate`. Additional commands: targeted `read`, terminal `explore`, passive `monitor`, explicit `reclaim`. Monitoring observes durable state, not external execution. Providers use `describe` and `evaluate` transport, plus optional `capture`.
+
+Providers that opt in (software-change, research and policy-document) also answer an optional `capture` operation: when a new run leaves an artifact's owning phase forward, by checked approval or owner override, the engine commits a `retained-artifacts` context record with that artifact's exact bytes in the same transaction. Full `show` and `history` expose these records after the run's files are gone; each entry has `name`, `sha256`, `size` and either `content` (`encoding` `utf-8` or `base64`), `same_as` (the record holding identical earlier content) or `absent: true`. Drafts between exits are not retained, and runs started before this capability have none.
+
+`reclaim` previews, without writing, the bulky legacy work-slot invocation payloads that earlier releases stored for final and terminated runs; `reclaim --apply` clears them and runs VACUUM so the catalog file shrinks. Active runs are untouched and cleaned runs stay listed and showable; other commands may briefly wait or get a retryable busy error during the shrink. It never runs automatically.
 
 Use an explicit catalog `--config`, inspect unintended LOOP/XDG/home redirects, and keep artifacts outside the checkout. Never use a user catalog for tests. Load CLI `--help` for exact arguments. Mutations require a fresh action/full observation; compact/status views do not arm them.
 ## External-driver loop

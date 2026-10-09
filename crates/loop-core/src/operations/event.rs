@@ -148,7 +148,7 @@ where
     };
 
     if let Some(attestation) = request.override_attestation {
-        return commit_override(&run, &transition, attestation, persistence);
+        return commit_override(&run, &transition, attestation, gateway, persistence);
     }
 
     if transition.kind.is_check_free() {
@@ -319,15 +319,48 @@ where
     }
 }
 
-fn commit_override<P: Persistence + ?Sized>(
+fn commit_override<G, P>(
     run: &crate::Run,
     transition: &Transition,
     attestation: crate::StateVisitAttestation,
+    gateway: &G,
     persistence: &P,
-) -> OperationOutcome<Result> {
+) -> OperationOutcome<Result>
+where
+    G: ProviderGateway + ?Sized,
+    P: Persistence + ?Sized,
+{
     let lifecycle = match target_lifecycle(&run.workflow, transition) {
         Ok(value) => value,
         Err(issue) => return OperationOutcome::error_with_issue(issue),
+    };
+    // An override skips provider evaluation, but a capturing workflow still
+    // retains what the run is leaving with. Capture failure refuses the
+    // override rather than silently committing without the effect.
+    let capture_append = if run.workflow.capture && transition.kind.is_checked() {
+        let context = match persistence.load_context_records(&run.id) {
+            Ok(context) => context,
+            Err(error) => return persistence_error(error),
+        };
+        let mut context = context;
+        context.sort_by_key(|record| record.sequence);
+        let capture_request = crate::EvaluationRequest::new(
+            run.workflow.clone(),
+            run.initial_input.clone(),
+            context,
+            transition.clone(),
+            Vec::new(),
+        );
+        match gateway.capture(
+            &run.provider_association,
+            capture_request,
+            crate::CaptureExit::Override,
+        ) {
+            Ok(effect) => effect,
+            Err(error) => return provider_error(error),
+        }
+    } else {
+        None
     };
     let mut request = CommitTransitionRequest::new(
         run.id.clone(),
@@ -336,6 +369,7 @@ fn commit_override<P: Persistence + ?Sized>(
         transition.clone(),
         lifecycle,
     );
+    request.capture_append = capture_append;
     request.exception = Some(crate::TransitionOverride {
         attestation,
         skipped_bound_checks: Vec::new(),
@@ -380,19 +414,36 @@ where
     // `load_checked_evaluation_snapshot` is the complete persistence activity
     // for this phase.  The gateway call is deliberately made after it
     // returns, so provider execution is never inside a persistence boundary.
+    let capture_request = run.workflow.capture.then(|| evaluation_request.clone());
     let evaluation = match gateway.evaluate(&snapshot.run.provider_association, evaluation_request)
     {
         Ok(result) => result,
         Err(error) => return provider_error(error),
     };
     match evaluation {
-        EvaluationResult::Allow { context_append } => commit_checked_allow(
-            snapshot,
-            transition,
-            context_append,
-            advice_exception,
-            persistence,
-        ),
+        EvaluationResult::Allow { context_append } => {
+            // Capture runs only after an allow, with the same snapshot the
+            // provider evaluated. Failure refuses the event; nothing commits.
+            let capture_append = match capture_request {
+                Some(request) => match gateway.capture(
+                    &snapshot.run.provider_association,
+                    request,
+                    crate::CaptureExit::Checked,
+                ) {
+                    Ok(effect) => effect,
+                    Err(error) => return provider_error(error),
+                },
+                None => None,
+            };
+            commit_checked_allow(
+                snapshot,
+                transition,
+                context_append,
+                capture_append,
+                advice_exception,
+                persistence,
+            )
+        }
         EvaluationResult::Deny { feedback } => {
             record_checked_denial(snapshot, transition, feedback, persistence)
         }
@@ -410,6 +461,7 @@ fn commit_checked_allow<P>(
     snapshot: crate::CheckedEvaluationSnapshot,
     transition: &Transition,
     context_append: Option<crate::ContextAppendEffect>,
+    capture_append: Option<crate::ContextAppendEffect>,
     advice_exception: Option<crate::AdviceExceptionAttestation>,
     persistence: &P,
 ) -> OperationOutcome<Result>
@@ -428,7 +480,8 @@ where
         transition.clone(),
         resulting_lifecycle,
     )
-    .with_context_append(context_append);
+    .with_context_append(context_append)
+    .with_capture_append(capture_append);
     if let Some(exception) = advice_exception {
         request = request.with_advice_exception(exception);
     }

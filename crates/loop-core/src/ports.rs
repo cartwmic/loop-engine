@@ -104,6 +104,18 @@ pub trait ProviderGateway {
         provider: &ProviderAssociation,
         request: EvaluationRequest,
     ) -> Result<EvaluationResult, ProviderError>;
+
+    /// Ask the provider for an optional opaque context effect to commit with
+    /// a checked transition. Core calls this only for workflows frozen with
+    /// `capture`; the default answers with no effect.
+    fn capture(
+        &self,
+        _provider: &ProviderAssociation,
+        _request: EvaluationRequest,
+        _exit: crate::CaptureExit,
+    ) -> Result<Option<ContextAppendEffect>, ProviderError> {
+        Ok(None)
+    }
 }
 
 /// Operational failure while invoking a provider or interpreting its
@@ -540,6 +552,11 @@ pub struct CommitTransitionRequest {
     /// transitions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_append: Option<ContextAppendEffect>,
+    /// Optional provider `capture` effect for a checked transition. Unlike
+    /// `context_append` it may accompany an override; it is persisted after
+    /// `context_append` and before the transition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_append: Option<ContextAppendEffect>,
     /// Explicit exception; mutually exclusive with a provider context effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exception: Option<crate::TransitionOverride>,
@@ -564,9 +581,19 @@ impl CommitTransitionRequest {
             transition,
             resulting_lifecycle,
             context_append: None,
+            capture_append: None,
             exception: None,
             advice_exception: None,
         }
+    }
+
+    /// Attach the optional provider capture effect to this commit.
+    pub fn with_capture_append(
+        mut self,
+        capture_append: impl Into<Option<ContextAppendEffect>>,
+    ) -> Self {
+        self.capture_append = capture_append.into();
+        self
     }
 
     /// Attach the single provider-authored context effect to this commit.

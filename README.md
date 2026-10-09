@@ -38,7 +38,7 @@ Continue with the [policy-document operator guide](crates/policy-document-provid
 
 Current source software-change profiles (`minimal-15`, `standard-15`, `high-rigor-15`) let you opt into reviewed markdown narratives at design, plan and validation, and owner checkpoints at intent, design, plan, implementation and validation. Both options default off and freeze at start. The JSON stays authoritative; a configured checkpoint waits for a recorded decision on the current narrative or artifact. These options require the current source provider; the installed 0.24.1 predecessor lacks them. Use the [software-change skill](crates/software-change-provider/skills/using-software-change-provider/SKILL.md#optional-narratives-and-owner-checkpoints) for setup, review and rejection recovery.
 
-Primary commands are `start`, `list`, `show`, `append`, `event`, `history`, `terminate`; targeted `read`, terminal `explore` and passive `monitor` expose retained state. Monitoring does not track external execution. Providers implement describe/evaluate transport.
+Primary commands are `start`, `list`, `show`, `append`, `event`, `history`, `terminate`; targeted `read`, terminal `explore` and passive `monitor` expose retained state, and explicit `reclaim` shrinks a catalog holding legacy payloads. Monitoring does not track external execution. Providers implement describe/evaluate transport and may opt in to `capture`, which keeps each approved artifact's exact bytes in the catalog so a run's approved documents survive deletion of its files.
 
 ## Validation
 

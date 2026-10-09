@@ -2441,3 +2441,19 @@ For new software-change runs, the owner may choose at setup, per run and frozen 
 A narrative is written only after that phase's JSON artifact has cleared its ordinary and challenge review, describes that exact artifact revision, and must itself clear ordinary and challenge review against the artifact and the frozen intent at the profile's stages and author counts before the run leaves the phase. The narrative step never changes the JSON, which stays authoritative for later phases. A new artifact revision makes its narrative and any owner decision stale. After the run ends, the last reviewed narrative for each enabled phase remains readable as its own markdown file among the run's artifacts.
 
 At a configured checkpoint the run does not leave the phase until a recorded owner decision approves the current subject revision: the narrative when one is enabled, otherwise the artifact. A rejection carries the owner's reason and names its target: an artifact rejection sends the run through that phase's existing revise route; a narrative rejection requires a rewritten and re-reviewed narrative and a new owner decision while the unchanged artifact's reviews stay valid. Each decision record keeps the owner's verbatim decision text, and decisions and rejections remain visible in history. The decision record shape and its evaluation are a provider convention shared through loop-integrations without software-change-specific assumptions; core assigns them no approval meaning (LE-18), and the provider does not prove that a decision came from a human. Runs started before this capability keep their frozen obligations.
+
+### LE-186: Approved run artifacts remain inspectable after run files are deleted
+- Status: live
+- Coverage: e2e/journey
+
+For new runs of the shipped software-change, research and policy-document providers, each time a run leaves an artifact's owning phase forward, the exact content of that artifact as it stood at that moment is retained in the run catalog. Deleting the run's artifact directory, or any other file outside the catalog, does not lose that content: an operator can read every retained copy, in order, with its artifact name, the transition that retained it and when, through the ordinary inspection commands.
+
+Only phase exits are retained, not intermediate drafts or revisions written between exits. A later exit after a revise loop adds a new entry; an artifact whose bytes are unchanged since its last retained copy is recorded as exited again without storing its content a second time. An exit by owner override is retained and visibly marked as not checked. Core assigns this content no artifact, approval or revision meaning; runs started before this capability are not backfilled.
+
+### LE-187: Operators can reclaim legacy catalog space from finished runs
+- Status: live
+- Coverage: e2e/journey
+
+An operator can deliberately reclaim catalog space held by bulky per-invocation detail that earlier releases stored for work-slot invocations, such as worker command, argument and prompt payloads and their duplicated completion snapshots. Before changing anything the operator can see which finished runs would be affected and roughly how much space would be reclaimed. Applying it discards that detail only for final or terminated runs, keeps those runs listed, and returns the freed space so the catalog file on disk becomes smaller.
+
+Active runs and their data are unaffected, and cleanup does not refuse merely because other runs are active. While the catalog file is being shrunk, concurrent commands may briefly wait or fail with a clear retryable busy error, but nothing is corrupted or lost beyond the selected legacy detail. Inspection of a cleaned run may be degraded; original worker payloads for cleaned runs, and verification that depends on them, are intentionally no longer available. Cleanup never runs automatically.
