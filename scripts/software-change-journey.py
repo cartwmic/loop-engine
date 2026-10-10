@@ -603,10 +603,13 @@ def strip_le184_policies(policies):
     return stripped
 
 
-def strip_le184_workflow(graph):
-    """Inverse of the exact LE-184 workflow delta: two literal instruction sentences and listed axes."""
+def strip_le184_workflow(graph, instructions=True):
+    """Inverse of the exact LE-184 workflow delta: two literal instruction sentences and listed axes.
+
+    A current binary emits the instruction sentences for any profile, so a same-binary
+    (profile-only) comparison removes only the profile-derived axes."""
     graph = json.loads(json.dumps(graph))
-    for sentence in (PLAN_GUIDANCE, IMPLEMENT_GUIDANCE):
+    for sentence in (PLAN_GUIDANCE, IMPLEMENT_GUIDANCE) if instructions else ():
         holders = [s for s in graph['states'] if sentence in (s.get('instructions') or '')]
         assert len(holders) == 1 and holders[0]['instructions'].count(sentence) == 1, sentence
         holders[0]['instructions'] = holders[0]['instructions'].replace(' ' + sentence, '', 1)
@@ -653,7 +656,7 @@ def compare_off(args, profile_source, root, log):
     edges = lambda g: [(t['source'], t['event'], t['target'], t.get('kind')) for t in g['transitions']]
     assert [s['id'] for s in graphs[0]['states']] == [s['id'] for s in graphs[1]['states']]
     assert edges(graphs[0]) == edges(graphs[1]), 'Options-off transitions changed'
-    assert graphs[0] == strip_le184_workflow(graphs[1]), 'Options-off workflow differs beyond the LE-184 delta'
+    assert graphs[0] == strip_le184_workflow(graphs[1], instructions=historical), 'Options-off workflow differs beyond the LE-184 delta'
     released = None
     if args.released_provider:
         # AC-8 (c): workflow and review policies equal the released slot-1 provider.

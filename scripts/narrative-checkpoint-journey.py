@@ -626,50 +626,100 @@ def self_test():
         else:
             raise AssertionError('Override escaped refusal assertion')
     with tempfile.TemporaryDirectory(prefix='off-profile-interface-') as directory:
+        # AC-8 interface model: 0.24.1 predecessor lacks exactly the LE-184 delta;
+        # the released slot-1 provider equals the current options-off profile/graph.
         root = Path(directory)
         source = ROOT / 'crates/software-change-provider/data/configs/minimal.json'
-        predecessor = json.loads(source.read_text())
-        predecessor['config_version'] = 'minimal-14'
+        current = json.loads(source.read_text())
+        shipped = json.loads(json.dumps(current))
         for key in ('narratives','checkpoints','narrative_review'):
-            predecessor['extra'].pop(key, None)
+            shipped['extra'].pop(key, None)
+        predecessor = json.loads(json.dumps(shipped))
+        predecessor['config_version'] = 'minimal-14'
+        predecessor['review_policies'] = SOFTWARE.strip_le184_policies(current['review_policies'])
+        axes = lambda: [{'id':'dependencies-honest'},{'id':SOFTWARE.LE184_AXIS}]
+        new_graph = {'states':[{'id':'plan','instructions':'Plan. ' + SOFTWARE.PLAN_GUIDANCE + ' Shape.'},
+                               {'id':'plan-review','action_guidance':{'review_axes':axes()}},
+                               {'id':'implement','instructions':'Work. ' + SOFTWARE.IMPLEMENT_GUIDANCE + ' Docs.'}],
+                     'transitions':[{'source':'plan','event':'plan-ready','target':'plan-review','kind':'checked'}]}
+        old_graph = SOFTWARE.strip_le184_workflow(new_graph)
+        assert old_graph != new_graph and old_graph['states'][0]['instructions'] == 'Plan. Shape.'
         calls, runs = [], []
-        class StubLog:
-            def __init__(self):
-                self.root = root / 'captures'
-                self.index = self.root / 'commands.jsonl'
-            def execute(self, argv, packet=None, **kwargs):
-                argv = list(map(str, argv))
-                calls.append(argv)
-                if argv[-1] == '--version':
-                    return subprocess.CompletedProcess(argv, 0, 'software-change 0.24.1\n', '')
-                if 'data-dump' in argv:
-                    target = Path(argv[-1]) / 'crates/software-change-provider/data/configs/minimal.json'
-                    target.parent.mkdir(parents=True)
-                    write_json(target, predecessor)
-                    return subprocess.CompletedProcess(argv, 0, '', '')
-                if argv[:2] == ['git','show']:
-                    return subprocess.CompletedProcess(argv, 0, json.dumps(predecessor), '')
-                return {'scripted':'same complete graph'}
+        def stub_log(old=None, released_graph=None, released_profile=None):
+            class StubLog:
+                def __init__(self):
+                    self.root = root / 'captures'
+                    self.index = self.root / 'commands.jsonl'
+                def execute(self, argv, packet=None, **kwargs):
+                    argv = list(map(str, argv))
+                    calls.append(argv)
+                    if argv[-1] == '--version':
+                        return subprocess.CompletedProcess(argv, 0, 'software-change 0.24.1\n', '')
+                    if 'data-dump' in argv:
+                        target = Path(argv[-1]) / 'crates/software-change-provider/data/configs/minimal.json'
+                        target.parent.mkdir(parents=True)
+                        released = argv[0].endswith('released-stub')
+                        write_json(target, (released_profile or shipped) if released else predecessor)
+                        return subprocess.CompletedProcess(argv, 0, '', '')
+                    if argv[:2] == ['git','show']:
+                        return subprocess.CompletedProcess(argv, 0, json.dumps(predecessor), '')
+                    if argv[0].endswith('old-stub'):
+                        return old or old_graph
+                    if argv[0].endswith('released-stub'):
+                        return released_graph or new_graph
+                    if packet and packet['initial_input']['config_version'].endswith('-14'):
+                        # Same current binary on the predecessor profile: sentences stay, profile axes do not.
+                        return SOFTWARE.strip_le184_workflow(new_graph, instructions=False)
+                    return new_graph
+            return StubLog()
         def stub_run(args, profile_source, root, **kwargs):
             runs.append(args.provider)
             work = Path(root) / str(len(runs))
             work.mkdir()
             write_json(work / 'states.json', ['explore','end'])
             return work
-        args = argparse.Namespace(provider='current-stub', predecessor_provider='old-stub')
-        with patch.object(SOFTWARE, 'run', side_effect=stub_run):
-            SOFTWARE.compare_off(args, source, root, StubLog())
-        parity = json.loads((root / 'minimal-off-comparison.json').read_text())
-        assert parity['historical_binary_comparison'] and runs == [str(Path('old-stub').resolve()), 'current-stub']
+        def compare(target, args, log):
+            target.mkdir(exist_ok=True)
+            with patch.object(SOFTWARE, 'run', side_effect=stub_run):
+                SOFTWARE.compare_off(args, source, target, log)
+            return json.loads((target / 'minimal-off-comparison.json').read_text())
+        args = argparse.Namespace(provider='current-stub', predecessor_provider='old-stub', released_provider='released-stub')
+        parity = compare(root / 'complete', args, stub_log())
+        assert parity['historical_binary_comparison'] and parity['ac8_released_comparison'] and parity['limitation'] is None
+        assert runs == [str(Path('old-stub').resolve()), 'current-stub']
         assert parity['actual_command_outcomes'] == str(root / 'captures/commands.jsonl')
         assert not any(argv[0] == 'git' for argv in calls), 'Historical mode guessed git source instead of explicit embedded data'
-        fallback = root / 'profile-only'
-        fallback.mkdir()
-        args.predecessor_provider = None
-        with patch.object(SOFTWARE, 'run', side_effect=stub_run):
-            SOFTWARE.compare_off(args, source, fallback, StubLog())
-        parity = json.loads((fallback / 'minimal-off-comparison.json').read_text())
-        assert not parity['ac1_historical_mechanical_proof'] and 'NOT complete historical AC-1' in parity['limitation']
+        # Negatives: each must fail closed. These are interface checks, NOT AC-8 proof.
+        drifted = json.loads(json.dumps(old_graph))
+        drifted['states'][2]['instructions'] += ' Extra.'
+        dropped = json.loads(json.dumps(new_graph))
+        dropped['states'][1]['action_guidance']['review_axes'].pop()
+        changed = json.loads(json.dumps(shipped))
+        changed['review_policies']['plan-review'][0]['required_authors'] += 1
+        for name, log in [('workflow drift beyond the LE-184 delta', stub_log(old=drifted)),
+                          ('released workflow differs', stub_log(released_graph=dropped)),
+                          ('released review_policies differ', stub_log(released_profile=changed))]:
+            try:
+                compare(root / name.replace(' ', '-'), args, log)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError(f'{name} escaped the AC-8 comparison')
+        extra_policy = json.loads(json.dumps(current['review_policies']))
+        extra_policy['plan-review'].append(dict(extra_policy['plan-review'][0], id='unaccepted-axis'))
+        assert SOFTWARE.strip_le184_policies(extra_policy) != predecessor['review_policies'], 'unaccepted policy addition hidden'
+        mismatched = json.loads(json.dumps(current['review_policies']))
+        mismatched['plan-review'] = [dict(r, required_authors=r['required_authors'] + 1) if r['id'] == SOFTWARE.LE184_AXIS else r
+                                     for r in mismatched['plan-review']]
+        try:
+            SOFTWARE.strip_le184_policies(mismatched)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError('parallelism-honest entry not mirroring dependencies-honest escaped')
+        args.predecessor_provider = args.released_provider = None
+        parity = compare(root / 'profile-only', args, stub_log())
+        assert not parity['ac8_historical_mechanical_proof'] and 'Incomplete AC-8 proof' in parity['limitation']
     print('narrative/checkpoint collection and stub interface checks passed; NOT progression proof; ' + LABEL)
 
 
