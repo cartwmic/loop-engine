@@ -1227,6 +1227,13 @@ mod tests {
         // Captured before T4 through public describe; also exact-byte equal to
         // installed 0.24.1 describe with the corresponding HEAD -14 profile.
         // Hash the complete serialized workflow Value, not a normalized graph.
+        // AC-8 (intent revision 5): before hashing, apply the exact inverse of the
+        // accepted LE-184 delta (two literal instruction sentences and the listed
+        // parallelism-honest axes); any other difference from 0.24.1 fails.
+        const LE184_SENTENCES: [&str; 2] = [
+            " Split work into tasks that do not share writable files or state unless one depends on the other, and declare a dependency only where a real contract, context or hard-input need exists.",
+            " Tasks with no dependency path between them (no chain of declared dependencies in either direction) are dispatched concurrently by default; state a reason when running them serially.",
+        ];
         let snapshots = [
             "9ee5121cbf31c6488edac046d752072e17cd3a35f3d139a0d74bec9dd4848e15",
             "f70cc5d07332379ba335219cee3272ac072cce98aaf7c83f4e9078e9e3aa5fc4",
@@ -1234,7 +1241,33 @@ mod tests {
         ];
         for (mut input, expected) in shipped_profiles().into_iter().zip(snapshots) {
             let workflow = describe_workflow(Some(&input)).unwrap();
-            let bytes = serde_json::to_vec(&serde_json::to_value(&workflow).unwrap()).unwrap();
+            let mut value = serde_json::to_value(&workflow).unwrap();
+            for sentence in LE184_SENTENCES {
+                let mut holders: Vec<&mut Value> = value["states"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .filter(|state| {
+                        state["instructions"]
+                            .as_str()
+                            .is_some_and(|text| text.contains(sentence))
+                    })
+                    .collect();
+                assert_eq!(holders.len(), 1, "{sentence}");
+                let text = holders[0]["instructions"].as_str().unwrap().to_owned();
+                assert_eq!(text.matches(sentence).count(), 1, "{sentence}");
+                holders[0]["instructions"] = json!(text.replacen(sentence, "", 1));
+            }
+            for state in value["states"].as_array_mut().unwrap() {
+                if let Some(axes) = state
+                    .get_mut("action_guidance")
+                    .and_then(|guidance| guidance.get_mut("review_axes"))
+                    .and_then(Value::as_array_mut)
+                {
+                    axes.retain(|axis| axis["id"] != "parallelism-honest");
+                }
+            }
+            let bytes = serde_json::to_vec(&value).unwrap();
             assert_eq!(
                 format!("{:x}", Sha256::digest(bytes)),
                 expected,

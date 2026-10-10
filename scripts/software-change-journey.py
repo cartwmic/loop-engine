@@ -584,8 +584,40 @@ def parallelism_journeys(args, root):
         'template':str(template),'profiles':{profile.stem:str(work) for profile,work in zip(profiles,works)}},indent=2))
 
 
+LE184_AXIS = 'parallelism-honest'
+
+
+def strip_le184_policies(policies):
+    """Remove exactly the accepted LE-184 parallelism-honest entries; each must mirror dependencies-honest."""
+    stripped = {}
+    for gate, rows in policies.items():
+        added = [row for row in rows if row['id'] == LE184_AXIS]
+        mirror = [row for row in rows if row['id'] == 'dependencies-honest']
+        shape = lambda row, axis: (row['review_stage'], row['required_authors'],
+                                   row['group'].replace(axis, '{axis}'))
+        if added:
+            assert gate in ('plan-review', 'plan-adversarial-review'), gate
+            assert sorted(shape(r, LE184_AXIS) for r in added) == sorted(shape(r, 'dependencies-honest') for r in mirror), gate
+        stripped[gate] = [row for row in rows if row['id'] != LE184_AXIS]
+    return stripped
+
+
+def strip_le184_workflow(graph):
+    """Inverse of the exact LE-184 workflow delta: two literal instruction sentences and listed axes."""
+    graph = json.loads(json.dumps(graph))
+    for sentence in (PLAN_GUIDANCE, IMPLEMENT_GUIDANCE):
+        holders = [s for s in graph['states'] if sentence in (s.get('instructions') or '')]
+        assert len(holders) == 1 and holders[0]['instructions'].count(sentence) == 1, sentence
+        holders[0]['instructions'] = holders[0]['instructions'].replace(' ' + sentence, '', 1)
+    for state in graph['states']:
+        guidance = state.get('action_guidance')
+        if isinstance(guidance, dict) and isinstance(guidance.get('review_axes'), list):
+            guidance['review_axes'] = [a for a in guidance['review_axes'] if a['id'] != LE184_AXIS]
+    return graph
+
+
 def compare_off(args, profile_source, root, log):
-    """Change-specific AC-1 proof pending LE-185 reconciliation; no live ID claim."""
+    """Change-specific AC-8 proof (intent revision 5): options-off -15 against 0.24.1 -14 and the released slot-1 provider."""
     source = Path(profile_source).resolve()
     current = json.loads(source.read_text())
     assert current['extra'].get('narratives', []) == []
@@ -603,19 +635,37 @@ def compare_off(args, profile_source, root, log):
         assert response.returncode == 0, response.stderr
         old_bytes = (dumped / 'crates/software-change-provider/data/configs' / source.name).read_bytes()
     else:
-        # Explicit profile-only mechanics, NOT full historical AC-1 proof.
+        # Explicit profile-only mechanics, NOT full historical AC-8 proof.
         relative = source.relative_to(ROOT)
         original = log.execute(['git', 'show', f'{PREDECESSOR}:{relative}'], cwd=ROOT, raw=True)
         assert original.returncode == 0, original.stderr
         old_bytes = original.stdout.encode()
     predecessor = json.loads(old_bytes)
     assert predecessor['config_version'] == current['config_version'].replace('-15', '-14')
-    assert predecessor['review_policies'] == current['review_policies']
+    # AC-8 (b): review obligations differ from 0.24.1 by exactly the LE-184 entries.
+    assert strip_le184_policies(current['review_policies']) == predecessor['review_policies']
     old = Path(root) / f'{source.stem}-14.json'
     old.write_bytes(old_bytes)
     graphs = [log.execute([binary], {'operation':'describe', 'initial_input':p}, cwd=ROOT)
               for binary, p in ((predecessor_args.provider, predecessor), (args.provider, current))]
-    assert graphs[0] == graphs[1], 'Options-off stitched workflow changed'
+    # AC-8 (a): states and transitions equal; everything else equal except the exact LE-184 delta.
+    edges = lambda g: [(t['source'], t['event'], t['target'], t.get('kind')) for t in g['transitions']]
+    assert [s['id'] for s in graphs[0]['states']] == [s['id'] for s in graphs[1]['states']]
+    assert edges(graphs[0]) == edges(graphs[1]), 'Options-off transitions changed'
+    assert graphs[0] == strip_le184_workflow(graphs[1]), 'Options-off workflow differs beyond the LE-184 delta'
+    released = None
+    if args.released_provider:
+        # AC-8 (c): workflow and review policies equal the released slot-1 provider.
+        released = str(Path(args.released_provider).resolve())
+        dumped = Path(root) / f'{source.stem}-released-data'
+        assert not dumped.exists(), 'Released dump destination already exists'
+        response = log.execute([released, 'data-dump', dumped], cwd=ROOT, raw=True)
+        assert response.returncode == 0, response.stderr
+        shipped = json.loads((dumped / 'crates/software-change-provider/data/configs' / source.name).read_bytes())
+        assert shipped['config_version'] == current['config_version']
+        assert shipped['review_policies'] == current['review_policies'], 'review_policies differ from released slot-1'
+        released_graph = log.execute([released], {'operation':'describe', 'initial_input':shipped}, cwd=ROOT)
+        assert released_graph == graphs[1], 'Options-off workflow differs from released slot-1'
     old_work = run(predecessor_args, old, root, command_log=log)
     new_work = run(args, source, root, command_log=log)
     states = [json.loads((w / 'states.json').read_text()) for w in (old_work, new_work)]
@@ -623,12 +673,13 @@ def compare_off(args, profile_source, root, log):
     assert not any('narrative' in s or s.endswith('-checkpoint') for s in states[1])
     (Path(root) / f'{source.stem}-off-comparison.json').write_text(json.dumps(
         {'scripted_dummy_backends':True, 'historical_binary_comparison':historical,
-         'ac1_historical_mechanical_proof':historical,
-         'predecessor_provider':predecessor_args.provider,
+         'ac8_historical_mechanical_proof':historical, 'ac8_released_comparison':released is not None,
+         'predecessor_provider':predecessor_args.provider, 'released_provider':released,
          'predecessor_ref':None if historical else PREDECESSOR,
-         'limitation':None if historical else 'Profile-only parity on the current binary; NOT complete historical AC-1 proof',
-         'graphs_equal':True, 'review_policies_equal':True, 'states':states[1],
-         'actual_command_outcomes':str(log.index), 'command_payload_root':str(log.root),
+         'limitation':None if historical and released else 'Incomplete AC-8 proof: needs --predecessor-provider and --released-provider',
+         'states_and_transitions_equal':True, 'workflow_equal_modulo_exact_le184_delta':True,
+         'review_policies_equal_modulo_exact_le184_entries':True, 'released_workflow_and_policies_equal':released is not None,
+         'states':states[1], 'actual_command_outcomes':str(log.index), 'command_payload_root':str(log.root),
          'terminal_runs':[str(old_work),str(new_work)]}, indent=2))
 
 
@@ -637,7 +688,8 @@ def main():
     parser.add_argument('--mode',choices=['source','packaged'],default='source')
     parser.add_argument('--engine')
     parser.add_argument('--provider')
-    parser.add_argument('--predecessor-provider', help='Explicit installed 0.24.1 provider for historical AC-1 parity; no guessing/fallback')
+    parser.add_argument('--predecessor-provider', help='Explicit installed 0.24.1 provider for historical AC-8 parity; no guessing/fallback')
+    parser.add_argument('--released-provider', help='Released slot-1 provider built from main 126a4fb for AC-8 (c); no guessing/fallback')
     parser.add_argument('--profile')
     parser.add_argument('--data-root')
     parser.add_argument('--work-root')
@@ -662,11 +714,12 @@ def main():
     root.mkdir(parents=True,exist_ok=True)
     print(f'Retained software-change proof root: {root}; SCRIPTED DUMMY BACKENDS', flush=True)
     log = CommandLog(root / 'captures')
-    log.identity(args.engine, args.provider, *([args.predecessor_provider] if args.predecessor_provider else []))
+    log.identity(args.engine, args.provider, *[p for p in (args.predecessor_provider, args.released_provider) if p])
     try:
         if args.mode == 'source' and Path(args.profile).resolve().parent == ROOT / 'crates/software-change-provider/data/configs':
             compare_off(args, args.profile, root, log)
-            scope = 'historical-binary AC-1 mechanics' if args.predecessor_provider else 'profile-only parity; NOT complete historical AC-1 proof'
+            scope = ('historical and released-binary AC-8 mechanics' if args.predecessor_provider and args.released_provider
+                     else 'partial parity; NOT complete AC-8 proof')
             print(f'options-off predecessor/successor journeys reached end ({scope}; SCRIPTED DUMMY BACKENDS)')
         elif args.mode == 'source':
             run(args,args.profile,root,command_log=log)
