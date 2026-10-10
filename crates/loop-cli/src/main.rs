@@ -8,3 +8,8 @@ fn main() {
     eprint!("{}", execution.stderr);
     std::process::exit(execution.exit_code);
 }
+
+#[test]
+fn lean_ci_intentional_workspace_failure() {
+    panic!("intentional workspace-test hosted CI failure");
+}
