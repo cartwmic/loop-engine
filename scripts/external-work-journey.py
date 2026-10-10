@@ -9,7 +9,9 @@ import os
 import subprocess
 import sys
 import sqlite3
+import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from external_work_driver import process
@@ -40,11 +42,21 @@ def refused(argv, packet=None, cwd=None, needle=None):
     return result
 
 
+@contextmanager
+def json_source(work, data):
+    # Keep growing evidence out of argv without changing its serialized bytes.
+    with tempfile.NamedTemporaryFile(dir=work, suffix='.json') as source:
+        source.write(json.dumps(data).encode('utf-8'))
+        source.flush()
+        yield '@'+source.name
+
+
 def append(ctx, kind, data, record_id=None):
     args = ['append']
     if record_id:
         args += ['--record-id',record_id]
-    return ctx['call'](*args,ctx['run_id'],kind,json.dumps(data))
+    with json_source(ctx['work'], data) as source:
+        return ctx['call'](*args,ctx['run_id'],kind,source)
 
 
 def provider(ctx, args, packet):
@@ -215,8 +227,9 @@ def intake_counts_advice(args, root):
                         changed = copy.deepcopy(candidate['data'])
                         changed['grounds']['reason'] = 'Conflicting replacement reason.'
                         ctx['show']()
-                        refused([ctx['engine'],'--database',ctx['database'],'--config',ctx['config'],'--json','append','--record-id','preview-resume',
-                                ctx['run_id'],candidate['kind'],json.dumps(changed)],cwd=ctx['repository'])
+                        with json_source(ctx['work'], changed) as source:
+                            refused([ctx['engine'],'--database',ctx['database'],'--config',ctx['config'],'--json','append','--record-id','preview-resume',
+                                    ctx['run_id'],candidate['kind'],source],cwd=ctx['repository'])
                     assert candidate['data']['external_review']['original']['original'] == original['text'], candidate
                     assert candidate['data']['grounds']['reason'] == ground_reason, candidate
                     assert candidate['data']['author'] == assignment['author'], candidate
@@ -1057,7 +1070,8 @@ def provider_specific(args, root):
             show()
             return call('event',run_id,event)
         def record(kind,data,id):
-            result = call('append','--record-id',id,run_id,kind,json.dumps(data))
+            with json_source(work, data) as source:
+                result = call('append','--record-id',id,run_id,kind,source)
             if kind == 'review-evidence':
                 retained = next(row for row in show()['result']['context'] if row['id'] == id)
                 assert retained['data']['external_review'] == data['external_review'], retained

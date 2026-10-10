@@ -76,6 +76,15 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
     run_id = 'software-external'
     def call(*args):
         return process([engine,'--database',database,'--config',config,'--json',*args],cwd=repository)
+    def append(kind, data, record_id=None):
+        argv = ['append']
+        if record_id:
+            argv += ['--record-id',record_id]
+        # Keep growing evidence out of argv without changing its serialized bytes.
+        with tempfile.NamedTemporaryFile(dir=work, suffix='.json') as source:
+            source.write(json.dumps(data).encode('utf-8'))
+            source.flush()
+            return call(*argv,run_id,kind,'@'+source.name)
     def show():
         return call('show','--view','full',run_id)
     def event(name):
@@ -128,18 +137,18 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
                     assert intake.get('records'), intake
                     # bookends:LE-44 bookends:LE-47 bookends:LE-137 — external author judgments are opaque durable rows; checked progression, not intake, validates configured obligations.
                     for candidate in intake['records']:
-                        appended = call('append',run_id,'review-evidence',json.dumps(candidate['data']))
+                        appended = append('review-evidence',candidate['data'])
                         assert appended['result']['context']['data'] == candidate['data'], appended
             if state == 'intent-review' and any(p['id'] == 'intent-sufficient' for p in profile['review_policies'][state]):
                 cold = [r for r in show()['result']['context'] if r['kind'] == 'review-evidence'
                         and r['data'].get('gate') == state and r['data'].get('policy_id') == 'intent-sufficient'
                         and r['data'].get('subject_revision') == revision]
-                call('append',run_id,'intent-comparison',json.dumps({
+                append('intent-comparison',{
                     'subject_revision':revision,'baseline':json.loads((artifacts / subject).read_text())['baseline'],
                     'reconstruction_ids':[r['id'] for r in cold],
                     'actor':{'name':'fixture-owner','kind':'human'},'authority':'owner',
                     'dispositions':[{'reconstruction_id':r['id'],'alternative':'Scripted fixture reconstruction; no material alternative supplied.',
-                                     'disposition':'implementation-freedom','note':'Scripted mechanical comparison only, not semantic judgment.'} for r in cold]}))
+                                     'disposition':'implementation-freedom','note':'Scripted mechanical comparison only, not semantic judgment.'} for r in cold]})
             ledger = {'schema_version':'1','gate':state,'subject':subject,'subject_revision':revision,
                       'author':{'name':'external-driver','kind':'agent'},'findings':[]}
             call('append',run_id,'finding-ledger',json.dumps(ledger))
@@ -187,7 +196,7 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
             (artifacts / 'validation-report.json').write_text(json.dumps(report))
             checkpoint('validation')
             for candidate in prepared['command_candidates']:
-                call('append','--record-id',candidate['record_id'],run_id,candidate['kind'],json.dumps(candidate['data']))
+                append(candidate['kind'],candidate['data'],candidate['record_id'])
             for index, batch in enumerate(prepared['judgment_batches']):
                 verdict = {'subject':'validation-report.json','subject_revision':report['revision'],
                            'checkpoint':'validation-checkpoint.json',
@@ -196,7 +205,7 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
                            'evidence_context_ids':report['command_evidence_ids']}
                 if batch['kind'] == 'criterion-verdict':
                     verdict['criterion_id'] = batch['criterion_id']
-                call('append','--record-id',batch['record_id'],run_id,batch['kind'],json.dumps(verdict))
+                append(batch['kind'],verdict,batch['record_id'])
             if exercise:
                 exercise('validation-prepared', {'call':call,'show':show,'event':event,'checkpoint':checkpoint,
                                                 'profile':profile,'artifacts':artifacts,'repository':repository,
