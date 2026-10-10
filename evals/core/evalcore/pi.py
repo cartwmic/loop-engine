@@ -6,8 +6,10 @@ protocol, and no agent loop or host tools are ever run by the helper.
 import asyncio
 from collections import OrderedDict
 from copy import deepcopy
+from contextlib import nullcontext
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 from weakref import WeakKeyDictionary
@@ -37,8 +39,15 @@ def helper_command() -> list[str]:
     if not node:
         raise ValueError("pi provider requires host Node and the installed Pi SDK")
     sdk = Path(node).resolve().parents[1] / "lib/node_modules/@earendil-works/pi-coding-agent/dist/index.js"
+    managed = os.environ.get("PI_MANAGED_INSTALL_ROOT")
+    if managed:
+        root = Path(managed).resolve()
+        version = (root / "current-version").read_text().strip()
+        if not version or not all(c.isalnum() or c in "._+-" for c in version) or version in (".", ".."):
+            raise ValueError("invalid managed Pi version")
+        sdk = root / "releases" / version / "node_modules/@earendil-works/pi-coding-agent/dist/index.js"
     if not sdk.is_file():
-        raise ValueError("pi provider requires the globally installed Pi SDK beside host Node")
+        raise ValueError("pi provider requires the installed Pi SDK")
     return [node, str(Path(__file__).with_name("pi_helper.mjs")), str(sdk)]
 
 
@@ -101,7 +110,8 @@ class PiAPI(ModelAPI):
     async def _exchange(self, request, timeout):
         async with self.lock:
             try:
-                async with asyncio.timeout(timeout):
+                deadline = asyncio.timeout(timeout) if timeout is not None else nullcontext()
+                async with deadline:
                     if self.process is None:
                         self.process = await asyncio.create_subprocess_exec(
                             *self.command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
@@ -156,7 +166,7 @@ class PiAPI(ModelAPI):
         try:
             for attempt in range(6):
                 try:
-                    native = await self._exchange(request, config.timeout or 300)
+                    native = await self._exchange(request, config.timeout)  # no invented per-turn deadline
                     break
                 except RetryableCompletionError:
                     if attempt == 5:

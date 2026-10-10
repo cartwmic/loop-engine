@@ -5,7 +5,8 @@ import re
 import shutil
 
 from evalcore.cli import read_settings
-from evalcore.continuation import load_run, settings_from_recorded
+from evalcore.continuation import (load_run, settings_from_recorded, record_digest,
+                                   validate_execution_exception)
 from evalcore.report import utc_timestamp
 from evalcore.runner import run_campaign
 from evalcore.settings import Assignment, CampaignSettings, matched_assignment
@@ -97,11 +98,28 @@ def merge_captures(args):
     if destination.exists():
         raise FileExistsError("merge output directory already exists")
     records, captures = {}, {}
+    exception_path = getattr(args, "execution_exception", None)
+    authorization = json.loads(exception_path.read_text()) if exception_path else None
+    original_settings = None
+    original_recorded_settings = None
+    source_receipts = []
     for source in args.src_dirs:
         summary, root = load_run(source)
         original = settings_from_recorded(summary["settings"])
-        if scoring_settings(original) != scoring_settings(settings):
+        if authorization:
+            validate_execution_exception(authorization, original, settings)
+            if original_settings is not None and scoring_settings(original_settings) != scoring_settings(original):
+                raise ValueError("source execution settings differ")
+            original_settings = original
+            if original_recorded_settings is None:
+                original_recorded_settings = summary["settings"]
+            if summary["matched_assignment"] != list(expected.values()):
+                raise ValueError("source matched assignment differs")
+        elif scoring_settings(original) != scoring_settings(settings):
             raise ValueError("merge requires matching scoring settings")
+        source_receipts.append({"path": str(Path(source).resolve()),
+                                "settings": summary["settings"],
+                                "records": {d["sample_id"]: record_digest(d) for d in summary["trials"]}})
         for data in summary["trials"]:
             sample = data["sample_id"]
             if sample in records:
@@ -114,6 +132,14 @@ def merge_captures(args):
             archive, meta = read_capture(capture)
             if not archive.is_file() or meta["assignment"] != expected[sample]:
                 raise ValueError("merge snapshot missing or assignment mismatch")
+            if authorization:
+                if scoring_settings(settings_from_recorded(meta["settings"])) != scoring_settings(original):
+                    raise ValueError("capture settings differ from its source")
+                if meta.get("record") != data:
+                    raise ValueError("source and capture scored records differ")
+                if data["outcome"] != "success" and not (
+                        data["outcome"] == "failure" and data["reason"] != "unclassified_error"):
+                    raise ValueError("only clean scored records may be carried in this continuation")
             records[sample], captures[sample] = data, capture
     if not records:
         raise ValueError("no scored captures to merge")
@@ -126,11 +152,24 @@ def merge_captures(args):
             shutil.copytree(capture, copied)
             copied.chmod(0o700)
             meta = json.loads((copied / "meta.json").read_text())
-            meta.update(settings=settings.recorded(), record=records[sample],
-                        usage_by_role=records[sample]["usage_by_role"], source_capture=str(capture.resolve()))
-            (copied / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+            if not authorization:
+                meta.update(settings=settings.recorded(), record=records[sample],
+                            usage_by_role=records[sample]["usage_by_role"], source_capture=str(capture.resolve()))
+                (copied / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+            # Exception merges preserve original metadata and records byte-for-byte.
         manifest = {"settings": settings.recorded(), "matched_assignment": list(expected.values()),
                     "sources": {}, "merged_from": [str(p.resolve()) for p in args.src_dirs]}
+        if authorization:
+            manifest["execution_continuation"] = {
+                "authorization": authorization,
+                "original_settings": original_recorded_settings,
+                "new_settings": settings.recorded(),
+                "matched_assignment": list(expected.values()),
+                "carried_record_sha256": {k: record_digest(v) for k, v in records.items()},
+                "new_assignment_ids": [k for k in expected if k not in records],
+                "sources": source_receipts,
+                "comparison_note": "Historical trials retain their original outer limits. Only new assignments have hard and idle limits disabled; this is not a uniform-limit comparison.",
+            }
         (destination / "run.json").write_text(json.dumps(manifest, indent=2) + "\n")
         (destination / "records.json").write_text(json.dumps({**manifest, "trials": list(records.values())}, indent=2) + "\n")
     except BaseException:
@@ -166,6 +205,7 @@ def register_subcommands(subparsers):
     parser.add_argument("out_dir", type=Path)
     parser.add_argument("src_dirs", type=Path, nargs="+")
     parser.add_argument("--settings", required=True)
+    parser.add_argument("--execution-exception", type=Path, help="explicit owner-authorized disabling of outer deadlines; preserves original capture settings")
     parser.set_defaults(handler=merge_captures)
     parser = subparsers.add_parser("rescore", help="score private workspace captures with the current harness")
     parser.add_argument("path", type=Path, help="capture run directory or bare /workspace tar")

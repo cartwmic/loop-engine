@@ -4,7 +4,7 @@
 import { pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, mkdirSync, chmodSync } from "node:fs";
+import { appendFileSync, mkdirSync, chmodSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 export function redactProviderError(message) {
@@ -104,8 +104,18 @@ export function toolChoiceForPi(choice, model) {
 async function main() {
   const sdkUrl = pathToFileURL(process.argv[2]);
   const { createAgentSession, SessionManager, ModelRuntime, getAgentDir } = await import(sdkUrl.href);
-  const { isRetryableAssistantError } = await import(new URL(
-    "node_modules/@earendil-works/pi-ai/dist/utils/retry.js", new URL("../", sdkUrl)).href);
+  // npm may hoist pi-ai next to pi-coding-agent (managed Pi) rather than
+  // nest it in the SDK package (global npm). Resolve the actual installed copy.
+  let directory = new URL("../", sdkUrl);
+  let retryUrl;
+  for (;;) {
+    const candidate = new URL("node_modules/@earendil-works/pi-ai/dist/utils/retry.js", directory);
+    if (existsSync(fileURLToPath(candidate))) { retryUrl = candidate; break; }
+    const parent = new URL("../", directory);
+    if (parent.href === directory.href) throw new Error("Installed Pi retry module missing");
+    directory = parent;
+  }
+  const { isRetryableAssistantError } = await import(retryUrl.href);
   // The public session factory loads normal extensions and applies their provider
   // registrations to ModelRuntime. Never prompt this session or bind lifecycle
   // hooks: this is NOT an agent run and must not start MCP/tools/background work.

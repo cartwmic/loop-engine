@@ -354,6 +354,8 @@ class SoftwareChangeTarget:
                                   sandbox=env, started=started, instance=instance)
 
         models = {role: get_model(role=role) for role in context.combination.role_models()}
+        driver_started = False
+        driver_finished = False
         try:
             async with anyio.create_task_group() as group:
                 group.start_soon(service)
@@ -361,7 +363,8 @@ class SoftwareChangeTarget:
                 try:
                     async with sandbox_agent_bridge(model_aliases=models, port=13131):
                         # Leave the existing hard-limit margin for capture/scoring.
-                        driver_limit = max(60, context.settings.hard_limit_seconds - DRIVER_LIMIT_MARGIN_SECONDS)
+                        driver_limit = (max(60, context.settings.hard_limit_seconds - DRIVER_LIMIT_MARGIN_SECONDS)
+                                        if context.settings.hard_limit_seconds is not None else None)
                         driver_done = anyio.Event()
 
                         async def watch_progress():
@@ -396,8 +399,10 @@ class SoftwareChangeTarget:
                                     return
 
                         async with anyio.create_task_group() as drivers:
-                            drivers.start_soon(watch_progress)
+                            if context.settings.idle_limit_seconds is not None:
+                                drivers.start_soon(watch_progress)
                             try:
+                                driver_started = True
                                 result = await env.exec(["python3", "/opt/sc-evals/driver_process.py",
                                                         *options.get("driver_command", ["sc-driver"]), prompt],
                                                         cwd="/workspace/public/repo",
@@ -407,6 +412,7 @@ class SoftwareChangeTarget:
                                                              "SC_SCRIPTED_INFRA": "1" if inject_infrastructure else "0",
                                                              "SC_SCRIPTED_TERMINATE": "1" if options.get("scripted_terminated") else "0"},
                                                         timeout=driver_limit)
+                                driver_finished = True
                             except TimeoutError:
                                 result = None
                                 evidence["driver_timed_out"] = True
@@ -431,6 +437,12 @@ class SoftwareChangeTarget:
         finally:
             # Capture even a bridge/driver crash, before interpreting engine output.
             with anyio.CancelScope(shield=True):
+                if driver_started and not driver_finished:
+                    # No outer deadline does not mean ignoring explicit cancellation.
+                    await env.exec(["python3", "-c",
+                                    "import os,signal; from pathlib import Path;"
+                                    "\ntry: os.killpg(int(Path('/workspace/trial/driver.pid').read_text()), signal.SIGKILL)"
+                                    "\nexcept (ProcessLookupError,FileNotFoundError): pass"], timeout=30)
                 reason = provider_route_failure()
                 if reason:
                     evidence["provider_route_failure"] = reason
@@ -532,6 +544,8 @@ class SoftwareChangeTarget:
                 "usage_by_role": {role: usage.model_dump() for role, usage in sample_role_usage().items()},
                 "wall_seconds": time.monotonic() - trial.evidence["started"],
                 "source_capture": str(getattr(self, "sources", {}).get(context.assignment.sample_id, ""))}
+        if getattr(self, "execution_continuation", None):
+            meta["execution_continuation"] = self.execution_continuation
         (capture / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
 
     async def score(self, state, execution, context):

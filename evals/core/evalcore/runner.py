@@ -1,5 +1,6 @@
 """One Inspect sample per matched (combination, case, trial)."""
 import asyncio
+from contextlib import nullcontext
 import importlib.metadata
 import platform
 import subprocess
@@ -42,7 +43,9 @@ def trial_solver(target: Target, contexts: dict[str, TrialContext], records: dic
         execution = None
         try:
             # Include scoring in the same limit. Target subprocesses must also honour it.
-            async with asyncio.timeout(context.settings.hard_limit_seconds):
+            deadline = (asyncio.timeout(context.settings.hard_limit_seconds)
+                        if context.settings.hard_limit_seconds is not None else nullcontext())
+            async with deadline:
                 execution = await target.run_trial(state, context)
                 record.terminal = execution.terminal
                 scored = await target.score(state, execution, context)
@@ -98,6 +101,8 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
         import json
         manifest = {"settings": settings.recorded(), "matched_assignment": [a.model_dump() for a in assignments],
                     "sources": {k: str(v) for k, v in getattr(target, "sources", {}).items()}}
+        if getattr(target, "execution_continuation", None):
+            manifest["execution_continuation"] = target.execution_continuation
         (target.run_directory / "run.json").write_text(json.dumps(manifest, indent=2) + "\n")
     records: dict[str, TrialRecord] = {r.sample_id: r for r in carried_records}
     carried_ids = set(records)
@@ -105,15 +110,15 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
     # Resolve all model providers before executing any trial. No generation here.
     for combo in settings.resolved_combinations():
         model_ids = {**combo.role_models(), **dict(zip(OVERHEAD_ROLES, (settings.simulator_model, settings.judge_model)))}
+        contexts = {a.sample_id: TrialContext(settings, a, case_lookup[a.case_id], combo)
+                    for a in assignments if a.combination_id == combo.id and a.sample_id not in carried_ids}
+        if not contexts:
+            continue
         role_models = {role: get_model(
             model_id, role=role, memoize=False,
             config=GenerateConfig(**settings.model_generation[model_id].model_dump())
             if model_id in settings.model_generation else GenerateConfig(),
             **settings.model_args.get(model_id, {})) for role, model_id in model_ids.items()}
-        contexts = {a.sample_id: TrialContext(settings, a, case_lookup[a.case_id], combo)
-                    for a in assignments if a.combination_id == combo.id and a.sample_id not in carried_ids}
-        if not contexts:
-            continue
         samples = []
         for context in contexts.values():
             sample = target.prepare_sample(context)
@@ -208,7 +213,10 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
         "usage_basis": "captured host meta.json (Inspect role_usage); replay uses current judge usage; external snapshots have unknown original usage",
         "operation": getattr(target, "operation", "campaign"),
         "resumed_trials": [r.recorded() for r in ordered_records if r.resumed],
-        "carried_trials": [{"sample_id": r.sample_id, "from_run": r.carried_from} for r in ordered_records if r.carried_from],
+        "carried_trials": [{"sample_id": r.sample_id,
+                           "from_run": str(getattr(target, "carried_sources", {}).get(r.sample_id, r.carried_from))}
+                          for r in ordered_records if r.sample_id in carried_ids],
+        "execution_continuation": getattr(target, "execution_continuation", None),
     }
     if hasattr(target, "run_directory"):
         import json

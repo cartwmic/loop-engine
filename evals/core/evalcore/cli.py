@@ -38,6 +38,9 @@ def campaign(args):
         value = getattr(args, key)
         if value is not None:
             data[key] = value
+    if args.no_outer_deadlines:
+        data["hard_limit_seconds"] = None
+        data["idle_limit_seconds"] = None
     if args.model:
         data["models"] = args.model
         data.pop("combinations", None)
@@ -83,6 +86,7 @@ def build_parser(plugins: list[str] = ()) -> argparse.ArgumentParser:
     cmd.add_argument("--judge-model")
     cmd.add_argument("--idle-limit-seconds", type=int)
     cmd.add_argument("--hard-limit-seconds", type=int)
+    cmd.add_argument("--no-outer-deadlines", action="store_true", help="disable both hard and idle trial deadlines (continuation changes require an explicit exception)")
     cmd.add_argument("--provider-config", action="append", default=[], help="host-only resolved provider config path to protect from export")
     cmd.set_defaults(handler=campaign)
     # Targets register case-check, image-check, ac5-demo, calibrate, check-results

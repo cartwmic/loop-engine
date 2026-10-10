@@ -48,8 +48,9 @@ class CampaignSettings(StrictModel):
     cases_path: Path
     simulator_model: str = Field(pattern=r"^[^/\s]+/\S+$")
     judge_model: str = Field(pattern=r"^[^/\s]+/\S+$")
-    idle_limit_seconds: int = Field(default=1800, ge=1)
-    hard_limit_seconds: int = Field(default=28800, ge=1)
+    # None explicitly disables the corresponding outer trial deadline.
+    idle_limit_seconds: int | None = Field(default=1800, ge=1)
+    hard_limit_seconds: int | None = Field(default=28800, ge=1)
     prices: dict[str, Price] = Field(default_factory=dict)
     # Per-model Inspect provider arguments, e.g. {"openrouter/x" = {strict_tools = false}}.
     model_args: dict[str, dict] = Field(default_factory=dict)
