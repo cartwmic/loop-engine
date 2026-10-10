@@ -1467,6 +1467,49 @@ def _file_digest(path):
     return hashlib.sha256(path.read_bytes() if path.exists() else b'').hexdigest()
 
 
+def _interrupt_reclaim_apply(engine, database, run_id):
+    """Observe a real WAL apply in progress, then require signal-caused termination."""
+    import signal
+    holder = sqlite3.connect(database, timeout=30, isolation_level=None)
+    observer = sqlite3.connect(database, timeout=1, isolation_level=None)
+    victim = None
+    try:
+        assert holder.execute('PRAGMA journal_mode').fetchone() == ('wal',)
+        assert holder.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0] == 0
+        main_before = database.stat().st_size
+        holder.execute('BEGIN')
+        holder.execute('SELECT count(*) FROM work_slot_invocations').fetchone()
+        pending = "SELECT count(*) FROM work_slot_invocations WHERE run_id=? AND inner_workers_json!='[]'"
+        assert observer.execute(pending, (run_id,)).fetchone()[0] > 0
+        victim = subprocess.Popen([str(engine), '--database', str(database), '--json', 'reclaim', '--apply'],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # The pinned reader prevents successful checkpoint/shrink. Wait for visible
+        # committed clearing, not elapsed-time guessing or mere process existence.
+        deadline = time.monotonic() + 4
+        while True:
+            assert victim.poll() is None, 'apply exited before an interrupted write was observed'
+            if observer.execute(pending, (run_id,)).fetchone()[0] == 0:
+                break
+            assert time.monotonic() < deadline, 'no committed apply write observed'
+            time.sleep(0.01)
+        wal_bytes = Path(str(database)+'-wal').stat().st_size
+        assert wal_bytes > 0 and database.stat().st_size == main_before
+        assert victim.poll() is None, 'apply must still be in progress before SIGKILL'
+        victim.send_signal(signal.SIGKILL)
+        status = victim.wait(timeout=10)
+        assert status == -signal.SIGKILL, f'apply was not interrupted by SIGKILL: {status}'
+        return {'stage': 'committed clearing, pinned checkpoint unfinished',
+                'wal_bytes': wal_bytes, 'main_file_unchanged': True, 'exit_code': status}
+    finally:
+        if victim is not None and victim.poll() is None:
+            victim.kill()
+            victim.wait(timeout=10)
+        observer.close()
+        if holder.in_transaction:
+            holder.execute('ROLLBACK')
+        holder.close()
+
+
 # bookends:LE-185 — explicit reclaim previews without writing, clears only finished runs' legacy payloads, keeps cleaned runs listed and showable, leaves active runs advancing, and shrinks the catalog file.
 def reclaim_legacy_catalog(args, root, retained_work):
     import shutil, signal
@@ -1599,20 +1642,22 @@ def reclaim_legacy_catalog(args, root, retained_work):
     assert any(row[2] != '[]' for row in _invocation_columns(database, 'terminated-run')), 'busy reclaim must not clear rows'
     print('external-work reclaim reports a held catalog as busy passed')
 
-    # Killed mid-apply: the catalog stays consistent and usable, and reclaim can simply be run again.
+    # Interrupt an observed real apply after clearing commits, before pinned WAL shrink finishes.
     _seed_legacy_invocations(database, 'terminated-run', 6, 2_000_000)
-    victim = subprocess.Popen([args.engine, '--database', str(database), '--json', 'reclaim', '--apply'],
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(0.3)
-    victim.send_signal(signal.SIGKILL)
-    victim.wait()
+    active_before = _invocation_columns(database, 'active-run')
+    interruption = _interrupt_reclaim_apply(args.engine, database, 'terminated-run')
+    (work / 'interruption.json').write_text(json.dumps(interruption, indent=2))
     assert sqlite3.connect(database).execute('PRAGMA integrity_check').fetchone() == ('ok',)
+    assert _invocation_columns(database, 'active-run') == active_before
     assert {finished, 'terminated-run', 'active-run'} <= {run['id'] for run in call('list')['result']}
     assert call('show', '--view', 'full', 'active-run')['status'] == 'completed'
+    assert call('event', 'active-run', 'revise')['status'] == 'completed'
+    call('show', 'active-run', '--view', 'action')
+    assert call('event', 'active-run', 'intent-ready')['status'] == 'completed'
     rerun = call('reclaim', '--apply')
     assert rerun['status'] == 'completed', rerun
     assert all(row[2] == '[]' for row in _invocation_columns(database, 'terminated-run'))
-    print('external-work reclaim interrupted by SIGKILL leaves a consistent catalog passed')
+    print('external-work reclaim SIGKILL interrupts an observed apply; catalog and active progression survive passed')
 
     # Storage runs out while the catalog is rewritten. A POSIX file-size limit makes the real SQLite write path
     # report full storage deterministically; filling an actual volume needs root or platform disk images.
