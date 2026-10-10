@@ -213,14 +213,15 @@ def self_test():
 def run(args, profile_source, root, *, configure=None, exercise=None, judgment_reason=None,
         stop_at=None, capture=False, command_log=None):
     engine, provider = Path(args.engine).resolve(), Path(args.provider).resolve()
-    log = command_log or CommandLog(Path(root) / 'commands')
+    work = Path(tempfile.mkdtemp(prefix='software-external-', dir=root))
+    # Callers may run several traversals under one root; an unshared log is owned by this traversal.
+    log = command_log or CommandLog(work / 'commands')
     invoke = log.execute
     def raw(argv, *, cwd=None, check=True):
         result = invoke(argv, cwd=cwd, raw=True)
         if check and result.returncode:
             raise RuntimeError(f'Command failed: {argv}: {result.stderr}')
         return result
-    work = Path(tempfile.mkdtemp(prefix='software-external-', dir=root))
     artifacts = work / 'artifacts'
     artifacts.mkdir()
     repository = work / 'repository'

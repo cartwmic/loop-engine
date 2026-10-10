@@ -195,7 +195,21 @@ def preparation_for(root: Path, spec: dict[str, str]) -> tuple[Path, dict[str, A
     return candidates[0]
 
 
+NARRATIVE_PREDECESSORS = {
+    # Mirrors prepare-calibration-input.py required_narrative_predecessors; the
+    # frozen intent is supplied as its own "frozen-intent" record, not a predecessor.
+    "design": (),
+    "plan": ("design-good",),
+    "validation": ("design-good", "plan-good", "implementation-report-good"),
+}
+
+
 def required_predecessors(gate: str, fixture_id: str) -> tuple[str, ...]:
+    if "-narrative-" in gate:
+        phase = gate.split("-narrative-", 1)[0]
+        if phase not in NARRATIVE_PREDECESSORS:
+            fail(f"unsupported narrative calibration gate: {gate}")
+        return NARRATIVE_PREDECESSORS[phase]
     family = gate.split("-", 1)[0]
     predecessors = {
         "intent": (),

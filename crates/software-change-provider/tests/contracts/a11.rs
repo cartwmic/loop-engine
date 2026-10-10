@@ -1526,8 +1526,11 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
                 "parent passing fixture must also be honestly attested or pending on the counterpart");
         }
     }
+    // 598 released slot-1 (126a4fb) keys plus 36 narrative challenge keys:
+    // 3 narrative-adversarial gates x 3 axes x (minimal aggregate + standard
+    // aggregate + high-rigor individual and aggregate).
     assert_eq!(
-        counterpart_keys, 738,
+        counterpart_keys, 634,
         "all historical and current ordinary/challenge counterpart keys"
     );
 }
@@ -3288,7 +3291,19 @@ fn validate_fresh_return(entry: &Map<String, Value>) -> Result<(), String> {
         .get("result_ref")
         .and_then(Value::as_str)
         .ok_or("fresh current judgment requires result_ref to actual retained raw return")?;
-    validate_fresh_selected(entry, &retained_return(reference)?)
+    let mut selected = retained_return(reference)?;
+    // Released slot-1 returns (returned-v15.json) are keyed by the exact row key
+    // instead of carrying a row_key field; the selector itself is then the identity.
+    if selected.get("row_key").is_none() {
+        let (_, pointer) = reference.split_once('#').unwrap_or((reference, ""));
+        let (parent, last) = pointer.rsplit_once('/').ok_or("return selector missing")?;
+        let token = last.replace("~1", "/").replace("~0", "~");
+        if parent != "/returns" {
+            return Err("actual fresh return row identity mismatch".into());
+        }
+        selected["row_key"] = Value::String(token);
+    }
+    validate_fresh_selected(entry, &selected)
 }
 
 fn validate_fresh_selected(entry: &Map<String, Value>, selected: &Value) -> Result<(), String> {
