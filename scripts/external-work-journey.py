@@ -1651,9 +1651,14 @@ def reclaim_legacy_catalog(args, root, retained_work):
     assert _invocation_columns(database, 'active-run') == active_before
     assert {finished, 'terminated-run', 'active-run'} <= {run['id'] for run in call('list')['result']}
     assert call('show', '--view', 'full', 'active-run')['status'] == 'completed'
-    assert call('event', 'active-run', 'revise')['status'] == 'completed'
-    call('show', 'active-run', '--view', 'action')
-    assert call('event', 'active-run', 'intent-ready')['status'] == 'completed'
+    # Advance through whatever normal transition the active run's profile offers now
+    # (review-enabled and review-free profiles reach different states before this point).
+    observed = call('show', 'active-run', '--view', 'action')['result']
+    offered = observed['requestable_events']
+    step = next((e for e in offered if e['kind'] == 'check-free'), None) or next(e for e in offered if e['kind'] == 'checked')
+    advanced = call('event', 'active-run', step['event'])
+    assert advanced['status'] == 'completed', advanced
+    assert advanced['result']['run']['current_state'] == step['target'], (observed['current_state'], step, advanced)
     rerun = call('reclaim', '--apply')
     assert rerun['status'] == 'completed', rerun
     assert all(row[2] == '[]' for row in _invocation_columns(database, 'terminated-run'))
@@ -1665,7 +1670,10 @@ def reclaim_legacy_catalog(args, root, retained_work):
     _seed_legacy_invocations(database, 'terminated-run', 1, 50_000)
     call('show', 'active-run', '--view', 'action')
     sqlite3.connect(database).execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
-    limit = database.stat().st_size + 2048
+    # VACUUM must rewrite at least half the remaining catalog, so a half-size cap always
+    # trips during the rewrite. A cap just above the current size could be satisfied when
+    # cleared bytes outweigh WAL frame overhead, letting apply succeed with no storage failure.
+    limit = database.stat().st_size // 2
     tmp = work / 'tmp'
     tmp.mkdir()
     def constrain():
