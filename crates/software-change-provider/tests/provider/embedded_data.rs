@@ -58,7 +58,19 @@ fn dump(destination: &Path) -> std::process::Output {
     // A relocated executable and unrelated cwd must not load checkout data.
     let binary = destination.parent().unwrap().join("software-change");
     if !binary.exists() {
-        fs::copy(workspace_integration::binary("software-change"), &binary).unwrap();
+        // Keep the destination writer out of the multithreaded test parent's FD table.
+        let mut copier = Command::new("/bin/cp");
+        copier
+            .arg(workspace_integration::binary("software-change"))
+            .arg(&binary);
+        let output = super::bounded_process::run(&mut copier, "relocated executable copy")
+            .expect("relocated executable copy should complete");
+        assert!(
+            output.status.success(),
+            "relocated executable copy failed: {:?}; stderr: {:?}",
+            output.status,
+            output.stderr
+        );
     }
     let mut command = Command::new(binary);
     command
