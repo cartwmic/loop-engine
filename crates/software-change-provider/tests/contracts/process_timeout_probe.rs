@@ -9,7 +9,8 @@ fn process_timeout_probe() {
             let mut command = Command::new("python3");
             command.args([
                 "-c",
-                "import subprocess, time; subprocess.Popen(['sleep', '60']); time.sleep(60)",
+                // Optional PID file lets an external proof wrapper confirm the spawned descendant exits.
+                "import os, subprocess, time; child = subprocess.Popen(['sleep', '60']); path = os.environ.get('LOOP_ENGINE_PROCESS_TIMEOUT_PROBE_PID_FILE'); path and open(path, 'w').write(str(child.pid)); time.sleep(60)",
             ]);
             super::bounded_process::run_with_deadline(
                 &mut command,

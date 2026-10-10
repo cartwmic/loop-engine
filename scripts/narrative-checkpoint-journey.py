@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Change-specific mechanical proof pending LE-185 reconciliation (not a live citation).
+"""Public-path mechanical proof for optional reviewed narratives and owner checkpoints.
 
 SCRIPTED DUMMY BACKENDS supply all reviews and owner decisions. They establish no
 semantic review or real human approval. --self-test checks collection/interfaces
 only. Real proof requires explicit built binaries and reaches end without override.
 """
+# bookends:LE-185 — frozen default-off options, reviewed fresh narratives, current-subject owner approval, target-specific rejection recovery and verbatim decision history.
 import argparse
 import copy
 import hashlib
@@ -681,7 +682,8 @@ def main():
     args = parser.parse_args()
     if sys.flags.optimize:
         parser.error('Optimized Python disables proof assertions; run without -O')
-    if args.self_test:
+    # Bare invocation is the CI/baseline collection form, matching the other journeys.
+    if args.self_test or len(sys.argv) == 1:
         self_test()
         return
     if not args.engine or not args.provider:
