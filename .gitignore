@@ -6,3 +6,5 @@ __pycache__/
 
 .loop-engine/
 fan-out-adhoc/
+
+# Temporary unrelated comment for the introduced-range negative proof.
