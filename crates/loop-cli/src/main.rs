@@ -1,4 +1,4 @@
-fn main() {
+fn main(){
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(code) = loop_cli::monitor::cli(&args) {
         std::process::exit(code);
