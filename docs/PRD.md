@@ -1095,6 +1095,10 @@ v0.1 is complete when the following are demonstrated end to end.
 
 ### 14.1 Workflow Authority
 
+### LE-1: A caller cannot directly set current state.
+- Status: live
+- Coverage: e2e/journey
+
 ### LE-2: A structurally uninterpretable workflow definition cannot create a run, while structurally valid unusual topology such as cycles, unreachable states, non-final sinks, or absence of a final state is permitted.
 - Status: live
 - Coverage: e2e/journey
