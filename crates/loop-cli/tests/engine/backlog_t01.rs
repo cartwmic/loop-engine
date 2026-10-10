@@ -1292,7 +1292,7 @@ fn external_work_retired_commands_are_unknown_public_binary() {
     }
 }
 
-// bookends:LE-1 bookends:LE-4 bookends:LE-5 bookends:LE-10 — only available stored events can mutate; fresh processes recover their committed state.
+// bookends:LE-4 bookends:LE-5 bookends:LE-10 — only available stored events can mutate; fresh processes recover their committed state.
 // bookends:LE-16 bookends:LE-17 bookends:LE-18 bookends:LE-19 bookends:LE-22 — exact opaque input/context survives and reaches evaluate in append order.
 // bookends:LE-20 bookends:LE-21 bookends:LE-25 bookends:LE-28 bookends:LE-35 — provider-free handoff retains external identity and stable semantic history, not evaluation input history.
 // bookends:LE-71 bookends:LE-73 bookends:LE-74 bookends:LE-98 — short-lived describe/evaluate processes suffice; status/history/list do not arm mutation.
