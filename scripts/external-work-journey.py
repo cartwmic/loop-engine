@@ -1286,7 +1286,7 @@ def retained_view(call, run_id):
     return entries
 
 
-# bookends:LE-184 — research and policy-document runs retain each owning phase's exact artifact bytes, readable after the files are deleted.
+# bookends:LE-186 — research and policy-document runs retain each owning phase's exact artifact bytes, readable after the files are deleted.
 def retention_provider_runs(args, root):
     import shutil
     from external_work_driver import engine_call
@@ -1324,7 +1324,7 @@ def _empty_review_policies(profile, repository, artifacts):
         profile['review_policies'][gate] = []
 
 
-# bookends:LE-184 — software-change retains only phase-exit bytes: drafts excluded, revise-loop re-exits appended, unchanged re-exits stored once and still readable after deletion.
+# bookends:LE-186 — software-change retains only phase-exit bytes: drafts excluded, revise-loop re-exits appended, unchanged re-exits stored once and still readable after deletion.
 def retention_software_revisions(args, root):
     import shutil
     visits = {'implement': 0}
@@ -1379,7 +1379,7 @@ def retention_software_revisions(args, root):
     return work
 
 
-# bookends:LE-184 — owner overrides retain what the run leaves with, visibly marked, and record a missing artifact as absent.
+# bookends:LE-186 — owner overrides retain what the run leaves with, visibly marked, and record a missing artifact as absent.
 def retention_software_overrides(args, root):
     captured = {}
     def override(ctx, event, reason):
@@ -1417,7 +1417,7 @@ def retention_software_overrides(args, root):
     print('external-work software-change override retention and absent artifact passed')
 
 
-# bookends:LE-184 — a shipped minimal profile with review states retains each phase exactly once at its real exit.
+# bookends:LE-186 — a shipped minimal profile with review states retains each phase exactly once at its real exit.
 def retention_minimal_profile(args, work):
     from external_work_driver import engine_call
     def call(*argv):
@@ -1510,7 +1510,7 @@ def _interrupt_reclaim_apply(engine, database, run_id):
         holder.close()
 
 
-# bookends:LE-185 — explicit reclaim previews without writing, clears only finished runs' legacy payloads, keeps cleaned runs listed and showable, leaves active runs advancing, and shrinks the catalog file.
+# bookends:LE-187 — explicit reclaim previews without writing, clears only finished runs' legacy payloads, keeps cleaned runs listed and showable, leaves active runs advancing, and shrinks the catalog file.
 def reclaim_legacy_catalog(args, root, retained_work):
     import shutil, signal
     from external_work_driver import engine_call
@@ -2598,7 +2598,7 @@ def intent_sufficient_comparison(args, root):
                                  ROOT / 'crates/software-change-provider/data/configs/minimal.json',root,configure=configure,exercise=hook)
 
 
-# bookends:LE-184 — observe every software artifact immediately before/after its required adversarial approval exit, including edits made during review.
+# bookends:LE-186 — observe every software artifact immediately before/after its required adversarial approval exit, including edits made during review.
 def retention_software_approval_exits(args, root):
     exits = {
         'intent-adversarial-review': ('approved', 'design', ['intent.json']),
