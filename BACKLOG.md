@@ -2,7 +2,7 @@
 
 Wanted work and concrete leads. Completed work belongs in Git history. Items are grouped by topic, not implementation priority. Inclusion does not authorize implementation or establish requirements; [docs/PRD.md](docs/PRD.md) owns the engine contract.
 
-Reconciled against the September 28 workflow delivery and October 1 review-recovery delivery through `a05dee75`. Removing delivered entries does not relabel `dogfood-review-teething-20261001` as ordinary GREEN: it completed with three scoped overrides for six original pre-lint proof fingerprints; its refusals and original evidence remain history. No fresh whole-matrix, hosted delivery or installed deployment is implied.
+Reconciled against released v0.25.0 (`144a40c072755893ebba97fff17842a50ffc252f`). Delivered external-work capabilities under LE-178–183 are no longer future work. Open issues retain concrete defects; related issue references below connect this backlog to them without making inclusion an implementation authorization. Removing delivered entries does not relabel `dogfood-review-teething-20261001` as ordinary GREEN: it completed with three scoped overrides for six original pre-lint proof fingerprints; its refusals and original evidence remain history. No fresh whole-matrix, hosted delivery or installed deployment is implied.
 
 ## PRD work
 
@@ -36,7 +36,7 @@ Observations marked as separate 0.22.0 dogfooding below came from another machin
 
 Rethink the research workflow so the owner will actually use and trust it: investigate a query as thoroughly as reasonably practical, then synthesize findings that satisfy the research question and intent.
 
-Establish what reasonable coverage and a satisfactory synthesis mean with the owner, and demonstrate them on representative real queries. Make material gaps and uncertainty visible; workflow completion alone does not establish research quality. The current bound-authoring gap is a limitation to consider, not the definition of this work. Detailed workflow design remains future work.
+Establish what reasonable coverage and a satisfactory synthesis mean with the owner, and demonstrate them on representative real queries. Make material gaps and uncertainty visible; workflow completion alone does not establish research quality. Assess current external authoring and evidence handoffs as part of that outcome; retired bound-authoring machinery is not the definition of this work. Detailed workflow design remains future work.
 
 ### Evaluate calibration and attestation needs across providers
 
@@ -44,69 +44,45 @@ Investigate whether and how providers beyond software-change merit calibration a
 
 Use software-change's experience to assess how representative acceptable and defective examples can reveal missed problems and false alarms. Establish who can justify the expected judgments, what is provider-specific, what could be shared, and the maintenance cost. Deliver an evidence-backed recommendation. Do not assume every provider needs the full software-change calibration process or that a shared framework must be built.
 
-### Keep work visibility useful after externalizing execution
+### Make human status and read output useful on active runs
 
-Preserve useful on-demand state, meaningful owner updates, evidence locators and explicit uncertainty as execution moves to the driver/harness. The existing visibility lanes and proactive-update guidance are delivered; remaining human readability and duplicated read output are covered below.
+The external-work release removed the old human `status details` JSON tail and retired engine-owned invocation/Dagu execution. Earlier observations of enormous fan-out packets, live Dagu collection and wrapped status blobs remain historical leads, not established defects in v0.25.0. Do not rebuild retired execution monitoring to address them.
 
-Do not add an external-work registry, automatic agent supervision or mandatory status-note lifecycle. Where an external driver provides progress or acceptance, distinguish it from engine-observed durable state; absence of a note is not proof that work finished. Execution-specific ownership/Dagu follow-ups cease to apply only when their machinery is actually retired. Preserve historical captures and do not relabel a retry as a demonstrated fix.
+Measure the current supported status/action/full, history, list and instruction/guidance surfaces on a representative messy active run. Establish what the owner needs at a glance: current work, next action, blocker, evidence location, freshness and uncertainty. Distinguish external driver reports from engine-observed durable facts; an absent progress note is not proof of completion.
 
-### Make human status output digestible on active runs
+Find remaining duplication and byte cost using before/after measurements. Keep complete information accessible through authoritative records and locators, preserve non-arming status and existing observation/output contracts, and fix demonstrated readability problems. Do not assume that earlier multi-gigabyte measurements still describe the current path or add a parallel monitoring system.
 
-Owner-observed pain (2026-09-21, second machine, brand-new active run): human `show --view status` renders lines and lines of wrapped text instead of the ~8-line digest demonstrated on the completed run-1789764810283193000-1-10500. Root cause, read from `render_show_compact` (`crates/loop-cli/src/lib.rs`): the human status output is the 8 digest lines **plus the entire status JSON packet appended inline** as one single-line blob (`status details ...`). On a finished run that packet is ~2 KB; on an active run it can carry current-state latest evaluations with feedback text, visibility lanes with reason prose, active invocation ownership/selection objects, and requestable-event details — so the terminal can wrap one mega-line into pages and the digest scrolls away unseen. Related: `--view full --json` measured 9 GB on the completed run (~260k duplicated assignment/ledger-adjacent records); that view is machine-only and must never reach a terminal. Human status attempts invocation-progress collection when an invocation is selected; measure when this triggers live Dagu work and its cost.
-
-Possible directions (investigate, do not assume): drop or cap the `status details` tail in human mode since locators already point at the detail; gate it behind a flag; add a hard-capped digest view; skip the Dagu collection unless progress is requested; determine whether the 260k-record fan-out in full output is a cartesian duplication bug in change-report assembly or legitimate history rendered raw.
-
-Directive: investigate first for the correct shape of human status — what an owner needs at a glance (current work, next action, blocker, evidence location, freshness, uncertainty) versus what belongs behind locators — against a live messy mid-implementation run, not a finished one. Fix what fails that shape; do not add a parallel monitoring system. Any CLI change keeps status non-arming and preserves the applicable show output and exit-status contracts.
-
-Owner-observed compliance signal (2026-09-22, other runs): agents pipe `show` output to null between transitions instead of reading it. Note the sharp edge: arming happens server-side, so `show ... > /dev/null` satisfies the observation interlock's letter (visit armed, mutation allowed) while defeating its purpose (acting informed). Output cost may contribute to this behavior, but the cause is unconfirmed. Investigate alongside duplication and byte cost: quantify what an agent needs from action/full per transition; consider machine-first shapes (digest plus locators by default, bulk on demand); and determine whether interlock compliance should mean anything beyond a server-side arm. Address the cause rather than assuming a punitive gate will make agents read the output.
-
-Extend the investigation to every read primitive agents actually consume — show views (status/action/full, human and JSON), history, invocation-progress, monitor packets, list, and the instruction/guidance surfaces — and audit for duplicated information across them: the same evaluation text, lane prose, ledger content, or invocation detail repeated in multiple outputs or repeated per record. Machine consumers stay complete (agents read this output; nothing they need is removed), but each fact should have one authoritative home with locators elsewhere, so agents stop paying context-window rent on the same bytes N times. Demonstrate byte counts per primitive on a live run before and after; do not merely assert efficiency. A separate 0.22.0 run reported 211 context records / 18.8 MB, a 47 MB fan-out spec and `show` taking over 100 seconds; repeated full-intent steering and per-worker context copying are leads to measure, not established causes here.
+The earlier observation that drivers discard `show` output remains a lead to understand, not proof that another punitive gate is needed. Address actual reading cost and instruction quality without claiming that a server-side observation proves an agent understood the result. External proof wait/deadline policy is tracked separately in #21; draft correction routes are tracked in #14.
 
 ### Preserve applicable work and evidence through correction
 
-LE-150 and the shipped selected-work/applicability paths already support meaningful same-run reuse after plan reshaping. The external-work refactor extends this to flexible commissions and proportionate aggregate/goal reuse. Close only demonstrated remaining gaps: preserve original work and failed attempts, inspect real dependency/scope effects, refresh affected proof and finish normally without replaying unaffected work for ceremony. Do not build generalized replay or a second criterion ledger merely because older notes described repeated work.
+LE-150/171/177/182 and the selected-work/applicability paths are delivered baseline. Close demonstrated remaining gaps without replaying unaffected work for ceremony: malformed or replaced immutable records (#7, #17, #20), duplicate advice occasions (#15), and stage/order-sensitive ordinary clearance with fresh or carried evidence (#16, #18).
 
-### Validate compact review packets and blinded perspectives
+Preserve original work, failed attempts, source identities and genuine unresolved findings. Support auditable correction/retirement and inspect actual dependency/scope effects; refresh affected proof and finish normally. Keep #17 and #18's distinct acceptance cases even where their causes overlap other issues. Reappending the same early challenge assessment must not make it a new post-clearance judgment. Do not build generalized replay, silently ignore malformed active obligations or add a second criterion ledger.
 
-LE-149 and the current commission filter deliver relevant context and accessible originals without arbitrary content quotas. A subsequent intent revision still exposed indirect individual-stage applicability conclusions in first aggregate preparation; the driver removed them before model launch. Reproduce and close any remaining product-path leak without relying on a private wrapper, while preserving required combined perspective and relevant applicability/findings.
+### Make review packets complete, citeable and usable
 
-Measure actual delivered context and test the declared independence/blindness purpose. Necessary originals must remain accessible; filtered or smaller output is not itself proof that the reader received correct material. Keep read-primitive duplication/human digest work in the separate item above.
+LE-149 and current commission filtering deliver relevant context and accessible originals without arbitrary content quotas. Existing tests cover initial aggregate blindness and retained confirmation evidence. The historical report of indirect individual-stage applicability conclusions reaching an initial aggregate remains a reproduction lead; do not claim a current leak or recommission the delivered baseline without evidence.
+
+Close current packet gaps: applicable non-intent steering and confirmation context (#4), readable checkpoints/scoped implementation changes (#9), and a supported way to cite required reconstructions, comparisons and owner sources (#19). Necessary originals must remain accessible; compact output alone does not prove the reviewer received correct material. Preserve required combined perspectives, applicable findings and blindness.
+
+Align intake with those packets and the effective evaluator contract: source-locator checks (#5), shared assessment identity and useful diagnostics (#6, #11), Bookends overlay axes (#10), residual shape and pre-review validation (#8), source-faithful finding statements (#12), and intent-baseline/correction routing (#13). The current baseline check applies before ordinary intent commissions too; do not retain the older challenge-only description.
+
+The v3 contract removes reviewer hash and rationale-length requirements and permits faithful driver-confirmed projection of non-JSON returns. This supersedes #1 and #3's bound-worker contract problems, not every possible diagnostic defect. Preserve useful source returns; investigate any current nested-schema/format diagnostic concern only when reproduced, rather than silently truncating judgments or reviving retired output repair. Keep read-surface duplication and human digest work in the separate item above.
 
 ### Maintain review quality against actual misses
 
 Grounded pass reasons, locator-only source references, truthful intent approval, merit-based triage, explicit partial/output-only recovery, invalid-reuse refusal, factual evidence preview/apply and per-criterion distinguishing proof are delivered baseline duties under LE-151/152/154–159. Do not recommission their implementation wholesale.
 
-Retain real misses and sound judgments for the required fresh/applicable-history calibration when judging meaning changes. The external-work refactor adds the owner-alignment and causal acceptance-sufficiency questions and strengthens granularity/plain-English guidance; its manual prompt trials are diagnostic, not complete calibration or universal model-quality proof. First ordinary reviews remain comprehensive, affected confirmation preserves valid evidence, and challenge tests a cleared conclusion rather than adjudicating open ordinary failures.
+Retain real misses and sound judgments for the required fresh/applicable-history calibration when judging meaning changes. The shipped external-work contract includes owner-alignment and causal acceptance-sufficiency questions and granularity/plain-English guidance; its manual prompt trials are diagnostic, not complete calibration or universal model-quality proof. First ordinary reviews remain comprehensive, affected confirmation preserves valid evidence, and challenge tests a cleared conclusion rather than adjudicating open ordinary failures.
 
 ### Evaluate external advisory backends and judgment quality
 
-The generic typed advisory primitive and software-change's bounded evidenced questions are delivered under LE-163–166. The external-work refactor preserves enabled advice as driver-performed work, with genuine typed values and reasoned dispositions, not engine-owned dispatch or gate authority.
+The generic typed advisory primitive and software-change's bounded evidenced questions are delivered under LE-163–166. The shipped external-work contract preserves enabled advice as driver-performed work, with genuine typed values and reasoned dispositions, not engine-owned dispatch or gate authority.
 
 Remaining investigation concerns useful judgment quality and feasible backends: compare sufficient-evidence bounded cases against reasoning judgments; inspect misses, false alarms and confidently wrong answers; measure real interface limits, latency, resource contention, installation and licensing. Evaluate a local model only if useful, with an owner-selected endpoint or host and honest unavailability; no model, download, deployment or default change is selected here.
 
 Do not revive the earlier proposed automatic cascade or send investigation, planning, missing-fact inference, cross-artifact or whole-run synthesis through the bounded advice interface. Advice does not replace independent reviews, alter author floors, accept requirements or authorize exceptions. Driver-owned reasoning/reconsideration remains outside that classifier contract. The general cross-provider evaluation/framework item above is separate.
-
-### Make small profile changes without a wholesale fork
-
-Standalone export, selected-file authority and effective preview/validation are delivered by LE-160. The owner now selected the remaining small-customization outcome for the external-work refactor: specify a shipped base plus common policy changes through supported preparation, inspect overrides versus defaults and visible drift, and resolve/confirm the real effective profile before launch. Guaranteed knobs cover author counts, explicit self-review permissions, groups/axes/stages, and advice/Bookends switches; raw schema/prompt replacements can remain a complete-custom-profile path.
-
-For future preparation against an updated base, unoverridden values must not remain a stale copied fork. Started runs do not silently track shipped changes. Choose the smallest recipe/options/overlay path; no inheritance framework, editor or preference store is assumed.
-
-The owner also requested explicit durable amendments of review, criterion and goal author counts without restarting supported active runs. Record before/after counts and effective obligations, preserve original judgments/findings/history, retain eligibility/blindness/group meaning and require genuine extra coverage when raising a floor. Old pinned runtimes are not retrofitted; the current delivery may use a separately confirmed replacement run. These are selected outcomes, not claims of implemented capability.
-
-### Report final residuals honestly
-
-Selected for the external-work refactor: existing final report/review surfaces make remaining limitations, accepted residual risks, unresolved defects, unsupported operations and proof uncertainty understandable. Distinguish accepted scope from undelivered outcomes and visible owner exceptions. Do not add a new phase or duplicate residual ledger by default, fabricate owner attribution, or rename a blocking defect residual to obtain a clean completion.
-
-### Record externally executed command proof
-
-Selected for the external-work refactor: the driver/harness runs test and proof commands. The engine records supplied results, output references and deterministic metadata; its optional command/matrix launch and execution-control surfaces are retired too. Normal proof can be fulfilled from genuine sufficient external results without rerunning solely for engine capture, while preserving current-source identity, actual assertions and original attribution. Deterministic provider calls and metadata checks remain. Historical captures stay original history, not newly labeled external work.
-
-### Complete one workflow across repositories
-
-Selected for the external-work refactor: support a representative change spanning multiple repositories through one ordinary workflow. Sources, coverage, command proof, identities and applicable Bookends authorities must identify the correct repository; matching filenames or local IDs are not interchangeable. Prove both outcomes and a wrong/stale-secondary-source refusal, without assuming one evaluation cwd is sufficient.
-
-Drivers retain repository/worktree/clone/merge/commit authority. No repository manager, automatic semantic-impact classifier or mandatory external-work registry follows. This item is not delivered merely by externalizing agent execution.
 
 ## Cross-project work
 
