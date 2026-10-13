@@ -3,6 +3,7 @@ use super::*;
 use loop_core::{SemanticSequence, Timestamp};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicU64, Ordering};
 struct Fixture {
     root: PathBuf,
     input: Value,
@@ -27,15 +28,22 @@ fn candidate(kind: &str, data: Value) -> CandidateRecord {
 }
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "provider-final-rules-{}-{}",
-            std::process::id(),
+        Self::new_at(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+        )
+    }
+    fn new_at(timestamp: u128) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "provider-final-rules-{}-{}-{}",
+            std::process::id(),
+            timestamp,
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir(&root).unwrap();
         let spec = json!({"id":"proof","command":"unit-fixture-not-executed","args":[],"owner":"driver","obligation":"scripted unit evidence"});
         let docs = [
             (
@@ -356,4 +364,12 @@ fn historical_verdict_source_does_not_reopen_old_output_files_or_current_cwd() {
     assert!(
         crate::validation::source(&f.context[2].data, "goal-verdict", &f.context, &f.root).is_err()
     );
+}
+
+#[test]
+fn fixture_cleanup_preserves_peer_with_same_timestamp() {
+    let first = Fixture::new_at(0);
+    let second = Fixture::new_at(0);
+    drop(first);
+    assert!(second.root.join("intent.json").is_file());
 }
