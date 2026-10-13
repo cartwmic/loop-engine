@@ -55,8 +55,10 @@ def compatibility(args):
 def guidance(args):
     """Successor-facing contracts remain discoverable in shipped guidance."""
     contracts = {
-        'docs/agent-usage.md': ('fail closed', 'assessment_id', 'record:ACTUAL_CONTEXT_ID#JSON-Pointer', 'intent-correction', 'multiline'),
-        'crates/software-change-provider/skills/using-software-change-provider/SKILL.md': ('admission', 'assessment_id', 'review_record_sources', 'intent-correction'),
+        'docs/agent-usage.md': ('fail closed', 'assessment_id', 'record:ACTUAL_CONTEXT_ID#JSON-Pointer', 'intent-correction', 'multiline',
+                                'declared-baseline-to-covered-commit', 'no tool ban'),
+        'crates/software-change-provider/skills/using-software-change-provider/SKILL.md': ('admission', 'assessment_id', 'review_record_sources', 'intent-correction',
+                                                                                        'declared-baseline-to-covered-commit', 'no tool ban'),
         'crates/software-change-provider/README.md': ('review-candidates', 'prepare-validation'),
     }
     for name, terms in contracts.items():

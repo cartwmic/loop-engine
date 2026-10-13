@@ -10,7 +10,7 @@ use std::time::Duration;
 
 // bookends:LE-188 bookends:LE-109 bookends:LE-114 bookends:LE-130
 // bookends:LE-149 bookends:LE-155 bookends:LE-156 bookends:LE-158
-// bookends:LE-170 bookends:LE-171
+// bookends:LE-170 bookends:LE-171 bookends:LE-107
 #[test]
 fn public_contract_cases() {
     let repository = workspace_integration::repository_root();
