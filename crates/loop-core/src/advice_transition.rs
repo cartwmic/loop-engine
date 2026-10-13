@@ -176,7 +176,11 @@ pub fn validate_advice_record(
     context: &[ContextRecord],
 ) -> Result<(), String> {
     let check = || -> Result<(), String> {
-        if kind == ADVICE_POLICY_CHANGE_RECORD_KIND {
+        if kind == ADVICE_ANSWER_RECORD_KIND {
+            let answer: ExternalAdviceAnswer = serde_json::from_value(data.clone())
+                .map_err(|error| format!("invalid answer shape: {error}"))?;
+            answer.validate()?;
+        } else if kind == ADVICE_POLICY_CHANGE_RECORD_KIND {
             let change = parse_policy_change(data, &run.workflow)?;
             if change.state_visit != run.control_revision.as_u64() {
                 return Err("state_visit must name the current observed state visit".into());
@@ -796,14 +800,37 @@ mod tests {
         });
         let supplied: ExternalAdviceAnswer = serde_json::from_value(value.clone()).unwrap();
         assert!(supplied.validate().is_ok());
+        let current = run(json!({})); // Answers must be safe even before advice is enabled.
+        assert!(
+            validate_advice_record("answer", ADVICE_ANSWER_RECORD_KIND, &value, &current, &[])
+                .is_ok()
+        );
         let mut missing = value.clone();
         missing["response"]["answers"]["q"]
             .as_object_mut()
             .unwrap()
             .remove("noul");
+        assert!(validate_advice_record(
+            "answer",
+            ADVICE_ANSWER_RECORD_KIND,
+            &missing,
+            &current,
+            &[]
+        )
+        .unwrap_err()
+        .contains("advice record `answer` refused"));
         assert!(serde_json::from_value::<ExternalAdviceAnswer>(missing).is_err());
         let mut missing_original = value;
         missing_original["original"] = json!({});
+        assert!(validate_advice_record(
+            "answer",
+            ADVICE_ANSWER_RECORD_KIND,
+            &missing_original,
+            &current,
+            &[]
+        )
+        .unwrap_err()
+        .contains("genuine original"));
         assert!(
             serde_json::from_value::<ExternalAdviceAnswer>(missing_original)
                 .unwrap()

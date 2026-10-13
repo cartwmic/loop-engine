@@ -2908,6 +2908,7 @@ def _recovery_occasion(ctx, occasion, record_id, *, triggered=False, revises=Non
 
 # bookends:LE-16 bookends:LE-17 bookends:LE-166 — originals survive explicit driver correction/owner policy changes; answer disposition remains independent.
 # bookends:LE-189 bookends:LE-192 — public advice revision and owner policy changes preserve answer dispositions.
+# bookends:LE-188 — malformed typed advice is refused before persistence, including advice-off starts.
 def advice_recovery(args, root):
     occasions = [{'state':'explore','event':'intent-ready','occasion_id':family+':explore:intent-ready'}
                  for family in ['review-candidates','execution-or-authority-issue']]
@@ -2920,8 +2921,12 @@ def advice_recovery(args, root):
             return
         initial = copy.deepcopy(ctx['show']()['result']['initial_input'])
         assert not ctx['show']()['result']['advice_policy']['enabled']
+        _recovery_refusal(ctx,['append','--record-id','received-answer',ctx['run_id'],
+                              'advice-answer','{}'],'invalid answer shape')
         append(ctx,'execution-issue',{'reason':'Scripted execution issue; only supplied facts selected.'},'advice-trigger')
         _recovery_advice_change(ctx,occasions,'owner-add')
+        _recovery_refusal(ctx,['append','--record-id','received-answer',ctx['run_id'],
+                              'advice-answer','{}'],'invalid answer shape')
         action = ctx['call']('show','--view','action',ctx['run_id'])
         assert action['result']['advice_policy']['enabled']
         _recovery_refusal(ctx,['event',ctx['run_id'],'intent-ready'],'no driver record')
@@ -2944,8 +2949,19 @@ def advice_recovery(args, root):
             'probabilities':{'supported':1.0,'contradicted':0.0,'not-established':0.0},'confidence':1.0}}}
         actual = ctx['_recovery_log'].execute([sys.executable,'-c','print('+repr(json.dumps(response))+')'],raw=True)
         assert actual.returncode == 0 and json.loads(actual.stdout) == response
-        append(ctx,'advice-answer',{'occasion':request['occasion'],'request':request,'response':json.loads(actual.stdout),
-            'author':{'name':'scripted-external-advisor','kind':'agent'},'original':{'text':actual.stdout}},'received-answer')
+        answer = {'occasion':request['occasion'],'request':request,'response':json.loads(actual.stdout),
+            'author':{'name':'scripted-external-advisor','kind':'agent'},'original':{'text':actual.stdout}}
+        for key, value, needle in [
+            ('occasion','wrong-occasion','occasion must match'),
+            ('author',{'name':' ','kind':'agent'},'nonempty author'),
+            ('original',{},'genuine original'),
+            ('response',{'answers':{}},'claim'),
+        ]:
+            invalid = dict(answer, **{key:value})
+            _recovery_refusal(ctx,['append','--record-id','received-answer',ctx['run_id'],
+                                  'advice-answer',json.dumps(invalid)],needle)
+        accepted = append(ctx,'advice-answer',answer,'received-answer')
+        assert accepted['status'] == 'completed' and accepted['result']['context']['data'] == answer
         _recovery_advice_change(ctx,[],'owner-disable')
         _recovery_refusal(ctx,['event',ctx['run_id'],'intent-ready'],'received-answer/claim')
         append(ctx,'advice-disposition',{'response_id':'received-answer','answer_id':'claim','occasion_id':request['occasion'],
