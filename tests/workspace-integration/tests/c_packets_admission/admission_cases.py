@@ -434,9 +434,12 @@ def overlay_case(w, args):
              'approved-artifact-shape', 'malformed')
     for kind in ('criterion-verdict', 'goal-verdict'):
         original = next(r['data'] for r in ctx['show']()['result']['context'] if r['kind'] == kind)
-        bad = copy.deepcopy(original)
+        good = dict(original, gate='validation-review', review_stage='aggregate',
+                    config_version=ctx['profile']['config_version'])
+        bad = copy.deepcopy(good)
         bad['gate'] = 'design-review'
         w.refuse(kind, bad, 'bad-' + kind, kind + '-shape-source', 'incompatible gate/stage/frozen config')
+        w.append(kind, good)
     counts = w.inspect([ctx['provider'], 'author-counts'], ctx['show']())
     for p in policies:
         require(counts['effective'][f"review.validation-review.{p['review_stage']}.{p['id']}"] == p['required_authors'], counts)
