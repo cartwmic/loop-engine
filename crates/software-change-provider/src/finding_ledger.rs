@@ -740,6 +740,28 @@ pub(crate) fn latest_snapshot_for_recovery(
     subject: &str,
     artifact_root: Option<&Value>,
 ) -> Result<Option<FindingLedgerSnapshot>, String> {
+    latest_snapshot_for_recovery_scope(context, gate, subject, artifact_root, true)
+}
+
+/// Replay an already admitted withdrawal using immutable ledger identity only.
+/// Current routing is checked on admission and on the current ledger, never
+/// against an old prefix whose plan may have been legitimately superseded.
+pub(crate) fn latest_snapshot_for_withdrawal_replay(
+    context: &[ContextRecord],
+    gate: &str,
+    subject: &str,
+    artifact_root: Option<&Value>,
+) -> Result<Option<FindingLedgerSnapshot>, String> {
+    latest_snapshot_for_recovery_scope(context, gate, subject, artifact_root, false)
+}
+
+fn latest_snapshot_for_recovery_scope(
+    context: &[ContextRecord],
+    gate: &str,
+    subject: &str,
+    artifact_root: Option<&Value>,
+    validate_current_routing: bool,
+) -> Result<Option<FindingLedgerSnapshot>, String> {
     let mut records: Vec<_> = context
         .iter()
         .filter(|record| {
@@ -750,7 +772,7 @@ pub(crate) fn latest_snapshot_for_recovery(
     let mut snapshots = Vec::new();
     let mut error = None;
     for record in records {
-        match parse_snapshot(
+        match parse_snapshot_with_routing(
             &record.data,
             gate,
             subject,
@@ -758,6 +780,7 @@ pub(crate) fn latest_snapshot_for_recovery(
             None,
             context,
             record.sequence.as_u64(),
+            validate_current_routing,
         ) {
             Ok(snapshot) => {
                 snapshots.push(snapshot);
@@ -788,6 +811,29 @@ pub(crate) fn parse_snapshot(
     context: &[ContextRecord],
     snapshot_sequence: u64,
 ) -> Result<FindingLedgerSnapshot, Vec<String>> {
+    parse_snapshot_with_routing(
+        value,
+        expected_gate,
+        expected_subject,
+        artifact_root,
+        config,
+        context,
+        snapshot_sequence,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_snapshot_with_routing(
+    value: &Value,
+    expected_gate: &str,
+    expected_subject: &str,
+    artifact_root: Option<&Value>,
+    config: Option<&ValidatedConfig>,
+    context: &[ContextRecord],
+    snapshot_sequence: u64,
+    validate_current_routing: bool,
+) -> Result<FindingLedgerSnapshot, Vec<String>> {
     let Some(object) = value.as_object() else {
         return Err(vec!["snapshot must be an object".to_owned()]);
     };
@@ -817,6 +863,7 @@ pub(crate) fn parse_snapshot(
         config,
         context,
         snapshot_sequence,
+        validate_current_routing,
         &mut reasons,
     );
 
@@ -865,6 +912,7 @@ fn parse_findings(
     config: Option<&ValidatedConfig>,
     context: &[ContextRecord],
     snapshot_sequence: u64,
+    validate_current_routing: bool,
     reasons: &mut Vec<String>,
 ) -> Option<Vec<Finding>> {
     let Some(value) = value else {
@@ -889,6 +937,7 @@ fn parse_findings(
             config,
             context,
             snapshot_sequence,
+            validate_current_routing,
         ) {
             Ok(finding) => {
                 if !ids.insert(finding.id.clone()) {
@@ -913,6 +962,7 @@ fn parse_finding(
     config: Option<&ValidatedConfig>,
     context: &[ContextRecord],
     snapshot_sequence: u64,
+    validate_current_routing: bool,
 ) -> Result<Finding, Vec<String>> {
     let path = format!("findings[{index}]");
     let Some(object) = value.as_object() else {
@@ -1004,20 +1054,22 @@ fn parse_finding(
         );
     }
 
-    let current_snapshot = !context.iter().any(|record| {
-        record.kind == FINDING_LEDGER_KIND
-            && ledger_record_matches_pair(record, gate, subject)
-            && record.sequence.as_u64() > snapshot_sequence
-    }) && read_json_under_root(artifact_root, subject)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("revision")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
+    let current_snapshot = validate_current_routing
+        && !context.iter().any(|record| {
+            record.kind == FINDING_LEDGER_KIND
+                && ledger_record_matches_pair(record, gate, subject)
+                && record.sequence.as_u64() > snapshot_sequence
         })
-        .as_deref()
-        == Some(subject_revision);
+        && read_json_under_root(artifact_root, subject)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("revision")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .as_deref()
+            == Some(subject_revision);
     let current_unresolved = current_snapshot
         && disposition == Some(FindingDisposition::Accepted)
         && status == Some(FindingStatus::Unresolved);

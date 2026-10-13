@@ -32,6 +32,7 @@ fn check_withdrawal(
     earlier: &[ContextRecord],
     already_withdrawn: &BTreeSet<String>,
     artifact_root: Option<&Value>,
+    historical_replay: bool,
 ) -> Result<Vec<String>, String> {
     let check = || -> Result<Vec<String>, String> {
         let withdrawal: Withdrawal =
@@ -85,12 +86,12 @@ fn check_withdrawal(
                 let subject = source.data["subject"]
                     .as_str()
                     .ok_or("failing source has no subject identity")?;
-                let ledger = finding_ledger::latest_snapshot_for_recovery(
-                    earlier,
-                    gate,
-                    subject,
-                    artifact_root,
-                )?;
+                let read_ledger = if historical_replay {
+                    finding_ledger::latest_snapshot_for_withdrawal_replay
+                } else {
+                    finding_ledger::latest_snapshot_for_recovery
+                };
+                let ledger = read_ledger(earlier, gate, subject, artifact_root)?;
                 if !ledger.is_some_and(|ledger| {
                     ledger
                         .findings
@@ -115,7 +116,7 @@ pub fn record_withdrawal_guardrails(
     artifact_root: Option<&Value>,
 ) -> Result<(), String> {
     let withdrawn = withdrawn_record_ids(earlier, artifact_root)?;
-    check_withdrawal(record_id, data, earlier, &withdrawn, artifact_root).map(|_| ())
+    check_withdrawal(record_id, data, earlier, &withdrawn, artifact_root, false).map(|_| ())
 }
 
 /// Recheck each withdrawal against its historical prefix, never a later ledger.
@@ -138,6 +139,7 @@ pub fn withdrawn_record_ids(
             &ordered[..index],
             &withdrawn,
             artifact_root,
+            true,
         )?);
     }
     Ok(withdrawn)
@@ -476,6 +478,62 @@ mod tests {
         assert!(withdrawn_record_ids(&context, Some(&root.value()))
             .unwrap()
             .contains("failure"));
+    }
+
+    #[test]
+    fn recovery_withdrawal_replay_survives_resolved_plan_task_replacement() {
+        let root = Root::new();
+        let config = config::validate_config(&root.input(1)).unwrap();
+        let source = review("failure", 1, "reader", "fail");
+        let mut snapshot = ledger(&source, 2, "accepted", "unresolved");
+        snapshot.data["findings"][0]["owner_phase"] = json!("implementation");
+        snapshot.data["findings"][0]["task_ids"] = json!(["T1"]);
+        std::fs::write(root.path.join("plan.json"), br#"{"tasks":[{"id":"T1"}]}"#).unwrap();
+        let mut context = vec![source, snapshot.clone()];
+        let withdrawal = withdrawal("withdraw", "failure", 3);
+        record_withdrawal_guardrails("withdraw", &withdrawal.data, &context, Some(&root.value()))
+            .unwrap();
+        context.push(withdrawal);
+        let mut resolved = snapshot.data.clone();
+        resolved["findings"][0]["status"] = json!("resolved");
+        context.push(row("resolved-ledger", "finding-ledger", 4, resolved));
+        std::fs::write(root.path.join("plan.json"), br#"{"tasks":[{"id":"T2"}]}"#).unwrap();
+        assert!(finding_ledger::evaluate_finding_ledger(
+            &context,
+            "intent-review",
+            "intent.json",
+            "r1",
+            &config,
+        )
+        .is_satisfied());
+        assert!(withdrawn_record_ids(&context, Some(&root.value()))
+            .unwrap()
+            .contains("failure"));
+
+        // New withdrawal admission must still reject invalid current routing.
+        assert!(record_withdrawal_guardrails(
+            "new-withdrawal",
+            &context[2].data,
+            &context[..2],
+            Some(&root.value()),
+        )
+        .unwrap_err()
+        .contains("unknown plan task id `T1`"));
+
+        // Historical replay must not weaken validation of a fresh unresolved route.
+        let invalid_current = finding_ledger::parse_snapshot(
+            &snapshot.data,
+            "intent-review",
+            "intent.json",
+            Some(&root.value()),
+            Some(&config),
+            &context[..2],
+            2,
+        )
+        .unwrap_err();
+        assert!(invalid_current
+            .iter()
+            .any(|reason| reason.contains("unknown plan task id `T1`")));
     }
 
     #[test]
