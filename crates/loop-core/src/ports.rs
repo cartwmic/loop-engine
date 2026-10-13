@@ -8,8 +8,8 @@
 use crate::{
     ContextAppendEffect, ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation,
     EvaluationFeedback, EvaluationRequest, EvaluationResult, HistoryEntry, InvocationId, Lifecycle,
-    ProviderAssociation, ProviderSelector, Run, RunId, StateId, Timestamp, Transition,
-    WorkSlotBinding, WorkSlotId, WorkSlotInvocation, Workflow,
+    ProviderAssociation, ProviderSelector, Run, RunId, SemanticSequence, StateId, Timestamp,
+    Transition, WorkSlotBinding, WorkSlotId, WorkSlotInvocation, Workflow,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -82,7 +82,7 @@ impl fmt::Display for ProviderResolutionError {
 
 impl std::error::Error for ProviderResolutionError {}
 
-/// Executes the two stateless semantic provider operations.
+/// Executes stateless semantic provider operations.
 ///
 /// `evaluate` receives an engine-selected transition.  A provider can allow,
 /// deny, or report unsupported; an allow may carry one opaque context append
@@ -105,6 +105,16 @@ pub trait ProviderGateway {
         request: EvaluationRequest,
     ) -> Result<EvaluationResult, ProviderError>;
 
+    /// Admit one caller-owned candidate before persistence. Core calls this
+    /// only when the frozen workflow declares `admit`.
+    fn admit(
+        &self,
+        _provider: &ProviderAssociation,
+        _request: AdmitRequest,
+    ) -> Result<Admission, ProviderError> {
+        Ok(Admission::Admitted)
+    }
+
     /// Ask the provider for an optional opaque context effect to commit with
     /// a checked transition. Core calls this only for workflows frozen with
     /// `capture`; the default answers with no effect.
@@ -116,6 +126,47 @@ pub trait ProviderGateway {
     ) -> Result<Option<ContextAppendEffect>, ProviderError> {
         Ok(None)
     }
+}
+
+/// Candidate identity and opaque data; no sequence is allocated until insert.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateRecord {
+    pub id: ContextRecordId,
+    pub kind: String,
+    pub data: Value,
+}
+
+/// Consistent run facts supplied to write-time provider admission.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AdmitRequest {
+    pub workflow: Workflow,
+    pub initial_input: Value,
+    pub context: Vec<ContextRecord>,
+    pub current_state: StateId,
+    pub state_visit: u64,
+    pub record: CandidateRecord,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Refusal {
+    pub rule: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Admission {
+    Admitted,
+    Refused(Refusal),
+}
+
+/// A passive, consistent append preflight. The adapter verifies active and
+/// observed lifecycle and unique candidate ID before returning these facts.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AppendSnapshot {
+    pub run: Run,
+    pub context: Vec<ContextRecord>,
 }
 
 /// Operational failure while invoking a provider or interpreting its
@@ -460,6 +511,9 @@ pub struct AppendContextRequest {
     pub created_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub carry: Option<CarryRequest>,
+    /// Insert only if no semantic mutation occurred since preflight/admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_last_sequence: Option<SemanticSequence>,
 }
 
 impl AppendContextRequest {
@@ -477,6 +531,7 @@ impl AppendContextRequest {
             data,
             created_at,
             carry: None,
+            expected_last_sequence: None,
         }
     }
 
@@ -776,11 +831,25 @@ pub trait Persistence {
 
     /// Atomically verify activity and current observation, append one
     /// immutable context record, and append its matching history entry. This
-    /// does not advance control revision.
+    /// does not advance control revision. When `expected_last_sequence` is
+    /// supplied, the adapter must reject a mismatch inside this same boundary.
     fn append_context(
         &self,
         request: AppendContextRequest,
     ) -> Result<AppendContextResult, PersistenceError>;
+
+    /// Capture append inputs without arming a visit or writing history.
+    /// Durable adapters must implement a consistent read; unsupported adapters
+    /// fail closed rather than assemble potentially torn admission inputs.
+    fn load_append_snapshot(
+        &self,
+        _request: &AppendContextRequest,
+    ) -> Result<AppendSnapshot, PersistenceError> {
+        Err(PersistenceError::failure(PersistenceFailure::new(
+            "append-snapshot-unsupported",
+            "persistence adapter cannot snapshot append admission inputs",
+        )))
+    }
 
     /// Atomically retain one generic advisory attempt as immutable run context
     /// and history, without arming or changing the primary run state.
@@ -916,8 +985,20 @@ pub trait Persistence {
 /// conditional-write failures use [`PersistenceConflict`] instead.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PersistenceRejection {
-    RunNotActive { run_id: RunId, lifecycle: Lifecycle },
-    RunNotObserved { run_id: RunId },
+    RunNotActive {
+        run_id: RunId,
+        lifecycle: Lifecycle,
+    },
+    RunNotObserved {
+        run_id: RunId,
+    },
+    DuplicateContextRecord {
+        record_id: ContextRecordId,
+    },
+    AppendSequenceChanged {
+        expected: SemanticSequence,
+        observed: SemanticSequence,
+    },
 }
 
 impl PersistenceRejection {
@@ -925,6 +1006,8 @@ impl PersistenceRejection {
         match self {
             Self::RunNotActive { .. } => "run-not-active",
             Self::RunNotObserved { .. } => "run-not-observed",
+            Self::DuplicateContextRecord { .. } => "duplicate-context-record",
+            Self::AppendSequenceChanged { .. } => "append-sequence-changed",
         }
     }
 }
@@ -935,6 +1018,10 @@ impl fmt::Display for PersistenceRejection {
             Self::RunNotActive { run_id, lifecycle } => {
                 write!(formatter, "run `{run_id}` is not active ({lifecycle:?})")
             }
+            Self::DuplicateContextRecord { record_id } => write!(formatter,
+                "context record `{record_id}` already exists on this run"),
+            Self::AppendSequenceChanged { expected, observed } => write!(formatter,
+                "append inputs changed (expected sequence {expected}, observed {observed}); re-observe and retry"),
             Self::RunNotObserved { run_id } => write!(
                 formatter,
                 "run `{run_id}` must be observed with `show` before it can be mutated"
@@ -1263,6 +1350,36 @@ mod tests {
         ) -> Result<Vec<crate::WorkSlotInvocation>, PersistenceError> {
             unavailable()
         }
+    }
+
+    #[test]
+    fn admission_capability_is_frozen_optional_and_default_gateway_admits() {
+        let original = workflow();
+        let historical = serde_json::to_value(&original).unwrap();
+        assert!(historical.get("admit").is_none());
+        assert!(
+            !serde_json::from_value::<Workflow>(historical)
+                .unwrap()
+                .admit
+        );
+        let frozen = original.with_admit(true);
+        assert_eq!(serde_json::to_value(&frozen).unwrap()["admit"], true);
+        let request = AdmitRequest {
+            workflow: frozen,
+            initial_input: json!({}),
+            context: vec![],
+            current_state: "start".into(),
+            state_visit: 7,
+            record: CandidateRecord {
+                id: "candidate".into(),
+                kind: "opaque".into(),
+                data: json!(null),
+            },
+        };
+        assert_eq!(
+            StubGateway.admit(&association(), request).unwrap(),
+            Admission::Admitted
+        );
     }
 
     #[test]

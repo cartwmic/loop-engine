@@ -1,6 +1,7 @@
 //! Inert external review intake. No catalog access or worker execution.
 use loop_integrations::external_work::{assemble_items, read_content, ContentSource};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::io::{self, Read, Write};
 
 fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -31,7 +32,14 @@ pub fn project(input: &Value) -> Result<Value, String> {
     {
         return Err("requires completed software-change full show envelope".into());
     }
-    let initial = &show["result"]["initial_input"];
+    let context: Vec<loop_core::ContextRecord> =
+        serde_json::from_value(show["result"].get("context").cloned().unwrap_or(json!([])))
+            .map_err(|e| format!("invalid full context: {e}"))?;
+    let resolution = software_change_provider::admission::effective_policy(
+        &show["result"]["initial_input"],
+        &context,
+    );
+    let initial = &resolution.effective;
     let assignment = &input["assignment"];
     let gate = text(assignment, "gate")?;
     let stage = text(assignment, "stage")?;
@@ -66,7 +74,54 @@ pub fn project(input: &Value) -> Result<Value, String> {
     {
         return Err("batch author contradicts assignment author".into());
     }
-    let assessment = projection.get("assessment_id").cloned();
+    // Explicit original metadata is authoritative. Never replace row/batch
+    // identities with generated metadata or silently accept contradictory claims.
+    let mut explicit_assessment: Option<Value> = None;
+    for batch in [&original["structured"], projection] {
+        for id in batch.get("assessment_id").into_iter().chain(
+            batch["judgments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|row| row.get("assessment_id")),
+        ) {
+            if id.as_str().is_none_or(|s| s.trim().is_empty()) {
+                return Err("assessment_id must be nonempty".into());
+            }
+            if explicit_assessment
+                .as_ref()
+                .is_some_and(|prior| prior != id)
+            {
+                return Err(
+                    "inconsistent explicit assessment_id in one original return/projection".into(),
+                );
+            }
+            explicit_assessment = Some(id.clone());
+        }
+    }
+    let original_digest = format!(
+        "sha256:{:x}",
+        Sha256::digest(
+            original["original"]
+                .as_str()
+                .ok_or("missing retained original text")?
+                .as_bytes()
+        )
+    );
+    let identity = json!({"version":1,"gate":gate,"stage":stage,"group":group,"author":author,"subject":subject,"revision":revision,"original_sha256":original_digest});
+    let assessment = explicit_assessment.unwrap_or_else(|| {
+        json!(format!(
+            "assessment:sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&identity).expect("identity JSON"))
+        ))
+    });
+    if resolution
+        .blocked
+        .iter()
+        .any(|key| key.starts_with(&format!("review.{gate}.")))
+    {
+        return Err("invalid author-count amendment blocks this gate".into());
+    }
     let policy = &initial["review_policies"][gate];
     let axes = policy
         .as_array()
@@ -84,6 +139,13 @@ pub fn project(input: &Value) -> Result<Value, String> {
     let known = json!({"gate":gate,"review_stage":stage,"group":group,"author":author,
         "subject":subject,"subject_revision":revision,"config_version":config,
         "review_contract_version":3});
+    for batch in [&original["structured"], projection] {
+        for (field, expected) in known.as_object().expect("known fields") {
+            if batch.get(field).is_some_and(|actual| actual != expected) {
+                return Err(format!("batch metadata contradicts assignment `{field}`"));
+            }
+        }
+    }
     let mut items = assemble_items(judgments, known.as_object().unwrap());
     let mut records = Vec::new();
     for item in &mut items {
@@ -102,12 +164,12 @@ pub fn project(input: &Value) -> Result<Value, String> {
             if axis_policy["group"] != group {
                 return Err("axis does not belong to assignment group".into());
             }
-            if direct && axis == "intent-sufficient" && gate == "intent-review" {
-                return Err("cold intent-sufficient reconstruction cannot be self-review".into());
-            }
-            if direct && axis_policy["self_review"] != true {
-                return Err("self review is not allowed for this axis".into());
-            }
+            crate::evidence::validate_direct_review(
+                gate,
+                axis,
+                axis_policy["self_review"] == true,
+                direct,
+            )?;
             if data.get("reuse").is_some() {
                 if data.as_object().is_none_or(|row| {
                     row.keys().any(|key| {
@@ -166,6 +228,20 @@ pub fn project(input: &Value) -> Result<Value, String> {
                 .unwrap();
             let candidate =
                 json!({"kind":"evidence-applicability","data":source["data"],"reuse_record_id":id});
+            if initial["contract_version"].as_u64().is_some_and(|v| v >= 3) {
+                let proposed = loop_core::CandidateRecord {
+                    id: format!("reuse-preview-{}", item.index).into(),
+                    kind: "evidence-applicability".into(),
+                    data: source["data"].clone(),
+                };
+                if let Err(refusal) =
+                    software_change_provider::admission::preview(&show["result"], &proposed)
+                {
+                    item.diagnostics
+                        .push(format!("{}: {}", refusal.rule, refusal.message));
+                    continue;
+                }
+            }
             records.push(candidate.clone());
             item.candidate = Some(candidate);
             continue;
@@ -179,14 +255,15 @@ pub fn project(input: &Value) -> Result<Value, String> {
                 .cloned()
                 .unwrap_or(Value::Null);
         }
-        if let Some(id) = &assessment {
-            if id.as_str().is_none_or(|s| s.trim().is_empty()) {
-                item.diagnostics
-                    .push("assessment_id must be nonempty".into());
-                continue;
-            }
-            data["assessment_id"] = id.clone();
+        if data
+            .get("assessment_id")
+            .is_some_and(|id| id != &assessment)
+        {
+            item.diagnostics
+                .push("assessment_id contradicts original return identity".into());
+            continue;
         }
+        data["assessment_id"] = assessment.clone();
         data["external_review"] = json!({"request":request,"original":original,"direct":direct});
         if let Some(formatter) = input.get("formatter") {
             text(formatter, "name")?;
@@ -194,6 +271,31 @@ pub fn project(input: &Value) -> Result<Value, String> {
                 return Err("invalid formatter kind".into());
             }
             data["external_review"]["formatter"] = formatter.clone();
+        }
+        if initial["contract_version"].as_u64().is_some_and(|v| v >= 3) {
+            let proposed = loop_core::CandidateRecord {
+                id: format!("review-preview-{}", item.index).into(),
+                kind: "review-evidence".into(),
+                data: data.clone(),
+            };
+            if let Err(refusal) =
+                software_change_provider::admission::preview(&show["result"], &proposed)
+            {
+                item.diagnostics
+                    .push(format!("{}: {}", refusal.rule, refusal.message));
+                continue;
+            }
+        } else if let Some(root) = root {
+            // Historical incomplete helper packets retain their original path.
+            if let Err(error) = crate::criterion::validate_grounding_with_context(
+                &data["grounds"],
+                std::path::Path::new(root),
+                Some(3),
+                &context,
+            ) {
+                item.diagnostics.push(error);
+                continue;
+            }
         }
         let candidate = json!({"kind":"review-evidence","data":data});
         records.push(candidate.clone());
@@ -233,6 +335,52 @@ mod tests {
     fn input() -> Value {
         json!({"show":{"operation":"show","status":"completed","result":{"workflow_id":"software-change","initial_input":{"config_version":"14","review_policies":{"intent-review":[{"id":"intent-sufficient","review_stage":"aggregate","group":"intent-sufficient","self_review":true}]}},"context":[]}},"assignment":{"gate":"intent-review","stage":"aggregate","group":"intent-sufficient","author":{"name":"reviewer","kind":"agent"},"subject":"intent.json","subject_revision":"1"},"request":{"text":"review instructions"},"original":{"text":"Prose judgment"},"projection":{"judgments":[{"axis":"intent-sufficient","result":"pass","findings":"","grounds":{"reason":"adequate","evidence":[{"locator":"intent.json#goal"}]}},false,{"axis":"intent-sufficient","result":"pass"}]}})
     }
+    #[test]
+    fn absent_assessment_is_one_stable_identity_bound_to_assignment_and_original_bytes() {
+        let mut packet = input();
+        let mut first = packet["projection"]["judgments"][0].clone();
+        first["axis"] = json!("intent-sufficient");
+        let mut second = first.clone();
+        second["axis"] = json!("other-axis");
+        packet["projection"]["judgments"] = json!([first, second]);
+        packet["show"]["result"]["initial_input"]["review_policies"]["intent-review"].as_array_mut().unwrap().push(json!({"id":"other-axis","review_stage":"aggregate","group":"intent-sufficient","self_review":true}));
+        let original = packet["original"].clone();
+        let output = project(&packet).unwrap();
+        let id = output["records"][0]["data"]["assessment_id"].clone();
+        assert!(id.as_str().unwrap().starts_with("assessment:sha256:"));
+        assert_eq!(output["records"][1]["data"]["assessment_id"], id);
+        assert_eq!(
+            project(&packet).unwrap()["records"][0]["data"]["assessment_id"],
+            id
+        );
+        assert_eq!(packet["original"], original);
+        packet["original"]["text"] = json!("Different exact original bytes");
+        assert_ne!(
+            project(&packet).unwrap()["records"][0]["data"]["assessment_id"],
+            id
+        );
+        packet["assignment"]["subject_revision"] = json!("2");
+        assert_ne!(
+            project(&packet).unwrap()["records"][0]["data"]["assessment_id"],
+            id
+        );
+    }
+    #[test]
+    fn explicit_original_assessment_is_preserved_and_projection_contradiction_refused() {
+        let mut packet = input();
+        packet["projection"]["assessment_id"] = json!("genuine-original-id");
+        packet["original"] = json!({"text":packet["projection"].to_string()});
+        let output = project(&packet).unwrap();
+        assert_eq!(
+            output["records"][0]["data"]["assessment_id"],
+            "genuine-original-id"
+        );
+        packet["projection"]["assessment_id"] = json!("different");
+        assert!(project(&packet)
+            .unwrap_err()
+            .contains("inconsistent explicit assessment"));
+    }
+
     #[test]
     fn malformed_siblings_preserve_prose_and_valid_candidate() {
         let output = project(&input()).unwrap();
@@ -349,12 +497,34 @@ mod tests {
 
     #[test]
     fn materialized_narrative_assignments_project_all_shipped_stages_and_groups() {
+        let root = std::env::temp_dir().join(format!(
+            "review-candidates-narrative-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        for phase in ["design", "plan", "validation"] {
+            std::fs::write(
+                root.join(format!("{phase}-narrative.md")),
+                "Inspected source line\n",
+            )
+            .unwrap();
+            std::fs::write(
+                root.join(format!("{phase}-narrative.json")),
+                r#"{"revision":"3/1","author":{"name":"writer","kind":"agent"}}"#,
+            )
+            .unwrap();
+        }
         for profile in [
             include_str!("../data/configs/minimal.json"),
             include_str!("../data/configs/standard.json"),
             include_str!("../data/configs/high-rigor.json"),
         ] {
             let mut profile: Value = serde_json::from_str(profile).unwrap();
+            profile["artifact_root"] = json!(root);
             for phase in ["design", "plan", "validation"] {
                 for (pass, suffix) in [("ordinary", "review"), ("challenge", "adversarial-review")]
                 {
@@ -400,5 +570,6 @@ mod tests {
                 }
             }
         }
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

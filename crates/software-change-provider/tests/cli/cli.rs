@@ -1,12 +1,19 @@
 use serde_json::{json, Value};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn invoke(arguments: &[&str], stdin: &[u8]) -> Output {
+    invoke_in_dir(arguments, stdin, None)
+}
+
+fn invoke_in_dir(arguments: &[&str], stdin: &[u8], directory: Option<&Path>) -> Output {
     let mut command = Command::new(workspace_integration::binary("software-change"));
     command.args(arguments);
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
     let completed =
         super::bounded_process::run_with_stdin(&mut command, "software-change CLI protocol", stdin)
             .expect("software-change process should exit");
@@ -168,9 +175,10 @@ fn external_validation_packet_accepts_results_and_fails_closed() {
     let result = json!({"id":"proof","command":"driver-proof","args":["check"],"cwd":repo,"exit_code":0,"stdout":"proof passed","producer":{"name":"external-driver","kind":"script"},"source":source});
     let mut packet = json!({"working_directory":repo,"revision":"v1","verdict_prefix":"verdict","author":{"name":"proof-owner","kind":"human"},"command_results":[result],"show":{"operation":"show","status":"completed","result":{"current_state":"validation","work_slots":graph["work_slots"],"context":[],"initial_input":{"artifact_root":artifacts,"contract_version":3,"criterion_policy":{"required_authors":1,"goal_required_authors":1}}}}});
     let prepare = |packet: &Value| {
-        let output = invoke(
+        let output = invoke_in_dir(
             &["prepare-validation"],
             &serde_json::to_vec(packet).unwrap(),
+            Some(&repo),
         );
         assert!(
             output.status.success(),
@@ -180,7 +188,8 @@ fn external_validation_packet_accepts_results_and_fails_closed() {
         serde_json::from_slice::<Value>(&output.stdout).unwrap()
     };
     let success = prepare(&packet);
-    assert_eq!(success["commands_complete"], true);
+    assert_eq!(success["commands_complete"], true, "{success}");
+    assert_eq!(success["diagnostics"], json!([]));
     assert_eq!(
         success["command_candidates"][0]["data"]["external_result"]["external"],
         true
@@ -199,16 +208,37 @@ fn external_validation_packet_accepts_results_and_fails_closed() {
     assert!(success["command_candidates"][0]["data"]
         .get("capture")
         .is_none());
+    // A named unknown scope must not silently fall back to this valid repo.
+    let valid_packet = packet.clone();
+    packet["command_results"][0]["source"]["scope"] = json!("undeclared");
+    let refused = prepare(&packet);
+    assert_eq!(refused["commands_complete"], false);
+    assert_eq!(refused["command_candidates"], json!([]));
+    assert_eq!(refused["diagnostics"][0]["status"], "record-refused");
+    assert_eq!(
+        refused["diagnostics"][0]["rule"],
+        "command-evidence-current-source"
+    );
+    assert!(refused["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("unknown source scope"));
+    packet = valid_packet;
     packet["command_results"][0]["exit_code"] = json!(7);
-    assert_eq!(prepare(&packet)["diagnostics"][0]["status"], "failed");
+    let failed = prepare(&packet);
+    assert_eq!(failed["commands_complete"], false);
+    assert_eq!(failed["diagnostics"][0]["status"], "failed");
     packet["command_results"][0]["exit_code"] = json!(0);
     packet["command_results"][0]["source"]["head"] = json!("stale");
-    assert_eq!(prepare(&packet)["diagnostics"][0]["status"], "stale-source");
+    let stale = prepare(&packet);
+    assert_eq!(stale["commands_complete"], false);
+    assert_eq!(stale["diagnostics"][0]["status"], "stale-source");
     packet["command_results"][0]["command"] = json!("different");
     assert_eq!(
-        invoke(
+        invoke_in_dir(
             &["prepare-validation"],
-            &serde_json::to_vec(&packet).unwrap()
+            &serde_json::to_vec(&packet).unwrap(),
+            Some(&repo),
         )
         .status
         .code(),

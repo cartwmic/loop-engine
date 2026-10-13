@@ -284,9 +284,9 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
     for profile in PROFILES {
         let config = load_profile(profile);
         let expected_version = match *profile {
-            "minimal" => "minimal-15",
-            "standard" => "standard-15",
-            "high-rigor" => "high-rigor-15",
+            "minimal" => "minimal-16",
+            "standard" => "standard-16",
+            "high-rigor" => "high-rigor-16",
             _ => unreachable!("unknown profile {profile}"),
         };
         assert_eq!(config["config_version"], expected_version);
@@ -531,8 +531,41 @@ fn shipped_review_prompts_and_calibration_fixtures_expose_the_new_boundaries() {
         "data/calibration/fixtures/validation-evidence-2026-08-12.json",
     ))
     .unwrap();
-    assert!(validation.to_string().contains("semantically prove"));
-    assert!(validation.to_string().contains("bookends:LE-39"));
+    let requirements = validation["requirements"].as_array().unwrap();
+    let expected = [
+        ("A caller can inspect the frozen policies and artifact schemas before evaluating a transition.",
+         &["full show observes selected canonical policies/schemas/config version before events", "frozen composed value stays equal afterward"][..]),
+        ("A malformed subject artifact is denied with each violated structural rule named.",
+         &["missing/unparseable authored artifacts", "/outcome|minLength", "/NEW-unexpected|additionalProperties", "without advancement"][..]),
+        ("A checked transition refuses stale, self-authored, duplicate-author, or configured-obligation-incomplete evidence.",
+         &["qualifying deficits are established before stale revision/config, self-authored", "only at declared N2 gates", "only missing qualifying repairs permit advancement", "standing fails cannot be outvoted"][..]),
+        ("The reference workflow reaches its terminal state only after its configured validation obligations are satisfied.",
+         &["all three profiles complete15 checked transitions to end", "lifecycle final", "completion_mode completed", "no overrides or requestable events", "durable history"][..]),
+    ];
+    assert_eq!(requirements.len(), expected.len());
+    for (row, (requirement, outcomes)) in requirements.iter().zip(expected) {
+        assert_eq!(row["requirement"], requirement);
+        let proof = row["proof"].as_str().unwrap();
+        assert_ne!(
+            proof, "bookends:LE-39",
+            "a requirement token alone is not outcome proof"
+        );
+        for outcome in outcomes {
+            assert!(
+                proof.contains(outcome),
+                "missing observable meaning {outcome}"
+            );
+        }
+    }
+    assert!(validation["outcome"]
+        .as_str()
+        .unwrap()
+        .contains("actual semantic judging remains external"));
+    assert!(
+        validation["command_results"]["no_whole_current_v11_workspace_execution"]
+            .as_bool()
+            .unwrap()
+    );
     let activity_only: Value = serde_json::from_str(&shipped_text(
         "data/calibration/fixtures/validation-evidence-2026-08-13.json",
     ))
@@ -1040,7 +1073,6 @@ fn finding_ledger_template_matches_well_formed_shape() {
             "id",
             "source",
             "policy_id",
-            "statement",
             "disposition",
             "reason",
             "owner_phase",
@@ -1050,8 +1082,19 @@ fn finding_ledger_template_matches_well_formed_shape() {
         ] {
             assert!(object.get(key).is_some(), "findings[{index}] missing {key}");
         }
+        // Statement is optional only because the production parser derives
+        // exact immutable findings from this required same-run source. Summary
+        // remains driver explanation and must never substitute for that source.
+        if let Some(statement) = object.get("statement") {
+            assert!(statement.as_str().is_some(), "statement must be a string");
+        }
+        if let Some(summary) = object.get("summary") {
+            assert!(summary.as_str().is_some(), "summary must be a string");
+        }
         assert_eq!(object["source"]["kind"], "context-record");
-        assert!(object["source"]["id"].as_str().is_some());
+        assert!(object["source"]["id"]
+            .as_str()
+            .is_some_and(|id| !id.trim().is_empty()));
     }
 }
 

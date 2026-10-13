@@ -25,8 +25,8 @@ The engine never executes agents, advisors or proof commands.
 
 Display and hash the exact per-run profile, confirm its identity, all live policies,
 groups/stages, self-review rules and author counts with the user, and rehash before
-start. Separately confirm external role/model commands, write ownership, budget and
-proof owner. Never substitute a model or silently reduce an axis/floor.
+start. Separately confirm external role/model commands, write ownership, owner-set
+spend/resource limits (none by default) and proof owner. Never substitute a model or silently reduce an axis/floor.
 Started runs retain frozen policy; inspect effective author-counts and use only
 explicit owner-attested amendments for supported count changes.
 
@@ -124,7 +124,13 @@ for reuse; declare source scope and current identity rather than relabeling old 
 Late findings need current evidence, violated obligation, consequence, validation gap
 and provenance (newly exposed, fix-introduced or previously overlooked). Do not drip-feed
 unrelated requirements or waive material defects because review was previously clear.
-Driver owns external timeout/cleanup; verify no overlapping writer before retry.
+Driver owns cancellation/cleanup under the engine companion: no outer kill deadline
+absent an owner limit, explicit resource constraint or justified acceptance/execution need.
+Waiting/polling never terminates work; silence or elapsed time alone is not a stall.
+Stop for cancellation, such a limit or a stall diagnosed from observable progress.
+Retain the diagnosis and original failed attempt, inspect partial edits and verify cleanup
+and no overlapping writer before an ordinary authorized rerun; no new approval is needed.
+Scope/acceptance changes and exceeding owner-set spend/resource limits remain owner decisions.
 Route upstream defects to their owning phase, then refresh invalidated subjects/review.
 
 At end, hand off cited conclusion, source/claim mapping, terminal run observation,

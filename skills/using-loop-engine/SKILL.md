@@ -41,7 +41,7 @@ Use --json for workflow envelopes. Parse stdout even on nonzero exit; only compl
 is success. rejected means the checked request did not advance; error and
 invalid-invocation are not provider approval.
 Global --timeout-ms defaults to 30000 per provider describe/evaluate call. Raise it
-for a slow provider, not for externally executed work: driver timeouts are separate.
+for a slow provider, not for externally executed work: external execution limits are separate.
 
 ## Exact profile confirmation
 
@@ -52,10 +52,11 @@ Copying a shipped profile is not confirmation. Rehash immediately before start;
 any byte change requires renewed confirmation. Never substitute a default afterward.
 
 Confirm a separate external role-to-model manifest, commands, write ownership,
-serial budget, proof owner and escalation owner. Verify the exact model with the
+owner-set spend/resource limits (none by default), proof owner and escalation owner. Verify the exact model with the
 chosen harness and pass it explicitly; stop rather than silently substituting.
 The profile hash does not cover this external fleet. No executor is frozen in engine
-state. Later profile edits do not change a started run's frozen obligations.
+state. Later profile edits do not change a started run's frozen obligations. Supported
+owner advice-policy-change records change the effective advice map, not the frozen input.
 
 ## Commands
 
@@ -117,12 +118,40 @@ execution information is unknown, not success. Explore is a terminal inspection 
    do not fabricate evidence or use an exception as ordinary clearance.
 6. Repeat until the actual terminal state; report residuals and pending owner decisions.
 
+## Advice and record recovery
+
+On a supporting runtime, inspect `show.result.advice_policy` before departure;
+it is authoritative over frozen start-time advice flags/guidance. A trusted owner
+may append a complete `advice-policy-change` map for the current observed visit:
+addition/removal applies immediately, empty occasions disables new due advice,
+and original input/history remains. Use exact shapes in checkout-root
+`docs/agent-usage.md`, section Running advice and append-only recovery.
+
+Correct driver occasion bookkeeping with `revises` naming the latest declaration
+for that occasion/state/visit/event and `revision_reason`; either trigger direction is legal,
+with no owner ceremony or revise taken only for a new visit. No-admissible-question
+claims remain explicit. Received successful answers still need reasoned dispositions
+after disablement/removal/revision; scoped exceptions do not waive them.
+
+For software-change obsolescence, use supported record-withdrawal or valid roster/
+ledger retirement, preserve exact sources and unresolved findings, and obtain
+replacement coverage. Diagnostics are not clearance. Invalid writes on admission-
+enabled runtimes store nothing; unavailable required validation fails closed.
+Incomplete source builds without admission are not proof of this guarantee.
+Never bypass a refusal or replace/migrate an older run's frozen executable.
+
 ## Execution recovery minimum
 
-The external driver owns launch, timeout, cancellation and verified cleanup. Before
-retry, inspect partial edits and retained output, verify no overlapping writer remains,
-and decide whether to restore or incorporate work. Never signal remembered PIDs or
-claim workflow termination stopped a process. Preserve failed attempts honestly.
+The external driver owns launch, cancellation and verified cleanup. Set no outer
+kill deadline unless an owner limit, explicit resource constraint or justified
+acceptance/execution requirement calls for one. Waiting or polling never terminates
+work. Stop for owner cancellation, such a limit or an actually diagnosed stall judged
+by observable progress; silence or elapsed time alone is not a stall. Preserve the
+diagnosis and original failed attempt. Before an ordinary rerun within authorized
+scope (no new approval needed), inspect partial edits and retained output, verify no
+overlapping writer remains, and decide whether to restore or incorporate work. Never
+signal remembered PIDs or claim workflow termination stopped a process. Scope or
+acceptance changes remain owner decisions.
 
 ## Evidence and handoff
 

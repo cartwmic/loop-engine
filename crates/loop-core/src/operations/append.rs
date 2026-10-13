@@ -1,9 +1,10 @@
 //! `append` run operation.
 
-use super::persistence_error;
+use super::{persistence_error, provider_error};
 use crate::{
-    AppendContextRequest, AppendContextResult, EvidenceApplicability, OperationOutcome,
-    OriginReference, Persistence, PersistenceError, ENGINE_ORIGIN_KEY, EVIDENCE_APPLICABILITY_KIND,
+    Admission, AdmitRequest, AppendContextRequest, AppendContextResult, AppendSnapshot,
+    CandidateRecord, EvidenceApplicability, OperationOutcome, OriginReference, OutcomeIssue,
+    Persistence, PersistenceError, ProviderGateway, ENGINE_ORIGIN_KEY, EVIDENCE_APPLICABILITY_KIND,
     ORIGIN_KEY,
 };
 use serde_json::{Map, Value};
@@ -86,6 +87,7 @@ fn validate_context_origin<P>(
     request: &Request,
     origin: &OriginReference,
     persistence: &P,
+    context: Option<&[crate::ContextRecord]>,
 ) -> std::result::Result<(), PreparationError>
 where
     P: Persistence + ?Sized,
@@ -104,9 +106,15 @@ where
     if let Err(error) = require_nonempty(&origin.id, "origin.id") {
         return Err(PreparationError::applicability(error));
     }
-    let records = match persistence.load_context_records(&request.run_id) {
-        Ok(records) => records,
-        Err(error) => return Err(PreparationError::Persistence(error)),
+    let loaded;
+    let records = match context {
+        Some(records) => records,
+        None => {
+            loaded = persistence
+                .load_context_records(&request.run_id)
+                .map_err(PreparationError::Persistence)?;
+            &loaded
+        }
     };
     if records.iter().any(|record| record.id.as_str() == origin.id) {
         Ok(())
@@ -121,6 +129,7 @@ where
 fn prepare_data<P>(
     request: &Request,
     persistence: &P,
+    context: Option<&[crate::ContextRecord]>,
 ) -> std::result::Result<Value, PreparationError>
 where
     P: Persistence + ?Sized,
@@ -138,6 +147,11 @@ where
     }
 
     let Some(object) = request.data.as_object() else {
+        if request.kind == EVIDENCE_APPLICABILITY_KIND {
+            return Err(PreparationError::applicability(
+                "evidence applicability data must be an object",
+            ));
+        }
         return Ok(request.data.clone());
     };
     if object
@@ -179,7 +193,7 @@ where
                 "evidence applicability reason must be a non-empty string",
             ));
         }
-        validate_context_origin(request, &applicability.origin, persistence)?;
+        validate_context_origin(request, &applicability.origin, persistence, context)?;
         return Ok(request.data.clone());
     }
 
@@ -188,7 +202,7 @@ where
     };
     match origin.kind.as_str() {
         "context-record" => {
-            validate_context_origin(request, &origin, persistence)?;
+            validate_context_origin(request, &origin, persistence, context)?;
             Ok(request.data.clone())
         }
         "selected-assignment-output" => Err(PreparationError::rejected(
@@ -204,14 +218,41 @@ where
 
 /// Execute an atomic context append.
 ///
-/// New stable references are resolved before the persistence mutation. The
-/// persistence adapter still owns observation, lifecycle, ID, and atomicity
-/// checks. Legacy carry requests remain decodable but are rejected here.
+/// Compatibility entry point for workflows without required admission. Durable
+/// adapters preflight integrity before engine record checks and guard insertion;
+/// callers of admission-enabled workflows must use `execute_with_gateway`.
+/// Legacy carry requests remain decodable but are rejected here.
 pub fn execute<P>(request: Request, persistence: &P) -> OperationOutcome<Result>
 where
     P: Persistence + ?Sized,
 {
-    let data = match prepare_data(&request, persistence) {
+    // Durable adapters use the same integrity/rule/insert path even through
+    // the compatibility entry point. Older lightweight no-admission adapters
+    // retain their historical behavior when snapshots are unsupported.
+    match persistence.load_append_snapshot(&request) {
+        Ok(snapshot) => {
+            return execute_snapshot::<P, dyn ProviderGateway>(request, persistence, None, snapshot)
+        }
+        Err(PersistenceError::Failure(failure))
+            if failure.code == "append-snapshot-unsupported"
+                && !matches!(
+                    request.kind.as_str(),
+                    crate::ADVICE_OCCASION_RECORD_KIND | crate::ADVICE_POLICY_CHANGE_RECORD_KIND
+                ) => {}
+        Err(error) => return persistence_error(error),
+    }
+    // Keep the old call shape for no-admission adapters, but never silently
+    // bypass a known required admission capability.
+    if persistence
+        .load_authoritative_run(&request.run_id)
+        .is_ok_and(|run| run.workflow.admit)
+    {
+        return OperationOutcome::error(
+            "provider-admission-required",
+            "this workflow requires the gateway-aware append path",
+        );
+    }
+    let data = match prepare_data(&request, persistence, None) {
         Ok(data) => data,
         Err(PreparationError::Rejected { code, message }) => {
             return OperationOutcome::rejected(code, message)
@@ -219,6 +260,115 @@ where
         Err(PreparationError::Persistence(error)) => return persistence_error(error),
     };
     let request = AppendContextRequest { data, ..request };
+    match persistence.append_context(request) {
+        Ok(result) => OperationOutcome::completed(result),
+        Err(error) => persistence_error(error),
+    }
+}
+
+/// Independent engine-owned record-rule extension point. A's advice rules
+/// belong here and run even when the workflow does not declare admission.
+/// Provider meaning must not be checked here.
+pub fn check_engine_owned_record(
+    request: &Request,
+    snapshot: &AppendSnapshot,
+) -> std::result::Result<(), OutcomeIssue> {
+    crate::validate_advice_record(
+        request.record_id.as_str(),
+        &request.kind,
+        &request.data,
+        &snapshot.run,
+        &snapshot.context,
+    )
+    .map_err(|message| OutcomeIssue::new("advice-record-refused", message))
+}
+
+/// Production append: integrity first, engine rules second, provider admission
+/// third, and a sequence-guarded insert last. No provider call holds a database
+/// transaction; all unsuccessful paths leave candidate/history unpersisted.
+pub fn execute_with_gateway<P, G>(
+    request: Request,
+    persistence: &P,
+    gateway: &G,
+) -> OperationOutcome<Result>
+where
+    P: Persistence + ?Sized,
+    G: ProviderGateway + ?Sized,
+{
+    let snapshot = match persistence.load_append_snapshot(&request) {
+        Ok(snapshot) => snapshot,
+        Err(error) => return persistence_error(error),
+    };
+    execute_snapshot(request, persistence, Some(gateway), snapshot)
+}
+
+fn execute_snapshot<P, G>(
+    request: Request,
+    persistence: &P,
+    gateway: Option<&G>,
+    snapshot: AppendSnapshot,
+) -> OperationOutcome<Result>
+where
+    P: Persistence + ?Sized,
+    G: ProviderGateway + ?Sized,
+{
+    let data = match prepare_data(&request, persistence, Some(&snapshot.context)) {
+        Ok(data) => data,
+        Err(PreparationError::Rejected { code, message }) => {
+            return OperationOutcome::rejected(code, message)
+        }
+        Err(PreparationError::Persistence(error)) => return persistence_error(error),
+    };
+    let request = AppendContextRequest {
+        data,
+        expected_last_sequence: Some(snapshot.run.last_sequence),
+        ..request
+    };
+    if let Err(issue) = check_engine_owned_record(&request, &snapshot) {
+        return OperationOutcome::rejected_with_issue(issue);
+    }
+    if snapshot.run.workflow.admit {
+        let Some(gateway) = gateway else {
+            return OperationOutcome::error(
+                "provider-admission-required",
+                "this workflow requires the gateway-aware append path",
+            );
+        };
+        let mut context = snapshot.context;
+        context.sort_by_key(|record| record.sequence);
+        let admission = AdmitRequest {
+            workflow: snapshot.run.workflow,
+            initial_input: snapshot.run.initial_input,
+            context,
+            current_state: snapshot.run.current_state,
+            state_visit: snapshot.run.control_revision.as_u64(),
+            record: CandidateRecord {
+                id: request.record_id.clone(),
+                kind: request.kind.clone(),
+                data: request.data.clone(),
+            },
+        };
+        match gateway.admit(&snapshot.run.provider_association, admission) {
+            Ok(Admission::Admitted) => {}
+            Ok(Admission::Refused(refusal)) => {
+                return OperationOutcome::rejected_with_issue(
+                    OutcomeIssue::new(
+                        "record-refused",
+                        format!(
+                            "record `{}` refused by rule `{}`: {}",
+                            request.record_id, refusal.rule, refusal.message
+                        ),
+                    )
+                    .with_details(serde_json::json!({
+                        "record_id": request.record_id,
+                        "rule": refusal.rule,
+                        "message": refusal.message,
+                    })),
+                );
+            }
+            Err(error) => return provider_error(error),
+        }
+    }
     match persistence.append_context(request) {
         Ok(result) => OperationOutcome::completed(result),
         Err(error) => persistence_error(error),

@@ -308,6 +308,8 @@ pub fn validation_fixture(input: &Value, repository: &Path) -> Vec<Value> {
         .join("../../tests/fixtures/prepare-validation.py");
     let mut command = Command::new("python3");
     command
+        // Provider/source capture cwd must match the real fixture repository.
+        .current_dir(repository)
         .arg(helper)
         .arg("--provider")
         .arg(provider_binary())
@@ -516,7 +518,7 @@ impl Engine {
     pub fn append(&self, run_id: &str, record: ContextRecord) -> ContextRecord {
         let _ = self.show(run_id);
         let persistence = self.persistence();
-        let result: OperationOutcome<AppendContextResult> = core::execute_append(
+        let result: OperationOutcome<AppendContextResult> = core::execute_append_with_gateway(
             core::AppendRequest::new(
                 run_id,
                 record.id.clone(),
@@ -525,6 +527,7 @@ impl Engine {
                 record.created_at,
             ),
             &persistence,
+            &self.gateway,
         );
         match result {
             OperationOutcome::Completed(result) => result.context,
@@ -592,6 +595,13 @@ impl Engine {
             config_version,
         );
         record.data["review_stage"] = json!(review_stage);
+        // This helper submits intended-valid new writes; legacy read fixtures
+        // continue to use evidence_context without retroactive grounding.
+        record.data["review_contract_version"] = json!(3);
+        record.data["grounds"] = json!({
+            "reason": "Scripted workflow control against the current subject revision; not a semantic review.",
+            "evidence": [{"locator": format!("{subject}#/revision")}]
+        });
         if policy_id == "intent-sufficient" {
             let input = self.authoritative(run_id).initial_input;
             let root = input["artifact_root"].as_str().expect("artifact root");

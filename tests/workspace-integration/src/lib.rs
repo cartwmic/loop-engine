@@ -750,6 +750,9 @@ mod tests {
 
     #[cfg(unix)]
     fn fake_build(mode: &str) -> Result<HashMap<&'static str, FreshBinary>, String> {
+        // Child scripts inherit the setter test's process-global environment.
+        // Hold its same lock until the child exits, not just during allocation.
+        let _guard = ENVIRONMENT_LOCK.lock().expect("environment lock");
         let root = tempfile::tempdir().expect("fake build root");
         let target = root.path().join("target");
         fs::create_dir(&target).expect("fake target");

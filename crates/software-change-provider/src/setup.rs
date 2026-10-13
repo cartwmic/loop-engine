@@ -333,9 +333,9 @@ fn resolve(args: &[String]) -> Result<(Value, PathBuf, Value), String> {
     if base["config_version"].as_str().is_some_and(|id| {
         ["minimal", "standard", "high-rigor"]
             .iter()
-            .any(|name| (1..=14).any(|version| id == format!("{name}-{version}")) || id == *name)
+            .any(|name| (1..=15).any(|version| id == format!("{name}-{version}")) || id == *name)
     }) {
-        return Err("historical shipped profile IDs cannot be used for new setup".into());
+        return Err("historical shipped profile IDs cannot be used for new setup; supported shipped IDs: minimal-16, standard-16, high-rigor-16".into());
     }
     if base["contract_version"] != 4 {
         return Err("profile must use contract_version 4".into());
@@ -459,7 +459,7 @@ mod tests {
         assert!(profile.get("work_slot_bindings").is_none());
         assert!(profile.get("advice_command").is_none());
         assert_eq!(profile["contract_version"], 4);
-        assert_eq!(explain["base"]["id"], "standard-15");
+        assert_eq!(explain["base"]["id"], "standard-16");
     }
     #[test]
     fn refuses_standard_14_for_new_setup() {
@@ -488,9 +488,82 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         assert_eq!(
             error,
-            "historical shipped profile IDs cannot be used for new setup"
+            "historical shipped profile IDs cannot be used for new setup; supported shipped IDs: minimal-16, standard-16, high-rigor-16"
         );
     }
+    #[test]
+    fn successor_identity_preserves_entire_retained_15_profile_policy_and_defaults() {
+        // Frozen canonical hashes of genuine HEAD 29652002312d4ba7cb36b1e59d4b00db8a0ec11a
+        // -15 source originals, not a policy reconstructed from successor assertions.
+        for (name, expected) in [
+            (
+                "minimal",
+                "375394f69e24d13741c5b8d798b1536624f7c48ef9d1a2ac8ce33ca22bb3e84f",
+            ),
+            (
+                "standard",
+                "42d492969c11a1bd005f7da1a53f97c9e644d22b07e7839600f539981ce057d0",
+            ),
+            (
+                "high-rigor",
+                "aa9b7fce7d2d2eb1c0b093d4c53fcf98e5a0ce68b899707c285f36a845b4d2b1",
+            ),
+        ] {
+            let path = format!("crates/software-change-provider/data/configs/{name}.json");
+            let bytes = embedded_data::FILES
+                .iter()
+                .find(|file| file.path == path)
+                .unwrap()
+                .bytes;
+            let mut value: Value = serde_json::from_slice(bytes).unwrap();
+            assert_eq!(value["config_version"], format!("{name}-16"));
+            value["config_version"] = json!(format!("{name}-15"));
+            assert_eq!(
+                format!("{:x}", Sha256::digest(serde_json::to_vec(&value).unwrap())),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn shipped_recording_sources_have_current_forms_without_new_template_paths() {
+        let read = |suffix: &str| {
+            std::str::from_utf8(
+                embedded_data::FILES
+                    .iter()
+                    .find(|file| file.path.ends_with(suffix))
+                    .unwrap()
+                    .bytes,
+            )
+            .unwrap()
+        };
+        let protocol = read("data/reviewer-protocol.md");
+        for term in [
+            "assessment_missing",
+            "assessment_inconsistent",
+            "mixed_authors",
+            "record:CORRECTION_ID#/data/prior_intent/json_bytes",
+            "intent-correction",
+            "baseline-to-covered-commit",
+            "literal two-character",
+            "physical",
+        ] {
+            assert!(protocol.contains(term), "{term}");
+        }
+        for suffix in [
+            "data/templates/implementation-report.md",
+            "data/templates/validation-report.md",
+        ] {
+            assert!(read(suffix)
+                .contains("{\"name\":\"actual accepting actor\",\"kind\":\"human|agent|script\"}"));
+        }
+        let ledger: Value =
+            serde_json::from_str(read("data/templates/finding-ledger.json")).unwrap();
+        assert!(ledger["data"]["findings"][0].get("statement").is_none());
+        assert!(ledger["data"]["findings"][0]["summary"].is_string());
+        assert!(read("data/review-worker-preamble.txt").contains("baseline-to-covered-commit"));
+    }
+
     #[test]
     fn advice_setting_satisfies_explicit_choice_and_conflicts_refuse() {
         let args = [

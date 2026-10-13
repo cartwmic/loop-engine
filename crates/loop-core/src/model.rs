@@ -832,6 +832,10 @@ pub struct Workflow {
     /// older provider are never asked to capture.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub capture: bool,
+    /// Optional write-time admission, frozen at start. Historical workflows
+    /// without this field never invoke provider admission.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub admit: bool,
 }
 
 impl Workflow {
@@ -848,6 +852,7 @@ impl Workflow {
             transitions,
             work_slots: Vec::new(),
             capture: false,
+            admit: false,
         }
     }
 
@@ -859,6 +864,11 @@ impl Workflow {
     /// Declare that the provider answers the optional `capture` operation.
     pub fn with_capture(mut self, capture: bool) -> Self {
         self.capture = capture;
+        self
+    }
+
+    pub fn with_admit(mut self, admit: bool) -> Self {
+        self.admit = admit;
         self
     }
 }

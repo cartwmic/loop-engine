@@ -5,6 +5,8 @@ SCRIPTED DUMMY BACKENDS supply all reviews and owner decisions. They establish n
 semantic review or real human approval. --self-test checks collection/interfaces
 only. Real proof requires explicit built binaries and reaches end without override.
 """
+# bookends:LE-54 — existing check-free transition and durable preservation mechanics.
+# bookends:LE-193 — direct earlier-phase draft returns preserve artifacts/history and checked forward re-entry, including fresh checkpoint approval.
 # bookends:LE-185 — frozen default-off options, reviewed fresh narratives, current-subject owner approval, target-specific rejection recovery and verbatim decision history.
 import argparse
 import copy
@@ -117,8 +119,8 @@ class Journey:
         self.frozen = copy.deepcopy(profile)
         write_json(self.root / 'declared-frozen-profile.json', profile)
         self.case('AC-2 setup/explain choices emitted', options=profile['extra'],
-                  fixture_declaration='Shipped high-rigor-15 floors unchanged' if not self.reviewless
-                  else 'Minimal-15 artifact-reviewless fixture; narrative floors and all completion duties retained')
+                  fixture_declaration=f'Shipped {profile["config_version"]} floors unchanged' if not self.reviewless
+                  else f'{profile["config_version"]} artifact-reviewless fixture; narrative floors and all completion duties retained')
 
     def append(self, ctx, kind, data, record_id=None):
         argv = ['append']
@@ -140,7 +142,7 @@ class Journey:
         self.case(name, outcome='scripted request refused', event=event, code=code, response=response)
 
     def decision(self, ctx, phase, *, decision='approve', target=None, revision=None,
-                 subject=None, reason=None, text=None):
+                 subject=None, reason=None, text=None, refusal_rule=None):
         packet = ctx['invoke']([ctx['provider'], 'commission', '--slot', phase + '-checkpoint'],
                                ctx['show'](), cwd=ctx['repository'])
         view = packet['owner_approval_view']
@@ -154,6 +156,11 @@ class Journey:
                  'target':target, 'reason':reason,
                  'text':text or f'SCRIPTED owner {decision} {phase}: preserve these exact words.\n  — End.\n',
                  'actor':{'name':'scripted-dummy-owner', 'kind':'script'}}
+        if refusal_rule:
+            refusal = SOFTWARE.refuse_append(ctx, 'owner-decision', value, refusal_rule)
+            self.case('AC-6 malformed owner decision refused before storage', phase=phase,
+                      submitted_candidate=value, **refusal)
+            return value
         appended = self.append(ctx, 'owner-decision', value)
         record = appended['result']['context']
         assert record['data'] == value, record
@@ -302,19 +309,95 @@ class Journey:
         self.pairs[phase] = self.snapshot_pair(ctx, phase)
         self.case('AC-3 actual narrative admission persisted with unchanged artifact', phase=phase, record=admission)
 
+    def earlier_draft(self, ctx, event, target, name):
+        """Public check-free route: no new artifact/report/rejection/override."""
+        before = ctx['show']()
+        context = before['result']['context']
+        assert any(r['kind'] == 'review-evidence' for r in context)
+        assert any(r['kind'] == 'finding-ledger' and r['data']['findings'] for r in context)
+        files = lambda root: {str(p.relative_to(root)):digest(p) for p in root.rglob('*')
+                              if p.is_file() and '.git' not in p.relative_to(root).parts}
+        artifacts, repository = files(ctx['artifacts']), files(ctx['repository'])
+        history = ctx['call']('history', ctx['run_id'])['result']
+        routes = [e for e in before['result']['requestable_events'] if e['event'] == event]
+        assert len(routes) == 1 and routes[0]['target'] == target and routes[0]['kind'] == 'check-free', routes
+        ctx['event'](event)
+        after = ctx['show']()
+        following = ctx['call']('history', ctx['run_id'])['result']
+        assert after['result']['current_state'] == target and not after['result']['has_overrides']
+        assert after['result']['initial_input'] == before['result']['initial_input']
+        assert after['result']['context'] == context, 'Backward route appended approval or changed evidence/findings'
+        assert artifacts == files(ctx['artifacts']) and repository == files(ctx['repository'])
+        assert following[:-1] == history and len(following) == len(history) + 1
+        entry = following[-1]
+        assert entry['action']['kind'] == 'transition' and entry['action']['outcome']['outcome'] == 'committed', entry
+        assert {k:entry['action']['transition'][k] for k in ('source','event','target')} == {
+            'source':before['result']['current_state'], 'event':event, 'target':target}
+        self.case(name, event=event, source=before['result']['current_state'], target=target,
+                  history_entry=entry, preserved_context_ids=[r['id'] for r in context],
+                  artifact_hashes=artifacts, repository_hashes=repository, approvals_added=0)
+
+    def preservation_finding(self, ctx, gate):
+        shown = ctx['show']()
+        source = next(r for r in shown['result']['context'] if r['kind'] == 'review-evidence'
+                      and r['data']['gate'] == gate)
+        self.append(ctx, 'finding-ledger', {'schema_version':'1', 'gate':gate,
+                    'subject':source['data']['subject'], 'subject_revision':source['data']['subject_revision'],
+                    'author':{'name':'scripted-dummy-driver', 'kind':'agent'},
+                    'findings':[{'id':'F-route-preservation', 'source':{'kind':'context-record','id':source['id']},
+                                 'policy_id':source['data']['policy_id'], 'statement':source['data']['findings'],
+                                 'disposition':'advisory', 'reason':'Nonmaterial scripted marker; not a failure or approval.',
+                                 'owner_phase':None, 'task_ids':[], 'review_axes':[], 'status':'recorded'}]})
+
+    def revise_design_identity(self, ctx, suffix):
+        self.bump_design(ctx, 'scripted-earlier-design-' + suffix)
+        plan_path = ctx['artifacts'] / 'plan.json'
+        plan = json.loads(plan_path.read_text())
+        plan['revision'] = 'scripted-earlier-plan-' + suffix
+        write_json(plan_path, plan)
+        implementation_path = ctx['artifacts'] / 'implementation-report.json'
+        implementation = json.loads(implementation_path.read_text())
+        implementation['plan_revision'] = plan['revision']
+        write_json(implementation_path, implementation)
+
     def checkpoint(self, ctx, phase):
         forward = 'passed' if phase == 'validation' else 'approved'
         self.deny(ctx, forward, f'AC-5 {phase} checkpoint missing/fresh owner approval refused',
                   'software-change-owner-decision-required')
+        if phase == 'plan' and not self.reviewless and 'checkpoint-earlier-draft' in self.flags:
+            records = [r for r in ctx['show']()['result']['context'] if r['kind'] == 'owner-decision'
+                       and r['data']['checkpoint'] == 'plan-checkpoint']
+            assert max(records, key=lambda r:r['sequence'])['data'] == self.old_plan_decision
         self.decision(ctx, phase, revision='obsolete/revision')
         self.deny(ctx, forward, f'AC-5 {phase} checkpoint stale owner approval refused',
                   'software-change-owner-decision-required')
+        if phase == 'plan' and not self.reviewless and 'checkpoint-earlier-draft' not in self.flags:
+            old = self.decision(ctx, phase)
+            self.preservation_finding(ctx, 'plan-review')
+            self.earlier_draft(ctx, 'revise-design', 'design',
+                               'Earlier draft from waiting checkpoint without owner rejection')
+            self.revise_design_identity(ctx, 'checkpoint')
+            self.flags.add('checkpoint-earlier-draft')
+            self.old_plan_decision = old
+            return
+        if phase == 'plan' and not self.reviewless and 'checkpoint-fresh-decision' not in self.flags:
+            current = json.loads((ctx['artifacts'] / 'plan-narrative.json').read_text())['revision']
+            assert current != self.old_plan_decision['subject_revision']
+            # Latest old matching decision is still retained, not reclassified as rejection.
+            records = [r for r in ctx['show']()['result']['context'] if r['kind'] == 'owner-decision'
+                       and r['data']['checkpoint'] == 'plan-checkpoint']
+            assert any(r['data'] == self.old_plan_decision for r in records)
+            self.case('Forward checkpoint re-entry refuses old approval; fresh current revision required',
+                      prior_approval=self.old_plan_decision, current_revision=current)
+            self.flags.add('checkpoint-fresh-decision')
         if phase == 'design' and not self.reviewless:
             if 'narrative-rejected' not in self.flags:
-                self.decision(ctx, phase, decision='reject', target='narrative', reason='', text='SCRIPTED invalid rejection: no reason.')
-                self.deny(ctx, 'revise-narrative', 'AC-6 rejection missing reason refused', 'software-change-owner-decision-required')
-                self.decision(ctx, phase, decision='reject', reason='SCRIPTED no target.', text='SCRIPTED invalid rejection: no target.')
-                self.deny(ctx, 'revise', 'AC-6 rejection missing target refused', 'software-change-owner-decision-required')
+                self.decision(ctx, phase, decision='reject', target='narrative', reason='', text='SCRIPTED invalid rejection: no reason.',
+                              refusal_rule='owner-decision-shape')
+                self.deny(ctx, 'revise-narrative', 'AC-6 refused missing-reason record grants no rewrite', 'software-change-owner-decision-required')
+                self.decision(ctx, phase, decision='reject', reason='SCRIPTED no target.', text='SCRIPTED invalid rejection: no target.',
+                              refusal_rule='owner-decision-shape')
+                self.deny(ctx, 'revise', 'AC-6 refused missing-target record grants no artifact revise', 'software-change-owner-decision-required')
                 self.decision(ctx, phase)
                 self.decision(ctx, phase, decision='reject', target='narrative', revision='another/revision', reason='SCRIPTED other revision rejection.')
                 self.deny(ctx, forward, 'AC-5 latest other-revision rejection outranks older matching approval', 'software-change-owner-decision-required')
@@ -433,6 +516,13 @@ class Journey:
                 self.deny(ctx, 'approved', 'AC-6 pre-rejection judgment carried later NOT counted', 'software-change-review-incomplete')
                 self.flags.add('applicability-cutoff')
                 self.case('AC-6 same content NEW revision requires fresh artifact reviews')
+        if state == 'plan' and not self.reviewless and 'plan-draft-earlier' not in self.flags:
+            self.preservation_finding(ctx, 'design-review')
+            self.earlier_draft(ctx, 'revise-design', 'design',
+                               'Plan draft directly returns to design without throwaway artifact or override')
+            self.revise_design_identity(ctx, 'draft')
+            self.flags.add('plan-draft-earlier')
+            return True
         if state in [p + '-narrative' for p in NARRATIVES]:
             self.admit_narrative(ctx, state.split('-')[0])
             return True
@@ -508,9 +598,13 @@ class Journey:
             else:
                 required = {'binding-negatives','freeze','artifact-return-no-rejection','narrative-rejected',
                             'old-narrative-ready','old-narrative-after-admission','artifact-rejected',
-                            'applicability-cutoff','prose-changed','stale-artifact-prefix'}
+                            'applicability-cutoff','prose-changed','stale-artifact-prefix',
+                            'plan-draft-earlier','checkpoint-earlier-draft','checkpoint-fresh-decision'}
                 assert required <= self.flags, required - self.flags
                 assert set(self.pairs) == set(NARRATIVES)
+                refused = [case for case in self.cases
+                           if case['case'] == 'AC-6 malformed owner decision refused before storage']
+                assert len(refused) == 2 and all(case['rule'] == 'owner-decision-shape' for case in refused), refused
             assert not self.withheld and terminal['result']['current_state'] == 'end'
             assert terminal['result']['lifecycle'] == 'final' and not terminal['result']['has_overrides']
             self.result('passed-terminal', work_root=str(work), database=str(work / 'run.sqlite'),
@@ -524,6 +618,46 @@ class Journey:
             raise
         finally:
             self.log.finalize()
+
+
+def stored_historical_graph(args, root):
+    """Start through a retained 0.25.0 provider, inspect with current engine; no DB edits."""
+    root = Path(root)
+    log = SOFTWARE.CommandLog(root / 'captures')
+    try:
+        historical = str(Path(args.historical_provider).resolve())
+        log.identity(args.engine, args.provider, historical)
+        version = log.execute([historical, '--version'], cwd=ROOT, raw=True)
+        assert version.returncode == 0 and version.stdout.strip() == 'software-change 0.25.0', version
+        profile = json.loads((ROOT / 'crates/software-change-provider/data/configs/high-rigor.json').read_text())
+        profile['artifact_root'] = str(root / 'artifacts')
+        Path(profile['artifact_root']).mkdir()
+        selected = root / 'profile.json'
+        write_json(selected, profile)
+        config = root / 'providers.toml'
+        config.write_text('[providers.software-change]\ncommand = ' + json.dumps(historical) + '\nargs = []\n')
+        database = root / 'run.sqlite'
+        def call(*argv):
+            return log.execute([args.engine, '--json', '--database', database, '--config', config, *argv], cwd=ROOT)
+        started = call('start', 'software-change', '@' + str(selected), 'Stored predecessor graph fixture')
+        assert started['status'] == 'completed', started
+        run_id = started['result']['run']['id']
+        before = call('show', run_id, '--view', 'full')
+        old = log.execute([historical], {'operation':'describe','initial_input':profile}, cwd=ROOT)
+        current = log.execute([args.provider], {'operation':'describe','initial_input':profile}, cwd=ROOT)
+        key = lambda e: (e['source'],e['event'],e['target'],e['kind'])
+        old_edges, new_edges = {key(e) for e in old['transitions']}, {key(e) for e in current['transitions']}
+        assert old_edges < new_edges and len(new_edges - old_edges) == 9
+        assert not any(e['source'] == 'plan' and e['event'] == 'revise-design' for e in old['transitions'])
+        assert before['result']['workflow_graph'] == old
+        after = call('show', run_id, '--view', 'full')
+        assert after['result']['workflow_graph'] == old and after['result']['context'] == before['result']['context']
+        write_json(root / 'result.json', {'status':'passed-stored-graph', 'label':LABEL, 'run_id':run_id,
+                   'database':str(database), 'config':str(config), 'historical_provider':historical,
+                   'added_only_on_new_describe':sorted(new_edges-old_edges),
+                   'actual_command_outcomes':str(log.index)})
+    finally:
+        log.finalize()
 
 
 def self_test():
@@ -625,12 +759,61 @@ def self_test():
             pass
         else:
             raise AssertionError('Override escaped refusal assertion')
+    # Exercise the actual backward-route preservation assertions with public
+    # history's nested action shape; corruption negatives must fail closed.
+    with tempfile.TemporaryDirectory(prefix='earlier-draft-interface-') as directory:
+        root = Path(directory)
+        artifacts, repository = root / 'artifacts', root / 'repository'
+        artifacts.mkdir(); repository.mkdir()
+        (artifacts / 'design.json').write_text('{"revision":"fixture"}')
+        (repository / 'marker').write_text('unchanged')
+        before = {'result':{'current_state':'plan', 'has_overrides':False, 'initial_input':{'fixture':True},
+                  'context':[{'id':'review','kind':'review-evidence','data':{}},
+                             {'id':'ledger','kind':'finding-ledger','data':{'findings':[{'id':'F-marker'}]}}],
+                  'requestable_events':[{'event':'revise-design','target':'design','kind':'check-free'}]}}
+        transition = {'sequence':2, 'action':{'kind':'transition', 'outcome':{'outcome':'committed'},
+                      'transition':{'source':'plan','event':'revise-design','target':'design','kind':'check-free'}}}
+        for corruption in (None, 'context', 'files', 'history', 'override'):
+            shown = copy.deepcopy(before)
+            history = [{'sequence':1,'action':{'kind':'started'}}]
+            def event(name):
+                assert name == 'revise-design'
+                shown['result']['current_state'] = 'design'
+                history.append(copy.deepcopy(transition))
+                if corruption == 'context':
+                    shown['result']['context'].append({'id':'unexpected','kind':'owner-decision'})
+                elif corruption == 'files':
+                    (repository / 'marker').write_text('changed')
+                elif corruption == 'history':
+                    history.append(copy.deepcopy(transition))
+                elif corruption == 'override':
+                    shown['result']['has_overrides'] = True
+            driver = Journey.__new__(Journey)
+            cases = []
+            driver.case = lambda name, **details: cases.append(details)
+            ctx = {'show':lambda:copy.deepcopy(shown), 'call':lambda *args:{'result':copy.deepcopy(history)},
+                   'event':event, 'run_id':'stub', 'artifacts':artifacts, 'repository':repository}
+            (repository / 'marker').write_text('unchanged')
+            try:
+                driver.earlier_draft(ctx, 'revise-design', 'design', 'stub-backed interface only')
+            except AssertionError:
+                assert corruption is not None, 'Valid public history shape failed'
+            else:
+                assert corruption is None and cases[0]['approvals_added'] == 0, corruption
     with tempfile.TemporaryDirectory(prefix='off-profile-interface-') as directory:
         # AC-8 interface model: 0.24.1 predecessor lacks exactly the LE-184 delta;
         # the released slot-1 provider equals the current options-off profile/graph.
         root = Path(directory)
-        source = ROOT / 'crates/software-change-provider/data/configs/minimal.json'
-        current = json.loads(source.read_text())
+        # Explicit SYNTHETIC -15 historical interface model; do not rename or
+        # normalize the actual current -16 profile/corpus into a legacy fixture.
+        source = root / 'minimal.json'
+        current = {'config_version':'minimal-15', 'extra':{'narratives':[], 'checkpoints':[]},
+                   'review_policies':{gate:[
+                       {'id':axis, 'review_stage':'aggregate', 'required_authors':1,
+                        'group':gate+'.aggregate'}
+                       for axis in ('dependencies-honest', SOFTWARE.LE184_AXIS)]
+                       for gate in SOFTWARE.PLAN_GATES}}
+        write_json(source, current)
         shipped = json.loads(json.dumps(current))
         for key in ('narratives','checkpoints','narrative_review'):
             shipped['extra'].pop(key, None)
@@ -728,6 +911,7 @@ def main():
     parser.add_argument('--engine', help='Built loop-engine executable (required for real progression)')
     parser.add_argument('--provider', help='Built software-change executable (required for real progression)')
     parser.add_argument('--output-root', '--work-root', dest='work_root', help='Fresh external capture/catalog root')
+    parser.add_argument('--historical-provider', help='Explicit retained 0.25.0 executable for stored-graph proof; never overwritten')
     parser.add_argument('--self-test', action='store_true', help='Collection/stub interface checks ONLY; no real progression')
     args = parser.parse_args()
     if sys.flags.optimize:
@@ -751,9 +935,12 @@ def main():
                                              ('minimal-reviewless-checkpoints',True,False),
                                              ('minimal-reviewless-final-narrative',True,True)]:
         Journey(args, root / name, name, reviewless=reviewless, final_narrative=final_narrative).execute()
+    if args.historical_provider:
+        stored_historical_graph(args, root / 'stored-historical-graph')
     write_json(root / 'result.json', {'status':'passed-terminal', 'label':LABEL,
                'fixtures':['high-rigor-all-options','minimal-reviewless-checkpoints','minimal-reviewless-final-narrative'],
-               'off_profile_comparisons':'Run software-change-journey.py separately on each shipped -15 profile',
+               'off_profile_progression':'Run software-change-journey.py separately for current shipped profiles; legacy AC-8 is a separate explicit scope',
+               'stored_historical_graph':'passed' if args.historical_provider else 'not-run: supply --historical-provider',
                'semantic_review':'not-performed'})
     print(f'narrative/checkpoint journeys reached actual end; receipts: {root}; {LABEL}')
 

@@ -26,8 +26,8 @@ The engine never executes agents, advisors or proof commands.
 
 Display and hash the exact per-run profile, confirm its identity, all live policies,
 groups/stages, self-review rules and author counts with the user, and rehash before
-start. Separately confirm external role/model commands, write ownership, budget and
-proof owner. Never substitute a model or silently reduce an axis/floor.
+start. Separately confirm external role/model commands, write ownership, owner-set
+spend/resource limits (none by default) and proof owner. Never substitute a model or silently reduce an axis/floor.
 Started runs retain frozen policy; inspect effective author-counts and use only
 explicit owner-attested amendments for supported count changes.
 

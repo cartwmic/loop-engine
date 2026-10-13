@@ -210,6 +210,8 @@ impl SqlitePersistence {
         if remaining.is_zero() {
             return Err(status_read_deadline());
         }
+        // Other observation callers retain their original contention budget.
+        // Bounded status reads install zero-timeout retries in their own method.
         connection.busy_timeout(remaining).map_err(sqlite_failure)?;
         connection
             .progress_handler(1_000, Some(move || std::time::Instant::now() >= deadline))
@@ -276,9 +278,36 @@ impl SqlitePersistence {
         if remaining.is_zero() {
             return Err(status_read_deadline());
         }
-        connection.busy_timeout(remaining).map_err(sqlite_failure)?;
-        let result =
-            sqlite_observation::read_bounded_observation(&mut connection, run_id, deadline, arm);
+        connection
+            .busy_timeout(if arm {
+                remaining
+            } else {
+                std::time::Duration::ZERO
+            })
+            .map_err(sqlite_failure)?;
+        let result = loop {
+            let attempt = sqlite_observation::read_bounded_observation(
+                &mut connection,
+                run_id,
+                deadline,
+                arm,
+            );
+            if arm
+                || !matches!(&attempt, Err(PersistenceError::Failure(error)) if error.code == "catalog-busy")
+            {
+                break attempt;
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break attempt;
+            }
+            // Reuse the existing bounded-mutex poll quantum; this is not a
+            // new operation/kill deadline. Each failed transaction rolls back.
+            std::thread::sleep(remaining.min(std::time::Duration::from_millis(2)));
+            if std::time::Instant::now() >= deadline {
+                break attempt;
+            }
+        };
         let _ = connection.progress_handler(0, None::<fn() -> bool>);
         let _ = connection.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS));
         result
@@ -399,6 +428,16 @@ impl Persistence for SqlitePersistence {
             require_active(&run)?;
             require_observed(&raw)?;
 
+            if let Some(expected) = request.expected_last_sequence {
+                if run.last_sequence != expected {
+                    return Err(PersistenceError::rejected(
+                        PersistenceRejection::AppendSequenceChanged {
+                            expected,
+                            observed: run.last_sequence,
+                        },
+                    ));
+                }
+            }
             let sequence = next_sequence(run.last_sequence)?;
             let context = ContextRecord::new(
                 request.record_id.clone(),
@@ -436,6 +475,31 @@ impl Persistence for SqlitePersistence {
                 context,
                 history,
             })
+        })();
+        finish_transaction(transaction, result)
+    }
+
+    fn load_append_snapshot(
+        &self,
+        request: &AppendContextRequest,
+    ) -> Result<loop_core::AppendSnapshot, PersistenceError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction().map_err(sqlite_failure)?;
+        let result = (|| {
+            let raw = load_raw_run(&transaction, &request.run_id)?
+                .ok_or_else(|| PersistenceError::not_found(request.run_id.clone()))?;
+            let run = decode_run(raw.clone())?;
+            require_active(&run)?;
+            require_observed(&raw)?;
+            let context = read_context_records(&transaction, &request.run_id)?;
+            if context.iter().any(|record| record.id == request.record_id) {
+                return Err(PersistenceError::rejected(
+                    PersistenceRejection::DuplicateContextRecord {
+                        record_id: request.record_id.clone(),
+                    },
+                ));
+            }
+            Ok(loop_core::AppendSnapshot { run, context })
         })();
         finish_transaction(transaction, result)
     }
@@ -2005,6 +2069,260 @@ mod tests {
             history.last().map(|entry| &entry.action),
             Some(HistoryAction::ContextAppended { context_record_id }) if context_record_id.as_str() == "advice-attempt-1"
         ));
+    }
+
+    struct AdmissionGateway<'a> {
+        result: Result<loop_core::Admission, ProviderError>,
+        calls: std::cell::RefCell<Vec<loop_core::AdmitRequest>>,
+        concurrent_append: Option<&'a SqlitePersistence>,
+    }
+
+    impl ProviderGateway for AdmissionGateway<'_> {
+        fn describe(
+            &self,
+            _: &ProviderAssociation,
+            _: Option<&serde_json::Value>,
+        ) -> Result<Workflow, ProviderError> {
+            unreachable!()
+        }
+        fn evaluate(
+            &self,
+            _: &ProviderAssociation,
+            _: EvaluationRequest,
+        ) -> Result<EvaluationResult, ProviderError> {
+            unreachable!()
+        }
+        fn admit(
+            &self,
+            _: &ProviderAssociation,
+            request: loop_core::AdmitRequest,
+        ) -> Result<loop_core::Admission, ProviderError> {
+            self.calls.borrow_mut().push(request);
+            if let Some(adapter) = self.concurrent_append {
+                adapter
+                    .append_context(append_candidate("concurrent", "note", json!({})))
+                    .expect("concurrent legitimate append");
+            }
+            self.result.clone()
+        }
+    }
+
+    fn append_candidate(id: &str, kind: &str, data: serde_json::Value) -> AppendContextRequest {
+        AppendContextRequest::new(
+            "admission",
+            id,
+            kind,
+            data,
+            Timestamp::from_unix_millis(200),
+        )
+    }
+
+    fn admission_adapter(admit: bool) -> SqlitePersistence {
+        let adapter = SqlitePersistence::open_in_memory().unwrap();
+        let mut request = create_run("admission");
+        request.workflow.admit = admit;
+        adapter.create_run(request).unwrap();
+        adapter
+    }
+
+    fn admission_gateway(
+        result: Result<loop_core::Admission, ProviderError>,
+    ) -> AdmissionGateway<'static> {
+        AdmissionGateway {
+            result,
+            calls: Default::default(),
+            concurrent_append: None,
+        }
+    }
+
+    #[test]
+    fn append_admission_failures_leave_context_and_history_unchanged() {
+        for result in [
+            Ok(loop_core::Admission::Refused(loop_core::Refusal {
+                rule: "fixture-rule".into(),
+                message: "candidate is invalid".into(),
+            })),
+            Err(ProviderError::execution(
+                "unavailable",
+                "fixture unavailable",
+            )),
+            Err(ProviderError::timeout("fixture timeout")),
+            Err(ProviderError::invalid_response("incompatible")),
+        ] {
+            let adapter = admission_adapter(true);
+            adapter.load_show_data(&"admission".into()).unwrap();
+            let before = adapter.load_history(&"admission".into()).unwrap();
+            let gateway = admission_gateway(result.clone());
+            let outcome = loop_core::execute_append_with_gateway(
+                append_candidate("candidate", "opaque", json!({})),
+                &adapter,
+                &gateway,
+            );
+            assert_eq!(outcome.is_rejected(), result.is_ok(), "{outcome:?}");
+            assert!(!outcome.is_completed());
+            assert_eq!(gateway.calls.borrow().len(), 1);
+            if result.is_ok() {
+                let issue = outcome.issue().unwrap();
+                assert_eq!(issue.code, "record-refused");
+                assert_eq!(issue.details.as_ref().unwrap()["rule"], "fixture-rule");
+                assert!(issue.message.contains("candidate"));
+            }
+            assert!(adapter
+                .load_context_records(&"admission".into())
+                .unwrap()
+                .is_empty());
+            assert_eq!(adapter.load_history(&"admission".into()).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn append_integrity_and_engine_shapes_precede_provider_admission() {
+        let adapter = admission_adapter(true);
+        let gateway = admission_gateway(Ok(loop_core::Admission::Admitted));
+        let bad = append_candidate("candidate", "note", json!({"loop_engine_carry": {}}));
+        let outcome = loop_core::execute_append_with_gateway(bad.clone(), &adapter, &gateway);
+        assert_eq!(outcome.issue().unwrap().code, "run-not-observed");
+        adapter.load_show_data(&"admission".into()).unwrap();
+        adapter
+            .append_context(append_candidate("candidate", "note", json!({})))
+            .unwrap();
+        let outcome = loop_core::execute_append_with_gateway(bad, &adapter, &gateway);
+        assert_eq!(outcome.issue().unwrap().code, "duplicate-context-record");
+        let outcome = loop_core::execute_append_with_gateway(
+            append_candidate("new", "note", json!({"loop_engine_carry": {}})),
+            &adapter,
+            &gateway,
+        );
+        assert_eq!(
+            outcome.issue().unwrap().code,
+            "selected-output-linkage-refused"
+        );
+        let outcome = loop_core::execute_append_with_gateway(
+            append_candidate(
+                "wrapper",
+                "evidence-applicability",
+                json!({
+                    "origin": {"kind": "context-record", "id": "missing"},
+                    "target": {}, "attesting_driver": {}, "reason": "reuse"
+                }),
+            ),
+            &adapter,
+            &gateway,
+        );
+        assert_eq!(
+            outcome.issue().unwrap().code,
+            "evidence-applicability-refused"
+        );
+        assert!(gateway.calls.borrow().is_empty());
+        adapter
+            .terminate(TerminateRequest::new("admission"))
+            .unwrap();
+        let outcome = loop_core::execute_append_with_gateway(
+            append_candidate("inactive", "note", json!({})),
+            &adapter,
+            &gateway,
+        );
+        assert_eq!(outcome.issue().unwrap().code, "run-not-active");
+        assert!(gateway.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn append_wrapper_is_admitted_with_consistent_ordered_facts() {
+        let adapter = admission_adapter(true);
+        adapter.load_show_data(&"admission".into()).unwrap();
+        adapter
+            .append_context(append_candidate(
+                "source",
+                "provider-owned",
+                json!({"value": 1}),
+            ))
+            .unwrap();
+        let gateway = admission_gateway(Ok(loop_core::Admission::Admitted));
+        let outcome = loop_core::execute_append_with_gateway(
+            append_candidate(
+                "wrapper",
+                "evidence-applicability",
+                json!({
+                    "origin": {"kind": "context-record", "id": "source"},
+                    "target": {}, "attesting_driver": {}, "reason": "reuse"
+                }),
+            ),
+            &adapter,
+            &gateway,
+        );
+        assert!(outcome.is_completed(), "{outcome:?}");
+        let calls = gateway.calls.borrow();
+        let request = &calls[0];
+        assert_eq!(request.record.id.as_str(), "wrapper");
+        assert_eq!(request.record.kind, "evidence-applicability");
+        assert_eq!(request.context[0].id.as_str(), "source");
+        assert_eq!(request.context.len(), 1);
+        assert_eq!(request.initial_input["objective"], "durable");
+        assert_eq!(request.current_state.as_str(), "start");
+        assert_eq!(request.state_visit, 0);
+        assert!(request.workflow.admit);
+    }
+
+    #[test]
+    fn append_without_admit_never_calls_provider_and_legacy_path_cannot_bypass() {
+        let adapter = admission_adapter(false);
+        adapter.load_show_data(&"admission".into()).unwrap();
+        let gateway = admission_gateway(Err(ProviderError::timeout("must not call")));
+        assert!(loop_core::execute_append_with_gateway(
+            append_candidate("first", "opaque", json!([1])),
+            &adapter,
+            &gateway
+        )
+        .is_completed());
+        assert!(loop_core::execute_append(
+            append_candidate("second", "opaque", json!(null)),
+            &adapter
+        )
+        .is_completed());
+        assert!(gateway.calls.borrow().is_empty());
+        for data in [json!(null), json!([]), json!("not an object")] {
+            let outcome = loop_core::execute_append_with_gateway(
+                append_candidate("bad-wrapper", "evidence-applicability", data),
+                &adapter,
+                &gateway,
+            );
+            assert_eq!(
+                outcome.issue().unwrap().code,
+                "evidence-applicability-refused"
+            );
+        }
+        assert!(gateway.calls.borrow().is_empty());
+        let adapter = admission_adapter(true);
+        adapter.load_show_data(&"admission".into()).unwrap();
+        let outcome =
+            loop_core::execute_append(append_candidate("first", "note", json!({})), &adapter);
+        assert_eq!(outcome.issue().unwrap().code, "provider-admission-required");
+        assert!(adapter
+            .load_context_records(&"admission".into())
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn append_sequence_cas_rejects_candidate_after_concurrent_semantic_write() {
+        let adapter = admission_adapter(true);
+        adapter.load_show_data(&"admission".into()).unwrap();
+        let gateway = AdmissionGateway {
+            result: Ok(loop_core::Admission::Admitted),
+            calls: Default::default(),
+            concurrent_append: Some(&adapter),
+        };
+        let outcome = loop_core::execute_append_with_gateway(
+            append_candidate("candidate", "note", json!({})),
+            &adapter,
+            &gateway,
+        );
+        assert!(outcome.is_rejected(), "{outcome:?}");
+        assert_eq!(outcome.issue().unwrap().code, "append-sequence-changed");
+        let context = adapter.load_context_records(&"admission".into()).unwrap();
+        assert_eq!(context.len(), 1);
+        assert_eq!(context[0].id.as_str(), "concurrent");
+        assert_eq!(adapter.load_history(&"admission".into()).unwrap().len(), 2);
     }
 
     fn checked_event_workflow() -> Workflow {

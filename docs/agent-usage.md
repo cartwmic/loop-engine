@@ -2,7 +2,7 @@
 
 ## Public surface
 
-Primary commands: `start`, `list`, `show`, `append`, `event`, `history`, `terminate`. Additional commands: targeted `read`, terminal `explore`, passive `monitor`, explicit `reclaim`. Monitoring observes durable state, not external execution. Providers use `describe` and `evaluate` transport, plus optional `capture`.
+Primary commands: `start`, `list`, `show`, `append`, `event`, `history`, `terminate`. Additional commands: targeted `read`, terminal `explore`, passive `monitor`, explicit `reclaim`. Monitoring observes durable state, not external execution. Providers use `describe` and `evaluate` transport, plus optional `capture` and `admit`.
 
 Providers that opt in (software-change, research and policy-document) also answer an optional `capture` operation: when a new run leaves an artifact's owning phase forward, by checked approval or owner override, the engine commits a `retained-artifacts` context record with that artifact's exact bytes in the same transaction. Full `show` and `history` expose these records after the run's files are gone; each entry has `name`, `sha256`, `size` and either `content` (`encoding` `utf-8` or `base64`), `same_as` (the record holding identical earlier content) or `absent: true`. Drafts between exits are not retained, and runs started before this capability have none.
 
@@ -17,6 +17,8 @@ The engine stores and evaluates workflow state; it never executes agents, adviso
 2. Do the work externally. Reviewers return judgments; the driver runs deterministic checks and owns progression.
 3. Submit external judgments through `review-candidates`, external `command_results` through `prepare-validation`, and accepted context through engine `append`.
 4. Read action/full `show`, then send the checked `event`; re-read after each transition. A successful process exit alone does not prove the deliverable.
+
+For new workflows advertising provider record admission, supported provider-owned append/intake records are checked before storage. Named rule refusals and unavailable/incompatible/malformed validator responses fail closed; refused writes leave context/history unchanged. Deterministic validity is not semantic approval or aggregate readiness. Started runs keep frozen capabilities/runtime; no migration or bypass is implied.
 
 Preserve review groups, self-review declarations, author counts and amendments. Declare evidence applicability explicitly; check ordinary review clearance before challenge review. Respect declared source scopes and current source identity. Record residual risks honestly and cover every applicable sufficiency axis; zero axes do not require invented reviews. Reuse evidence only while its declared applicability remains true. Typed advice answers are externally authored context of kind `advice-answer`.
 ## Software-change steering records
@@ -53,13 +55,179 @@ The only optional top-level fields are:
   digest, including the prefix. This prior-intent source is distinct from the
   intent artifact's pre-change Git baseline.
 
-Check the provider shape before append. A completed engine append does not
-validate it. In 0.24.1, commission and final validation parse every retained
-steering record before supersession. A malformed payload or invalid baseline
-therefore blocks the run even after a corrected superseding record. Preserve
-the failure and stop; no documented append-only repair exists. Do not delete
-history, bypass checks or replace a frozen executable. Obtain owner authorization
-to preserve/terminate the affected run and prepare a correctly shaped replacement.
+Check the provider shape before append. On a release with complete provider
+admission, an invalid steering digest, revision or earlier-record reference is
+refused before storage; correct the named field and retry. Required validation
+being unavailable or incompatible is a write failure, not unchecked acceptance.
+A stored record still grants no semantic authority.
+No exception stores a refused record. Incomplete source builds without admission
+still do not establish this guarantee from a successful direct append.
+
+Earlier frozen runtimes (including 0.24.1) parse steering before supersession;
+a malformed retained payload can therefore block even after a corrected record.
+These runs gain no new recovery by editing profiles or replacing executables.
+Preserve the failure and obtain owner authorization for any termination/replacement;
+never delete history, bypass storage rules or overwrite the frozen runtime.
+
+## Running advice and append-only recovery
+
+Use a release implementing these record kinds on new runs. Do not apply current
+contracts to runs frozen on an earlier executable. Full `show` preserves the original
+input and complete context; action/full show must precede mutation.
+
+### Immediate owner advice changes
+
+`show.result.advice_policy` is the effective setting, overriding start-time advice
+flags or frozen action-guidance prose. It contains `frozen`, `change_record_ids`,
+`effective` and `enabled`; unavailable is not an enabled/stale fallback. Owner
+attribution is trusted, not authentication. Append this closed `advice-policy-change`
+shape using the current observed visit and actual owner decision:
+
+```json
+{
+  "actor": {"name": "owner", "kind": "human"},
+  "reason": "Use this advice requirement for the pending departure.",
+  "state_visit": 4,
+  "advice_departures": {
+    "version": 1,
+    "occasions": [{"state": "explore", "event": "intent-ready", "occasion_id": "execution-or-authority-issue:explore:intent-ready"}]
+  }
+}
+```
+
+Copy real state/event identities from the stored workflow; examples create no edge.
+The complete map replaces the previous effective map immediately, including the
+pending departure. Empty `occasions` disables new due advice. Removing A releases
+A's unanswered prerequisite without releasing retained B; adding a requirement
+needs a current declaration. Frozen software-change occasion families still bound
+`advice-request`. The original map and every owner change remain in history.
+
+For `advice-occasion`, provide `source_state`, `state_visit`, `event`, `occasion_id`,
+object `target`, `triggered`, `trigger_source_ids`, `response_ids` and `reason`.
+A triggered declaration names unique earlier trigger sources and earlier typed
+advice-answer IDs (possibly empty while unanswered), with no non-trigger reason.
+`triggered:false` needs a nonblank no-admissible-question reason and empty source/
+response lists; it is not fabricated advice. An enabled effective map checks these
+fields at write. An accidental duplicate is refused naming the existing ID.
+Correct either direction by adding `revises` naming the latest declaration for
+that exact occasion/state/visit/event and a nonblank `revision_reason`; originals
+stay visible. Ordinary driver correction needs no owner ceremony or fresh-visit
+revise. Removed declarations are historical/inactive for closure.
+
+Every successful received answer still needs a reasoned `advice-disposition`, even
+after policy removal/disablement or occasion revision. Use `response_id`, `answer_id`,
+`occasion_id`, `state_visit`, matching object `target`, `disposition` (`accept`,
+`partial`, `reject`) and nonblank `reason`. Changed targets need explicit valid
+`advice-applicability` or fresh advice. The existing scoped `--advice-exception`
+only excuses precisely named unanswered due occasions, never missing answer
+dispositions, ordinary gates, proof or authority. Advice remains non-authoritative.
+
+### Obsolete evidence and proof additions
+
+Append software-change `record-withdrawal` as the closed object
+`{record_ids:["earlier-record-id"],reason:"why obsolete",attesting_driver:{name,kind}}`.
+IDs must be nonempty, unique, earlier same-run records, not already withdrawn;
+reason/driver name must be nonblank. Only `review-evidence`, `evidence-applicability`
+and supplemental `validation-command` records qualify. A failing review must
+already have an exact-source entry in the latest valid finding ledger for its
+gate/subject. Withdrawal never dispositions an accepted-unresolved finding,
+received advice answer or already-taken transition. Frozen plan proof commands
+are not context records and cannot be withdrawn.
+
+Valid reviewer retirement still requires a reasoned `reviewer-manifest` roster
+change (prior presence, current absence) plus `retired-author` ledger disposition.
+Re-added authors are not still retired. Withdrawn/retired records and carries of
+excluded origins do not count or block later coverage, including malformed records;
+configured replacement floors remain. A new carry of an excluded origin is invalid.
+Keep originals for immutable ledger-source identity; do not erase pending findings.
+
+A commission reports current malformed records in `record_diagnostics` with ID/
+reason instead of supplying fabricated clearance or aborting on their citations.
+Gates remain blocked until correction by later conforming evidence or withdrawal/
+valid retirement plus replacement coverage. Ledger review-source checks retain
+stored identity/shape rather than re-resolving current cited files; unreadable
+identity fields still invalidate a snapshot. Later checks see exclusions, while
+passed transition history stays unchanged. Current counted cold reconstructions,
+including eligible carries under their original IDs, all require intent comparison;
+withdrawn/retired/noncounting returns remain history, not comparison obligations.
+
+Provider admission is a separate required boundary: on supporting releases these
+provider records are refused at write when invalid; without that capability a
+completed append is not proof of provider validity. Do not describe incomplete
+admission wiring as passing every-write validation or use a bypass to store a refusal.
+
+## Software-change recording metadata and sources
+
+`review-candidates` retains the genuine request/original and derives one stable
+assessment_id from exact original-return bytes plus assignment when absent. All fresh
+axes from that return share it. Consistent explicit IDs are preserved; contradictory
+batch/row/projection identities refuse. Do not fabricate per-axis execution origins.
+`assessment_missing`, `assessment_inconsistent` and `mixed_authors` are distinct
+metadata/stage causes, not a substitute for genuine configured author-floor shortages.
+Incomplete groups and ineligible self-review still block; do not weaken frozen policy.
+
+A finding-ledger entry may omit string statement to derive exact immutable source
+findings; a supplied value must match exactly. Review text stays exact, criterion/goal
+arrays retain the literal two-character backslash-plus-n separator, not a newline.
+Optional summary is driver explanation outside stable identity, not reviewer text.
+Optional report residual accepted_by is {"name":"actual accepting actor","kind":"human|agent|script"}
+(choose one kind), not a scalar. The implementation report schema is checked at the
+first report-bearing reconciliation-ready hop; implementation-ready remains report-free.
+
+Review citations may use contained file pointers/line ranges or
+`record:ACTUAL_CONTEXT_ID#JSON-Pointer` over the complete stored ContextRecord,
+e.g. `record:OWNER_ID#/data/instruction`. Allowed kinds: review-evidence,
+intent-comparison, user-steering, finding-ledger, evidence-applicability,
+criterion-verdict, goal-verdict, intent-correction. IDs must resolve to actual earlier
+same-run records and pointers must exist. No invented nested IDs or arbitrary kinds.
+Commission's review_record_sources names real delivered IDs. Applicable non-intent
+steering follows existing target/supersession selection; unrelated/superseded steering
+is excluded. Reviewer truth remains external; citation availability is not support.
+
+### Driver intent correction
+
+For a correction within accepted intent, kind `intent-correction` accepts this closed
+data object (replace every placeholder with retained facts):
+
+```json
+{
+  "subject":"intent.json",
+  "subject_revision":"CORRECTED_REVISION",
+  "prior_intent":{
+    "revision":"PRIOR_REVIEWED_REVISION",
+    "locator":"ACTUAL_RETAINED_PRIOR_LOCATOR",
+    "sha256":"sha256:ACTUAL_64_LOWERCASE_HEX",
+    "json_bytes":"EXACT_PRIOR_UTF8_JSON_TEXT"
+  },
+  "findings":[{"ledger_id":"ACTUAL_LEDGER_ID","finding_id":"F-actual"}],
+  "author":{"name":"actual driver","kind":"script"},
+  "reason":"Driver's attributed correction reason."
+}
+```
+
+Use distinct current/prior revisions, exact bytes/digest/revision, and accepted
+intent-owned findings in the latest matching earlier intent-gate ledger backed by
+actual prior-revision review sources. Unknown/missing/wrong-source/stale references
+refuse. Known later reviewed revisions without qualified exact prior bytes refuse
+intent-ready and commission before review. Real scope changes still require owner
+steering/authority; correction classification is a cooperative driver declaration,
+not a prose/diff oracle, approval or finding discharge. Ordinary/challenge/checkpoint
+packets expose intent_revision_baseline's actual record/source/delivery status;
+owner intent_revision_view shows exact prior-byte delta and separate actors.
+`record:CORRECTION_ID#/data/prior_intent/json_bytes` is a supported citation.
+Driver correction provenance never becomes owner words or approval. Existing frozen
+workflow context declarations are not rewritten.
+
+Implementation reviewers inspect the actual declared-baseline-to-covered-commit
+change, not report claims alone. Necessary inputs and tools are driver-selected;
+no tool ban, mandatory bundled diff or new judging axis. Supplied-only calibration
+uses supplied companions only, never live lookup of fictional path labels.
+
+Default generated implementation/validation checkpoint JSON is multiline two-space
+pretty JSON, no added final newline, readable with ordinary line readers. Internal
+content/report/state digest meaning is unchanged; physical file-byte SHA-256 changes
+with whitespace. Accepted history binds and retains actual verified bytes/name,
+including compact/manual encodings, without rewriting or duplicating equivalent proof.
 
 ## Provider tools
 
@@ -114,13 +282,14 @@ criterion/goal duties unchanged.
 
 ## Software-change narratives and checkpoints
 
-These forms require the current source `software-change` provider with `-15` profiles.
+These forms use current source `software-change` with `-16` profiles; setup refuses
+historical shipped IDs through -15 and reports minimal-16, standard-16, high-rigor-16.
 The installed 0.24.1 predecessor lacks these options; existing `-14` runs retain their
 frozen graph, obligations and original runtime. Load the
 [software-change skill](../crates/software-change-provider/skills/using-software-change-provider/SKILL.md#optional-narratives-and-owner-checkpoints)
 for the full procedure before driving either option.
 
-Both options default off in `minimal-15`, `standard-15` and `high-rigor-15`. Setup
+Both options default off in `minimal-16`, `standard-16` and `high-rigor-16`. Setup
 accepts repeated boolean phase settings; `false` removes a selected phase:
 
 ```sh

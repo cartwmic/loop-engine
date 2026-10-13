@@ -568,6 +568,7 @@ fn inject_axes(policies: &mut Map<String, Value>, contract_v3: bool, semantic_co
             };
             push_axis_if_absent(
                 axes,
+                &gate,
                 IDS_GROUNDED_ID,
                 ids_description,
                 ids_prompt,
@@ -577,6 +578,7 @@ fn inject_axes(policies: &mut Map<String, Value>, contract_v3: bool, semantic_co
             if VALIDATION_GATES.contains(&gate.as_str()) {
                 push_axis_if_absent(
                     axes,
+                    &gate,
                     BYPASS_NOT_GREEN_ID,
                     BYPASS_NOT_GREEN_DESCRIPTION,
                     BYPASS_NOT_GREEN_PROMPT,
@@ -590,6 +592,7 @@ fn inject_axes(policies: &mut Map<String, Value>, contract_v3: bool, semantic_co
 
 fn push_axis_if_absent(
     axes: &mut Vec<Value>,
+    gate: &str,
     id: &str,
     description: &str,
     example_prompt: &str,
@@ -612,6 +615,7 @@ fn push_axis_if_absent(
     });
     if let Some(review_stage) = review_stage {
         axis["review_stage"] = Value::String(review_stage.to_owned());
+        axis["group"] = json!(format!("{gate}.{review_stage}.{id}"));
     }
     axes.push(axis);
 }

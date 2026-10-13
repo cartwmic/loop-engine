@@ -44,3 +44,6 @@ mod embedded_data;
 mod evaluate;
 #[path = "provider/shipped_data.rs"]
 mod shipped_data;
+
+#[path = "provider/challenge_clearance.rs"]
+mod challenge_clearance;

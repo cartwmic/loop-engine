@@ -1495,7 +1495,7 @@ fn software_change_groups_and_self_review_are_explicit() {
 }
 
 #[test]
-fn setup_refuses_historical_14_profiles_and_accepts_shipped_successors() {
+fn setup_refuses_historical_14_and_15_profiles_and_accepts_shipped_successors() {
     let root = TestDir::new();
     for name in ["minimal", "standard", "high-rigor"] {
         let source = workspace_integration::package_root("software-change-provider")
@@ -1517,6 +1517,17 @@ fn setup_refuses_historical_14_profiles_and_accepts_shipped_successors() {
                 .bounded_output("setup shipped profile identity")
                 .unwrap()
         };
+        let previous = root.path.join(format!("{name}-15.json"));
+        let mut previous_profile = profile.clone();
+        previous_profile["config_version"] = json!(format!("{name}-15"));
+        fs::write(&previous, serde_json::to_vec(&previous_profile).unwrap()).unwrap();
+        let refused_previous = run_setup(&previous);
+        assert_exit(&refused_previous, 2);
+        assert!(refused_previous.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&refused_previous.stderr)
+            .contains("historical shipped profile IDs cannot be used for new setup"));
+        assert!(!output.exists());
+
         let refused = run_setup(&historical);
         assert_exit(&refused, 2);
         assert!(refused.stdout.is_empty());
@@ -1531,7 +1542,7 @@ fn setup_refuses_historical_14_profiles_and_accepts_shipped_successors() {
         let accepted = run_setup(&source);
         assert_exit(&accepted, 0);
         let profile: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
-        assert_eq!(profile["config_version"], format!("{name}-15"));
+        assert_eq!(profile["config_version"], format!("{name}-16"));
     }
 }
 
@@ -1551,7 +1562,7 @@ fn software_change_setup_knobs_explain_drift_and_author_counts_cli() {
     assert_exit(&run_setup(&[]), 0);
     let explain_path = root.path.join("profile.json.explain.json");
     let mut explain: Value = serde_json::from_slice(&fs::read(&explain_path).unwrap()).unwrap();
-    assert_eq!(explain["base"]["id"], "minimal-15");
+    assert_eq!(explain["base"]["id"], "minimal-16");
     explain["overrides"][1]["base_value"] = json!(7);
     fs::write(&explain_path, serde_json::to_vec(&explain).unwrap()).unwrap();
     assert_exit(
@@ -1589,4 +1600,106 @@ fn software_change_setup_knobs_explain_drift_and_author_counts_cli() {
     .output;
     assert_exit(&output, 0);
     assert_eq!(response(&output)["data"]["before"], 2);
+}
+
+#[test]
+fn later_conforming_citation_replacement_remains_clear_at_shared_final_check() {
+    let root = TestDir::new();
+    root.write_json("intent.json", &valid_metadata("1"));
+    root.write_text("citation.txt", "first\nsecond\n");
+    let mut request = base_request(
+        config_with_axis(&root),
+        checked("intent-review", "approved", "design"),
+    );
+    let mut original = passing_evidence();
+    original["data"]["review_contract_version"] = json!(3);
+    original["data"]["assessment_id"] = json!("original");
+    original["data"]["grounds"] = json!({
+        "reason": "Scripted citation drift control, not a semantic judgment.",
+        "evidence": [{"locator": "citation.txt#L2"}]
+    });
+    request["context"] = json!([
+        original.clone(),
+        finding_ledger_record("intent-review", "intent.json", "1", json!([]))
+    ]);
+    let admitted_bytes = serde_json::to_vec(&request["context"][0]).unwrap();
+    let valid = run_provider(request.clone());
+    assert_exit(&valid, 0);
+    assert_eq!(response(&valid), json!({"result": "allow"}));
+
+    root.write_text("citation.txt", "first\n");
+    let drift = run_provider(request.clone());
+    assert_exit(&drift, 0);
+    let denied = response(&drift);
+    assert_eq!(denied["result"], "deny");
+    assert_eq!(denied["feedback"]["details"]["phase"], "evidence");
+    let reasons = denied["feedback"]["details"]["diagnostics"].to_string();
+    assert!(reasons.contains("malformed"), "{denied}");
+    assert!(reasons.contains("citation.txt#L2"), "{denied}");
+    assert!(reasons.contains("outside the source"), "{denied}");
+
+    let mut replacement = original;
+    replacement["id"] = json!("context-2");
+    replacement["sequence"] = json!(3);
+    replacement["created_at"] = json!(3);
+    replacement["data"]["assessment_id"] = json!("replacement");
+    replacement["data"]["grounds"]["evidence"] = json!([{"locator":"citation.txt#L1"}]);
+    request["context"].as_array_mut().unwrap().push(replacement);
+    let repaired = run_provider(request.clone());
+    assert_exit(&repaired, 0);
+    assert_eq!(response(&repaired), json!({"result": "allow"}));
+    assert_eq!(
+        serde_json::to_vec(&request["context"][0]).unwrap(),
+        admitted_bytes
+    );
+}
+
+#[test]
+fn broad_later_conforming_clearing_keeps_other_current_coverage_without_config_partition() {
+    let root = TestDir::new();
+    root.write_json("intent.json", &valid_metadata("1"));
+    root.write_text("citation.txt", "first\n");
+    let mut request = base_request(
+        config_with_axis(&root),
+        checked("intent-review", "approved", "design"),
+    );
+    let mut current = passing_evidence();
+    current["data"]["review_contract_version"] = json!(3);
+    current["data"]["assessment_id"] = json!("current");
+    current["data"]["grounds"] = json!({
+        "reason":"Scripted broad R14 control, not a semantic judgment.",
+        "evidence":[{"locator":"citation.txt#L1"}]
+    });
+    let mut malformed = current.clone();
+    malformed["id"] = json!("context-2");
+    malformed["sequence"] = json!(2);
+    malformed["data"]["author"]["name"] = json!("other-reviewer");
+    malformed["data"]["assessment_id"] = json!("malformed");
+    malformed["data"]["grounds"]["evidence"] = json!([{"locator":"citation.txt#L2"}]);
+    request["context"] = json!([
+        current,
+        malformed.clone(),
+        finding_ledger_record("intent-review", "intent.json", "1", json!([]))
+    ]);
+    let denied = response(&run_provider(request.clone()));
+    assert_eq!(denied["result"], "deny");
+    assert_eq!(denied["feedback"]["details"]["phase"], "evidence");
+    assert!(denied["feedback"]["details"]["diagnostics"]
+        .to_string()
+        .contains("citation.txt#L2"));
+
+    // R14 accepts ANY later conforming record at this gate/stage/axis. This
+    // stale-config record does not supply current coverage, which stays with
+    // the original independent current author. No config-partition repair.
+    let mut later = malformed;
+    later["id"] = json!("context-3");
+    later["sequence"] = json!(4);
+    later["created_at"] = json!(4);
+    later["data"]["config_version"] = json!("older-config");
+    later["data"]["assessment_id"] = json!("later-conforming");
+    later["data"]["grounds"]["evidence"] = json!([{"locator":"citation.txt#L1"}]);
+    request["context"].as_array_mut().unwrap().push(later);
+    let cleared = run_provider(request);
+    assert_exit(&cleared, 0);
+    assert_eq!(response(&cleared), json!({"result":"allow"}));
 }

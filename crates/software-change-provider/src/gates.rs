@@ -70,14 +70,9 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     if request.initial_input["contract_version"].as_u64() == Some(2) {
         return EvaluationOutcome::Response(unsupported_response());
     }
-    let effective = if overlay::enabled(&request.initial_input) {
-        overlay::apply(&request.initial_input)
-    } else {
-        request.initial_input.clone()
-    };
-    let effective = software_change_provider::author_counts::resolve(
-        &effective,
-        &serde_json::to_value(&request.context).expect("context JSON"),
+    let effective = software_change_provider::admission::effective_policy(
+        &request.initial_input,
+        &request.context,
     )
     .effective;
     let config = match parse_initial_input(&effective) {
@@ -180,6 +175,105 @@ fn preserve_accepted_proof(
     }
 }
 
+/// Select authoritative/relevant records only, after exclusions. Aggregate
+/// missing-author/finding clearance remains with the existing evaluators.
+fn classify_gate_records(
+    request: &EvaluateRequest,
+    gate: &str,
+    subject: &str,
+    revision: &str,
+    config: &crate::config::ValidatedConfig,
+    excluded: &BTreeSet<String>,
+    conforming_review_ids: Option<&BTreeSet<String>>,
+) -> Result<(), loop_core::Refusal> {
+    let mut all_excluded = excluded.clone();
+    all_excluded.extend(
+        software_change_provider::recovery::excluded_record_ids(
+            &request.context,
+            gate,
+            subject,
+            config.artifact_root(),
+        )
+        .map_err(|message| loop_core::Refusal {
+            rule: "recovery-exclusions".into(),
+            message,
+        })?,
+    );
+    let excluded = &all_excluded;
+    let mut selected = BTreeSet::new();
+    let available: Vec<_> = request
+        .context
+        .iter()
+        .filter(|record| !excluded.contains(record.id.as_str()))
+        .collect();
+    for record in &available {
+        // Only current-config review records can qualify at this gate. After
+        // the existing staged reader is satisfied, classify its read-conforming
+        // direct review projection rather than re-poisoning an R14-cleared row.
+        // All conforming rows remain selected, not just latest/counting passes:
+        // R16 standings, ledger debt and full source context stay untouched.
+        // Uncorrected malformed/Unverified marks already denied above; strict
+        // new-write admission still validates every submitted row independently.
+        let review = record.kind == "review-evidence"
+            && conforming_review_ids.is_none_or(|ids| ids.contains(record.id.as_str()))
+            && record.data["gate"] == gate
+            && record.data["config_version"] == config.config_version()
+            && record.data["policy_id"]
+                .as_str()
+                .is_some_and(|id| config.axis(gate, id).is_some());
+        let carry = record.kind == "evidence-applicability"
+            && record.data["target"]["subject"] == subject
+            && record.data["target"]["revision"] == revision
+            && record.data["origin"]["id"]
+                .as_str()
+                .and_then(|id| {
+                    request
+                        .context
+                        .iter()
+                        .find(|source| source.id.as_str() == id)
+                })
+                .is_some_and(|source| source.data["gate"] == gate);
+        if review
+            || carry
+            || (record.kind == "intent-correction"
+                && subject == "intent.json"
+                && record.data["subject_revision"] == revision)
+        {
+            selected.insert(record.id.as_str().to_owned());
+        }
+    }
+    for kind in ["finding-ledger", "reviewer-manifest", "intent-comparison"] {
+        if let Some(record) = available.iter().rev().find(|record| {
+            record.kind == kind
+                && if kind == "intent-comparison" {
+                    subject == "intent.json" && record.data["subject_revision"] == revision
+                } else {
+                    record.data["gate"] == gate
+                        && (kind == "reviewer-manifest" || record.data["subject"] == subject)
+                }
+        }) {
+            selected.insert(record.id.as_str().to_owned());
+        }
+    }
+    let ctx = software_change_provider::admission::AdmissionContext::new(
+        &request.initial_input,
+        &request.context,
+        request.transition.source.as_str(),
+        0,
+        &request.workflow,
+    )
+    .map_err(|message| loop_core::Refusal {
+        rule: "classification-context".into(),
+        message,
+    })?;
+    for (_, verdict) in
+        software_change_provider::admission::classify_selected(&ctx, excluded, Some(&selected), &[])
+    {
+        verdict?;
+    }
+    Ok(())
+}
+
 fn evaluate_base(
     request: &EvaluateRequest,
     duties: TransitionDuties,
@@ -194,11 +288,11 @@ fn evaluate_base(
     // evaluate-time only and does not mutate the frozen initial_input.
     let overlay_on = overlay::enabled(&request.initial_input);
     let semantic_coverage = overlay::semantic_coverage_enabled(&request.initial_input);
-    let initial_input = if overlay_on {
-        overlay::apply(&request.initial_input)
-    } else {
-        request.initial_input.clone()
-    };
+    let counts = software_change_provider::admission::effective_policy(
+        &request.initial_input,
+        &request.context,
+    );
+    let initial_input = &counts.effective;
     // Contract v2 remains inspectable by the engine and by historical helper
     // code, but this candidate provider must not reinterpret its semantic
     // obligations as v3. Return the protocol-level unsupported result for a
@@ -209,11 +303,7 @@ fn evaluate_base(
         return EvaluationOutcome::Response(unsupported_response());
     }
 
-    let counts = software_change_provider::author_counts::resolve(
-        &initial_input,
-        &serde_json::to_value(&request.context).expect("context JSON"),
-    );
-    let initial_input = counts.effective;
+    let initial_input = counts.effective.clone();
     let (count_subject, count_gate) = match duties {
         TransitionDuties::Checked { subject, gate } => (Some(subject), gate),
         _ => (None, None),
@@ -269,6 +359,16 @@ fn evaluate_base(
         .filter(|axes| !axes.is_empty());
     let checkpoint_phase = checkpoint::phase_for_subject(subject);
     let checkpoint_required = checkpoint_phase.is_some();
+    let needs_intent_baseline = subject == "intent.json"
+        && request.transition.event.as_str() == "intent-ready"
+        && request.context.iter().any(|record| {
+            record.kind == "review-evidence"
+                && record.data["subject"] == "intent.json"
+                && matches!(
+                    record.data["gate"].as_str(),
+                    Some("intent-review" | "intent-adversarial-review")
+                )
+        });
 
     // §9.4: no configured schema, link, or semantic axis means allow without
     // requiring artifact_root and without consulting context, except that
@@ -279,6 +379,7 @@ fn evaluate_base(
         && staged_axes.is_none()
         && !checkpoint_required
         && !force_document
+        && !needs_intent_baseline
     {
         if overlay_on && is_passed(request) && !bookends_is_green(bookends_report.as_ref()) {
             return EvaluationOutcome::Response(bookends_red_deny(
@@ -293,34 +394,24 @@ fn evaluate_base(
 
     // §9.5: only an actual schema/link read requires artifact_root.  The
     // artifact reader owns canonical containment and the §6 I/O taxonomy.
-    let document = if schema.is_some() || !links.is_empty() || force_document {
-        match read_artifact(config.artifact_root(), subject) {
-            ArtifactReadOutcome::Present(document) => Some(document),
-            ArtifactReadOutcome::Deny(deny) => {
-                return EvaluationOutcome::Response(schema_deny_for_read(request, deny))
+    let document =
+        if schema.is_some() || !links.is_empty() || force_document || needs_intent_baseline {
+            match read_artifact(config.artifact_root(), subject) {
+                ArtifactReadOutcome::Present(document) => Some(document),
+                ArtifactReadOutcome::Deny(deny) => {
+                    return EvaluationOutcome::Response(schema_deny_for_read(request, deny))
+                }
+                ArtifactReadOutcome::EvaluationError(error) => {
+                    return EvaluationOutcome::EvaluationError(error.to_string())
+                }
             }
-            ArtifactReadOutcome::EvaluationError(error) => {
-                return EvaluationOutcome::EvaluationError(error.to_string())
-            }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     let mut metadata = None;
     if let (Some(schema), Some(document)) = (schema, document.as_ref()) {
-        let report = schema.evaluate(document.value());
-        let violations: Vec<Value> = report
-            .violations()
-            .iter()
-            .map(|violation| {
-                json!({
-                    "path": violation.path,
-                    "rule": violation.rule,
-                    "message": violation.message,
-                })
-            })
-            .collect();
+        let violations = schema_violations(schema, document.value());
         if !violations.is_empty() {
             return EvaluationOutcome::Response(schema_deny(request, violations));
         }
@@ -339,6 +430,48 @@ fn evaluate_base(
             match extracted {
                 Ok(value) => metadata = Some(value),
                 Err(error) => return EvaluationOutcome::EvaluationError(error.to_string()),
+            }
+        }
+    }
+
+    if needs_intent_baseline {
+        let intent = document.as_ref().expect("baseline check reads intent");
+        if let Err(diagnostic) = software_change_provider::commission::intent_revision_baseline(
+            &request.context,
+            &request.initial_input,
+            intent.value(),
+        ) {
+            return EvaluationOutcome::Response(deny_response(
+                "software-change-intent-baseline-required",
+                "later intent revision requires exact qualified prior bytes before review",
+                Some(json!({"phase":"intent-baseline","diagnostic":diagnostic})),
+            ));
+        }
+    }
+
+    // The first implementation-report-bearing boundary is post-reconciliation,
+    // even when optional narratives/checkpoints are off. Check shape before
+    // checkpoint/review commissioning; implementation-ready remains report-free.
+    if subject == workflow::RECONCILIATION_SUBJECT
+        && request.transition.source.as_str() == workflow::RECONCILIATION_STATE
+        && request.transition.event.as_str() == workflow::RECONCILIATION_READY_EVENT
+    {
+        if let Some(report_schema) = config.schema("implementation-report.json") {
+            let report = match read_artifact(config.artifact_root(), "implementation-report.json") {
+                ArtifactReadOutcome::Present(report) => report,
+                ArtifactReadOutcome::Deny(deny) => {
+                    return EvaluationOutcome::Response(schema_deny_for_read(request, deny))
+                }
+                ArtifactReadOutcome::EvaluationError(error) => {
+                    return EvaluationOutcome::EvaluationError(error.to_string())
+                }
+            };
+            let mut violations = schema_violations(report_schema, report.value());
+            for violation in &mut violations {
+                violation["subject"] = json!("implementation-report.json");
+            }
+            if !violations.is_empty() {
+                return EvaluationOutcome::Response(schema_deny(request, violations));
             }
         }
     }
@@ -485,6 +618,8 @@ fn evaluate_base(
                 &report,
                 request.transition.source.as_str() != "validation"
                     || request.transition.target.as_str() == "end",
+                &request.workflow,
+                excluded_applicability,
             )
         })();
         if let Err(error) = result {
@@ -523,13 +658,17 @@ fn evaluate_base(
     if let (Some(gate), Some(metadata)) = (gate, metadata.as_ref()) {
         let subject_author =
             EvidenceAuthorIdentity::new(metadata.author().name(), metadata.author().kind());
-        let ledger = evaluate_finding_ledger(
-            &request.context,
-            gate,
-            subject,
-            metadata.revision(),
-            &config,
-        );
+        let ledger_context: Vec<_> = request
+            .context
+            .iter()
+            .filter(|record| {
+                record.kind != "finding-ledger"
+                    || !excluded_applicability.contains(record.id.as_str())
+            })
+            .cloned()
+            .collect();
+        let ledger =
+            evaluate_finding_ledger(&ledger_context, gate, subject, metadata.revision(), &config);
         if !ledger.is_satisfied() {
             let mut details = ledger
                 .details_value()
@@ -551,6 +690,7 @@ fn evaluate_base(
             .cloned()
             .collect();
         let mut challenge_context = eligible_context.clone();
+        let mut early_challenges = Vec::new();
         if let Some(parent) = gate
             .strip_suffix("-adversarial-review")
             .map(|prefix| format!("{prefix}-review"))
@@ -604,21 +744,9 @@ fn evaluate_base(
                                 )
                             })
                         });
-                        let ordinary = crate::evidence::evaluate_staged_evidence_excluding(
-                            &request.context,
-                            &parent,
-                            subject,
-                            metadata.revision(),
-                            &subject_author,
-                            config.config_version(),
-                            &corresponding,
-                            config.axis_namespace(),
-                            config.artifact_root(),
-                            parent_ledger.current_snapshot(),
-                            config.contract_version() >= 3,
-                            excluded_applicability,
-                        );
-                        retain_challenges_after_clearance(
+                        // Normal checked entry proves ordinary evidence cleared. Only
+                        // its current ledger remains an ordinary-side safeguard.
+                        early_challenges.extend(retain_challenges_after_clearance(
                             &eligible_context,
                             &mut challenge_context,
                             &parent,
@@ -629,13 +757,13 @@ fn evaluate_base(
                                 .values()
                                 .flat_map(|axes| axes.keys().cloned())
                                 .collect::<std::collections::BTreeSet<_>>(),
-                        );
-                        if blocked || !ordinary.is_satisfied() {
+                        ));
+                        if blocked {
                             return EvaluationOutcome::Response(deny_response(
                                 EVIDENCE_DENY_CODE,
                                 "challenge-before-ordinary-clearance",
                                 Some(
-                                    json!({"phase":"evidence","axis":policy.id(),"parent":parent}),
+                                    json!({"phase":"evidence","axis":policy.id(),"parent":parent,"ordinary_ledger":parent_ledger.details_value()}),
                                 ),
                             ));
                         }
@@ -664,9 +792,19 @@ fn evaluate_base(
                     .collect(),
             )
         });
-        if let Some(evidence) = evidence {
+        if let Some(ref evidence) = evidence {
             if !evidence.is_satisfied() && challenge_context.len() != eligible_context.len() {
-                return EvaluationOutcome::Response(deny_response(EVIDENCE_DENY_CODE, "challenge-before-ordinary-clearance: retained early challenge is non-qualifying", Some(evidence.details_value())));
+                let mut details = evidence.details_value();
+                details["early_challenges"] = json!(early_challenges);
+                details["remedies"] = json!([
+                    "Obtain a fresh challenge assessment first recorded after the named ordinary record.",
+                    "Append explicit evidence-applicability after the cutoff, attesting that the earlier challenge still applies."
+                ]);
+                return EvaluationOutcome::Response(deny_response(
+                    EVIDENCE_DENY_CODE,
+                    "challenge-before-ordinary-clearance: retained early challenge is non-qualifying; obtain a fresh challenge or append explicit evidence-applicability after the cutoff",
+                    Some(details),
+                ));
             }
             if !evidence.is_satisfied() {
                 let details = evidence.details_value();
@@ -685,6 +823,31 @@ fn evaluate_base(
                 ));
             }
         }
+
+        // Typed ledger and evidence evaluators retain their established denial
+        // diagnostics (including LE-105 Unverified selected-origin failures).
+        // Their early exits are denials only. Shared classification remains a
+        // mandatory final check before this gate can reach any allow path;
+        // Append/admission rules, modes and exclusions remain unchanged.
+        if let Err(refusal) = classify_gate_records(
+            request,
+            gate,
+            subject,
+            metadata.revision(),
+            &config,
+            excluded_applicability,
+            evidence
+                .as_ref()
+                .map(|value| &value.classification_review_ids),
+        ) {
+            return EvaluationOutcome::Response(deny_response(
+                EVIDENCE_DENY_CODE,
+                "stored record failed shared classification",
+                Some(
+                    json!({"phase":"record-classification","category":if refusal.rule=="review-assessment-identity" {"assessment_missing"} else {"record_malformed"},"rule":refusal.rule,"message":refusal.message}),
+                ),
+            ));
+        }
     }
 
     if matches!(gate, Some("intent-review" | "intent-adversarial-review"))
@@ -698,6 +861,7 @@ fn evaluate_base(
             if let Err(diagnostic) = software_change_provider::intent_comparison::validate(
                 &request.context,
                 intent.value(),
+                &initial_input,
             ) {
                 return EvaluationOutcome::Response(deny_response(
                     "software-change-intent-comparison-invalid",
@@ -752,6 +916,10 @@ fn evaluate_base(
         }));
     }
     EvaluationOutcome::Response(allow_response())
+}
+
+fn schema_violations(schema: &crate::schema::ValidatedSchema, value: &Value) -> Vec<Value> {
+    schema.evaluate(value).violations().iter().map(|violation| json!({"path":violation.path,"rule":violation.rule,"message":violation.message})).collect()
 }
 
 fn validate_driver_act(
@@ -1567,7 +1735,8 @@ fn retain_challenges_after_clearance(
     subject: &str,
     axis: &str,
     parent_axes: &std::collections::BTreeSet<String>,
-) {
+) -> Vec<Value> {
+    let mut excluded = Vec::new();
     let clearance = context
         .iter()
         .filter(|record| {
@@ -1608,12 +1777,12 @@ fn retain_challenges_after_clearance(
                     })
                 })
         })
-        .map(|r| r.sequence)
-        .max();
-    if let Some(clearance) = clearance {
+        .max_by_key(|r| r.sequence);
+    if let Some(cutoff) = clearance {
+        let clearance = cutoff.sequence;
         retained.retain(|record| {
             let data = intake_data(context, record);
-            !(data["gate"] == gate
+            let early = data["gate"] == gate
                 && loop_integrations::review_intake::evidence_axis(data) == axis
                 && matches!(
                     record.kind.as_str(),
@@ -1635,9 +1804,21 @@ fn retain_challenges_after_clearance(
                         .unwrap_or(record.sequence)
                 } else {
                     record.sequence
-                }) <= clearance)
+                }) <= clearance;
+            if early {
+                excluded.push(json!({
+                    "record_id": record.id.as_str(),
+                    "assessment_identity": challenge_assessment_identity(data)
+                        .unwrap_or_else(|| format!("record:{}", record.id)),
+                    "ordinary_record_id": cutoff.id.as_str(),
+                    "axis": axis,
+                    "parent": parent,
+                }));
+            }
+            !early
         });
     }
+    excluded
 }
 
 #[cfg(test)]
@@ -1704,7 +1885,7 @@ mod tests {
             ),
         ];
         let mut retained = context.clone();
-        super::retain_challenges_after_clearance(
+        let excluded = super::retain_challenges_after_clearance(
             &context,
             &mut retained,
             "intent-review",
@@ -1713,11 +1894,95 @@ mod tests {
             "axis",
             &std::collections::BTreeSet::from(["axis".into()]),
         );
+        assert_eq!(excluded.len(), 2);
+        assert_eq!(excluded[0]["record_id"], "early");
+        assert_eq!(excluded[1]["record_id"], "copy");
+        assert_eq!(
+            excluded[0]["assessment_identity"],
+            "assessment:\"early-assessment\""
+        );
+        assert_eq!(excluded[0]["ordinary_record_id"], "ordinary");
         assert!(!retained.iter().any(|r| r.id.as_str() == "early"));
         assert!(retained.iter().any(|r| r.id.as_str() == "fresh"));
         assert!(retained.iter().any(|r| r.id.as_str() == "carry"));
         assert!(!retained.iter().any(|r| r.id.as_str() == "copy"));
         assert_eq!(context.len(), 6);
+    }
+
+    #[test]
+    fn challenge_cutoff_preserves_all_five_relevant_ordinary_record_kinds() {
+        let record = |id: &str, kind: &str, sequence, data| {
+            loop_core::ContextRecord::new(
+                id,
+                kind,
+                data,
+                loop_core::SemanticSequence::new(sequence),
+                loop_core::Timestamp::from_unix_millis(0),
+            )
+        };
+        for (kind, data) in [
+            (
+                "review-evidence",
+                json!({"gate":"intent-review","subject":"intent.json","policy_id":"intent-sufficient"}),
+            ),
+            (
+                "evidence-applicability",
+                json!({"origin":{"id":"ordinary-origin"}}),
+            ),
+            (
+                "finding-ledger",
+                json!({"gate":"intent-review","subject":"intent.json","findings":[{"policy_id":"intent-sufficient"}]}),
+            ),
+            (
+                "author-count-amendment",
+                json!({"targets":[{"gate":"intent-review","axis":"intent-sufficient"}]}),
+            ),
+            ("intent-comparison", json!({"subject_revision":"current"})),
+        ] {
+            let challenge = json!({"gate":"intent-adversarial-review","subject":"intent.json","policy_id":"intent-sufficient","assessment_id":"early"});
+            let context = vec![
+                record(
+                    "ordinary-origin",
+                    "review-evidence",
+                    1,
+                    json!({"gate":"intent-review","subject":"intent.json","policy_id":"intent-sufficient"}),
+                ),
+                record("early", "review-evidence", 2, challenge.clone()),
+                record("cutoff", kind, 3, data),
+                record("raw-copy", "review-evidence", 4, challenge),
+                record(
+                    "later-carry",
+                    "evidence-applicability",
+                    5,
+                    json!({"origin":{"id":"early"}}),
+                ),
+                record(
+                    "unrelated",
+                    "review-evidence",
+                    6,
+                    json!({"gate":"intent-review","subject":"intent.json","policy_id":"other"}),
+                ),
+            ];
+            let mut retained = context.clone();
+            let excluded = retain_challenges_after_clearance(
+                &context,
+                &mut retained,
+                "intent-review",
+                "intent-adversarial-review",
+                "intent.json",
+                "intent-sufficient",
+                &std::collections::BTreeSet::from(["intent-sufficient".into()]),
+            );
+            assert_eq!(excluded.len(), 2, "{kind}");
+            assert!(
+                excluded.iter().all(|r| r["ordinary_record_id"] == "cutoff"),
+                "{kind}"
+            );
+            assert!(
+                retained.iter().any(|r| r.id.as_str() == "later-carry"),
+                "{kind}"
+            );
+        }
     }
 
     #[test]
@@ -1850,6 +2115,16 @@ mod tests {
         ] {
             std::fs::write(root.join(name), json!({"revision":revision}).to_string()).unwrap();
         }
+        let mut report: Value = serde_json::from_str(include_str!(
+            "../data/calibration/fixtures/implementation-report-good.json"
+        ))
+        .unwrap();
+        report["plan_revision"] = json!("plan-r1");
+        std::fs::write(
+            root.join("implementation-report.json"),
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
         let decision = json!({
             "revision":"reconciliation-r1","author":{"name":"driver","kind":"agent"},
             "mode":"bookends-disabled","branch":"sufficient-existing-wording",

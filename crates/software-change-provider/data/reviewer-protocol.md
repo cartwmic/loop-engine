@@ -38,12 +38,13 @@ These are externally judged axes, not readability metrics or automatic checks. T
     "author": {"name": "reviewer-sol", "kind": "agent"},
     "subject": "design.json",
     "subject_revision": "3",
-    "config_version": "standard-13"
+    "config_version": "standard-16",
+    "assessment_id": "assessment:sha256:ACTUAL_ORIGINAL_RETURN_IDENTITY"
   }
 }
 ```
 
-The nine judgment fields remain required for semantic contract v3 under frozen successor profiles. Fresh rows add `grounds: {reason,evidence}` with a nonempty rationale and at least one inspected source locator. Each evidence entry is exactly `{locator}` using `file#JSON-Pointer` or `file#Lstart-Lend`. No reviewer-authored source hash, rationale length limit, reference count quota or locator-length ceiling applies. Citation availability is not citation truth. `review_stage` is `individual` or `aggregate`; author identity is exact `(name,kind)`; subject, revision and config identify the judgment target. Historical evidence retains its original identity and is not rebound to changed files.
+The existing judgment target, author and result fields remain required under current semantic contract v4. Fresh rows carry `grounds: {reason,evidence}` with a nonempty rationale and at least one inspected source locator. Each evidence entry is exactly `{locator}` using `file#JSON-Pointer`, `file#Lstart-Lend`, or `record:ACTUAL_CONTEXT_ID#JSON-Pointer`. The record form addresses the complete stored ContextRecord: e.g. `record:OWNER_ID#/data/instruction` or `record:CORRECTION_ID#/data/prior_intent/json_bytes`. Allowed same-run kinds are review-evidence, intent-comparison, user-steering, finding-ledger, evidence-applicability, criterion-verdict, goal-verdict and intent-correction. The actual ID must resolve unambiguously to an allowed earlier record and the pointer must exist; no invented nested IDs, arbitrary record kinds or unsupported selectors. Immutable record citations do not reopen historical file paths. No reviewer-authored source hash, rationale length limit, reference count quota or locator-length ceiling applies. Citation availability is not citation truth. `review_stage` is `individual` or `aggregate`; author identity is exact `(name,kind)`; subject, revision and config identify the judgment target. Historical evidence retains its original identity and is not rebound to changed files.
 
 ## External review returns
 
@@ -55,19 +56,78 @@ For confirmation only, an unaffected row may be `{axis,reuse:APPLICABILITY_RECOR
 
 ## Read-only candidate inspection
 
-Inspect EXTERNAL returns through `software-change review-candidates`. Supply stdin JSON with `show` (the completed full software-change show envelope), `assignment` (gate, stage, group, author, subject and subject_revision), `request` and `original`. Each content object has exactly one `text` or `reference`. The structured original contains `judgments` and may carry `assessment_id`; a non-JSON return requires a driver-confirmed `projection` preserving its actual meaning. Assignment facts supply target, author and contract version 3; contradictory claims are refused.
+Inspect EXTERNAL returns through `software-change review-candidates`. Supply stdin JSON with `show` (the completed full software-change show envelope), `assignment` (gate, stage, group, author, subject and subject_revision), `request` and `original`. Each content object has exactly one `text` or `reference`. The structured original contains `judgments` and may carry `assessment_id`; when absent, intake derives one stable `assessment:sha256:<64 lowercase hex>` from the exact retained original UTF-8 bytes and assignment identity (gate/stage/group/author/subject/revision). Every fresh axis from that original shares the identity; the same bytes/assignment reproduce it. An explicit consistent identity is preserved; contradictory batch/row/projection identities refuse rather than being overwritten. Reviewers supply judgments, not an invented execution origin. Direct append must retain the actual assessment identity. A non-JSON return requires a driver-confirmed `projection` preserving its actual meaning. Assignment facts supply target, author and contract version 3; contradictory claims are refused.
 
 Candidate output schema version **3** contains `records` and per-item `items` with refusal diagnostics. Fresh records retain grounds, assessment identity and `external_review` request/original evidence. The projector checks configured axis/stage/group, author and judgment shape. It does not establish semantic support, completeness of all obligations, applicability, or author independence. Inspect each candidate and original, explicitly accept, edit or reject, then append accepted `review-evidence` and a driver-authored `finding-ledger`. Projector success is not review approval.
 
 This command performs no catalog mutation, reviewer execution, retry, capture rewrite or gate satisfaction. Preserve originals; candidate output is never itself semantic judgment.
 
+## Challenge meaning and timing
+
+Challenge independently tests whether the ordinary passing or sufficiency conclusion
+holds: assume it did not pass; why might it not have? Ordinary findings and their
+dispositions are context, not individual findings to rebut. Normal entry into the
+challenge state proves ordinary review passed; only its current-revision finding
+ledger is checked, not ordinary evidence again. The challenge outcome is independent
+of the append order of ordinary individual, aggregate and carried records.
+
+Separately, a challenge assessment counts only if first recorded after the latest
+relevant ordinary-review record for its corresponding obligations (review-evidence,
+evidence-applicability, finding-ledger, targeting author-count amendment, or
+intent-comparison where applicable). An earlier assessment, including a raw re-append,
+requires explicit evidence-applicability appended after that cutoff, or a fresh
+challenge. Ordinary-review writes are refused during the challenge; use the existing
+check-free `revise` route for correction and renewed ordinary approval. This applies
+to artifact and narrative challenges. Owner override remains exceptional and does
+not establish ordinary approval.
+
 ## External commission context
 
 The driver selects meaningful relevant context without rewriting originals or silently dropping required evidence. Keep frozen intent/subject, assigned policy prompts, accessible sources and rich durable history. Exclude unrelated gate/subject history. First ordinary aggregate review excludes peers' individual judgments and linked findings/applicability; confirmation keeps relevant findings/applicability; challenge keeps actual parent aggregate grounds. Context size is informational, never a threshold gate. No executable roster or engine execution recovery is part of this contract.
 
-For intent review, only retained `user-steering` records are owner-source material. Superseded qualified statements remain available with their original IDs and supersession edges; `steering-incorporation` and driver-authored paraphrases are not owner instructions. A later material intent revision requires an exact prior-intent source in `intent_baseline` on an effective owner steering record. The owner view shows the full current intent, exact structural wording delta, source statements, constraints/non-goals/acceptance choice surface, and separate drafter/reviewer/driver/owner actors. Owner approval remains external and is never inferred.
+For non-intent design, plan, implementation and validation commissions, applicable user-steering follows existing slot/task targeting and supersession; unrelated/superseded instructions are excluded, not a new review obligation. `review_record_sources` lists actual delivered context IDs/kinds. Tools and meaningful supplied inputs remain driver-selected; missing necessary inputs must be supplied before review.
 
-An optional owner steering `intent_baseline` has exactly `{revision,locator,sha256,json_bytes}`; `json_bytes` contains the original UTF-8 intent JSON exactly, and its digest is checked before a delta is shown. The ordinary artifact path retains only the current intent, while review history retains judgments rather than the exact prior subject bytes; the existing `user-steering` source is therefore the narrow durable place for an owner-qualified baseline instead of a second intent-history ledger. A missing baseline on a material later revision refuses commission rather than displaying a paraphrase as an exact diff. An initial intent has no prior intent delta; its full wording is compared against the retained owner-source statements.
+For implementation review, inspect the actual declared-baseline-to-covered-commit change, not merely the report or completion claims, using driver-selected inputs/tools. Inspect source-scope changes and their consequence against the frozen obligations. No particular tool is required or banned, no diff must be bundled, and no new judging axis is created. Supplied-only calibration still inspects only supplied companions; fictional paths never authorize live checkout lookup. Whether retained calibration evidence covers this clarified inspection duty requires independent exact combined appraisal, not a version-based assumption.
+
+For intent review, only retained `user-steering` records are owner-source material. Superseded qualified statements remain available with their original IDs and supersession edges; `steering-incorporation` and driver-authored paraphrases are not owner instructions. A scope-changing later intent revision requires an exact prior-intent source in `intent_baseline` on effective owner steering. A driver correction within accepted intent may instead use the qualified `intent-correction` form below; it supplies neither owner words nor owner approval. The owner view shows the full current intent, exact structural wording delta, source statements, constraints/non-goals/acceptance choice surface, and separate drafter/reviewer/driver/owner actors. Owner approval remains external and is never inferred.
+
+An optional owner steering `intent_baseline` has exactly `{revision,locator,sha256,json_bytes}`; `json_bytes` contains the original UTF-8 intent JSON exactly, and its digest is checked before a delta is shown. The ordinary artifact path retains only the current intent, while review history retains judgments rather than the exact prior subject bytes; the existing `user-steering` source is therefore the narrow durable place for an owner-qualified baseline instead of a second intent-history ledger. A known later reviewed revision without qualified exact prior bytes refuses `intent-ready` and commission before review rather than displaying a paraphrase as an exact diff. An initial intent has no prior intent delta; its full wording is compared against the retained owner-source statements.
+
+## Driver intent corrections
+
+Use kind `intent-correction` with this closed payload (placeholders are not evidence):
+
+```json
+{
+  "subject": "intent.json",
+  "subject_revision": "CORRECTED_REVISION",
+  "prior_intent": {
+    "revision": "PRIOR_REVIEWED_REVISION",
+    "locator": "ACTUAL_RETAINED_PRIOR_LOCATOR",
+    "sha256": "sha256:ACTUAL_64_LOWERCASE_HEX",
+    "json_bytes": "EXACT_PRIOR_UTF8_JSON_TEXT"
+  },
+  "findings": [{"ledger_id": "ACTUAL_LEDGER_ID", "finding_id": "F-actual"}],
+  "author": {"name": "actual driver", "kind": "script"},
+  "reason": "Driver's attributed correction reason."
+}
+```
+
+Use distinct current/prior revisions and exact prior bytes/digest/revision. References must resolve to accepted intent-owned findings in the latest matching earlier intent-gate ledger, backed by actual prior-revision review sources. Unknown fields, wrong/absent sources, stale ledger, wrong ownership/disposition, wrong digest/revision or current target refuse; the provider does not infer correction materiality from prose or diffs. The cooperative driver's correction/scope distinction remains external. A real scope change requires owner authority through the owner steering route. Correction does not approve intent, discharge findings or waive fresh affected review.
+
+Ordinary/challenge/owner-checkpoint packets use the same qualified baseline selection. `intent_revision_baseline` exposes the actual stored record, `source` with record ID/kind/baseline/correction provenance, and truthful `delivered_in_context`. Owner `intent_revision_view` shows the exact prior-byte structural delta and separate actors. Corrections remain driver provenance, not owner-source instructions; the view's `not-performed` approval status is not owner approval. Existing frozen workflows are not rewritten to add context kinds.
+
+## Assessment/stage diagnostics and write admission
+
+An assessment identifies one original return, not one axis. Complete every configured axis at its assigned stage/group. `assessment_missing` names absent assessment metadata; `assessment_inconsistent` names conflicting identities within the author's group; `mixed_authors` names the distinct individual/aggregate author-set cause. These are not fabricated zero-author independence shortages. A genuine author floor shortage still blocks, as do incomplete groups, unsupported self-review and undispositioned failures. Do not reduce floors or invent authors to repair metadata.
+
+For new runs whose frozen workflow advertises provider admission, ordinary append and supported provider-owned intake writes validate against the shared deterministic rule set before storage. A named refusal or unavailable/incompatible/malformed provider reply fails closed, leaving history/context unchanged. Shape/currency validity is not semantic approval or whole-gate readiness. Current helpers and gates use the same rules in their applicable modes; historical classification preserves original earlier-context identity rather than rebinding old records to today's files/state. No migration, validator bypass, silent runtime replacement or blanket applicability is supplied to historical runs.
+
+## Readable repository checkpoints and report metadata
+
+Generated implementation/validation checkpoint files use the existing serializer's multiline two-space pretty JSON (no added final newline). Ordinary line readers can inspect them. Object meaning and internal file/report/index/status/state content hashes retain their original calculation. The physical checkpoint-file checksum necessarily differs with formatting. Immutable implementation-proof-history names/checks bind actual retained verified bytes; compact/manual valid JSON remains byte-for-byte historical proof, never rewritten/rehashed as new proof. Formatting-only regeneration does not append duplicate equivalent accepted proof. Current source/report identity and ambiguous/differing-proof refusal remain.
+
+Optional report residual `accepted_by` is an object, not a scalar: `{"name":"actual accepting actor","kind":"human|agent|script"}` (choose one kind). It is an attributed acceptance claim, not authentication or an outcome waiver. Implementation report schema is checked at the first report-bearing `reconciliation-ready` hop; `implementation-ready` remains report-free. Keep failure/proof-gap/unsupported residuals honest.
 
 ## Evidence applicability
 
@@ -95,7 +155,7 @@ For axis reuse the referenced record must be earlier same-run review-evidence. C
 
 The driver appends context records with kind `finding-ledger`; Loop Engine stores them unchanged and ordinary `show` returns the immutable history. A latest malformed record for an exact gate/subject pair blocks that pair until a later valid snapshot; otherwise the latest well-formed record is the current snapshot. The snapshot data is closed and uses exactly these top-level fields: `schema_version: "1"`, `gate`, `subject`, `subject_revision`, `author: {name, kind}`, and `findings`.
 
-Each finding has exactly `id`, `source`, `policy_id`, `statement`, `disposition`, `reason`, `owner_phase`, `task_ids`, `review_axes`, and `status`. IDs match `F-[a-z0-9][a-z0-9_-]{0,63}` and remain tied to the same source, policy, and statement across snapshots. `source` is exactly a context-record reference: `{"kind":"context-record","id":"review-evidence-1"}`. The provider resolves that immutable record, checks its gate, policy, subject, config, and judgment agreement, and retains any historical origin without treating it as current execution provenance; no finding copies a path, digest, attempt, command, binding, or repository-state digest. Source revision is historical identity, not a claim of current applicability. Accepted findings use `unresolved`, `resolved`, or `stale` and an owning phase; rejected/advisory/retired-author findings use `recorded` or `stale`, null owner, and empty routing arrays.
+Each finding has `id`, `source`, `policy_id`, `disposition`, `reason`, `owner_phase`, `task_ids`, `review_axes`, and `status`, plus optional string `statement` and `summary`. Omit `statement` to derive the exact immutable source findings. If supplied, it must equal them exactly, including empty pass findings; paraphrases refuse. Review text stays exact; criterion/goal arrays use their existing literal two-character `\n` separator, not a newline. `summary` is driver explanation outside stable finding identity, not replacement reviewer words. IDs match `F-[a-z0-9][a-z0-9_-]{0,63}` and remain tied to the same source, policy, and statement across snapshots. `source` is exactly a context-record reference: `{"kind":"context-record","id":"review-evidence-1"}`. The provider resolves that immutable record, checks its gate, policy, subject, config, and judgment agreement, and retains any historical origin without treating it as current execution provenance; no finding copies a path, digest, attempt, command, binding, or repository-state digest. Source revision is historical identity, not a claim of current applicability. Accepted findings use `unresolved`, `resolved`, or `stale` and an owning phase; rejected/advisory/retired-author findings use `recorded` or `stale`, null owner, and empty routing arrays.
 
 The provider checks shape, stable finding identity, current snapshot subject/checkpoint freshness, and immutable source validity. Only current accepted-unresolved routing must name current configured axes and plan tasks. Resolved historical entries retain old source revisions and routing identities without an applicability declaration. Accepted-unresolved entries block even when their source is historical or another reviewer now passes; revision changes do not permit silently omitting them.
 
@@ -103,9 +163,52 @@ A current failure is discharged only by a reasoned rejection, accepted/resolved 
 
 `retired-author` requires a recorded per-gate `reviewer-manifest` change. Each manifest is exactly `{"gate":"design-review","authors":[{"name":"reviewer","kind":"agent"}],"reason":"why the roster changed"}`. Ordered snapshots must show the source author present before and absent in the latest roster; unchanged rosters, re-added authors, malformed/duplicate identities, or a missing reason do not establish retirement. Retired authors do not count toward the configured author floor, including later judgments by that author. Replacement coverage is still required. Rosters contain identities, not model argv or copied invocation metadata.
 
+## Append-only recovery on supporting runtimes
+
+New runs on a release implementing provider admission refuse deterministically
+invalid records before storage through every public write path. Refusal names the
+record/rule; unavailable required validation fails closed. Preview helpers and
+schema validity are not semantic judgment, and no storage exception admits a
+refused record. Incomplete source builds without provider admission do not yet
+provide this guarantee. Earlier runs keep their frozen runtime and obligations.
+
+An obsolete earlier `review-evidence`, `evidence-applicability` or supplemental
+`validation-command` may be named in a closed `record-withdrawal` object with
+`record_ids`, nonblank `reason` and `attesting_driver:{name,kind}`. IDs are unique,
+nonblank, earlier and not already withdrawn. A failing review needs an exact-source
+entry in the latest valid ledger for its gate/subject first. Withdrawal is not a
+finding disposition: accepted-unresolved findings and received advice-answer
+reasoned-disposition duties remain. Frozen required proof commands cannot be withdrawn.
+
+Use the existing valid roster change plus `retired-author` entry for retirement;
+replacement author floors stay binding and re-added authors are not retired.
+Exclusions apply before classification even if a retired record is malformed, and
+propagate to carries. New applicability of withdrawn/retired origins is refused on
+admission-enabled runtimes. Originals stay visible and already-passed history is
+never reverted. Later dependent checks need valid replacement coverage.
+
+Review-evidence ledger sources retain their immutable identity and stored shape;
+current citation resolution is an evidence-aggregation check, not a prerequisite
+for dispositioning that historical source. Unreadable source identity still makes
+a snapshot malformed. Commission `record_diagnostics` name malformed current
+records instead of aborting the packet. Diagnostics supply no review clearance;
+gates/final validation wait for later conforming correction or exclusion with
+replacement coverage. Keep unresolved accepted entries visible even when their
+source no longer counts.
+
+An `intent-comparison` covers every effective counted aggregate reconstruction:
+current conforming/eligible/config-matching sources and eligible explicit carries,
+using original reconstruction IDs, not rewritten revisions. Latest effective
+supersession, retirement/withdrawal and group/assessment eligibility still apply.
+Excluded or noncounting returns require no comparison response, but remain history.
+For exact running advice map/revision/disposition shapes, read checkout-root
+`docs/agent-usage.md`, section Running advice and append-only recovery. Effective
+`advice_policy` overrides start-time guidance; owner changes apply immediately,
+while driver occasion revisions need no owner ceremony and never erase answer debt.
+
 ## Historical boundary
 
-Current bundled profiles declare semantic `contract_version: 3` and review output `review_contract_version: 3`; candidate projection schema 3 and profile generations are separate identities. Historical output schema bytes remain inspectable without upgrading their evidence meaning. Retired executable bindings and execution captures are inert history, not a supported execution path. No active migration is supported. Engine overrides are separate exceptional progression, permanently `completed-with-overrides`; they never create reviewer success or missing proof.
+Current bundled -16 profiles declare semantic `contract_version: 4` and review output `review_contract_version: 3`; candidate projection schema 3 and profile generations are separate identities. Historical output schema bytes remain inspectable without upgrading their evidence meaning. Retired executable bindings and execution captures are inert history, not a supported execution path. No active migration is supported. Engine overrides are separate exceptional progression, permanently `completed-with-overrides`; they never create reviewer success or missing proof.
 
 Completed runs may contain records from the former verbose linkage and two-act carry contract. They remain immutable and readable through engine `show` and `history`; they are not accepted as a parallel new provider path and are not rewritten or migrated.
 
@@ -168,16 +271,23 @@ A late material finding remains actionable and is not waived because it arrived 
 
 ## Owning-phase routing
 
-A review operator selects the phase that owns an accepted material defect. Use phase-named check-free events exposed by the live graph. Parent and adversarial review for a phase share the same nearest revise and owning-phase events:
+A review operator selects the phase that owns an accepted material defect. In newly
+started runs, every active state has check-free routes directly to each earlier phase's
+draft as listed below. Narrative/checkpoint states belong to their phase; reconciliation
+belongs to implementation. No artifact, report, rejection or override is required.
+Routes preserve files, artifacts, context, findings and history, roll back nothing and
+approve nothing; every forward check still applies, including a fresh owner decision
+on the current subject revision at an enabled checkpoint. Earlier-started runs keep
+their stored graphs. The draft-only restriction covers these added earlier-phase routes,
+not existing narrative corrections or checked checkpoint rejection routes.
 
-| Review state | Nearest `revise` | Direct owning-phase events |
+| Owning phase (all active states) | Existing correction routes | Direct earlier-phase events |
 |---|---|---|
-| `intent-review`, `intent-adversarial-review` | `revise` → `explore` | — |
-| `design-review`, `design-adversarial-review` | `revise` → `design` | `revise-intent` → `explore` |
-| `plan-review`, `plan-adversarial-review` | `revise` → `plan` | `revise-design` → `design`; `revise-intent` → `explore` |
-| `implement` | — | `revise-plan` → `plan`; `revise-design` → `design`; `revise-intent` → `explore` (new graphs only; no report required) |
-| `implementation-review`, `implementation-adversarial-review` | `revise` → `implement` | `revise-plan` → `plan`; `revise-design` → `design`; `revise-intent` → `explore` |
-| `validation-review`, `validation-adversarial-review` | `revise` → `validation` | `revise-implementation` → `implement`; `revise-plan` → `plan`; `revise-design` → `design`; `revise-intent` → `explore` |
+| Intent | Review `revise` → `explore`; checkpoint checked `revise` → `explore` | — |
+| Design | Review `revise` → `design`; narrative `revise-design` → `design`, review `revise` → narrative draft; checkpoint checked `revise`/enabled `revise-narrative` | `revise-intent` → `explore` |
+| Plan | Review `revise` → `plan`; narrative `revise-plan` → `plan`, review `revise` → narrative draft; checkpoint checked `revise`/enabled `revise-narrative` | `revise-design` → `design`; `revise-intent` → `explore` |
+| Implementation (including reconciliation) | Review `revise` → `implement`; reconciliation `revise-implementation` → `implement`; checkpoint checked `revise` → `implement` | `revise-plan` → `plan`; `revise-design` → `design`; `revise-intent` → `explore` |
+| Validation | Review `revise` → `validation`; narrative `revise-validation` → `validation`, review `revise` → narrative draft; checkpoint checked `revise`/enabled `revise-narrative` | `revise-implementation` → `implement`; `revise-plan` → `plan`; `revise-design` → `design`; `revise-intent` → `explore` |
 
 Validation-local `validation-report.json` corrections stay in validation: nearest `revise` returns to the validation draft, including report-local corrections; correct the report and retry the next checked hop. Use `revise-implementation` for an implementation-owned defect, `revise-plan` for a plan-owned defect, `revise-design` for a design-owned defect, and `revise-intent` for an intent-owned defect. After any fix, confirmation covers affected scope and downstream regressions before the review gate is attempted again.
 

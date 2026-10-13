@@ -221,6 +221,12 @@ fn describe_all_live_slots_declare_steering_and_projection_sources() {
         if id == "implement" {
             expected.push("reconciliation-decision");
         }
+        if matches!(
+            id,
+            "intent-draft" | "intent-review" | "intent-adversarial-review"
+        ) {
+            expected.push("intent-correction");
+        }
         assert_eq!(
             slot.get("stdin_context_kinds"),
             Some(&json!(expected)),

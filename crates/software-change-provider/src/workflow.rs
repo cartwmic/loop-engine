@@ -53,7 +53,7 @@ fn bookends_citation_hint() -> String {
     ["bookends", ":LE-", "<n>"].concat()
 }
 
-/// Owning-phase check-free revise from a review state to an earlier draft.
+/// Owning-phase check-free revise to a phase draft.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OwningRevise {
     pub event: &'static str,
@@ -158,7 +158,7 @@ pub(crate) const PHASES: &[Phase] = &[
         name: "implementation",
         draft_state: "implement",
         draft_title: "Implement",
-        draft_instructions: "Perform external work against the accepted plan and frozen intent `operating_context`; do not add excluded hostile or multi-tenant requirements or waive stated outcomes and outside obligations. Tasks with no dependency path between them (no chain of declared dependencies in either direction) are dispatched concurrently by default; state a reason when running them serially. Document the implementation and validation report shapes using `crates/software-change-provider/data/templates/implementation-report.md` and `crates/software-change-provider/data/templates/validation-report.md`. Doc integration is part of this change: update authoritative repository documents rather than leaving a parallel change truth. Before `implementation-ready`, read run-frozen obligations via `show`. If returning from reconciliation through `revise-implementation`, preserve already-authorized document edits, do not reapply them, and finalize the implementation report/checkpoint against the current post-reconciliation tree before `implementation-ready`. If the owner rejects earlier work, choose `revise-plan` to plan, `revise-design` to design, or `revise-intent` to explore directly; no implementation report is required for these check-free routes. The driver/harness owns any external work and its cleanup; ensure your own external work is quiescent before departing. Routes preserve artifacts, context and denial history; neither engine nor provider classifies the defect or rolls back the repository. Only routes in this run's stored graph are available; upgrading does not add them to historical runs.",
+        draft_instructions: "Perform external work against the accepted plan and frozen intent `operating_context`; do not add excluded hostile or multi-tenant requirements or waive stated outcomes and outside obligations. Tasks with no dependency path between them (no chain of declared dependencies in either direction) are dispatched concurrently by default; state a reason when running them serially. Document the implementation and validation report shapes using `crates/software-change-provider/data/templates/implementation-report.md` and `crates/software-change-provider/data/templates/validation-report.md`. Doc integration is part of this change: update authoritative repository documents rather than leaving a parallel change truth. Before `implementation-ready`, read run-frozen obligations via `show`. If returning from reconciliation through `revise-implementation`, preserve already-authorized document edits, do not reapply them, and finalize the implementation report/checkpoint against the current post-reconciliation tree before `implementation-ready`. For earlier-phase defects, choose `revise-plan` to plan, `revise-design` to design, or `revise-intent` to explore directly; no implementation report is required for these check-free routes. The driver/harness owns any external work and its cleanup; ensure your own external work is quiescent before departing. Routes preserve artifacts, context and denial history; neither engine nor provider classifies the defect or rolls back the repository. Only routes in this run's stored graph are available; upgrading does not add them to historical runs.",
         draft_slot: "implement",
         ready_event: "implementation-ready",
         draft_revises: &[REVISE_PLAN, REVISE_DESIGN, REVISE_INTENT],
@@ -293,6 +293,26 @@ pub(crate) fn phase_options_for_state(source: &str) -> Option<&'static PhaseOpti
     })
 }
 
+/// One order/ownership rule for all active states, including conditional hops.
+fn earlier_phase_revises(source: &str) -> impl Iterator<Item = OwningRevise> {
+    let owner = phase_options_for_state(source).map(|o| o.phase.name);
+    let index = PHASES
+        .iter()
+        .position(|p| Some(p.name) == owner)
+        .unwrap_or(0);
+    [
+        REVISE_INTENT,
+        REVISE_DESIGN,
+        REVISE_PLAN,
+        REVISE_IMPLEMENTATION,
+    ]
+    .into_iter()
+    .take(index)
+    .rev()
+}
+
+const EARLIER_DRAFT_GUIDANCE: &str = "In newly started runs, every active state offers check-free `revise-intent`, `revise-design`, `revise-plan` and `revise-implementation` for whichever of those phases is earlier than its owning phase, directly to `explore`, `design`, `plan` and `implement` respectively. No artifact, report, owner rejection or override is required. These routes preserve artifacts, context, findings and history, roll back nothing, and grant no approval; every forward check still applies, including a fresh owner decision on the current revision at an enabled checkpoint. Earlier-started runs keep their stored graphs.";
+
 pub(crate) fn checkpoint_subject(options: &PhaseOptions, narrative_enabled: bool) -> &'static str {
     options
         .narrative
@@ -378,6 +398,9 @@ pub(crate) enum TransitionDuties {
 
 /// Look up evaluation duties for a source state and event from the phase table.
 pub(crate) fn duties_for(source: &str, event: &str) -> Option<TransitionDuties> {
+    if earlier_phase_revises(source).any(|revise| revise.event == event) {
+        return Some(TransitionDuties::CheckFree);
+    }
     if source == RECONCILIATION_STATE {
         if event == RECONCILIATION_READY_EVENT {
             return Some(TransitionDuties::Checked {
@@ -758,7 +781,13 @@ fn stitch(
     let mut transitions = Vec::new();
     let mut work_slots = Vec::new();
     for (index, hop) in hops.iter().copied().enumerate() {
-        states.push(hop.state(bookends_enabled, semantic_coverage));
+        let mut state = hop.state(bookends_enabled, semantic_coverage);
+        if !matches!(hop, Hop::Parent(_) | Hop::Adversarial(_))
+            && earlier_phase_revises(hop.state_id()).next().is_some()
+        {
+            state.instructions = format!("{} {EARLIER_DRAFT_GUIDANCE}", state.instructions);
+        }
+        states.push(state);
         let event = hop_event(hop, index == last_index);
         let target = if index == last_index {
             "end"
@@ -831,6 +860,19 @@ fn stitch(
                     hop.state_id(),
                     "revise-narrative",
                     options.narrative.expect("narrative enabled").draft,
+                ));
+            }
+        }
+        // Keep every pre-existing edge (including same-phase narrative repair
+        // and checked checkpoint rejection), adding only missing earlier drafts.
+        for revise in earlier_phase_revises(hop.state_id()) {
+            if !transitions.iter().any(|edge| {
+                edge.source.as_str() == hop.state_id() && edge.event.as_str() == revise.event
+            }) {
+                transitions.push(Transition::check_free(
+                    hop.state_id(),
+                    revise.event,
+                    revise.target,
                 ));
             }
         }
@@ -1052,6 +1094,11 @@ impl Hop {
                 "goal-verdict".to_owned(),
             ]);
         }
+        if matches!(self, Self::Draft(phase)|Self::Parent(phase)|Self::Adversarial(phase) if phase.name=="intent")
+            || matches!(self,Self::Checkpoint(options,_) if options.phase.name=="intent")
+        {
+            kinds.push("intent-correction".to_owned());
+        }
         slot.with_stdin_context_kinds(kinds)
     }
 
@@ -1098,7 +1145,7 @@ fn narrative_instructions(options: &PhaseOptions, n: NarrativeStates, hop: Hop) 
         ),
         _ => {
             let stage = if matches!(hop, Hop::NarrativeChallenge(_)) {
-                "Commission challenge review only after ordinary narrative findings are cleared; falsify the ordinary clean conclusion, not unresolved ordinary findings."
+                crate::commission::CHALLENGE_GUIDANCE
             } else {
                 "Commission comprehensive independent ordinary narrative review; triage accepted findings before append."
             };
@@ -1139,7 +1186,8 @@ fn adversarial_instructions(
 ) -> String {
     with_bookends_guidance(
         &format!(
-            "This challenge review follows parent `{}` and must meaningfully falsify that parent's pass claim only with current supplied evidence, a violated frozen obligation, a concrete consequence for change success, and why existing validation does not resolve the issue. Reject hypothetical threats, invented requirements, silence or style complaints, and mechanism-for-its-own-sake findings; do not waive material failures. {}",
+            "{} This challenge review follows parent `{}` and must meaningfully falsify that parent's pass claim only with current supplied evidence, a violated frozen obligation, a concrete consequence for change success, and why existing validation does not resolve the issue. Reject hypothetical threats, invented requirements, silence or style complaints, and mechanism-for-its-own-sake findings; do not waive material failures. {}",
+            crate::commission::CHALLENGE_GUIDANCE,
             phase.parent_review, phase.parent_review_instructions
         ),
         bookends_enabled,
@@ -1222,11 +1270,12 @@ mod tests {
     }
 
     #[test]
-    fn off_successor_graphs_match_predecessor_snapshots_without_normalization() {
+    fn off_successor_graphs_match_predecessor_except_exact_accepted_deltas() {
         use sha2::{Digest, Sha256};
         // Captured before T4 through public describe; also exact-byte equal to
         // installed 0.24.1 describe with the corresponding HEAD -14 profile.
-        // Hash the complete serialized workflow Value, not a normalized graph.
+        // Preserve complete historical workflow hashes; only the exact accepted
+        // instruction/context delivery deltas below are inverted for comparison.
         // AC-8 (intent revision 5): before hashing, apply the exact inverse of the
         // accepted LE-184 delta (two literal instruction sentences and the listed
         // parallelism-honest axes); any other difference from 0.24.1 fails.
@@ -1242,6 +1291,81 @@ mod tests {
         for (mut input, expected) in shipped_profiles().into_iter().zip(snapshots) {
             let workflow = describe_workflow(Some(&input)).unwrap();
             let mut value = serde_json::to_value(&workflow).unwrap();
+            // Keep historical hashes unchanged. The only new delivery delta is
+            // one correction kind on these newly described intent slots; take
+            // its exact inverse on this comparison copy, never stored workflows.
+            let mut corrected_slots = 0;
+            for slot in value["work_slots"].as_array_mut().unwrap() {
+                let is_intent = ["intent-draft", "intent-review", "intent-adversarial-review"]
+                    .contains(&slot["id"].as_str().unwrap());
+                let kinds = slot["stdin_context_kinds"].as_array_mut().unwrap();
+                assert_eq!(
+                    kinds
+                        .iter()
+                        .filter(|kind| **kind == "intent-correction")
+                        .count(),
+                    usize::from(is_intent)
+                );
+                if is_intent {
+                    kinds.retain(|kind| *kind != "intent-correction");
+                    corrected_slots += 1;
+                }
+            }
+            assert_eq!(corrected_slots, 3);
+            // New-run draft routing deliberately supersedes predecessor parity.
+            // Invert only these exact accepted additions; retain the old hashes.
+            let added = [
+                ("design", "revise-intent", "explore"),
+                ("plan", "revise-design", "design"),
+                ("plan", "revise-intent", "explore"),
+                (RECONCILIATION_STATE, "revise-plan", "plan"),
+                (RECONCILIATION_STATE, "revise-design", "design"),
+                (RECONCILIATION_STATE, "revise-intent", "explore"),
+                ("validation", "revise-plan", "plan"),
+                ("validation", "revise-design", "design"),
+                ("validation", "revise-intent", "explore"),
+            ];
+            for (source, event, target) in added {
+                let expected =
+                    serde_json::to_value(Transition::check_free(source, event, target)).unwrap();
+                let edges = value["transitions"].as_array_mut().unwrap();
+                assert_eq!(edges.iter().filter(|e| **e == expected).count(), 1);
+                edges.retain(|e| *e != expected);
+            }
+            for source in [
+                "design",
+                "plan",
+                "implement",
+                RECONCILIATION_STATE,
+                "validation",
+            ] {
+                let state = value["states"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|s| s["id"] == source)
+                    .unwrap();
+                let text = state["instructions"].as_str().unwrap();
+                assert_eq!(text.matches(EARLIER_DRAFT_GUIDANCE).count(), 1);
+                let old = text
+                    .strip_suffix(&format!(" {EARLIER_DRAFT_GUIDANCE}"))
+                    .unwrap()
+                    .to_owned();
+                state["instructions"] = json!(if source == "implement" {
+                    assert_eq!(
+                        old.matches("For earlier-phase defects, choose `revise-plan`")
+                            .count(),
+                        1
+                    );
+                    old.replacen(
+                        "For earlier-phase defects, choose `revise-plan`",
+                        "If the owner rejects earlier work, choose `revise-plan`",
+                        1,
+                    )
+                } else {
+                    old
+                });
+            }
             for sentence in LE184_SENTENCES {
                 let mut holders: Vec<&mut Value> = value["states"]
                     .as_array_mut()
@@ -1258,7 +1382,20 @@ mod tests {
                 assert_eq!(text.matches(sentence).count(), 1, "{sentence}");
                 holders[0]["instructions"] = json!(text.replacen(sentence, "", 1));
             }
+            // B's accepted challenge-guidance delta changes instructions only.
+            // Invert that exact prefix, retaining the predecessor graph receipt.
             for state in value["states"].as_array_mut().unwrap() {
+                if state["id"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("-adversarial-review")
+                {
+                    let prefix = format!("{} ", crate::commission::CHALLENGE_GUIDANCE);
+                    let text = state["instructions"].as_str().unwrap();
+                    state["instructions"] = json!(text
+                        .strip_prefix(&prefix)
+                        .expect("exact challenge guidance prefix"));
+                }
                 if let Some(axes) = state
                     .get_mut("action_guidance")
                     .and_then(|guidance| guidance.get_mut("review_axes"))
@@ -1447,6 +1584,59 @@ mod tests {
                             e.target.as_str() == "validation"
                                 && !e.event.as_str().starts_with("revise")
                         );
+                    }
+                    for state in &workflow.states {
+                        let source = state.id.as_str();
+                        let Some(owner) = phase_options_for_state(source) else {
+                            assert_eq!(source, "end");
+                            assert!(!workflow.transitions.iter().any(|e| e.source == state.id));
+                            continue;
+                        };
+                        let index = PHASES
+                            .iter()
+                            .position(|p| p.name == owner.phase.name)
+                            .unwrap();
+                        for (earlier_index, (event, target)) in [
+                            ("revise-intent", "explore"),
+                            ("revise-design", "design"),
+                            ("revise-plan", "plan"),
+                            ("revise-implementation", "implement"),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
+                            let edges = workflow
+                                .transitions
+                                .iter()
+                                .filter(|e| {
+                                    e.source.as_str() == source && e.event.as_str() == event
+                                })
+                                .collect::<Vec<_>>();
+                            if earlier_index < index {
+                                assert_eq!(edges.len(), 1, "{source}/{event}");
+                                assert_eq!(edges[0].target.as_str(), target);
+                                assert_eq!(edges[0].kind, TransitionKind::CheckFree);
+                                assert_eq!(
+                                    duties_for(source, event),
+                                    Some(TransitionDuties::CheckFree)
+                                );
+                                let exit = phase_exit_duties(source, event, target);
+                                assert_eq!(exit.completion_subject, None);
+                                assert_eq!(exit.approved_artifact, None);
+                                assert!(!exit.record_accepted_implementation_proof);
+                            } else if earlier_index > index {
+                                assert!(edges.is_empty(), "no later-phase route: {source}/{event}");
+                            } else if !owner
+                                .narrative
+                                .is_some_and(|n| [n.draft, n.review, n.challenge].contains(&source))
+                                && source != RECONCILIATION_STATE
+                            {
+                                assert!(
+                                    edges.is_empty(),
+                                    "no new same-phase route: {source}/{event}"
+                                );
+                            }
+                        }
                     }
                     assert_eq!(workflow.work_slots.len(), workflow.states.len() - 1);
                 }
@@ -1915,6 +2105,16 @@ mod tests {
             if id.ends_with("-review") {
                 expected.extend(["command-evidence", "criterion-verdict", "goal-verdict"]);
             }
+            if [
+                "intent-draft",
+                "intent-review",
+                "intent-adversarial-review",
+                "intent-checkpoint",
+            ]
+            .contains(&id)
+            {
+                expected.push("intent-correction");
+            }
             assert_eq!(
                 slot.get("stdin_context_kinds"),
                 Some(&json!(expected)),
@@ -1924,7 +2124,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_backtracking_only_implement_gains_three_check_free_owning_routes() {
+    fn recovery_backtracking_preserves_implementation_routes_and_extends_earlier_drafts() {
         for workflow in [
             union(),
             describe_workflow(Some(&json!({"review_policies": {}}))).unwrap(),
@@ -1951,13 +2151,21 @@ mod tests {
                     Some(TransitionDuties::CheckFree)
                 );
             }
-            for state in ["explore", "design", "plan"] {
-                assert!(!workflow
-                    .transitions
-                    .iter()
-                    .any(|edge| edge.source.as_str() == state
-                        && edge.kind == TransitionKind::CheckFree));
-            }
+            assert!(!workflow.transitions.iter().any(|edge| {
+                edge.source.as_str() == "explore" && edge.kind == TransitionKind::CheckFree
+            }));
+            assert_eq!(
+                check_free_target(&workflow, "design", "revise-intent"),
+                "explore"
+            );
+            assert_eq!(
+                check_free_target(&workflow, "plan", "revise-design"),
+                "design"
+            );
+            assert_eq!(
+                check_free_target(&workflow, "plan", "revise-intent"),
+                "explore"
+            );
             assert_eq!(
                 check_free_target(&workflow, "validation", "revise-implementation"),
                 "implement"
@@ -2458,6 +2666,9 @@ mod tests {
             }
             if id.ends_with("-review") {
                 expected.extend(["command-evidence", "criterion-verdict", "goal-verdict"]);
+            }
+            if ["intent-review", "intent-draft"].contains(&id) {
+                expected.push("intent-correction");
             }
             assert_eq!(slot(&mixed, id).stdin_context_kinds, expected);
         }

@@ -17,7 +17,10 @@ pub mod terminate;
 pub use crate::invocation::project_invocation_status;
 /// Start-facing catalog and frozen-binding contract types.
 pub use crate::{WorkSlot, WorkSlotBinding, WorkSlotId};
-pub use append::{execute as execute_append, Request as AppendRequest};
+pub use append::{
+    execute as execute_append, execute_with_gateway as execute_append_with_gateway,
+    Request as AppendRequest,
+};
 pub use evaluation::{lineage_for_transition, request_from_snapshot};
 pub use event::{execute as execute_event, Request as EventRequest, Result as EventResult};
 pub use history::{execute as execute_history, Request as HistoryRequest};

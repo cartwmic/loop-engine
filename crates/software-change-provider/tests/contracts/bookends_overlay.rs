@@ -376,10 +376,24 @@ fn overlay_on_reconciliation_implementation_correction_requires_live_traceabilit
         json!("The implementation was corrected under the sufficient live requirement.");
     result["traceability"] = json!({"status": "retained", "references": []});
     artifacts.write_json("reconciliation.json", &result);
-    for name in ["intent.json", "design.json", "plan.json"] {
+    // Reconciliation-ready checks implementation report shape before result
+    // traceability. Supply that prerequisite so only references are missing.
+    for name in [
+        "intent.json",
+        "design.json",
+        "plan.json",
+        "implementation-report.json",
+    ] {
         artifacts.write_json(
             name,
-            &load_fixture(&format!("{}-good.json", name.trim_end_matches(".json"))),
+            &if name == "intent.json" {
+                // Reach reconciliation traceability with otherwise valid
+                // overlay intent criteria; missing result references below
+                // remain the single intended negative.
+                intent_with_live_ids(json!(["LE-1"]))
+            } else {
+                load_fixture(&format!("{}-good.json", name.trim_end_matches(".json")))
+            },
         );
     }
     let config = with_root(enable_overlay(load_profile("high-rigor")), &artifacts);

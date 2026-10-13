@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """External-driver software-change journey using scripted judgments, not semantic proof."""
 import argparse
+import copy
 import hashlib
 import os
 import json
@@ -421,6 +422,27 @@ def run(args, profile_source, root, *, configure=None, exercise=None, judgment_r
     return work
 
 
+def refuse_append(ctx, kind, data, rule):
+    """Assert a specific pre-storage refusal; prior context/history stay exact."""
+    before = copy.deepcopy(ctx['show']()['result'])
+    history = copy.deepcopy(ctx['call']('history', ctx['run_id'])['result'])
+    response = ctx['append'](kind, data)
+    assert response['status'] == 'rejected' and response['code'] == 'record-refused', response
+    assert response['details']['rule'] == rule, response
+    refused_id = response['details']['record_id']
+    assert isinstance(refused_id, str) and refused_id, response
+    after = ctx['show']()['result']
+    for field in ('current_state', 'state_visit', 'lifecycle', 'has_overrides',
+                  'initial_input', 'workflow_graph', 'context'):
+        assert after[field] == before[field], (field, response, after)
+    assert not after['has_overrides'], after
+    assert all(r['id'] != refused_id for r in after['context']), after
+    following = ctx['call']('history', ctx['run_id'])['result']
+    assert following == history, ('Refused append changed durable history', response)
+    return {'response':response, 'context_ids':[r['id'] for r in after['context']],
+            'history_entries':len(history), 'rule':rule, 'kind':kind}
+
+
 def append_reviews(ctx, gate, subject, revision, policies, *, wrong_group=False):
     """Return scripted external judgments through public intake, preserving group batches."""
     shown = ctx['shown']
@@ -444,11 +466,14 @@ def append_reviews(ctx, gate, subject, revision, policies, *, wrong_group=False)
             for candidate in intake['records']:
                 data = candidate['data']
                 if wrong_group:
-                    # Deliberately mis-tag an otherwise valid individual judgment at append,
-                    # so evaluate (not intake's assignment check) must enforce membership.
+                    # A valid intake is deliberately mistagged at direct append.
+                    # Current admission rejects it before storage, not at approval.
                     data['group'] = gate+'.individual.dependencies-honest'
-                appended = ctx['append']('review-evidence',data)
-                assert appended['result']['context']['data'] == data, appended
+                    refuse_append(ctx, 'review-evidence', data, 'review-shape-policy')
+                else:
+                    appended = ctx['append']('review-evidence',data)
+                    assert appended['status'] == 'completed', appended
+                    assert appended['result']['context']['data'] == data, appended
 
 
 PLAN_GUIDANCE = ('Split work into tasks that do not share writable files or state unless one '
@@ -465,7 +490,9 @@ PLAN_GATES = ('plan-review','plan-adversarial-review')
 def parallelism_traversal(args, profile_source, root):
     receipts = []
     def configure(profile, repository, artifacts):
-        assert profile['config_version'] == profile_source.stem+'-15', profile['config_version']
+        declared = json.loads(profile_source.read_text())
+        assert profile['config_version'] == declared['config_version'], profile['config_version']
+        assert profile['extra']['profile'] == profile_source.stem, profile
         for gate in PLAN_GATES:
             policies = profile['review_policies'][gate]
             siblings = [p for p in policies if p['id'] == 'dependencies-honest']
@@ -526,13 +553,14 @@ def parallelism_traversal(args, profile_source, root):
             return axis_diagnostics
 
         missing = refuse('missing-parallelism',stages)
-        if profile['config_version'] == 'high-rigor-15' and state == 'plan-review':
+        if profile['extra']['profile'] == 'high-rigor' and state == 'plan-review':
             aggregate = [p for p in parallel if p['review_stage'] == 'aggregate']
             individual = [p for p in parallel if p['review_stage'] == 'individual']
             append_reviews(ctx,state,'plan.json',revision,aggregate)
             append_reviews(ctx,state,'plan.json',revision,individual,wrong_group=True)
-            # All other evidence, including aggregate parallelism, is now complete.
-            wrong = refuse('wrong-group',{'individual'})
+            # Wrong individual-group records were refused without storage.
+            # Aggregate is complete; approval still refuses missing individual coverage.
+            wrong = refuse('wrong-group-not-stored',{'individual'})
             assert all(d.get('category') not in ('malformed','unverified')
                        for axis in wrong for d in axis['diagnostics']), wrong
             append_reviews(ctx,state,'plan.json',revision,individual)
@@ -546,7 +574,7 @@ def parallelism_traversal(args, profile_source, root):
         after = ctx['show']()
         assert after['result']['current_state'] != state, after
         receipts.append({'gate':state,'missing_stages':sorted(stages),'missing_diagnostics':missing,
-                         'wrong_group_refused':profile['config_version'] == 'high-rigor-15' and state == 'plan-review',
+                         'wrong_group_refused':profile['extra']['profile'] == 'high-rigor' and state == 'plan-review',
                          'accepted':accepted['status']})
         return True
 
@@ -555,11 +583,11 @@ def parallelism_traversal(args, profile_source, root):
                command_log=CommandLog(Path(root) / f'commands-parallelism-{profile_source.stem}'))
     assert {r['gate'] for r in receipts} == set(PLAN_GATES), receipts
     (work / 'parallelism-receipts.json').write_text(json.dumps({
-        'profile':profile_source.stem+'-15','bookends':['LE-184','LE-130'],
+        'profile':json.loads(profile_source.read_text())['config_version'],'bookends':['LE-184','LE-130'],
         'catalog':str(work / 'run.sqlite'),'receipts':receipts,
         'guidance_captures':['plan-show.json','implement-show.json'],
         'stopped_at':'implement'},indent=2))
-    print(f'parallelism traversal passed: {profile_source.stem}-15; receipts: {work}',flush=True)
+    print(f'parallelism traversal passed: {json.loads(profile_source.read_text())["config_version"]}; receipts: {work}',flush=True)
     return work
 
 
@@ -578,6 +606,9 @@ def parallelism_journeys(args, root):
     assert IMPLEMENT_GUIDANCE in text, template
     profiles = [ROOT / f'crates/software-change-provider/data/configs/{name}.json'
                 for name in ('minimal','standard','high-rigor')]
+    for profile in profiles:
+        shipped = data_root / 'crates/software-change-provider/data/configs' / profile.name
+        assert shipped.read_bytes() == profile.read_bytes(), ('Compiled/source profile mismatch', profile)
     # Independent catalogs/repositories; bounded by the existing external-driver run budget.
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         works = list(pool.map(lambda profile: parallelism_traversal(args,profile,root),profiles))
@@ -640,7 +671,7 @@ def compare_off(args, profile_source, root, log):
         old_bytes = (dumped / 'crates/software-change-provider/data/configs' / source.name).read_bytes()
     else:
         # Explicit profile-only mechanics, NOT full historical AC-8 proof.
-        relative = source.relative_to(ROOT)
+        relative = Path('crates/software-change-provider/data/configs') / source.name
         original = log.execute(['git', 'show', f'{PREDECESSOR}:{relative}'], cwd=ROOT, raw=True)
         assert original.returncode == 0, original.stderr
         old_bytes = original.stdout.encode()
@@ -677,6 +708,8 @@ def compare_off(args, profile_source, root, log):
     assert not any('narrative' in s or s.endswith('-checkpoint') for s in states[1])
     (Path(root) / f'{source.stem}-off-comparison.json').write_text(json.dumps(
         {'scripted_dummy_backends':True, 'historical_binary_comparison':historical,
+         'proof_scope':'legacy-ac8-le184-only',
+         'complete_legacy_ac8':historical and released is not None,
          'ac8_historical_mechanical_proof':historical, 'ac8_released_comparison':released is not None,
          'predecessor_provider':predecessor_args.provider, 'released_provider':released,
          'predecessor_ref':None if historical else PREDECESSOR,
@@ -687,6 +720,54 @@ def compare_off(args, profile_source, root, log):
          'terminal_runs':[str(old_work),str(new_work)]}, indent=2))
 
 
+def current_off(args, profile_source, root, log):
+    """Current-source full progression; no predecessor or released-parity claim."""
+    source = Path(profile_source).resolve()
+    profile = json.loads(source.read_text())
+    assert profile['extra'].get('narratives', []) == []
+    assert profile['extra'].get('checkpoints', []) == []
+    work = run(args, source, root, command_log=log)
+    terminal = json.loads((work / 'terminal.json').read_text())['result']
+    states = json.loads((work / 'states.json').read_text())
+    assert states[0] == 'explore' and states[-1] == 'end', states
+    assert not any('narrative' in state or state.endswith('-checkpoint') for state in states), states
+    assert terminal['current_state'] == 'end' and terminal['lifecycle'] == 'final'
+    assert not terminal['has_overrides'], terminal
+    assert terminal['initial_input']['config_version'] == profile['config_version']
+    assert terminal['initial_input']['review_policies'] == profile['review_policies']
+    edges = terminal['workflow_graph']['transitions']
+    for source_state, target in zip(states, states[1:]):
+        assert any(edge['source'] == source_state and edge['target'] == target
+                   and edge['kind'] == 'checked' for edge in edges), (source_state, target)
+    (Path(root) / f'{source.stem}-current-off.json').write_text(json.dumps({
+        'scripted_dummy_backends':True, 'proof_scope':'current-source-options-off',
+        'config_version':profile['config_version'],
+        'profile_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),
+        'historical_binary_comparison':False, 'complete_legacy_ac8':False,
+        'legacy_ac8':'not performed; requires explicit legacy-ac8 scope and frozen -15 candidate/data',
+        'terminal_run':str(work), 'states':states, 'terminal':'end', 'has_overrides':False,
+        'actual_command_outcomes':str(log.index), 'command_payload_root':str(log.root)}, indent=2))
+    return work
+
+
+def legacy_candidate_data(args, profile_source, root, log):
+    """Require explicit frozen candidate fixtures; never relabel current -16 data."""
+    source = Path(profile_source).resolve()
+    data_root = Path(args.data_root).resolve()
+    relative = Path('crates/software-change-provider/data/configs') / source.name
+    assert source.read_bytes() == (data_root / relative).read_bytes(), source
+    dumped = Path(root) / 'legacy-candidate-data'
+    assert not dumped.exists(), dumped
+    response = log.execute([args.provider, 'data-dump', dumped], cwd=ROOT, raw=True)
+    assert response.returncode == 0, response.stderr
+    assert source.read_bytes() == (dumped / relative).read_bytes(), 'Selected legacy profile is not compiled candidate profile'
+    profile = json.loads(source.read_text())
+    assert profile['config_version'] == source.stem + '-15', profile['config_version']
+    for fixture in SUBJECTS.values():
+        relative = Path('crates/software-change-provider/data/calibration/fixtures') / fixture
+        assert (data_root / relative).read_bytes() == (dumped / relative).read_bytes(), relative
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode',choices=['source','packaged'],default='source')
@@ -694,6 +775,8 @@ def main():
     parser.add_argument('--provider')
     parser.add_argument('--predecessor-provider', help='Explicit installed 0.24.1 provider for historical AC-8 parity; no guessing/fallback')
     parser.add_argument('--released-provider', help='Released slot-1 provider built from main 126a4fb for AC-8 (c); no guessing/fallback')
+    parser.add_argument('--proof-scope', choices=['current','legacy-ac8'], default='current',
+                        help='Current full progression by default; legacy AC-8 requires explicit frozen -15 candidate/data')
     parser.add_argument('--profile')
     parser.add_argument('--data-root')
     parser.add_argument('--work-root')
@@ -708,6 +791,11 @@ def main():
     for key in ['engine','provider','profile']:
         if not getattr(args,key):
             parser.error(f'--{key} is required')
+    if args.proof_scope == 'legacy-ac8':
+        if args.mode != 'source' or not args.data_root:
+            parser.error('legacy-ac8 requires --mode source and an explicit frozen candidate --data-root')
+    elif args.predecessor_provider or args.released_provider:
+        parser.error('Historical provider flags require explicit --proof-scope legacy-ac8; never ignored')
     if args.jobs < 1:
         parser.error('--jobs must be positive')
     root = Path(args.work_root).resolve() if args.work_root else Path(tempfile.mkdtemp(prefix='software-external-root-'))
@@ -720,18 +808,19 @@ def main():
     log = CommandLog(root / 'captures')
     log.identity(args.engine, args.provider, *[p for p in (args.predecessor_provider, args.released_provider) if p])
     try:
-        if args.mode == 'source' and Path(args.profile).resolve().parent == ROOT / 'crates/software-change-provider/data/configs':
+        if args.proof_scope == 'legacy-ac8':
+            legacy_candidate_data(args, args.profile, root, log)
             compare_off(args, args.profile, root, log)
             scope = ('historical and released-binary AC-8 mechanics' if args.predecessor_provider and args.released_provider
                      else 'partial parity; NOT complete AC-8 proof')
-            print(f'options-off predecessor/successor journeys reached end ({scope}; SCRIPTED DUMMY BACKENDS)')
+            print(f'Legacy -15/-14 predecessor/successor journeys reached end ({scope}; SCRIPTED DUMMY BACKENDS)')
         elif args.mode == 'source':
-            run(args,args.profile,root,command_log=log)
-            print('full software-change journey passed (SCRIPTED DUMMY BACKENDS)')
+            current_off(args,args.profile,root,log)
+            print('current-source options-off journey reached actual end; NOT legacy AC-8 parity (SCRIPTED DUMMY BACKENDS)')
         else:
             run(args,args.profile,root,command_log=log)
             print('full packaged software-change journey passed (SCRIPTED DUMMY BACKENDS)')
-        if args.mode == 'source':
+        if args.mode == 'source' and args.proof_scope == 'current':
             parallelism_journeys(args,root)
     finally:
         log.finalize()

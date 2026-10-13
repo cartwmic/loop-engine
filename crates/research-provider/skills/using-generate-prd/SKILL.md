@@ -29,8 +29,8 @@ Register `target/debug/research` under exact alias `research` (absolute `command
 
 Prepare with `research setup --rigor generate-prd --output /absolute/profile.json`.
 Confirm exact profile bytes/hash, policies, groups, self-review declarations and author
-counts with the user. Confirm the external role/model manifest, ownership and budget
-separately; rehash unchanged profile immediately before start. No engine executor is
+counts with the user. Confirm the external role/model manifest, ownership and owner-set
+spend/resource limits (none by default) separately; rehash unchanged profile immediately before start. No engine executor is
 configured. Follow the research companion for external review commissioning/intake.
 Inspect LOOP_/XDG/home redirects and use explicit --config.
 

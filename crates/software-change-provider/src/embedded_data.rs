@@ -21,6 +21,7 @@ pub struct EmbeddedFile {
 /// data file requires adding its include here, and the drift-guard test catches
 /// omissions or stale bytes.
 pub static FILES: &[EmbeddedFile] = &[
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/returned-v16.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/returned-v16.json")) },
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-133.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-133.json")) },
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-133.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-133.md")) },
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-134.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-134.json")) },
@@ -696,7 +697,7 @@ mod tests {
                 .expect("profile is in FILES");
             let profile: serde_json::Value = serde_json::from_slice(file.bytes).unwrap();
             assert_eq!(profile["contract_version"], 4);
-            assert_eq!(profile["config_version"], format!("{name}-15"));
+            assert_eq!(profile["config_version"], format!("{name}-16"));
             assert_eq!(profile["extra"]["narratives"], serde_json::json!([]));
             assert_eq!(profile["extra"]["checkpoints"], serde_json::json!([]));
             for entries in profile["review_policies"].as_object().unwrap().values() {

@@ -12,13 +12,13 @@ const PROFILES: &[&str] = &["minimal", "standard", "high-rigor"];
 const CURRENT_INVOCATION: &str = "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.";
 const PENDING_INVOCATION: &str = "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.";
 const NEUTRAL_REVISION: &str = "r15";
-const HISTORICAL_CONFIG_SUFFIXES: &[&str] = &["-10", "-11", "-12", "-13", "-14"];
-const PREDECESSOR_CONFIG_SUFFIX: &str = "-14";
-const CURRENT_CONFIG_SUFFIX: &str = "-15";
+const HISTORICAL_CONFIG_SUFFIXES: &[&str] = &["-10", "-11", "-12", "-13", "-14", "-15"];
+const PREDECESSOR_CONFIG_SUFFIX: &str = "-15";
+const CURRENT_CONFIG_SUFFIX: &str = "-16";
 const HISTORICAL_V10_ROW_COUNT: usize = 368;
 const HISTORICAL_V11_ROW_COUNT: usize = 396;
 const HISTORICAL_ROW_COUNT: usize =
-    HISTORICAL_V10_ROW_COUNT + HISTORICAL_V11_ROW_COUNT + 396 + 396 + 420;
+    HISTORICAL_V10_ROW_COUNT + HISTORICAL_V11_ROW_COUNT + 396 + 396 + 420 + 612;
 const CURRENT_ROW_COUNT: usize = 612;
 const PARALLELISM_FIXTURES: &[&str] = &[
     "plan-good",
@@ -31,10 +31,12 @@ const PARALLELISM_FIXTURES: &[&str] = &[
 const HISTORICAL_V10_AXIS_KEYS: usize = 184;
 const HISTORICAL_V11_AXIS_KEYS: usize = 196;
 const HISTORICAL_AXIS_KEYS: usize =
-    HISTORICAL_V10_AXIS_KEYS + HISTORICAL_V11_AXIS_KEYS + 196 + 196 + 208;
+    HISTORICAL_V10_AXIS_KEYS + HISTORICAL_V11_AXIS_KEYS + 196 + 196 + 208 + 288;
 const CURRENT_AXIS_KEYS: usize = 288;
 const EXPECTED_AXIS_KEYS: usize = HISTORICAL_AXIS_KEYS + CURRENT_AXIS_KEYS;
 const HISTORICAL_MANIFEST_CANONICAL_SHA256: &str =
+    "62967bf2188be79aec96f20ae62b2adba07647dbdb84dee9b065518bad8ec34d";
+const HISTORICAL_THROUGH_V14_CANONICAL_SHA256: &str =
     "d4ccae56ee7d3fb13fc280c51f83e623200c9ae7bd329393605a4555818eb658";
 const IMPLEMENTATION_COMPANION_LABEL: &str =
     "companion:fictional-repo/implementation-evidence/repository-state.txt";
@@ -59,9 +61,9 @@ fn read_data(relative: &str) -> Vec<u8> {
 
 fn profile_name(config_version: &str) -> &'static str {
     match config_version {
-        "minimal-15" => "minimal",
-        "standard-15" => "standard",
-        "high-rigor-15" => "high-rigor",
+        "minimal-16" => "minimal",
+        "standard-16" => "standard",
+        "high-rigor-16" => "high-rigor",
         other => panic!("current calibration source records do not accept {other}"),
     }
 }
@@ -328,16 +330,7 @@ fn indexed_evidence(subject: &Value) -> Value {
     }
 }
 
-fn implementation_companion_record(subject: &Value) -> Record {
-    let subject = indexed_evidence(subject);
-    let commit = subject
-        .get("coverage")
-        .and_then(|coverage| coverage.get("commit"))
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("implementation subject coverage.commit must be a string"));
-    let path = implementation_companion_path(commit);
-    let content = read_data(path);
-    let text = std::str::from_utf8(&content).expect("implementation companion must be UTF-8");
+fn assert_implementation_companion_selectors(text: &str, commit: &str) {
     let head = text
         .lines()
         .find_map(|line| line.strip_prefix("HEAD: "))
@@ -349,8 +342,66 @@ fn implementation_companion_record(subject: &Value) -> Record {
     let coverage_label = text
         .lines()
         .find_map(|line| line.strip_prefix("coverage label: "))
+        .or_else(|| {
+            // The NEW supplied source names HEAD/coverage jointly as a fixed
+            // fictional selector. Read that declaration; do not invent a
+            // historical Git identity or normalize the supplied bytes.
+            text.lines()
+                .filter_map(|line| {
+                    line.strip_prefix(
+                        "HEAD/coverage isONLY unchanged procedures fixedfictional selector. Actualsourceidentity:",
+                    )
+                })
+                .any(|identity| {
+                    identity.len() == 64
+                        && identity.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                })
+                .then_some(head)
+        })
         .unwrap_or_else(|| panic!("implementation companion lacks coverage label for {commit}"));
     assert_eq!(coverage_label, commit);
+}
+
+#[test]
+fn implementation_companion_selectors_read_both_supplied_identity_forms() {
+    let commit = "repo-state-2026-08-12";
+    let explicit = format!("HEAD: {commit}\ncoverage label: {commit}\n");
+    let qualified = format!(
+        "HEAD: {commit}\nHEAD/coverage isONLY unchanged procedures fixedfictional selector. Actualsourceidentity:{}\n",
+        "a".repeat(64)
+    );
+    assert_implementation_companion_selectors(&explicit, commit);
+    assert_implementation_companion_selectors(&qualified, commit);
+    for invalid in [
+        format!("HEAD: {commit}\n"),
+        qualified.replace(commit, "repo-state-2026-08-13"),
+        format!("HEAD: {commit}\ncoverage label: wrong\n"),
+        format!(
+            "HEAD: {commit}\ncoverage label: wrong\n{}",
+            qualified.lines().nth(1).unwrap()
+        ),
+        qualified.replace(&"a".repeat(64), &"A".repeat(64)),
+        qualified.replace(&"a".repeat(64), &"a".repeat(63)),
+        qualified.replace("fixedfictional selector", "historical Git revision"),
+    ] {
+        assert!(std::panic::catch_unwind(|| {
+            assert_implementation_companion_selectors(&invalid, commit);
+        })
+        .is_err());
+    }
+}
+
+fn implementation_companion_record(subject: &Value) -> Record {
+    let subject = indexed_evidence(subject);
+    let commit = subject
+        .get("coverage")
+        .and_then(|coverage| coverage.get("commit"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("implementation subject coverage.commit must be a string"));
+    let path = implementation_companion_path(commit);
+    let content = read_data(path);
+    let text = std::str::from_utf8(&content).expect("implementation companion must be UTF-8");
+    assert_implementation_companion_selectors(text, commit);
     Record {
         label: IMPLEMENTATION_COMPANION_LABEL.to_owned(),
         content,
@@ -519,11 +570,17 @@ fn companion_records(subject: &Value, gate: &str, axis: &str) -> Vec<Record> {
 
 const CLASS_CODED_IDENTITY_TOKENS: &[&str] = &["good", "defective", "overbuilt", "bad"];
 const REVIEWER_VISIBLE_LEAK_MARKERS: &[&str] = &[
-    "intentionally conflicts",
-    "intentional conflict",
-    "incompatible",
-    "oracle",
-    "class-coded",
+    "intentionally conflicts with expected class",
+    "intentional conflict fixture",
+    "oracle verdict",
+    "manual oracle",
+    "class-coded fixture",
+    "expected result: pass",
+    "expected result: fail",
+    "observed result: pass",
+    "observed result: fail",
+    "manual class:",
+    "seed label:",
     "good fixture",
     "defective fixture",
     "bad fixture",
@@ -563,6 +620,54 @@ fn assert_no_reviewer_visible_leak(content: &[u8], location: &str) {
         assert!(
             !lower.contains(marker),
             "reviewer-visible oracle/class marker {marker:?} in {location}"
+        );
+    }
+    // Source bodies may legitimately discuss incompatible evidence, code
+    // expectations, and result fields. Reviewer role framing may not identify
+    // the manual class or observation. Closed request/assignment/preparation
+    // keys are checked separately by the packet and consumer tests.
+    for line in lower.lines() {
+        if let Some(role) = line.strip_prefix("=== supplied material: ") {
+            assert_neutral_identity(role, location);
+            for marker in [
+                "expected",
+                "observed",
+                "manual class",
+                "oracle",
+                "seed label",
+            ] {
+                assert!(
+                    !role.contains(marker),
+                    "oracle role framing in {location}: {role}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn reviewer_leak_guards_distinguish_source_vocabulary_from_oracle_framing() {
+    assert_no_reviewer_visible_leak(
+        b"Reject incompatible evidence; provider code checks result and expected rule names.",
+        "real rubric/source vocabulary",
+    );
+    for injected in [
+        "Expected result: pass",
+        "Observed result: fail",
+        "Manual class: faithful",
+        "Seed label: contradiction",
+        "Oracle verdict: pass",
+        "This is a good fixture with expected pass.",
+        "This companion intentionally conflicts with expected class.",
+        "=== supplied material: observed outcome ===\nneutral body",
+        "=== supplied material: good fixture ===\nneutral body",
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| {
+                assert_no_reviewer_visible_leak(injected.as_bytes(), "injected framing");
+            })
+            .is_err(),
+            "injected oracle framing admitted: {injected}"
         );
     }
 }
@@ -696,6 +801,239 @@ fn source_records_for_entry(entry: &Map<String, Value>) -> CalibrationInput {
     }
 }
 
+fn bytes_sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn frozen_historical_rows(entries: &[Value]) -> Vec<Value> {
+    let rows: Vec<_> = entries
+        .iter()
+        .filter(|row| is_historical_entry(row.as_object().unwrap()))
+        .cloned()
+        .collect();
+    assert_eq!(rows.len(), HISTORICAL_ROW_COUNT);
+    assert_eq!(
+        canonical_sha256(&Value::Array(rows.clone())),
+        HISTORICAL_MANIFEST_CANONICAL_SHA256
+    );
+    rows
+}
+
+// Decode only supplied NEW source bytes. These are not recovered Git history,
+// and receipt paths below are provenance strings, never files opened by tests.
+fn sealed_repository_state(text: &str) -> (Value, BTreeMap<String, Vec<u8>>) {
+    assert!(text.starts_with("NEW CURRENT FICTIONAL SOURCE/PROOF VERSIONv15. Not recovered historicalGit/source/tracking/execution.\n"));
+    let start = text.find("\n{").expect("sealed source metadata") + 1;
+    let metadata: Value = serde_json::Deserializer::from_str(&text[start..])
+        .into_iter::<Value>()
+        .next()
+        .unwrap()
+        .expect("sealed metadata JSON");
+    assert_eq!(metadata["source_version"], "NEWv15");
+    let declared = metadata["actual_source_files"].as_object().unwrap();
+    assert!(!declared.is_empty());
+    assert_eq!(
+        canonical_sha256(&metadata["actual_source_files"]),
+        metadata["source_sha256"].as_str().unwrap()
+    );
+    let selector_identity = text
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix(
+        "HEAD/coverage isONLY unchanged procedures fixedfictional selector. Actualsourceidentity:")
+        })
+        .unwrap();
+    assert_eq!(
+        selector_identity,
+        metadata["source_sha256"].as_str().unwrap()
+    );
+    let marker = "=== NEW COVERED FILE: fictional-repo/";
+    let sections: Vec<_> = text.split(marker).skip(1).collect();
+    let mut files = BTreeMap::new();
+    for (index, section) in sections.iter().enumerate() {
+        let (header, framed) = section.split_once(" ===\n").expect("covered-file header");
+        let (relative, expected) = header.split_once("; sha256:").unwrap();
+        assert!(!Path::new(relative).is_absolute());
+        assert!(Path::new(relative)
+            .components()
+            .all(|part| matches!(part, Component::Normal(_))));
+        // The supplied composition adds exactly two LF separators between
+        // covered files and one final framing LF after the last file. Remove
+        // only that framing, never trim source bodies; hashes verify the bytes.
+        let body = if index + 1 < sections.len() {
+            framed.strip_suffix("\n\n").expect("covered-file separator")
+        } else {
+            framed
+                .strip_suffix('\n')
+                .expect("final covered-file framing")
+        };
+        let bytes = body.as_bytes().to_vec();
+        assert_eq!(
+            bytes_sha256(&bytes),
+            expected,
+            "covered bytes for {relative}"
+        );
+        assert_eq!(declared[relative].as_str(), Some(expected));
+        assert!(
+            files.insert(relative.to_owned(), bytes).is_none(),
+            "duplicate covered file"
+        );
+    }
+    assert_eq!(
+        files.keys().collect::<BTreeSet<_>>(),
+        declared.keys().collect::<BTreeSet<_>>()
+    );
+    let inventory: Value =
+        serde_json::from_slice(&files["implementation-evidence/source-inventory.json"]).unwrap();
+    let actual: BTreeMap<_, _> = files
+        .iter()
+        .filter(|(path, _)| path.as_str() != "implementation-evidence/source-inventory.json")
+        .map(|(path, bytes)| (path.clone(), bytes_sha256(bytes)))
+        .collect();
+    assert_eq!(
+        serde_json::to_value(actual).unwrap(),
+        inventory["files_sha256"]
+    );
+    (metadata, files)
+}
+
+fn assert_public_journey_source(bytes: &[u8]) {
+    let text = std::str::from_utf8(bytes).unwrap();
+    for assertion in [
+        "def main():",
+        "for profile_name in [\"minimal\", \"standard\", \"high-rigor\"]:",
+        "cli(\"start\", \"--id\", rid, \"software-change\", \"@\" + str(profile_path)",
+        "full = cli(\"show\", rid, \"--view\", \"full\")[\"result\"]",
+        "assert {k: v for k, v in frozen.items() if k != \"artifact_root\"} == submitted",
+        "assert set(frozen) == set(submitted) | {\"artifact_root\"}",
+        "assert full[\"initial_input\"] == frozen",
+        "required property `revision` is missing",
+        "assert (\"/outcome\", \"minLength\") in actual",
+        "assert (\"/NEW-unexpected\", \"additionalProperties\") in actual",
+        "assert cli(\"show\", rid, \"--view\", \"full\")[\"result\"][\"current_state\"] == before_state",
+        "for record in good[:-1]:",
+        "missing = good[-1]",
+        "for defect in [\"stale-revision\", \"stale-config\", \"subject-author\"]:",
+        "if axes[-1].get(\"required_authors\", 1) > 1:",
+        "bad[\"author\"] = good[-2][\"author\"]",
+        "assert any(d.get(\"standing_fails\", 0) > 0 for d in denied[\"details\"])",
+        "append(missing)",
+        "cli(\"event\", rid, edge[\"event\"])",
+        "if state == \"end\":",
+        "assert full[\"lifecycle\"] == \"final\"",
+        "assert full[\"requestable_events\"] == []",
+        "assert full[\"completion_mode\"] == \"completed\"",
+        "assert full[\"has_overrides\"] is False and full[\"override_count\"] == 0",
+        "assert action[\"outcome\"][\"feedback\"] == evaluation[\"result\"][\"feedback\"]",
+        "and row[\"action\"][\"transition\"][\"target\"] == \"end\"",
+        "and row[\"action\"][\"outcome\"][\"outcome\"] == \"committed\"",
+        "assert receipt[\"fixture_after\"] == before",
+        "assert len(receipt[\"journeys\"]) == 3",
+    ] {
+        assert!(text.contains(assertion), "missing actual public assertion: {assertion}");
+    }
+    assert!(text.find("for record in good[:-1]:").unwrap() < text.find("for defect in").unwrap());
+    assert!(text.find("for defect in").unwrap() < text.find("append(missing)").unwrap());
+    assert!(
+        !text.contains("for record in good:"),
+        "must not preload complete qualifying evidence"
+    );
+}
+
+fn assert_exact_requirement_mapping(files: &BTreeMap<String, Vec<u8>>) {
+    let mapping: Value =
+        serde_json::from_slice(&files["implementation-evidence/four-acceptance-proof-map.json"])
+            .unwrap();
+    let rows = mapping.as_array().unwrap();
+    let requirements = [
+        "A caller can inspect the frozen policies and artifact schemas before evaluating a transition.",
+        "A malformed subject artifact is denied with each violated structural rule named.",
+        "A checked transition refuses stale, self-authored, duplicate-author, or configured-obligation-incomplete evidence.",
+        "The reference workflow reaches its terminal state only after its configured validation obligations are satisfied.",
+    ];
+    assert_eq!(rows.len(), requirements.len());
+    let matrix =
+        std::str::from_utf8(&files["implementation-evidence/requirement-to-proof.md"]).unwrap();
+    let prd = std::str::from_utf8(&files["docs/PRD.md"]).unwrap();
+    assert!(prd.contains("This document is authoritative for product behavior"));
+    assert!(prd.contains("supplemental and non-authoritative"));
+    let intent = fixture_value("intent-good");
+    let accepted: Vec<_> = intent["acceptance"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|criterion| criterion["statement"].as_str().unwrap())
+        .collect();
+    assert_eq!(accepted, requirements);
+    let mut references = BTreeSet::new();
+    for (row, requirement) in rows.iter().zip(requirements) {
+        assert_eq!(row["requirement"], requirement);
+        let prefix = format!("| {requirement} |");
+        let lines: Vec<_> = matrix
+            .lines()
+            .filter(|line| line.starts_with(&prefix))
+            .collect();
+        assert_eq!(lines.len(), 1);
+        let proof_column = lines[0].split('|').nth(2).unwrap();
+        let named: Vec<_> = proof_column
+            .split('`')
+            .enumerate()
+            .filter_map(|(index, name)| (index % 2 == 1).then_some(name))
+            .collect();
+        let expected: Vec<_> = row["proofs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|name| name.as_str().unwrap())
+            .collect();
+        assert_eq!(named, expected);
+        for name in named {
+            let (file, function) = name.split_once("::").unwrap();
+            let source = std::str::from_utf8(&files[file]).unwrap();
+            let declaration = if file.ends_with(".rs") {
+                format!("fn {function}(")
+            } else {
+                format!("def {function}(")
+            };
+            assert!(
+                source.contains(&declaration),
+                "actual proof function {name}"
+            );
+            references.insert(name.to_owned());
+        }
+    }
+    let inventory: Value =
+        serde_json::from_slice(&files["implementation-evidence/source-inventory.json"]).unwrap();
+    let inventoried: BTreeSet<_> = inventory["proof_inventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|name| name.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(references, inventoried);
+}
+
+#[test]
+fn sealed_repository_state_rejects_missing_or_changed_covered_bytes() {
+    let text = String::from_utf8(read_data(GOOD_STATE_DATA_PATH)).unwrap();
+    let (_, files) = sealed_repository_state(&text);
+    assert_exact_requirement_mapping(&files);
+    for tampered in [
+        text.replacen("def main():", "def renamed_main():", 1),
+        text.replacen(
+            "=== NEW COVERED FILE: fictional-repo/Cargo.lock;",
+            "=== OMITTED FILE: fictional-repo/Cargo.lock;",
+            1,
+        ),
+    ] {
+        assert_ne!(tampered, text);
+        assert!(std::panic::catch_unwind(|| sealed_repository_state(&tampered)).is_err());
+    }
+}
+
 fn manifest() -> Vec<Value> {
     serde_json::from_slice(&read_data("calibration/manifest.json")).expect("manifest JSON")
 }
@@ -732,7 +1070,7 @@ fn required_current_row_keys(entries: &[Value]) -> Result<BTreeSet<CalibrationRo
             .ok_or_else(|| format!("{profile} profile has no config_version"))?;
         let Some(base) = version.strip_suffix(CURRENT_CONFIG_SUFFIX) else {
             return Err(format!(
-                "{profile} profile is not a v15 successor: {version}"
+                "{profile} profile is not a v16 successor: {version}"
             ));
         };
         let predecessor = format!("{base}{PREDECESSOR_CONFIG_SUFFIX}");
@@ -903,6 +1241,18 @@ fn validate_applicability(entry: &Map<String, Value>, entries: &[Value]) -> Resu
     let selected = retained
         .pointer(pointer)
         .ok_or("prior return selector does not resolve")?;
+    validate_applicability_selected(source, selected)
+}
+
+/// Decode a retained original under its ORIGINAL row identity. Narrative sources
+/// use the same strict singleton-batch validator as fresh captured returns.
+fn validate_applicability_selected(
+    source: &Map<String, Value>,
+    selected: &Value,
+) -> Result<(), String> {
+    if is_narrative_gate(string_field(source, "gate")) {
+        return validate_fresh_selected(source, selected);
+    }
     if selected["model"] != source["model"] {
         return Err("prior returned model disagrees with source row".into());
     }
@@ -1221,7 +1571,7 @@ fn calibration_manifest_binds_exact_source_record_stream_and_covers_profile_axes
 }
 
 #[test]
-fn historic_v10_v11_v12_v13_v14_rows_remain_unchanged_and_v15_packets_use_fresh_keys() {
+fn historic_v10_v11_v12_v13_v14_v15_rows_remain_unchanged_and_v16_packets_use_fresh_keys() {
     let entries = manifest();
     let historical: Vec<Value> = entries
         .iter()
@@ -1232,6 +1582,15 @@ fn historic_v10_v11_v12_v13_v14_rows_remain_unchanged_and_v15_packets_use_fresh_
     assert_eq!(
         canonical_sha256(&Value::Array(historical.clone())),
         HISTORICAL_MANIFEST_CANONICAL_SHA256
+    );
+    let through_v14: Vec<Value> = historical
+        .iter()
+        .filter(|entry| !entry["config_version"].as_str().unwrap().ends_with("-15"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        canonical_sha256(&Value::Array(through_v14)),
+        HISTORICAL_THROUGH_V14_CANONICAL_SHA256
     );
     let v10: Vec<_> = historical
         .iter()
@@ -1311,7 +1670,7 @@ fn historic_v10_v11_v12_v13_v14_rows_remain_unchanged_and_v15_packets_use_fresh_
         .to_path_buf();
     let temporary = support::TestDir::new("calibration-history");
     let output_root = temporary.path().join("packets");
-    let row_key = "minimal-15|intent-review|solution-agnostic|aggregate|intent-good";
+    let row_key = "minimal-16|intent-review|solution-agnostic|aggregate|intent-good";
     let mut prepare = Command::new("python3");
     prepare
         .current_dir(&repository)
@@ -1342,7 +1701,7 @@ fn historic_v10_v11_v12_v13_v14_rows_remain_unchanged_and_v15_packets_use_fresh_
         &fs::read(case_dir.join("preparation.json")).expect("preparation metadata"),
     )
     .expect("preparation JSON");
-    assert_eq!(preparation["config_version"], "minimal-15");
+    assert_eq!(preparation["config_version"], "minimal-16");
     assert_eq!(preparation["row_key"], row_key);
     for forbidden in ["expected", "observed", "attested_by", "oracle"] {
         assert!(
@@ -1352,12 +1711,19 @@ fn historic_v10_v11_v12_v13_v14_rows_remain_unchanged_and_v15_packets_use_fresh_
     }
     let current_row = current
         .iter()
-        .find(|entry| entry["config_version"] == "minimal-15")
-        .and_then(|entry| {
-            (entry["gate"] == "intent-review"
-                && entry["axis"] == "solution-agnostic"
-                && entry["fixture_id"] == "intent-good")
-                .then_some(*entry)
+        .copied()
+        .find(|entry| {
+            let entry = entry.as_object().expect("current row object");
+            [
+                "config_version",
+                "gate",
+                "axis",
+                "review_stage",
+                "fixture_id",
+            ]
+            .map(|field| string_field(entry, field))
+            .join("|")
+                == row_key
         })
         .expect("current row for prepared packet");
     assert_eq!(
@@ -1526,13 +1892,35 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
                 "parent passing fixture must also be honestly attested or pending on the counterpart");
         }
     }
-    // 598 released slot-1 (126a4fb) keys plus 36 narrative challenge keys:
-    // 3 narrative-adversarial gates x 3 axes x (minimal aggregate + standard
-    // aggregate + high-rigor individual and aggregate).
-    assert_eq!(
-        counterpart_keys, 634,
-        "all historical and current ordinary/challenge counterpart keys"
+    // Frozen history supplies historical keys; complete shipped policies and
+    // procedure pairings supply current keys. Neither a release-slot constant
+    // nor the observed current manifest count establishes complete coverage.
+    let mut required_keys: BTreeSet<_> = frozen_historical_rows(&entries)
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|row| is_adversarial_gate(string_field(row, "gate")))
+        .map(|row| {
+            let key = row_key(row);
+            (key.0, key.1, key.2, key.3)
+        })
+        .collect();
+    required_keys.extend(
+        required_current_row_keys(&entries)
+            .unwrap()
+            .into_iter()
+            .filter(|key| is_adversarial_gate(&key.1))
+            .map(|key| (key.0, key.1, key.2, key.3)),
     );
+    let actual_keys: BTreeSet<_> = by_key
+        .keys()
+        .filter(|key| is_adversarial_gate(&key.1))
+        .cloned()
+        .collect();
+    assert_eq!(
+        actual_keys, required_keys,
+        "complete historical/current challenge keys"
+    );
+    assert_eq!(counterpart_keys, required_keys.len());
 }
 
 #[test]
@@ -1567,11 +1955,20 @@ fn implementation_rows_have_total_commit_mapped_companion_coverage() {
             if commit == "repo-state-2026-08-12" {
                 let text = std::str::from_utf8(&records[0].content)
                     .expect("good repository state is UTF-8");
-                assert!(!text.contains("A\\tfictional-repo/provider/tests/snapshots/describe.json"));
-                assert!(text.contains("pre-change existence exit status: 0"));
-                assert!(text.contains("unchanged exit status: 0"));
-                assert!(text.contains("pre-change sha256: 2361843677d68b90775db42939f6333f16760138bfd36c96a71d5f01a65498e2"));
-                assert!(text.contains("covered-state sha256: 2361843677d68b90775db42939f6333f16760138bfd36c96a71d5f01a65498e2"));
+                let (metadata, files) = sealed_repository_state(text);
+                assert_eq!(metadata["whole_current_workspace_execution"], false);
+                let snapshot = &files["provider/tests/snapshots/describe.json"];
+                assert_eq!(
+                    bytes_sha256(snapshot),
+                    "2361843677d68b90775db42939f6333f16760138bfd36c96a71d5f01a65498e2"
+                );
+                let test =
+                    std::str::from_utf8(&files["provider/tests/describe_protocol.rs"]).unwrap();
+                assert!(test.contains("fn describe_matches_existing_component_byte_for_byte("));
+                assert!(test.contains("common::exercise(\"describe\")"));
+                let common = std::str::from_utf8(&files["provider/tests/common/mod.rs"]).unwrap();
+                assert!(common.contains("include_bytes!(\"../snapshots/describe.json\")"));
+                assert_public_journey_source(&files["scripts/production-journey.py"]);
             }
             *commits.entry(commit.to_owned()).or_insert(0usize) += 1;
 
@@ -1604,14 +2001,35 @@ fn implementation_rows_have_total_commit_mapped_companion_coverage() {
             );
         }
     }
-    assert_eq!(implementation_rows, 288);
-    assert_eq!(
-        commits,
-        BTreeMap::from([
-            ("repo-state-2026-08-12".to_owned(), 144usize),
-            ("repo-state-2026-08-13".to_owned(), 144usize),
-        ])
+    let mut required: BTreeSet<_> = frozen_historical_rows(&entries)
+        .iter()
+        .map(|row| row_key(row.as_object().unwrap()))
+        .filter(|key| {
+            matches!(
+                key.1.as_str(),
+                "implementation-review" | "implementation-adversarial-review"
+            )
+        })
+        .collect();
+    required.extend(
+        required_current_row_keys(&entries)
+            .unwrap()
+            .into_iter()
+            .filter(|key| {
+                matches!(
+                    key.1.as_str(),
+                    "implementation-review" | "implementation-adversarial-review"
+                )
+            }),
     );
+    let mut expected_commits = BTreeMap::new();
+    for key in &required {
+        let fixture = fixture_value(&key.4);
+        let commit = fixture["coverage"]["commit"].as_str().unwrap().to_owned();
+        *expected_commits.entry(commit).or_insert(0usize) += 1;
+    }
+    assert_eq!(implementation_rows, required.len());
+    assert_eq!(commits, expected_commits);
 }
 
 #[test]
@@ -1676,7 +2094,7 @@ fn implementation_companion_mutation_changes_digest() {
         .find(|entry| {
             entry["gate"] == "implementation-review"
                 && entry["fixture_id"] == "implementation-report-good"
-                && entry["config_version"] == "standard-15"
+                && entry["config_version"] == "standard-16"
         })
         .expect("current implementation row");
     let input = source_records_for_entry(entry.as_object().expect("manifest row object"));
@@ -1749,8 +2167,8 @@ fn all_subject_fixtures_and_revision_links_use_neutral_r15() {
 
 #[test]
 fn design_decisions_and_plan_references_preserve_profile_and_evidence_choices() {
-    const PROFILE_CHOICE: &str = "Transport complete caller-selected canonical profile as immutable initial_input rather than profile identifier or repository lookup.";
-    const PROFILE_RATIONALE: &str = "Loop Engine already freezes initial_input, so exact run-frozen profile bytes make obligations inspectable/replayable and prevent provider environment/catalog drift; describe remains static workflow topology rather than selected-profile data.";
+    const PROFILE_CHOICE: &str = "Caller submits the full unchanged canonical profile. At start Loop Engine may add its allocated artifact_root when absent, preserving every submitted profile field; it freezes the composed value, which show and evaluate project unchanged. No provider catalog or mutable policy lookup is permitted.";
+    const PROFILE_RATIONALE: &str = "The existing engine performs artifact-root allocation before freezing, preserving canonical obligations; show/evaluate expose the immutable composed value without provider environment/catalog drift.";
     const EVIDENCE_CHOICE: &str = "Freeze evidence aggregation by exact gate, policy axis, subject, subject_revision, config_version, and author (name, kind): only current subject revision and frozen config version can satisfy; subject author is excluded; latest conforming verdict per exact (axis, current subject revision, author identity) stands; every required distinct non-subject author must be present with zero standing fails, and duplicate records from one author do not increase author count; malformed or nonconforming current-axis records block until a later conforming record for the same gate and axis supersedes them. Provider evaluates supplied claims deterministically but does not authenticate identity or judge semantic truth.";
 
     let design = fixture_value("design-good");
@@ -1769,6 +2187,9 @@ fn design_decisions_and_plan_references_preserve_profile_and_evidence_choices() 
         ])
     );
     assert_eq!(decisions[5]["choice"], EVIDENCE_CHOICE);
+    let state = String::from_utf8(read_data(GOOD_STATE_DATA_PATH)).unwrap();
+    let (_, files) = sealed_repository_state(&state);
+    assert_public_journey_source(&files["scripts/production-journey.py"]);
     let profile_element = design["elements"]
         .as_array()
         .expect("design-good elements array")
@@ -1943,6 +2364,8 @@ fn good_plan_supplies_context_interfaces_public_proof_and_current_routes() {
 #[test]
 fn validation_docs_coverage_has_exact_mapped_companion_bytes() {
     let mut docs_rows = 0;
+    let mut historical_rows = 0;
+    let mut current_rows = 0;
     for entry in manifest() {
         let entry = entry.as_object().expect("manifest row object");
         if !(gate_family(string_field(entry, "gate")) == "validation"
@@ -1951,6 +2374,15 @@ fn validation_docs_coverage_has_exact_mapped_companion_bytes() {
             continue;
         }
         docs_rows += 1;
+        if is_historical_entry(entry) {
+            historical_rows += 1;
+        } else {
+            assert!(
+                string_field(entry, "config_version").ends_with(CURRENT_CONFIG_SUFFIX),
+                "unsupported companion coverage version"
+            );
+            current_rows += 1;
+        }
         let subject = indexed_evidence(&fixture_value(string_field(entry, "fixture_id")));
         let documents = subject["coverage"]["documents"]
             .as_array()
@@ -1983,14 +2415,24 @@ fn validation_docs_coverage_has_exact_mapped_companion_bytes() {
         }
     }
     assert_eq!(
-        docs_rows, 96,
-        "expected v10/v11/v12/v13/v14 history and v15 good/defective docs rows on parent and adversarial validation gates"
+        historical_rows, 96,
+        "v10/v11/v12/v13/v14/v15 historical docs-integrated coverage must remain unchanged"
+    );
+    assert_eq!(
+        current_rows, 16,
+        "missing current v16 docs-integrated companion coverage: expected all good/defective rows on parent/adversarial validation gates"
+    );
+    assert_eq!(
+        docs_rows, 112,
+        "complete coverage requires 96 historical v10-through-v15 rows plus 16 current v16 rows"
     );
 }
 
 #[test]
 fn validation_intent_delivered_has_inspectable_repository_state_companion() {
     let mut intent_delivered_rows = 0;
+    let mut historical_rows = 0;
+    let mut current_rows = 0;
     for entry in manifest() {
         let entry = entry.as_object().expect("manifest row object");
         let gate = string_field(entry, "gate");
@@ -1999,6 +2441,15 @@ fn validation_intent_delivered_has_inspectable_repository_state_companion() {
             continue;
         }
         intent_delivered_rows += 1;
+        if is_historical_entry(entry) {
+            historical_rows += 1;
+        } else {
+            assert!(
+                string_field(entry, "config_version").ends_with(CURRENT_CONFIG_SUFFIX),
+                "unsupported companion coverage version"
+            );
+            current_rows += 1;
+        }
         let subject = indexed_evidence(&fixture_value(string_field(entry, "fixture_id")));
         let records = companion_records(&subject, gate, axis);
         let repository_state: Vec<&Record> = records
@@ -2021,34 +2472,68 @@ fn validation_intent_delivered_has_inspectable_repository_state_companion() {
         if string_field(entry, "expected") == "pass" {
             let text = std::str::from_utf8(&repository_state[0].content)
                 .expect("repository-state companion is UTF-8");
-            assert!(text.contains("## Public operator journey scenarios (bookends:LE-39)"));
-            assert!(text.contains("command: python3 scripts/production-journey.py"));
-            assert!(text.contains("### frozen_profile_is_inspectable_before_transition"));
-            assert!(text.contains("assertion: show exposes the selected frozen policies and artifact schemas before event"));
-            assert!(text.contains("### malformed_artifact_denial_names_all_rules"));
-            assert!(text
-                .contains("assertion: structural denial names every simultaneous path and rule"));
-            assert!(text.contains("### evidence_denial_reports_each_configured_reason"));
-            assert!(text.contains(
-                "assertion: each evidence deficiency is independently decisive and leaves current_state=intent-review"
-            ));
-            assert!(
-                text.contains("partial transition observation: passed returned status=rejected")
+            let (metadata, files) = sealed_repository_state(text);
+            assert_public_journey_source(&files["scripts/production-journey.py"]);
+            assert_eq!(metadata["whole_current_workspace_execution"], false);
+            let scopes: BTreeSet<_> = metadata["proofs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|proof| {
+                    assert_eq!(proof["actual_status"], "passed");
+                    assert!(!proof["scope"].as_str().unwrap().is_empty());
+                    assert_eq!(proof["receipt_sha256"].as_str().unwrap().len(), 64);
+                    proof["version"].as_str().unwrap()
+                })
+                .collect();
+            assert_eq!(scopes, BTreeSet::from(["v8", "v9", "v10", "v13", "v15"]));
+            let cases = metadata["actual_public_evidence_cases"].as_array().unwrap();
+            let actual: Vec<_> = cases
+                .iter()
+                .map(|case| {
+                    assert_eq!(case["context_unchanged"], true);
+                    if case["event_status"] == "rejected" {
+                        assert_eq!(case["state_before"], case["state_after"]);
+                    }
+                    (
+                        case["case"].as_str().unwrap(),
+                        case["event_status"].as_str().unwrap(),
+                        case["same_author_restoration"].as_bool().unwrap(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                actual,
+                vec![
+                    ("valid-control", "completed", false),
+                    ("missing-config-restoration", "rejected", true),
+                    ("stale-with-sufficient", "completed", false),
+                    ("stale-noncounting", "rejected", false),
+                    ("stale-malformed-order-unchanged", "completed", false),
+                    ("standing-fail-and-own-restoration", "rejected", true),
+                ]
             );
-            assert!(text.contains("### terminal_validation_gate"));
-            assert!(text.contains("assertion: denied transition leaves current_state=validation"));
-            assert!(text.contains("assertion: accepted transition reaches current_state=end"));
         }
     }
     assert_eq!(
-        intent_delivered_rows, 96,
-        "expected v10/v11/v12/v13/v14 history and v15 good/defective intent-delivered rows across shipped validation gates"
+        historical_rows, 96,
+        "v10/v11/v12/v13/v14/v15 historical intent-delivered coverage must remain unchanged"
+    );
+    assert_eq!(
+        current_rows, 16,
+        "missing current v16 intent-delivered companion coverage: expected all good/defective rows on parent/adversarial validation gates"
+    );
+    assert_eq!(
+        intent_delivered_rows, 112,
+        "complete coverage requires 96 historical v10-through-v15 rows plus 16 current v16 rows"
     );
 }
 
 #[test]
 fn validation_requirement_proof_mapping_has_inspectable_public_proof_companions() {
     let mut rows = 0;
+    let mut historical_rows = 0;
+    let mut current_rows = 0;
     for entry in manifest() {
         let entry = entry.as_object().expect("manifest row object");
         let gate = string_field(entry, "gate");
@@ -2057,6 +2542,15 @@ fn validation_requirement_proof_mapping_has_inspectable_public_proof_companions(
             continue;
         }
         rows += 1;
+        if is_historical_entry(entry) {
+            historical_rows += 1;
+        } else {
+            assert!(
+                string_field(entry, "config_version").ends_with(CURRENT_CONFIG_SUFFIX),
+                "unsupported companion coverage version"
+            );
+            current_rows += 1;
+        }
         let subject = indexed_evidence(&fixture_value(string_field(entry, "fixture_id")));
         let records = companion_records(&subject, gate, axis);
         let labels: Vec<&str> = records.iter().map(|record| record.label.as_str()).collect();
@@ -2078,139 +2572,200 @@ fn validation_requirement_proof_mapping_has_inspectable_public_proof_companions(
                     record.label == "companion:fictional-repo/scripts/production-journey.py"
                 })
                 .expect("public journey companion");
-            let text = std::str::from_utf8(&journey.content).expect("public journey is UTF-8");
-            for scenario in [
-                "frozen_profile_is_inspectable_before_transition",
-                "malformed_artifact_denial_names_all_rules",
-                "evidence_denial_reports_each_configured_reason",
-                "terminal_validation_gate",
-            ] {
-                assert!(
-                    text.contains(&format!("def {scenario}(")),
-                    "missing {scenario}"
+            assert_public_journey_source(&journey.content);
+            let state = records
+                .iter()
+                .find(|record| record.label == IMPLEMENTATION_COMPANION_LABEL)
+                .unwrap();
+            let (_, files) = sealed_repository_state(std::str::from_utf8(&state.content).unwrap());
+            assert_eq!(journey.content, files["scripts/production-journey.py"]);
+            for record in records
+                .iter()
+                .filter(|record| record.label.starts_with("companion:fictional-repo/"))
+            {
+                if record.label == IMPLEMENTATION_COMPANION_LABEL {
+                    continue;
+                }
+                let relative = record
+                    .label
+                    .strip_prefix("companion:fictional-repo/")
+                    .unwrap();
+                assert_eq!(
+                    record.content, files[relative],
+                    "sealed proof source binding for {relative}"
                 );
             }
-            assert!(text.contains(
-                "assert data(denied)[\"current_state\"] == \"validation-adversarial-review\""
-            ));
-            assert!(text.contains("public structural-denial proof"));
-            assert!(!text.contains("invoke(engine, config, \"event\", run_id, \"revise-intent\")"));
-            assert!(text.contains("for policy_id in required:"));
-            assert!(text.contains("assert policy_id in denial_text"));
-            assert!(text.contains("for policy_id, count in required.items()"));
-            assert!(text.contains("assert len(authors[policy_id]) >= count"));
-            assert!(text.contains("assert data(accepted)[\"current_state\"] == \"end\""));
+            assert_exact_requirement_mapping(&files);
         }
     }
     assert_eq!(
-        rows, 96,
-        "expected v10/v11/v12/v13/v14 history and v15 parent/adversarial good/defective proof rows"
+        historical_rows, 96,
+        "v10/v11/v12/v13/v14/v15 historical requirement-proof-mapping coverage must remain unchanged"
     );
+    assert_eq!(
+        current_rows, 16,
+        "missing current v16 requirement-proof-mapping companion coverage: expected all good/defective rows on parent/adversarial validation gates"
+    );
+    assert_eq!(
+        rows, 112,
+        "complete coverage requires 96 historical v10-through-v15 rows plus 16 current v16 rows"
+    );
+}
+
+fn materialize_sealed_proof_source(root: &Path) -> BTreeMap<String, Vec<u8>> {
+    let state = String::from_utf8(read_data(GOOD_STATE_DATA_PATH)).unwrap();
+    let (_, files) = sealed_repository_state(&state);
+    assert_eq!(
+        files["scripts/assert-requirement-proof.py"],
+        read_data(REQUIREMENT_PROOF_SCRIPT_DATA_PATH)
+    );
+    assert_eq!(
+        files["implementation-evidence/requirement-to-proof.md"],
+        read_data(REQUIREMENT_PROOF_MATRIX_DATA_PATH)
+    );
+    assert_exact_requirement_mapping(&files);
+    for (relative, bytes) in &files {
+        let destination = root.join(relative);
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(destination, bytes).unwrap();
+    }
+    files
+}
+
+// Public CLI structural preflight only. No invented receipts and no live proof
+// files: the valid sealed control must reach this exact missing binding read.
+// Root separately owns full genuine runtime receipt/binding validation.
+fn proof_checker_preflight(root: &Path, capture_root: &Path, label: &str, refusal: Option<&str>) {
+    let binding = capture_root.join("unavailable-runtime-binding.json");
+    assert!(!binding.exists());
+    let mut command = Command::new("python3");
+    command
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .arg(root.join("scripts/assert-requirement-proof.py"))
+        .arg("--receipt")
+        .arg(capture_root.join("unavailable-runtime-receipt.json"))
+        .arg("--binding")
+        .arg(&binding)
+        .arg("--repair-proof")
+        .arg(capture_root.join("unavailable-repair-proof.json"))
+        .arg("--evidence-proof")
+        .arg(capture_root.join("unavailable-evidence-proof.json"));
+    let argv = format!("{command:?}");
+    let output = command
+        .bounded_output("requirement proof public structural preflight")
+        .unwrap();
+    fs::write(capture_root.join(format!("{label}.command")), &argv).unwrap();
+    fs::write(capture_root.join(format!("{label}.stdout")), &output.stdout).unwrap();
+    fs::write(capture_root.join(format!("{label}.stderr")), &output.stderr).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{argv}\n{stderr}");
+    assert!(
+        output.stdout.is_empty(),
+        "{argv}\nstdout: {:?}",
+        output.stdout
+    );
+    if let Some(cause) = refusal {
+        assert!(
+            stderr.ends_with(&format!("AssertionError: {cause}\n")),
+            "{argv}\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("FileNotFoundError"),
+            "must reject before any proof file read: {stderr}"
+        );
+    } else {
+        let expected = format!(
+            "FileNotFoundError: [Errno 2] No such file or directory: '{}'\n",
+            binding.display()
+        );
+        assert!(
+            stderr.ends_with(&expected),
+            "must reach exactly nominated binding: {argv}\n{stderr}"
+        );
+        assert!(
+            stderr.contains("binding = json.loads(binding_path.read_text())"),
+            "wrong preflight stage: {stderr}"
+        );
+        assert!(
+            !stderr.contains("AssertionError"),
+            "sealed structural control must pass all pre-receipt checks: {stderr}"
+        );
+    }
 }
 
 #[test]
 fn requirement_proof_checker_rejects_missing_mapping() {
-    let root = std::env::temp_dir().join(format!(
-        "software-change-provider-requirement-proof-tamper-{}",
-        std::process::id()
-    ));
-    if root.exists() {
-        fs::remove_dir_all(&root).expect("remove stale tamper root");
-    }
-    fs::create_dir_all(root.join("implementation-evidence"))
-        .expect("create tamper evidence directory");
-    fs::create_dir_all(root.join("scripts")).expect("create tamper scripts directory");
-
-    let missing = "`fictional-repo/provider/tests/a15.rs::every_shipped_profile_starts_and_exposes_policies_and_schemas`";
-    let matrix = String::from_utf8(read_data(REQUIREMENT_PROOF_MATRIX_DATA_PATH))
-        .expect("proof matrix is UTF-8");
+    let temporary = support::TestDir::new("requirement-proof-mapping-preflight");
+    let root = temporary.path().join("sealed-source");
+    let files = materialize_sealed_proof_source(&root);
+    proof_checker_preflight(&root, temporary.path(), "sealed-control", None);
+    let matrix =
+        String::from_utf8(files["implementation-evidence/requirement-to-proof.md"].clone())
+            .unwrap();
+    let missing = "`provider/tests/opaque_describe.rs::optional_opaque_initial_input_is_ignored_without_allowing_other_fields`";
+    assert_eq!(
+        matrix.matches(missing).count(),
+        1,
+        "real current map target"
+    );
     let tampered = matrix.replacen(missing, "", 1);
-    assert_ne!(tampered, matrix, "tamper target must exist in proof matrix");
     fs::write(
         root.join("implementation-evidence/requirement-to-proof.md"),
         tampered,
     )
-    .expect("write tampered proof matrix");
-    fs::write(
-        root.join("implementation-evidence/repo-state-2026-08-12.txt"),
-        read_data(GOOD_STATE_DATA_PATH),
-    )
-    .expect("write proof inventory");
-    let script = root.join("scripts/assert-requirement-proof.py");
-    fs::write(&script, read_data(REQUIREMENT_PROOF_SCRIPT_DATA_PATH)).expect("write proof checker");
-
-    let output = Command::new("python3")
-        .arg(&script)
-        .arg(&root)
-        .output()
-        .expect("python3 proof checker should spawn");
-    assert!(
-        !output.status.success(),
-        "tampered proof map unexpectedly passed"
+    .unwrap();
+    proof_checker_preflight(
+        &root,
+        temporary.path(),
+        "missing-mapping",
+        Some("matrix proof names disagree"),
     );
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("proof mapping mismatch"),
-        "tampered checker error was not useful: {:?}",
-        output.stderr
-    );
-    fs::remove_dir_all(root).expect("remove tamper root");
 }
 
 #[test]
 fn requirement_proof_checker_rejects_preloaded_complete_evidence() {
-    let root = std::env::temp_dir().join(format!(
-        "software-change-provider-preloaded-evidence-tamper-{}",
-        std::process::id()
-    ));
-    if root.exists() {
-        fs::remove_dir_all(&root).expect("remove stale tamper root");
-    }
-    fs::create_dir_all(root.join("implementation-evidence"))
-        .expect("create tamper evidence directory");
-    fs::create_dir_all(root.join("scripts")).expect("create tamper scripts directory");
-    fs::write(
-        root.join("implementation-evidence/requirement-to-proof.md"),
-        read_data(REQUIREMENT_PROOF_MATRIX_DATA_PATH),
-    )
-    .expect("write proof matrix");
-    fs::write(
-        root.join("implementation-evidence/repo-state-2026-08-12.txt"),
-        read_data(GOOD_STATE_DATA_PATH),
-    )
-    .expect("write proof inventory");
-    fs::write(
-        root.join("scripts/assert-requirement-proof.py"),
-        read_data(REQUIREMENT_PROOF_SCRIPT_DATA_PATH),
-    )
-    .expect("write proof checker");
-    let journey = String::from_utf8(read_data(
-        "calibration/companions/fictional-repo/scripts/production-journey.py",
-    ))
-    .expect("public journey is UTF-8");
-    let tampered = journey.replacen(
-        "EVIDENCE_CASES = (",
-        "EVIDENCE_CASES = (\n    \"intent-evidence-good.json\",",
+    let temporary = support::TestDir::new("requirement-proof-preload-preflight");
+    let root = temporary.path().join("sealed-source");
+    let files = materialize_sealed_proof_source(&root);
+    proof_checker_preflight(&root, temporary.path(), "sealed-control", None);
+    let journey = String::from_utf8(files["scripts/production-journey.py"].clone()).unwrap();
+    // Preload complete qualifying coverage before the bad contributions, then
+    // move the named partial loop to the repair phase. All real source names
+    // remain, but their causal order no longer establishes a decisive deficit.
+    let target = "                    for record in good[:-1]:";
+    let repair = "                    append(missing)";
+    assert_eq!(
+        journey.matches(target).count(),
         1,
+        "real current deficit target"
     );
-    assert_ne!(tampered, journey, "tamper target must exist");
-    fs::write(root.join("scripts/production-journey.py"), tampered)
-        .expect("write tampered public journey");
-
-    let output = Command::new("python3")
-        .arg(root.join("scripts/assert-requirement-proof.py"))
-        .arg(&root)
-        .output()
-        .expect("python3 proof checker should spawn");
-    assert!(
-        !output.status.success(),
-        "preloaded evidence journey unexpectedly passed"
+    assert_eq!(
+        journey.matches(repair).count(),
+        1,
+        "real current repair target"
     );
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("preloads complete intent evidence"),
-        "unexpected preloaded-evidence error: {:?}",
-        output.stderr
+    let tampered = journey.replacen(target, "                    for record in good:", 1)
+        .replacen(repair,
+            "                    for record in good[:-1]:\n                        append(record)\n                    append(missing)", 1);
+    fs::write(root.join("scripts/production-journey.py"), &tampered).unwrap();
+    // Rebind only this TEST-LOCAL inventory member to isolate the semantic
+    // preloading structure guard after the otherwise-correct file hash guard.
+    // This never changes the supplied sealed declaration or records a proof.
+    let inventory_path = root.join("implementation-evidence/source-inventory.json");
+    let mut inventory: Value = serde_json::from_slice(&fs::read(&inventory_path).unwrap()).unwrap();
+    inventory["files_sha256"]["scripts/production-journey.py"] =
+        json!(bytes_sha256(tampered.as_bytes()));
+    fs::write(
+        inventory_path,
+        serde_json::to_vec_pretty(&inventory).unwrap(),
+    )
+    .unwrap();
+    proof_checker_preflight(
+        &root,
+        temporary.path(),
+        "preloaded-evidence",
+        Some("public journey preloads coverage"),
     );
-    fs::remove_dir_all(root).expect("remove tamper root");
 }
 
 #[test]
@@ -2538,7 +3093,7 @@ fn canonical_source_records_have_exact_order_and_labels() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-15"
+                && entry["config_version"] == "standard-16"
         })
         .expect("docs-integrated current row");
     let entry = entry.as_object().expect("manifest row object");
@@ -2548,33 +3103,75 @@ fn canonical_source_records_have_exact_order_and_labels() {
         .iter()
         .map(|record| record.label.as_str())
         .collect();
+    let mut expected = vec![
+        "system-developer-instruction:data/calibration/reviewer-instruction.txt".to_owned(),
+        "example_prompt".to_owned(),
+        "reviewer-protocol:data/reviewer-protocol.md".to_owned(),
+        "template:data/templates/validation-report.md".to_owned(),
+        "schema:data/configs/standard.json#/artifact_schemas/validation-report.json".to_owned(),
+        "subject:data/calibration/fixtures/validation-report-good.json".to_owned(),
+        "required predecessor:data/calibration/fixtures/intent-good.json".to_owned(),
+        "required predecessor:data/calibration/fixtures/design-good.json".to_owned(),
+        "required predecessor:data/calibration/fixtures/plan-good.json".to_owned(),
+        "required predecessor:data/calibration/fixtures/implementation-report-good.json".to_owned(),
+        "companion:validation-evidence.json".to_owned(),
+    ];
+    let selected = indexed_evidence(&fixture_value(string_field(entry, "fixture_id")));
+    let mut documents: Vec<_> = selected["coverage"]["documents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|document| document["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        documents.iter().copied().collect::<BTreeSet<_>>().len(),
+        documents.len()
+    );
+    documents.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    for document in documents {
+        assert!(DOC_COMPANION_ALLOWLIST.contains(&document));
+        expected.push(format!("companion:{document}"));
+        let record = input
+            .source_records
+            .iter()
+            .find(|record| record.label == format!("companion:{document}"))
+            .unwrap();
+        assert_eq!(
+            record.content,
+            fs::read(docs_companion_path(document)).unwrap()
+        );
+    }
+    expected.push("request-json".to_owned());
     assert_eq!(
         labels,
-        vec![
-            "system-developer-instruction:data/calibration/reviewer-instruction.txt",
-            "example_prompt",
-            "reviewer-protocol:data/reviewer-protocol.md",
-            "template:data/templates/validation-report.md",
-            "schema:data/configs/standard.json#/artifact_schemas/validation-report.json",
-            "subject:data/calibration/fixtures/validation-report-good.json",
-            "required predecessor:data/calibration/fixtures/intent-good.json",
-            "required predecessor:data/calibration/fixtures/design-good.json",
-            "required predecessor:data/calibration/fixtures/plan-good.json",
-            "required predecessor:data/calibration/fixtures/implementation-report-good.json",
-            "companion:validation-evidence.json",
-            "companion:fictional-repo/README.md",
-            "companion:fictional-repo/docs/PRD.md",
-            "companion:fictional-repo/implementation-evidence/requirement-to-proof.md",
-            "companion:fictional-repo/loop-engine-software-change-provider-prd.md",
-            "companion:fictional-repo/loop-engine-software-change-provider-task-packets.md",
-            "companion:fictional-repo/loop-engine-software-change-provider-technical-design.md",
-            "companion:fictional-repo/provider/README.md",
-            "companion:fictional-repo/scripts/assert-doc-authority.py",
-            "companion:fictional-repo/scripts/assert-requirement-proof.py",
-            "companion:fictional-repo/scripts/production-journey.py",
-            "request-json",
-        ]
+        expected.iter().map(String::as_str).collect::<Vec<_>>()
     );
+    // production-journey.py is mandatory on proof-mapping and validation
+    // narrative streams, not on docs-integrated unless selected by coverage.
+    for axis in ["requirement-proof-mapping", "narrative-faithful"] {
+        let row = manifest()
+            .into_iter()
+            .find(|row| {
+                row["config_version"] == "standard-16"
+                    && row["axis"] == axis
+                    && row["expected"] == "pass"
+                    && gate_family(row["gate"].as_str().unwrap()) == "validation"
+            })
+            .unwrap();
+        let proof = source_records_for_entry(row.as_object().unwrap());
+        let journey: Vec<_> = proof
+            .source_records
+            .iter()
+            .filter(|record| {
+                record.label == "companion:fictional-repo/scripts/production-journey.py"
+            })
+            .collect();
+        assert_eq!(journey.len(), 1);
+        assert_eq!(
+            journey[0].content,
+            read_data("calibration/companions/fictional-repo/scripts/production-journey.py")
+        );
+    }
 }
 
 #[test]
@@ -2602,7 +3199,7 @@ fn every_supplied_source_record_mutation_changes_digest() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-15"
+                && entry["config_version"] == "standard-16"
         })
         .expect("docs-integrated current row");
     let entry = entry.as_object().expect("manifest row object");
@@ -2660,7 +3257,7 @@ fn explicit_applicability_checks_real_retained_returns_without_relabeling_histor
     let mut current = entries
         .iter()
         .find(|row| {
-            row["config_version"] == "minimal-15"
+            row["config_version"] == "minimal-16"
                 && row["gate"] == source["gate"]
                 && row["axis"] == source["axis"]
                 && row["fixture_id"] == source["fixture_id"]
@@ -2705,7 +3302,7 @@ fn explicit_applicability_checks_real_retained_returns_without_relabeling_histor
 }
 
 #[test]
-fn current_calibration_gate_requires_complete_attested_nonempty_v15_corpus() {
+fn current_calibration_gate_requires_complete_attested_nonempty_v16_corpus() {
     let entries = manifest();
     let mut fully_attested_fixture = entries.clone();
     for entry in fully_attested_fixture.iter_mut().filter(|entry| {
@@ -2740,7 +3337,7 @@ fn current_calibration_gate_requires_complete_attested_nonempty_v15_corpus() {
                 .unwrap()
                 .ends_with(CURRENT_CONFIG_SUFFIX)
         })
-        .expect("one v15 current row");
+        .expect("one v16 current row");
     missing.remove(index);
     assert!(
         validate_current_corpus(&missing).is_err(),
@@ -2756,7 +3353,7 @@ fn current_calibration_gate_requires_complete_attested_nonempty_v15_corpus() {
                 .unwrap()
                 .ends_with(CURRENT_CONFIG_SUFFIX)
         })
-        .expect("one v15 current row");
+        .expect("one v16 current row");
     current["observed"] = Value::String("pending".to_owned());
     current["attested_by"] = Value::String(String::new());
     current["invocation"] = Value::String(PENDING_INVOCATION.to_owned());
@@ -2774,7 +3371,7 @@ fn current_calibration_gate_requires_complete_attested_nonempty_v15_corpus() {
                 .unwrap()
                 .ends_with(CURRENT_CONFIG_SUFFIX)
         })
-        .expect("one v15 current row");
+        .expect("one v16 current row");
     current["attested_by"] = Value::String(String::new());
     assert!(
         validate_current_corpus(&unattested).is_err(),
@@ -3485,15 +4082,15 @@ fn narrative_templates_packets_and_raw_batch_checks_cover_every_stage() {
     assert_eq!(
         counts,
         BTreeMap::from([
-            (("minimal-15".to_owned(), "aggregate".to_owned()), 36),
-            (("standard-15".to_owned(), "aggregate".to_owned()), 36),
-            (("high-rigor-15".to_owned(), "individual".to_owned()), 36),
-            (("high-rigor-15".to_owned(), "aggregate".to_owned()), 36),
+            (("minimal-16".to_owned(), "aggregate".to_owned()), 36),
+            (("standard-16".to_owned(), "aggregate".to_owned()), 36),
+            (("high-rigor-16".to_owned(), "individual".to_owned()), 36),
+            (("high-rigor-16".to_owned(), "aggregate".to_owned()), 36),
         ])
     );
     let mut row = entries
         .iter()
-        .find(|e| e["config_version"] == "minimal-15" && e["axis"] == "narrative-faithful")
+        .find(|e| e["config_version"] == "minimal-16" && e["axis"] == "narrative-faithful")
         .unwrap()
         .as_object()
         .unwrap()
@@ -3581,13 +4178,76 @@ fn narrative_corpus_has_three_faithful_and_ten_separately_seeded_cases() {
         String::from_utf8(read_data("calibration/fixtures/narrative-131.md")).unwrap();
     let delivery = String::from_utf8(read_data("calibration/fixtures/narrative-133.md")).unwrap();
     let residuals = String::from_utf8(read_data("calibration/fixtures/narrative-134.md")).unwrap();
+    let paragraphs: Vec<_> = faithful.split("\n\n").collect();
+    assert_eq!(paragraphs.len(), 7);
+    assert!(paragraphs[5].contains("not a whole-current-workspace execution"));
+    assert!(paragraphs[5].contains("Current evidence supplies actual v13"));
+    assert!(paragraphs[5].contains("Failed v6/v14 attempts remain failed"));
+    assert!(paragraphs[5].contains("These checks do not supply external semantic judgment"));
+    let seeds: Vec<Vec<&str>> = [&uncertainty, &delivery, &residuals]
+        .iter()
+        .map(|text| text.split("\n\n").collect())
+        .collect();
+    for seed in &seeds {
+        assert_eq!(seed.len(), 7);
+        assert_eq!(
+            &seed[..5],
+            &paragraphs[..5],
+            "common operator explanation and proof structure"
+        );
+        assert!(seed[5].starts_with("Reported checks include workspace tests"));
+        let common = "The requirement mapping and document-authority checkers";
+        assert_eq!(
+            seed[5].split_once(common).unwrap().1,
+            paragraphs[5].split_once(common).unwrap().1
+        );
+    }
+    assert_eq!(seeds[0][5], seeds[1][5]);
+    assert_eq!(seeds[1][5], seeds[2][5]);
     let uncertainty_clause = "dishonest material edits without a revision bump remain undetectable and require external process controls.";
-    assert_eq!(uncertainty, faithful.replace(uncertainty_clause,
+    assert!(paragraphs[6].contains(uncertainty_clause));
+    assert_eq!(seeds[0][6], paragraphs[6].replace(uncertainty_clause,
         "dishonest material edits without a revision bump remain undetectable, but that possibility is merely theoretical and need not affect an operator's trust in reviewed outcomes."));
-    assert_eq!(delivery, faithful
+    assert_eq!(seeds[1][6], paragraphs[6]
         .replace("No hostile-user or multi-tenant protection, new workflow states, or standalone installed packaging is delivered or required", "No hostile-user or multi-tenant protection or new workflow states are delivered or required")
         .replace("Passing supplied checks does not remove those limitations or turn planned packaging into delivered packaging.", "The provider has also been delivered as a standalone installed distribution; the supplied workspace tests and public CLI journey fully prove its installed behavior. Passing those checks does not remove the identity and revision limitations above."));
-    assert_eq!(residuals, faithful.replace("The program checks claimed identities but does not authenticate them. Immaterial same-revision edits remain an accepted claim-trust residual; dishonest material edits without a revision bump remain undetectable and require external process controls. ", ""));
+    let residual_clause = "The program checks claimed identities but does not authenticate them. Immaterial same-revision edits remain an accepted claim-trust residual; dishonest material edits without a revision bump remain undetectable and require external process controls. ";
+    assert!(paragraphs[6].contains(residual_clause));
+    assert_eq!(seeds[2][6], paragraphs[6].replace(residual_clause, ""));
+    assert!(!uncertainty.contains("has also been delivered as a standalone installed distribution"));
+    assert!(delivery.contains(uncertainty_clause));
+    assert!(!delivery.contains("merely theoretical"));
+    assert!(!residuals.contains("merely theoretical"));
+    assert!(!residuals.contains("has also been delivered as a standalone installed distribution"));
+    // The other seven seeded cases retain their separately observable defects.
+    for (id, distinct_defect) in [
+        (
+            "narrative-111",
+            "describe returns the selected rules as well as the workflow map",
+        ),
+        (
+            "narrative-112",
+            "counts repeated claims from a single author as additional independent authors",
+        ),
+        (
+            "narrative-113",
+            "authenticate every reviewer cryptographically",
+        ),
+        ("narrative-121", "undocumented automatic approval bypass"),
+        (
+            "narrative-122",
+            "The reader should use those IDs to determine",
+        ),
+        ("narrative-123", "new mid-run waiver states"),
+        ("narrative-132", "readers should infer the operator outcome"),
+    ] {
+        assert!(cases["seeded"].contains(id));
+        let text = String::from_utf8(read_data(&format!("calibration/fixtures/{id}.md"))).unwrap();
+        assert!(
+            text.contains(distinct_defect),
+            "missing designated contrast {id}"
+        );
+    }
     for id in ["narrative-131", "narrative-133", "narrative-134"] {
         assert!(cases["seeded"].contains(id));
         for phase in ["design", "plan"] {
@@ -3622,4 +4282,147 @@ fn narrative_corpus_has_three_faithful_and_ten_separately_seeded_cases() {
             "narrative-133"
         );
     }
+}
+
+fn narrative_applicability_original_fixture() -> (Map<String, Value>, Value) {
+    let source = manifest()
+        .into_iter()
+        .find(|row| {
+            row["config_version"] == "minimal-15"
+                && row["gate"] == "design-narrative-review"
+                && row["axis"] == "narrative-faithful"
+                && row["review_stage"] == "aggregate"
+                && row["fixture_id"] == "narrative-101"
+        })
+        .expect("genuine retained -15 narrative source")
+        .as_object()
+        .unwrap()
+        .clone();
+    assert!(source.get("applicability").is_none());
+    let selected = retained_return(
+        source["result_ref"]
+            .as_str()
+            .expect("actual original return reference"),
+    )
+    .expect("actual retained original");
+    (source, selected)
+}
+
+#[test]
+fn narrative_applicability_selected_accepts_genuine_original_without_rebinding() {
+    let (source, selected) = narrative_applicability_original_fixture();
+    let original_source = source.clone();
+    let original_selected = selected.clone();
+    let raw = selected["output"].as_str().unwrap().to_owned();
+    assert!(validate_fresh_selected(&source, &selected).is_ok());
+    assert!(validate_applicability_selected(&source, &selected).is_ok());
+    assert_eq!(source, original_source);
+    assert_eq!(selected, original_selected);
+    assert_eq!(selected["output"].as_str().unwrap(), raw);
+
+    // A current-row identity must not replace the actual original -15 identity.
+    let mut rebound = source.clone();
+    rebound.insert("config_version".into(), json!("minimal-16"));
+    assert!(validate_applicability_selected(&rebound, &selected).is_err());
+}
+
+#[test]
+fn narrative_applicability_selected_preserves_strict_original_negative_controls() {
+    let (source, selected) = narrative_applicability_original_fixture();
+    for field in ["row_key", "model", "input_sha256"] {
+        let mut changed = selected.clone();
+        changed[field] = json!("wrong");
+        assert!(
+            validate_applicability_selected(&source, &changed).is_err(),
+            "{field}"
+        );
+        assert!(
+            validate_fresh_selected(&source, &changed).is_err(),
+            "{field}"
+        );
+    }
+    let mut missing = selected.clone();
+    missing.as_object_mut().unwrap().remove("output");
+    assert!(validate_applicability_selected(&source, &missing).is_err());
+
+    let raw = selected["output"].as_str().unwrap();
+    for output in [
+        "not JSON".to_owned(),
+        "null".to_owned(),
+        "{}".to_owned(),
+        format!("{raw}\n{raw}"),
+        json!({"kind":"review-evidence","data":{"result":"pass"}}).to_string(),
+    ] {
+        let mut changed = selected.clone();
+        changed["output"] = json!(output);
+        assert!(validate_applicability_selected(&source, &changed).is_err());
+        assert!(validate_fresh_selected(&source, &changed).is_err());
+    }
+
+    let batch: Value = serde_json::from_str(raw).unwrap();
+    for (pointer, replacement) in [
+        ("/review_contract_version", json!(2)),
+        ("/review_stage", json!("individual")),
+        ("/author/name", json!("another-author")),
+        ("/author/kind", json!("human")),
+        ("/judgments/0/axis", json!("another-axis")),
+        ("/judgments/0/result", json!("fail")),
+        ("/judgments/0/findings", json!("not-empty-on-pass")),
+        ("/judgments/0/grounds/reason", json!("")),
+        ("/judgments/0/grounds/evidence", json!([])),
+        ("/judgments/0/grounds/evidence/0/locator", json!("")),
+    ] {
+        let mut changed_batch = batch.clone();
+        *changed_batch.pointer_mut(pointer).unwrap() = replacement;
+        let mut changed = selected.clone();
+        changed["output"] = json!(changed_batch.to_string());
+        assert!(
+            validate_applicability_selected(&source, &changed).is_err(),
+            "{pointer}"
+        );
+        assert!(
+            validate_fresh_selected(&source, &changed).is_err(),
+            "{pointer}"
+        );
+    }
+
+    let mut variants = Vec::new();
+    let mut changed = batch.clone();
+    changed["unknown"] = json!(true);
+    variants.push(changed);
+    let mut changed = batch.clone();
+    changed["judgments"][0]["unknown"] = json!(true);
+    variants.push(changed);
+    let mut changed = batch.clone();
+    changed["judgments"][0]["grounds"]["unknown"] = json!(true);
+    variants.push(changed);
+    let mut changed = batch.clone();
+    changed["judgments"][0]["grounds"]["evidence"][0]["oracle"] = json!("unsupported");
+    variants.push(changed);
+    let mut changed = batch.clone();
+    let duplicate = changed["judgments"][0].clone();
+    changed["judgments"].as_array_mut().unwrap().push(duplicate);
+    variants.push(changed);
+    let mut changed = batch.clone();
+    changed["judgments"] = json!([]);
+    variants.push(changed);
+    for variant in variants {
+        let mut changed = selected.clone();
+        changed["output"] = json!(variant.to_string());
+        assert!(validate_applicability_selected(&source, &changed).is_err());
+        assert!(validate_fresh_selected(&source, &changed).is_err());
+    }
+
+    // Fail findings and rationale must also remain substantive, not just typed.
+    let mut fail_source = source.clone();
+    fail_source.insert("observed".into(), json!("fail"));
+    let mut fail_batch = batch.clone();
+    fail_batch["judgments"][0]["result"] = json!("fail");
+    fail_batch["judgments"][0]["findings"] = json!("test-only negative-control finding");
+    let mut fail_selected = selected.clone();
+    fail_selected["output"] = json!(fail_batch.to_string());
+    assert!(validate_applicability_selected(&fail_source, &fail_selected).is_ok());
+    fail_batch["judgments"][0]["findings"] = json!("");
+    fail_selected["output"] = json!(fail_batch.to_string());
+    assert!(validate_applicability_selected(&fail_source, &fail_selected).is_err());
 }

@@ -70,84 +70,7 @@ fn artifact_fact(document: &ArtifactDocument) -> Result<Value, EvaluationOutcome
     )
 }
 
-fn valid_narrative_fact(fact: &Value, phase: &str) -> bool {
-    fact.as_object().is_some_and(|object| {
-        object.len() == 3
-            && object
-                .keys()
-                .all(|k| ["phase", "revision", "sha256"].contains(&k.as_str()))
-    }) && fact["phase"] == phase
-        && fact["revision"]
-            .as_str()
-            .is_some_and(|r| !r.trim().is_empty())
-        && fact["sha256"].as_str().is_some_and(|h| {
-            h.len() == 64
-                && h.bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        })
-}
-
-fn valid_artifact_fact(fact: &Value, phase: &str, subject: &str, admitted: bool) -> bool {
-    let Some(object) = fact.as_object() else {
-        return false;
-    };
-    let allowed = if admitted {
-        &["phase", "subject", "revision", "sha256"][..]
-    } else {
-        &["subject", "revision", "sha256"][..]
-    };
-    // The primary artifact-admitted may also contain the one colliding approval.
-    object
-        .keys()
-        .all(|k| allowed.contains(&k.as_str()) || (admitted && k == "approved_artifact"))
-        && (!admitted || fact["phase"] == phase)
-        && fact["subject"] == subject
-        && fact["revision"]
-            .as_str()
-            .is_some_and(|r| !r.trim().is_empty())
-        && fact["sha256"].as_str().is_some_and(|h| {
-            h.len() == 64
-                && h.bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        })
-}
-
-fn validate_artifact_record(
-    record: &ContextRecord,
-    fact: &Value,
-    kind: &str,
-    phase: &str,
-    subject: &str,
-) -> bool {
-    if (record.kind != workflow::ARTIFACT_ADMITTED_KIND && fact.get("approved_artifact").is_some())
-        || !valid_artifact_fact(
-            fact,
-            phase,
-            subject,
-            kind == workflow::ARTIFACT_ADMITTED_KIND,
-        )
-    {
-        return false;
-    }
-    if let Some(admission) = phase_record_fact(record, workflow::ARTIFACT_ADMITTED_KIND) {
-        if (record.kind != workflow::ARTIFACT_ADMITTED_KIND
-            && admission.get("approved_artifact").is_some())
-            || !valid_artifact_fact(admission, phase, subject, true)
-        {
-            return false;
-        }
-        if let Some(approval) = phase_record_fact(record, workflow::APPROVED_ARTIFACT_KIND) {
-            if !valid_artifact_fact(approval, phase, subject, false)
-                || admission["subject"] != approval["subject"]
-                || admission["revision"] != approval["revision"]
-                || admission["sha256"] != approval["sha256"]
-            {
-                return false;
-            }
-        }
-    }
-    true
-}
+use crate::record_facts::{valid_narrative_fact, validate_artifact_record};
 
 fn require_artifact(
     context: &[ContextRecord],
@@ -233,6 +156,48 @@ pub(crate) fn prepare(
     options: &PhaseOptions,
 ) -> Result<Prepared, EvaluationOutcome> {
     let phase = options.phase;
+    let mut selected = BTreeSet::new();
+    for kind in [
+        workflow::ARTIFACT_ADMITTED_KIND,
+        workflow::APPROVED_ARTIFACT_KIND,
+        workflow::NARRATIVE_ADMITTED_KIND,
+    ] {
+        if let Some((record, _)) =
+            latest_phase_record(&request.context, kind, phase.name, phase.subject)
+        {
+            selected.insert(record.id.as_str().to_owned());
+        }
+    }
+    if let Some(record) = request
+        .context
+        .iter()
+        .filter(|record| {
+            record.kind == workflow::OWNER_DECISION_KIND
+                && record.data["checkpoint"] == options.checkpoint
+                && owner_checkpoint::parse(&record.data, &["artifact", "narrative"]).is_ok()
+        })
+        .max_by_key(|record| record.sequence)
+    {
+        selected.insert(record.id.as_str().to_owned());
+    }
+    let ctx = crate::admission::AdmissionContext::new(
+        &request.initial_input,
+        &request.context,
+        request.transition.source.as_str(),
+        0,
+        &request.workflow,
+    )
+    .map_err(|error| deny(ARTIFACT_FRESHNESS, error))?;
+    for (_, verdict) in
+        crate::admission::classify_selected(&ctx, &BTreeSet::new(), Some(&selected), &[])
+    {
+        if let Err(refusal) = verdict {
+            return Err(deny(
+                ARTIFACT_FRESHNESS,
+                format!("{}: {}", refusal.rule, refusal.message),
+            ));
+        }
+    }
     let source = request.transition.source.as_str();
     let event = request.transition.event.as_str();
     let target = request.transition.target.as_str();
@@ -393,12 +358,13 @@ pub(crate) fn prepare(
             phase.subject,
         )
         .ok_or_else(|| deny(NARRATIVE_BINDING, "missing approved-artifact record"))?;
-        if binding.artifact.subject != phase.subject
-            || binding.markdown.file != n.markdown
-            || binding.approved_artifact_record_id != approved_record.id.as_str()
-            || binding.artifact.revision != approved["revision"].as_str().unwrap_or("")
-            || binding.artifact.sha256 != approved["sha256"].as_str().unwrap_or("")
-        {
+        if !crate::record_facts::valid_binding_source(
+            &binding,
+            approved_record,
+            approved,
+            phase.subject,
+            n.markdown,
+        ) {
             return Err(deny(
                 NARRATIVE_BINDING,
                 "binding must cite the latest approved artifact identity and exact phase files",
@@ -857,11 +823,9 @@ mod tests {
             "design-narrative.json",
             "1/1",
         );
-        f.deny(
-            "design-narrative-adversarial-review",
-            "approved",
-            "software-change-review-incomplete",
-        );
+        // Early preparation is allowed. Evaluate challenge only after ordinary
+        // checked entry: ordinary evidence is no longer re-judged there, while
+        // the early-assessment cutoff below still requires a fresh challenge.
         f.clear("design-narrative-review", "design-narrative.json", "1/1");
         f.allow("design-narrative-review", "approved");
         f.deny(
@@ -893,6 +857,51 @@ mod tests {
             "design-narrative-review",
             "approved",
             "software-change-finding-ledger-invalid",
+        );
+    }
+
+    #[test]
+    fn challenge_clearance_keeps_missing_stale_and_unresolved_ordinary_ledger_safeguards() {
+        let mut f = Fixture::new(false, false, true);
+        f.allow("design", "design-ready");
+        f.clear("design-review", "design.json", "1");
+        f.allow("design-review", "approved");
+        f.clear("design-adversarial-review", "design.json", "1");
+        f.allow("design-adversarial-review", "approved");
+        // In-memory evaluation fixtures can remove a ledger; public immutable
+        // histories cannot lose the ledger required by normal ordinary entry.
+        f.context
+            .retain(|r| !(r.kind == "finding-ledger" && r.data["gate"] == "design-review"));
+        let missing = f.evaluate("design-adversarial-review", "approved");
+        assert_eq!(missing["result"], "deny", "{missing}");
+        assert_eq!(
+            missing["feedback"]["details"]["ordinary_ledger"]["status"], "missing",
+            "{missing}"
+        );
+        f.ledger("design-review", "design.json", "0", json!([]));
+        let stale = f.evaluate("design-adversarial-review", "approved");
+        assert_eq!(stale["result"], "deny", "{stale}");
+        assert_eq!(
+            stale["feedback"]["details"]["ordinary_ledger"]["status"], "stale_subject",
+            "{stale}"
+        );
+        let source = f.judgment(
+            "design-review",
+            "design.json",
+            "1",
+            "fail",
+            "finding-reviewer",
+        );
+        f.ledger("design-review", "design.json", "1", json!([{
+            "id":"F-defect","source":{"kind":"context-record","id":source},"policy_id":"axis",
+            "statement":"Standing defect","disposition":"accepted","reason":"Accepted scripted defect",
+            "owner_phase":"design","task_ids":[],"review_axes":["axis"],"status":"unresolved"
+        }]));
+        let unresolved = f.evaluate("design-adversarial-review", "approved");
+        assert_eq!(unresolved["result"], "deny", "{unresolved}");
+        assert_eq!(
+            unresolved["feedback"]["details"]["ordinary_ledger"]["status"], "accepted_unresolved",
+            "{unresolved}"
         );
     }
 

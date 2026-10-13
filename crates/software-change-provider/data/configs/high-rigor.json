@@ -4,7 +4,7 @@
     "required_authors": 2,
     "goal_required_authors": 2
   },
-  "config_version": "high-rigor-15",
+  "config_version": "high-rigor-16",
   "review_policies": {
     "intent-review": [
       {
