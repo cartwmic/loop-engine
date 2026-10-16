@@ -9,7 +9,9 @@ import os
 import subprocess
 import sys
 import sqlite3
+import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from external_work_driver import process
@@ -40,11 +42,21 @@ def refused(argv, packet=None, cwd=None, needle=None):
     return result
 
 
+@contextmanager
+def json_source(work, data):
+    # Keep growing evidence out of argv without changing its serialized bytes.
+    with tempfile.NamedTemporaryFile(dir=work, suffix='.json') as source:
+        source.write(json.dumps(data).encode('utf-8'))
+        source.flush()
+        yield '@'+source.name
+
+
 def append(ctx, kind, data, record_id=None):
     args = ['append']
     if record_id:
         args += ['--record-id',record_id]
-    return ctx['call'](*args,ctx['run_id'],kind,json.dumps(data))
+    with json_source(ctx['work'], data) as source:
+        return ctx['call'](*args,ctx['run_id'],kind,source)
 
 
 def provider(ctx, args, packet):
@@ -177,6 +189,11 @@ def intake_counts_advice(args, root):
                     corrected = copy.deepcopy(packet)
                     corrected['projection'] = copy.deepcopy(batch)
                     corrected['projection']['judgments'][0]['grounds']['evidence'][0]['locator'] = 'intent.json#/goal'
+                    invalid_locator = provider(ctx,['review-candidates'],corrected)
+                    assert len(invalid_locator['records']) == len(axes) - 1, invalid_locator
+                    assert any('does not resolve' in diagnostic
+                               for item in invalid_locator['items'] for diagnostic in item['diagnostics']), invalid_locator
+                    corrected['projection']['judgments'][0]['grounds']['evidence'][0]['locator'] = 'intent.json#/outcome'
                     assert len(provider(ctx,['review-candidates'],corrected)['records']) == len(axes)
                     corrected['projection']['judgments'][0]['result'] = 'fail'
                     refused([args.software,'review-candidates'],corrected,needle='contradicts decoded result')
@@ -215,8 +232,9 @@ def intake_counts_advice(args, root):
                         changed = copy.deepcopy(candidate['data'])
                         changed['grounds']['reason'] = 'Conflicting replacement reason.'
                         ctx['show']()
-                        refused([ctx['engine'],'--database',ctx['database'],'--config',ctx['config'],'--json','append','--record-id','preview-resume',
-                                ctx['run_id'],candidate['kind'],json.dumps(changed)],cwd=ctx['repository'])
+                        with json_source(ctx['work'], changed) as source:
+                            refused([ctx['engine'],'--database',ctx['database'],'--config',ctx['config'],'--json','append','--record-id','preview-resume',
+                                    ctx['run_id'],candidate['kind'],source],cwd=ctx['repository'])
                     assert candidate['data']['external_review']['original']['original'] == original['text'], candidate
                     assert candidate['data']['grounds']['reason'] == ground_reason, candidate
                     assert candidate['data']['author'] == assignment['author'], candidate
@@ -408,6 +426,8 @@ def paired_and_command_proof(args, root):
                                 'command_results':[dict(command['data']['external_result'],id=command['data']['proof_id']),result]})
             assert prepared['commands_complete'], prepared
             original = prepared['report_draft']
+            (ctx['artifacts'] / 'validation-report.json').write_text(json.dumps(original))
+            ctx['checkpoint']('validation')
             for candidate in prepared['command_candidates']:
                 append(ctx,candidate['kind'],candidate['data'],candidate['record_id'])
             for index, batch in enumerate(prepared['judgment_batches']):
@@ -416,8 +436,6 @@ def paired_and_command_proof(args, root):
                            **({'criterion_id':batch['criterion_id']} if batch['kind'] == 'criterion-verdict' else {}),'result':'pass','findings':[],
                            'reason':'The secondary-scoped command succeeded in the secondary repository.',
                            'evidence_context_ids':original['command_evidence_ids']},batch['record_id'])
-            (ctx['artifacts'] / 'validation-report.json').write_text(json.dumps(original))
-            ctx['checkpoint']('validation')
             print('external-work secondary-scoped successful command accepted passed')
             # bookends:LE-164 — final-completion bounded questions consume actual successor external command outputs and indexed judgments, not retired engine captures.
             report = original
@@ -480,7 +498,10 @@ def paired_and_command_proof(args, root):
                     data['external_result']['cwd'] = str(state['secondary'])
                     data['external_result']['source'] = provider(ctx,['source-identity','--working-directory',str(state['secondary'])],{})
                 record_id = 'refused-'+label
-                append(ctx,'command-evidence',data,record_id)
+                admission = append(ctx,'command-evidence',data,record_id)
+                assert admission['status'] == 'rejected', admission
+                assert ('stale-source' if label == 'stale' else 'outside declared source scope') in json.dumps(admission), admission
+                assert not any(row['id'] == record_id for row in ctx['show']()['result']['context'])
                 report = copy.deepcopy(original)
                 report['command_evidence_ids'] = [record_id]
                 (ctx['artifacts'] / 'validation-report.json').write_text(json.dumps(report))
@@ -488,7 +509,7 @@ def paired_and_command_proof(args, root):
                 ctx['show']()
                 refusal = refused([ctx['engine'],'--database',ctx['database'],'--config',ctx['config'],'--json',
                                    'event',ctx['run_id'],'validation-ready'],cwd=ctx['repository'],needle='criterion-incomplete')
-                assert ('stale-source' if label == 'stale' else 'outside declared source scope') in refusal.stdout, refusal.stdout
+                assert 'missing or duplicate context ID' in refusal.stdout and record_id in refusal.stdout, refusal.stdout
             (ctx['artifacts'] / 'validation-report.json').write_text(json.dumps(original))
             ctx['checkpoint']('validation')
             print('external-work command proof stale and wrong-source refusal passed')
@@ -560,6 +581,8 @@ def paired_and_command_proof(args, root):
             state['accepted_limitation'] = intent['operating_context']['accepted_risks'][0]['risk']
             original['residuals'] = [{'kind':'accepted-boundary','statement':state['accepted_limitation'],
                                      'references':['intent.json#/operating_context/accepted_risks/0']}]
+            report_path.write_text(json.dumps(original))
+            ctx['checkpoint']('validation')
             append(ctx,'criterion-revalidation',{'subject_revision':original['revision'],
                    'affected_criteria':['AC-2'],'change_kind':'material',
                    'reason':'The missing malformed-artifact refusal command now succeeds.'})
@@ -578,8 +601,6 @@ def paired_and_command_proof(args, root):
                     fresh['criterion_id'] = batch['criterion_id']
                 assert proof_id in fresh['evidence_context_ids']
                 append(ctx,batch['kind'],fresh,batch['record_id'])
-            report_path.write_text(json.dumps(original))
-            ctx['checkpoint']('validation')
             final_goals = [row for row in ctx['show']()['result']['context'] if row['id'] in original['goal_verdict_ids']]
             assert final_goals and all(row['data']['result'] == 'pass' and
                                        proof_id in row['data']['evidence_context_ids'] for row in final_goals)
@@ -757,7 +778,14 @@ if __name__ == '__main__':
             prepared = provider(ctx,['prepare-validation'],{'show':ctx['show'](),'working_directory':str(ctx['repository']),
                                 'revision':'lint-v2','author':{'name':'lint-proof-owner','kind':'script'},
                                 'command_results':results,'additions':additions})
-            assert prepared['diagnostics'] == [{'proof_id':'prior-suite','status':'stale-source'}], prepared
+            assert len(prepared['diagnostics']) == 2, prepared
+            assert prepared['diagnostics'][0] == {'proof_id':'prior-suite','status':'stale-source'}, prepared
+            refusal = prepared['diagnostics'][1]
+            assert refusal['proof_id'] == 'prior-suite' and refusal['status'] == 'record-refused', prepared
+            assert refusal['rule'] == 'command-evidence-current-source', prepared
+            assert 'stale-source: external command result identity changed' in refusal['message'], prepared
+            assert not prepared['commands_complete'], prepared
+            assert all(c['data']['proof_id'] != 'prior-suite' for c in prepared['command_candidates']), prepared
             for candidate in prepared['addition_candidates']:
                 append(ctx,candidate['kind'],candidate['data'],candidate['record_id'])
             for candidate in prepared['command_candidates']:
@@ -765,6 +793,7 @@ if __name__ == '__main__':
                     append(ctx,candidate['kind'],candidate['data'],candidate['record_id'])
             report = copy.deepcopy(original_report)
             report.update(revision='lint-v2',implementation_revision='lint-i2')
+            carries = []
             for original in originals:
                 kind = original['kind']
                 if kind not in ['command-evidence','criterion-verdict','goal-verdict','review-evidence']:
@@ -774,10 +803,10 @@ if __name__ == '__main__':
                 source_id = original['id']
                 carry_id = 'carry-'+source_id
                 target = {'subject':'validation-report.json','checkpoint':{'phase':'validation','report_revision':'lint-v2'}}
-                target['subject_revision' if kind in ['criterion-verdict','goal-verdict'] else 'revision'] = 'lint-v2'
-                append(ctx,'evidence-applicability',{'origin':{'kind':'context-record','id':source_id},'target':target,
+                target['revision'] = 'lint-v2'
+                carries.append((carry_id, {'origin':{'kind':'context-record','id':source_id},'target':target,
                        'attesting_driver':{'name':'lint-driver','kind':'agent'},
-                       'reason':'Only parse_retained_return review-return recognition (P) and unchanged duplicate exclusion (Q) were collapsed from nested ifs to P and Q. Both retained variants have identical parsing, recognition, deduplication and error behavior; current helper tests and lint pass. The earlier suite, complete aggregate review, criterion and whole-goal judgments keep their original identities and remain applicable because their complete scope and judging meaning are unchanged.'},carry_id)
+                       'reason':'Only parse_retained_return review-return recognition (P) and unchanged duplicate exclusion (Q) were collapsed from nested ifs to P and Q. Both retained variants have identical parsing, recognition, deduplication and error behavior; current helper tests and lint pass. The earlier suite, complete aggregate review, criterion and whole-goal judgments keep their original identities and remain applicable because their complete scope and judging meaning are unchanged.'}))
                 report['command_evidence_ids'] = [carry_id if value == source_id else value for value in report['command_evidence_ids']]
                 for criterion in report['criteria']:
                     criterion['verdict_ids'] = [carry_id if value == source_id else value for value in criterion['verdict_ids']]
@@ -785,6 +814,9 @@ if __name__ == '__main__':
             report['command_evidence_ids'] += [c['record_id'] for c in prepared['command_candidates'] if c['data']['proof_id'] != 'prior-suite']
             (artifacts / 'validation-report.json').write_text(json.dumps(report))
             ctx['checkpoint']('validation')
+            for carry_id, data in carries:
+                admission = append(ctx,'evidence-applicability',data,carry_id)
+                assert admission['status'] == 'completed', admission
             ledger(ctx,'validation-review','validation-report.json','lint-v2')
             ctx['event']('validation-ready')
             ctx['event']('passed')
@@ -952,10 +984,11 @@ def reshaped_plan_applicability(args, root):
                     reason = ('Explicit task mapping ' + json.dumps(state['mapping']) +
                               ': inspected actual helper(7)==7 effect, current tree, preserved dependencies and fresh helper-test proof; original ' +
                               criterion['criterion_id'] + ' judgment scope and meaning are unchanged. No standing is inferred from names or file equality.')
-                    append(ctx,'evidence-applicability',{'origin':{'kind':'context-record','id':original_id},
-                        'target':{'subject':'validation-report.json','subject_revision':report['revision'],
+                    admission = append(ctx,'evidence-applicability',{'origin':{'kind':'context-record','id':original_id},
+                        'target':{'subject':'validation-report.json','revision':report['revision'],
                                   'checkpoint':{'phase':'validation','report_revision':report['revision']}},
                         'attesting_driver':{'name':'plan-reshape-driver','kind':'agent'},'reason':reason},carry_id)
+                    assert admission['status'] == 'completed', admission
                     mapped_ids.append(carry_id)
                 criterion['verdict_ids'] = mapped_ids
             pending['verdict_ids'] = ['unmapped-plan-obligation']
@@ -1057,7 +1090,8 @@ def provider_specific(args, root):
             show()
             return call('event',run_id,event)
         def record(kind,data,id):
-            result = call('append','--record-id',id,run_id,kind,json.dumps(data))
+            with json_source(work, data) as source:
+                result = call('append','--record-id',id,run_id,kind,source)
             if kind == 'review-evidence':
                 retained = next(row for row in show()['result']['context'] if row['id'] == id)
                 assert retained['data']['external_review'] == data['external_review'], retained
@@ -1223,6 +1257,461 @@ def provider_specific(args, root):
         assert terminal['current_state'] == 'end' and terminal['lifecycle'] == 'final' and not terminal['has_overrides'], terminal
         print(f'external-work {kind} self-exclusion amendment applicability normal completion passed')
 
+
+
+def decode_retained(context):
+    """Every retained artifact entry, in order, with its exact bytes (None when absent)."""
+    import base64
+    by_id = {record['id']: record for record in context}
+    entries = []
+    for record in sorted((r for r in context if r['kind'] == 'retained-artifacts'), key=lambda r: r['sequence']):
+        assert record['data']['schema_version'] == 1, record
+        for entry in record['data']['artifacts']:
+            data = None
+            if not entry.get('absent'):
+                source = entry
+                if 'same_as' in entry:
+                    holder = by_id[entry['same_as']]
+                    source = next(x for x in holder['data']['artifacts'] if x['name'] == entry['name'])
+                    assert 'content' in source, source
+                    assert 'content' not in entry, entry
+                data = source['content'].encode() if source['encoding'] == 'utf-8' else base64.b64decode(source['content'])
+                assert 'sha256:'+hashlib.sha256(data).hexdigest() == entry['sha256'], entry
+                assert len(data) == entry['size'], entry
+            entries.append({'record': record['id'], 'sequence': record['sequence'], 'created_at': record['created_at'],
+                            'transition': record['data']['transition'], 'exit': record['data']['exit'],
+                            'name': entry['name'], 'bytes': data, 'same_as': entry.get('same_as')})
+    return entries
+
+
+def assert_retained_history(call, run_id, entries):
+    """Each retained record is a context entry immediately followed by the transition that retained it."""
+    history = call('history', run_id)['result']
+    by_sequence = {entry['sequence']: entry for entry in history}
+    for entry in entries:
+        appended = by_sequence[entry['sequence']]['action']
+        assert appended == {'kind': 'context_appended', 'context_record_id': entry['record']}, appended
+        following = by_sequence[entry['sequence'] + 1]['action']
+        assert following['kind'] == 'transition', following
+        assert {k: following['transition'][k] for k in ('source', 'event', 'target')} == entry['transition'], following
+        expected = 'overridden' if entry['exit'] == 'override' else 'committed'
+        assert following['outcome']['outcome'] == expected, following
+        assert by_sequence[entry['sequence']]['occurred_at'] == entry['created_at']
+
+
+def retained_view(call, run_id):
+    shown = call('show', '--view', 'full', run_id)
+    entries = decode_retained(shown['result']['context'])
+    assert_retained_history(call, run_id, entries)
+    return entries
+
+
+# bookends:LE-186 — research and policy-document runs retain each owning phase's exact artifact bytes, readable after the files are deleted.
+def retention_provider_runs(args, root):
+    import shutil
+    from external_work_driver import engine_call
+    expectations = {
+        'research': [('scope', 'scoped', 'brief.json'), ('gather', 'gathered', 'sources.json'),
+                     ('verify', 'verified', 'verification.json'), ('synthesize', 'completed', 'report.json')],
+        'policy-document': [('semantic-review', 'passed', 'README.md')],
+    }
+    for kind, exits in expectations.items():
+        work = root / (kind + '-specific')
+        database, config, run_id = work / 'run.sqlite', work / 'providers.toml', kind + '-external-specific'
+        def call(*argv):
+            return engine_call(args.engine, database, config, list(argv))
+        files = {'README.md': work / 'README.md'} if kind == 'policy-document' else {
+            name: work / 'artifacts' / name for _, _, name in exits}
+        before = retained_view(call, run_id)
+        assert [(e['transition']['source'], e['transition']['event'], e['name']) for e in before] == exits, before
+        for entry in before:
+            assert entry['exit'] == 'checked' and entry['same_as'] is None, entry
+            assert entry['bytes'] == files[entry['name']].read_bytes(), entry['name']
+        shutil.rmtree(work / 'artifacts')
+        if kind == 'policy-document':
+            files['README.md'].unlink()
+        after = retained_view(call, run_id)
+        assert [(e['name'], e['bytes'], e['transition']) for e in after] == [(e['name'], e['bytes'], e['transition']) for e in before]
+        print(f'external-work {kind} retained artifacts readable after file deletion passed')
+
+
+class _StopRun(Exception):
+    pass
+
+
+def _empty_review_policies(profile, repository, artifacts):
+    for gate in profile['review_policies']:
+        profile['review_policies'][gate] = []
+
+
+# bookends:LE-186 — software-change retains only phase-exit bytes: drafts excluded, revise-loop re-exits appended, unchanged re-exits stored once and still readable after deletion.
+def retention_software_revisions(args, root):
+    import shutil
+    visits = {'implement': 0}
+    snapshots = {}
+    drafts = []
+    def hook(phase, ctx):
+        plan_path = ctx['artifacts'] / 'plan.json'
+        if phase == 'plan':
+            if visits['implement'] == 2:
+                value = json.loads(plan_path.read_text())
+                for draft in ['draft one', 'draft two']:
+                    value['objective'] = 'Retention journey ' + draft
+                    plan_path.write_text(json.dumps(value))
+                    drafts.append(plan_path.read_bytes())
+                value['objective'] = 'Retention journey final plan'
+                plan_path.write_text(json.dumps(value))
+            snapshots.setdefault('plan', []).append(plan_path.read_bytes())
+            return False
+        if phase == 'implement':
+            visits['implement'] += 1
+            if visits['implement'] <= 2:
+                ctx['event']('revise-plan')
+                return True
+        return False
+    work = software_module().run(SimpleNamespace(engine=args.engine, provider=args.software, mode='source', data_root=None),
+                                 ROOT / 'crates/software-change-provider/data/configs/minimal.json', root,
+                                 configure=_empty_review_policies, exercise=hook)
+    database, config, run_id = work / 'run.sqlite', work / 'providers.toml', 'software-external'
+    from external_work_driver import engine_call
+    def call(*argv):
+        return engine_call(args.engine, database, config, list(argv))
+    artifacts = work / 'artifacts'
+    entries = retained_view(call, run_id)
+    names = [e['name'] for e in entries]
+    assert names == ['intent.json', 'design.json', 'plan.json', 'plan.json', 'plan.json',
+                     'implementation-report.json', 'reconciliation.json', 'validation-report.json'], names
+    plans = [e for e in entries if e['name'] == 'plan.json']
+    assert [e['bytes'] for e in plans] == snapshots['plan'], 'plan exits must retain the bytes present at each exit'
+    assert plans[1]['same_as'] == plans[0]['record'], plans[1]
+    assert plans[2]['same_as'] is None and plans[2]['bytes'] != plans[0]['bytes']
+    retained_bytes = {e['bytes'] for e in entries}
+    assert drafts and not any(draft in retained_bytes for draft in drafts), 'intermediate drafts must not be retained'
+    for entry in entries:
+        assert entry['exit'] == 'checked'
+        if entry['name'] != 'plan.json':
+            assert entry['bytes'] == (artifacts / entry['name']).read_bytes(), entry['name']
+    assert entries[-1]['transition']['target'] == 'end'
+    shutil.rmtree(artifacts)
+    after = retained_view(call, run_id)
+    assert [(e['name'], e['bytes']) for e in after] == [(e['name'], e['bytes']) for e in entries]
+    print('external-work software-change retained exits, drafts, revise loop and unchanged re-exit passed')
+    return work
+
+
+# bookends:LE-186 — owner overrides retain what the run leaves with, visibly marked, and record a missing artifact as absent.
+def retention_software_overrides(args, root):
+    captured = {}
+    def override(ctx, event, reason):
+        shown = ctx['show']()
+        attestation = json.dumps({'state_visit': shown['result']['state_visit'], 'owner': 'journey-owner', 'reason': reason})
+        response = ctx['call']('event', '--override', attestation, ctx['run_id'], event)
+        assert response['status'] == 'completed', response
+    def hook(phase, ctx):
+        if phase == 'explore':
+            captured['intent'] = (ctx['artifacts'] / 'intent.json').read_bytes()
+            override(ctx, 'intent-ready', 'Journey override with the artifact present.')
+            return True
+        if phase == 'design':
+            design = ctx['artifacts'] / 'design.json'
+            saved = design.read_bytes()
+            design.unlink()
+            override(ctx, 'design-ready', 'Journey override with the artifact missing.')
+            design.write_bytes(saved)
+            captured['ctx'] = ctx
+            raise _StopRun()
+        return False
+    try:
+        software_module().run(SimpleNamespace(engine=args.engine, provider=args.software, mode='source', data_root=None),
+                              ROOT / 'crates/software-change-provider/data/configs/minimal.json', root,
+                              configure=_empty_review_policies, exercise=hook)
+    except _StopRun:
+        pass
+    ctx = captured['ctx']
+    entries = retained_view(ctx['call'], ctx['run_id'])
+    assert [(e['name'], e['exit']) for e in entries] == [('intent.json', 'override'), ('design.json', 'override')], entries
+    assert entries[0]['bytes'] == captured['intent']
+    assert entries[1]['bytes'] is None
+    shown = ctx['show']()['result']
+    assert shown['has_overrides'] and shown['override_count'] == 2, shown
+    print('external-work software-change override retention and absent artifact passed')
+
+
+# bookends:LE-186 — a shipped minimal profile with review states retains each phase exactly once at its real exit.
+def retention_minimal_profile(args, work):
+    from external_work_driver import engine_call
+    def call(*argv):
+        return engine_call(args.engine, work / 'run.sqlite', work / 'providers.toml', list(argv))
+    entries = retained_view(call, 'software-external')
+    assert [e['name'] for e in entries] == ['intent.json', 'design.json', 'plan.json', 'implementation-report.json',
+                                            'reconciliation.json', 'validation-report.json'], entries
+    for entry in entries:
+        assert entry['exit'] == 'checked' and entry['bytes'] == (work / 'artifacts' / entry['name']).read_bytes(), entry['name']
+    print('external-work software-change minimal profile retains each phase exit passed')
+
+
+def _seed_legacy_invocations(database, run_id, rows, payload_bytes):
+    """Insert legacy-format work-slot invocation rows with bulky payloads, as earlier releases wrote them."""
+    worker = {'assignment_id': 'worker-0', 'command': '/legacy/bin/pi',
+              'args': ['--print', 'x' * payload_bytes], 'exit_code': 0, 'attempts': []}
+    connection = sqlite3.connect(database, timeout=30)
+    with connection:
+        for index in range(rows):
+            inner = json.dumps([worker])
+            connection.execute(
+                """INSERT INTO work_slot_invocations (run_id, invocation_id, slot_id, binding_json,
+                       instruction_digest, subject, state_visit, waiter_pid, started_at, allowed_time_ms,
+                       status, exit_code, completed_at, capture_dir, inner_workers_json, assignment_selection_json,
+                       invocation_input_json, routed_inputs_json, frozen_run_identity_json, completion_snapshot_json)
+                   VALUES (?, ?, 'legacy-slot', ?, 'sha256:legacy', 'legacy-subject', 0, 0, 1, 1000,
+                           'succeeded', 0, 2, '/legacy/capture', ?, NULL, ?, ?, NULL, ?)""",
+                (run_id, f'legacy-{run_id}-{index}-{time.time_ns()}',
+                 json.dumps({'command': '/legacy/bin/pi', 'args': ['--print']}),
+                 inner, json.dumps({'prompt': 'p' * 1000}), '[]', inner))
+    connection.close()
+
+
+def _invocation_columns(database, run_id):
+    connection = sqlite3.connect(database, timeout=30)
+    try:
+        return connection.execute(
+            """SELECT invocation_id, binding_json, inner_workers_json, completion_snapshot_json, routed_inputs_json,
+                      invocation_input_json, assignment_selection_json, frozen_run_identity_json
+               FROM work_slot_invocations WHERE run_id = ? ORDER BY invocation_id""", (run_id,)).fetchall()
+    finally:
+        connection.close()
+
+
+def _file_digest(path):
+    # A missing write-ahead log and an empty one hold the same catalog content.
+    return hashlib.sha256(path.read_bytes() if path.exists() else b'').hexdigest()
+
+
+def _interrupt_reclaim_apply(engine, database, run_id):
+    """Observe a real WAL apply in progress, then require signal-caused termination."""
+    import signal
+    holder = sqlite3.connect(database, timeout=30, isolation_level=None)
+    observer = sqlite3.connect(database, timeout=1, isolation_level=None)
+    victim = None
+    try:
+        assert holder.execute('PRAGMA journal_mode').fetchone() == ('wal',)
+        assert holder.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0] == 0
+        main_before = database.stat().st_size
+        holder.execute('BEGIN')
+        holder.execute('SELECT count(*) FROM work_slot_invocations').fetchone()
+        pending = "SELECT count(*) FROM work_slot_invocations WHERE run_id=? AND inner_workers_json!='[]'"
+        assert observer.execute(pending, (run_id,)).fetchone()[0] > 0
+        victim = subprocess.Popen([str(engine), '--database', str(database), '--json', 'reclaim', '--apply'],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # The pinned reader prevents successful checkpoint/shrink. Wait for visible
+        # committed clearing, not elapsed-time guessing or mere process existence.
+        deadline = time.monotonic() + 4
+        while True:
+            assert victim.poll() is None, 'apply exited before an interrupted write was observed'
+            if observer.execute(pending, (run_id,)).fetchone()[0] == 0:
+                break
+            assert time.monotonic() < deadline, 'no committed apply write observed'
+            time.sleep(0.01)
+        wal_bytes = Path(str(database)+'-wal').stat().st_size
+        assert wal_bytes > 0 and database.stat().st_size == main_before
+        assert victim.poll() is None, 'apply must still be in progress before SIGKILL'
+        victim.send_signal(signal.SIGKILL)
+        status = victim.wait(timeout=10)
+        assert status == -signal.SIGKILL, f'apply was not interrupted by SIGKILL: {status}'
+        return {'stage': 'committed clearing, pinned checkpoint unfinished',
+                'wal_bytes': wal_bytes, 'main_file_unchanged': True, 'exit_code': status}
+    finally:
+        if victim is not None and victim.poll() is None:
+            victim.kill()
+            victim.wait(timeout=10)
+        observer.close()
+        if holder.in_transaction:
+            holder.execute('ROLLBACK')
+        holder.close()
+
+
+# bookends:LE-187 — explicit reclaim previews without writing, clears only finished runs' legacy payloads, keeps cleaned runs listed and showable, leaves active runs advancing, and shrinks the catalog file.
+def reclaim_legacy_catalog(args, root, retained_work):
+    import shutil, signal
+    from external_work_driver import engine_call
+    work = root / 'reclaim'
+    work.mkdir()
+    database = work / 'loop.db'
+    shutil.copyfile(retained_work / 'run.sqlite', database)
+    config = retained_work / 'providers.toml'
+    finished = 'software-external'
+    def call(*argv):
+        return engine_call(args.engine, database, config, list(argv))
+    def engine(*argv):
+        return raw([args.engine, '--database', database, '--config', config, '--json', *argv])
+    profile = json.loads((retained_work / 'profile.json').read_text())
+    active_artifacts = work / 'active-artifacts'
+    active_artifacts.mkdir()
+    shutil.copyfile(retained_work / 'profile.json', work / 'active-profile.json')
+    fixtures = ROOT / 'crates/software-change-provider/data/calibration/fixtures'
+    for target, source in software_module().SUBJECTS.items():
+        shutil.copyfile(fixtures / source, active_artifacts / target)
+    profile['artifact_root'] = str(active_artifacts)
+    (work / 'active-profile.json').write_text(json.dumps(profile))
+    call('start', '--id', 'active-run', 'software-change', '@'+str(work / 'active-profile.json'), 'active during reclaim')
+    call('start', '--id', 'terminated-run', 'software-change', '@'+str(work / 'active-profile.json'), 'terminated before reclaim')
+    call('show', 'terminated-run', '--view', 'action')
+    assert call('terminate', 'terminated-run')['status'] == 'completed'
+    for run_id in [finished, 'terminated-run', 'active-run']:
+        _seed_legacy_invocations(database, run_id, 4, 400_000)
+    retained_before = retained_view(call, finished)
+    for run_id in [finished, 'terminated-run', 'active-run']:
+        assert call('show', '--view', 'full', run_id)['status'] == 'completed'
+    active_before = _invocation_columns(database, 'active-run')
+    digest_before = (_file_digest(database), _file_digest(Path(str(database)+'-wal')))
+    preview = call('reclaim')
+    assert preview['status'] == 'completed' and preview['result']['mode'] == 'preview', preview
+    listed = {run['run_id']: run for run in preview['result']['preview']['runs']}
+    assert set(listed) == {finished, 'terminated-run'}, listed
+    assert all(run['invocation_rows'] == 4 and run['reclaimable_bytes'] > 3_000_000 for run in listed.values()), listed
+    assert (_file_digest(database), _file_digest(Path(str(database)+'-wal'))) == digest_before, 'preview must not write'
+    human = raw([args.engine, '--database', database, 'reclaim'])
+    assert human.returncode == 0 and 'nothing written' in human.stdout, human
+    print('external-work reclaim preview lists only finished runs and writes nothing passed')
+    applied = call('reclaim', '--apply')
+    assert applied['status'] == 'completed', applied
+    result = applied['result']['applied']
+    assert result['invocation_rows_cleared'] == 8, result
+    assert result['after']['file_bytes'] < result['before']['file_bytes'] - 3_000_000, result
+    assert database.stat().st_size == result['after']['file_bytes']
+    for run_id in [finished, 'terminated-run']:
+        for row in _invocation_columns(database, run_id):
+            assert row[2:] == ('[]', '[]', '[]', None, None, None), row
+            assert json.loads(row[1])['command'], row
+    assert _invocation_columns(database, 'active-run') == active_before, 'active run rows must be unchanged'
+    listed_runs = {run['id'] for run in call('list')['result']}
+    assert {finished, 'terminated-run', 'active-run'} <= listed_runs, listed_runs
+    retained_after = retained_view(call, finished)
+    assert [(e['name'], e['bytes']) for e in retained_after] == [(e['name'], e['bytes']) for e in retained_before]
+    call('show', 'active-run', '--view', 'action')
+    assert call('event', 'active-run', 'intent-ready')['status'] == 'completed'
+    assert sqlite3.connect(database).execute('PRAGMA integrity_check').fetchone() == ('ok',)
+    print('external-work reclaim apply clears finished runs only, keeps them showable and shrinks the file passed')
+
+    # Concurrent driver command while reclaim rewrites the file: it completes or fails with a retryable busy error.
+    _seed_legacy_invocations(database, 'terminated-run', 6, 2_000_000)
+    reclaim_process = subprocess.Popen([args.engine, '--database', str(database), '--json', 'reclaim', '--apply'],
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    concurrent = engine('show', 'active-run', '--view', 'full')
+    reclaim_out, _ = reclaim_process.communicate(timeout=300)
+    assert reclaim_process.returncode == 0, reclaim_out
+    if concurrent.returncode != 0:
+        assert 'catalog-busy' in concurrent.stdout and 'retry' in concurrent.stdout, concurrent
+    assert call('show', '--view', 'full', 'active-run')['status'] == 'completed'
+    print('external-work reclaim alongside a concurrent driver command passed')
+
+    # Pin a reader's WAL snapshot across clearing and VACUUM. A busy checkpoint returns a row,
+    # not a SQLite exception; apply must refuse success until the rewritten pages reach the main file.
+    _seed_legacy_invocations(database, 'terminated-run', 4, 400_000)
+    holder = sqlite3.connect(database, timeout=30, isolation_level=None)
+    assert holder.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0] == 0
+    main_before = database.stat().st_size
+    holder.execute('BEGIN')
+    holder.execute('SELECT inner_workers_json FROM work_slot_invocations').fetchall()
+    active_before = _invocation_columns(database, 'active-run')
+    try:
+        pinned = engine('reclaim', '--apply')
+        assert pinned.returncode != 0, pinned.stdout
+        issue = json.loads(pinned.stdout)
+        assert 'catalog-busy' in json.dumps(issue) and 'retry' in json.dumps(issue), issue
+        assert database.stat().st_size == main_before, 'pinned snapshot keeps the old main file'
+        assert Path(str(database)+'-wal').stat().st_size > 0
+    finally:
+        holder.execute('ROLLBACK')
+        holder.close()
+    assert _invocation_columns(database, 'active-run') == active_before
+    assert sqlite3.connect(database).execute('PRAGMA integrity_check').fetchone() == ('ok',)
+    retried = call('reclaim', '--apply')
+    assert retried['status'] == 'completed', retried
+    assert database.stat().st_size < main_before - 2_000_000
+    assert not Path(str(database)+'-wal').exists() or Path(str(database)+'-wal').stat().st_size == 0
+    assert call('show', 'active-run', '--view', 'full')['status'] == 'completed'
+    print('external-work reclaim refuses a pinned WAL checkpoint and shrinks on retry passed')
+
+    # Ordinary mutation under a write lock must also explain that contention is retryable.
+    holder = sqlite3.connect(database, timeout=30, isolation_level=None)
+    holder.execute('BEGIN IMMEDIATE')
+    try:
+        ordinary_busy = engine('append', 'active-run', 'user-steering',
+                               json.dumps({'target': {'kind': 'all'}, 'instruction': 'held lock probe'}))
+        assert ordinary_busy.returncode != 0, ordinary_busy.stdout
+        issue = json.loads(ordinary_busy.stdout)
+        assert 'catalog-busy' in json.dumps(issue) and 'retry' in json.dumps(issue), issue
+    finally:
+        holder.execute('ROLLBACK')
+        holder.close()
+    assert call('append', 'active-run', 'user-steering',
+                json.dumps({'target': {'kind': 'all'}, 'instruction': 'after held lock'}))['status'] == 'completed'
+    print('external-work ordinary command reports retryable catalog contention passed')
+
+    # Another process holds the catalog's write lock: reclaim stops with a clear busy error and changes nothing.
+    _seed_legacy_invocations(database, 'terminated-run', 1, 100_000)
+    holder = sqlite3.connect(database, timeout=30, isolation_level=None)
+    holder.execute('BEGIN IMMEDIATE')
+    busy = raw([args.engine, '--database', database, '--json', 'reclaim', '--apply'])
+    holder.execute('ROLLBACK')
+    holder.close()
+    assert busy.returncode != 0, busy
+    busy_issue = json.loads(busy.stdout)
+    assert 'catalog-busy' in json.dumps(busy_issue) and 'retry' in json.dumps(busy_issue), busy_issue
+    assert any(row[2] != '[]' for row in _invocation_columns(database, 'terminated-run')), 'busy reclaim must not clear rows'
+    print('external-work reclaim reports a held catalog as busy passed')
+
+    # Interrupt an observed real apply after clearing commits, before pinned WAL shrink finishes.
+    _seed_legacy_invocations(database, 'terminated-run', 6, 2_000_000)
+    active_before = _invocation_columns(database, 'active-run')
+    interruption = _interrupt_reclaim_apply(args.engine, database, 'terminated-run')
+    (work / 'interruption.json').write_text(json.dumps(interruption, indent=2))
+    assert sqlite3.connect(database).execute('PRAGMA integrity_check').fetchone() == ('ok',)
+    assert _invocation_columns(database, 'active-run') == active_before
+    assert {finished, 'terminated-run', 'active-run'} <= {run['id'] for run in call('list')['result']}
+    assert call('show', '--view', 'full', 'active-run')['status'] == 'completed'
+    # Advance through whatever normal transition the active run's profile offers now
+    # (review-enabled and review-free profiles reach different states before this point).
+    observed = call('show', 'active-run', '--view', 'action')['result']
+    offered = observed['requestable_events']
+    step = next((e for e in offered if e['kind'] == 'check-free'), None) or next(e for e in offered if e['kind'] == 'checked')
+    advanced = call('event', 'active-run', step['event'])
+    assert advanced['status'] == 'completed', advanced
+    assert advanced['result']['run']['current_state'] == step['target'], (observed['current_state'], step, advanced)
+    rerun = call('reclaim', '--apply')
+    assert rerun['status'] == 'completed', rerun
+    assert all(row[2] == '[]' for row in _invocation_columns(database, 'terminated-run'))
+    print('external-work reclaim SIGKILL interrupts an observed apply; catalog and active progression survive passed')
+
+    # Storage runs out while the catalog is rewritten. A POSIX file-size limit makes the real SQLite write path
+    # report full storage deterministically; filling an actual volume needs root or platform disk images.
+    _seed_legacy_invocations(database, 'active-run', 4, 2_000_000)
+    _seed_legacy_invocations(database, 'terminated-run', 1, 50_000)
+    call('show', 'active-run', '--view', 'action')
+    sqlite3.connect(database).execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+    # VACUUM must rewrite at least half the remaining catalog, so a half-size cap always
+    # trips during the rewrite. A cap just above the current size could be satisfied when
+    # cleared bytes outweigh WAL frame overhead, letting apply succeed with no storage failure.
+    limit = database.stat().st_size // 2
+    tmp = work / 'tmp'
+    tmp.mkdir()
+    def constrain():
+        import resource
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+    environment = dict(os.environ, TMPDIR=str(tmp), SQLITE_TMPDIR=str(tmp))
+    full = subprocess.run([str(args.engine), '--database', str(database), '--json', 'reclaim', '--apply'],
+                          text=True, capture_output=True, env=environment, preexec_fn=constrain)
+    assert full.returncode != 0, full.stdout
+    full_issue = json.dumps(json.loads(full.stdout))
+    assert 'catalog-storage-full' in full_issue and 'storage' in full_issue, full_issue
+    assert sqlite3.connect(database).execute('PRAGMA integrity_check').fetchone() == ('ok',)
+    assert {finished, 'terminated-run', 'active-run'} <= {run['id'] for run in call('list')['result']}
+    call('show', 'active-run', '--view', 'action')
+    assert call('append', 'active-run', 'user-steering', json.dumps({'target': {'kind': 'all'}, 'instruction': 'after full storage'}))['status'] == 'completed'
+    assert call('reclaim', '--apply')['status'] == 'completed'
+    print('external-work reclaim reports full storage clearly and leaves the catalog usable passed')
 
 
 # bookends:LE-46 bookends:LE-48 bookends:LE-49 bookends:LE-50 bookends:LE-52 bookends:LE-54 — durable denial, provider-unavailable revision and later superseding approval.
@@ -1614,6 +2103,37 @@ def findings_and_steering(args, root):
 
 
 
+def acknowledge_context_record(packet, record_id, receive):
+    """Wait for the complete append sample before asserting unchanged silence.
+
+    Monitor reads workflow and history separately. A concurrent append can first
+    appear in history while workflow still reflects the preceding observation.
+    Accept only that exact one-record catch-up, not a heartbeat or other change.
+    """
+    old_context = packet['workflow']['context']
+    if any(r['id'] == record_id for r in old_context):
+        return packet
+    appended = [r for r in packet['judgment']['history']['items']
+                if r['action'].get('context_record_id') == record_id]
+    assert len(appended) == 1
+    complete = receive()
+    new_context = complete['workflow']['context']
+    assert len(new_context) == len(old_context) + 1
+    assert new_context[:-1] == old_context
+    assert new_context[-1]['id'] == record_id
+    assert new_context[-1]['sequence'] == appended[0]['sequence']
+    projected = copy.deepcopy(complete)
+    projected['workflow']['context'] = old_context
+    def without_clocks(value):
+        if isinstance(value, dict):
+            return {k:without_clocks(v) for k,v in value.items() if k != 'sampled_at_ms'}
+        if isinstance(value, list):
+            return [without_clocks(v) for v in value]
+        return value
+    assert without_clocks(projected) == without_clocks(packet), 'Not an isolated context catch-up'
+    return complete
+
+
 # bookends:LE-143 — real changed packets and unchanged stdout silence describe the assistant-owned posting checkpoint; conversation delivery remains external evidence.
 def owner_update_proof(ctx):
     import queue
@@ -1653,7 +2173,8 @@ def owner_update_proof(ctx):
         assert ctx['call']('history',ctx['run_id']) == before
         append(ctx,'driver-note',{'reason':'Non-meaningful owner-update proof annotation.'},'owner-update-note')
         noted = ctx['call']('history',ctx['run_id'])
-        unchanged = receive()['owner_update']
+        noted_packet = acknowledge_context_record(receive(), 'owner-update-note', receive)
+        unchanged = noted_packet['owner_update']
         assert unchanged['required_before_next_decision'] is False, unchanged
         assert unchanged['unchanged_observation'] == 'suppress the heartbeat', unchanged
         quiet()
@@ -2010,6 +2531,31 @@ def self_test():
     assert len(RETIRED_ENGINE) == len(set(RETIRED_ENGINE))
     assert 'invoke' in RETIRED_ENGINE and 'run-validation' in RETIRED_PROVIDER
     assert software_module().SUBJECTS['plan.json'] == 'plan-good.json'
+    admission = _recovery_admission_prerequisites([{'workflow_admit':False}])
+    assert admission['status'] == 'blocked' and all(not row['public_refusal_proved'] for row in admission['cases'])
+    # Concurrent append: history can observe it before the workflow read does.
+    partial = {'workflow':{'context':[], 'current_state':'explore'},
+               'judgment':{'history':{'items':[{'sequence':2, 'action':{'context_record_id':'note'}}]}},
+               'sampled_at_ms':1, 'freshness':{'sampled_at_ms':1}}
+    complete = copy.deepcopy(partial)
+    complete['workflow']['context'] = [{'id':'note', 'sequence':2}]
+    complete['sampled_at_ms'] = complete['freshness']['sampled_at_ms'] = 2
+    assert acknowledge_context_record(partial, 'note', lambda:complete) == complete
+    assert acknowledge_context_record(complete, 'note', lambda:None) == complete
+    for corruption in ['unchanged', 'another-context', 'semantic-change']:
+        bad = copy.deepcopy(complete)
+        if corruption == 'unchanged':
+            bad = copy.deepcopy(partial)
+        elif corruption == 'another-context':
+            bad['workflow']['context'].append({'id':'other', 'sequence':3})
+        else:
+            bad['workflow']['current_state'] = 'intent-review'
+        try:
+            acknowledge_context_record(partial, 'note', lambda:bad)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError('Context catch-up accepted ' + corruption)
     print('external-work journey self-test passed')
 
 
@@ -2027,8 +2573,8 @@ def qualified_intent_revision(args, root):
         path = ctx['artifacts'] / 'intent.json'
         baseline = path.read_text()
         prior = json.loads(baseline)
-        append(ctx,'review-evidence',{'gate':'intent-review','subject':'intent.json',
-               'subject_revision':prior['revision'],'author':{'name':'prior-reviewer','kind':'agent'}},'prior-intent-review')
+        _recovery_review(ctx, 'intent-review', 'intent.json', 'prior-reviewer',
+                         'prior-intent-review')
         revised = copy.deepcopy(prior)
         revised['revision'] = prior['revision'] + '-qualified'
         revised['outcome'] += ' Preserve status inspection during ordinary delivery outages.'
@@ -2041,7 +2587,7 @@ def qualified_intent_revision(args, root):
                 value['intent_revision'] = revised['revision']
                 artifact.write_text(json.dumps(value))
         # bookends:LE-156 — a materially revised approval without qualified exact prior bytes is refused.
-        refused([args.software,'commission','--slot','intent-review'],ctx['show'](),needle='exact owner baseline')
+        refused([args.software,'commission','--slot','intent-review'],ctx['show'](),needle='exact qualified prior baseline')
         instruction = 'Owner qualification: status inspection must remain available during ordinary delivery outages; delivery retry is separate.'
         append(ctx,'user-steering',{'target':{'kind':'all'},'instruction':instruction,
                'intent_baseline':{'revision':prior['revision'],'locator':str(path)+'@prior',
@@ -2129,21 +2675,832 @@ def intent_sufficient_comparison(args, root):
                                  ROOT / 'crates/software-change-provider/data/configs/minimal.json',root,configure=configure,exercise=hook)
 
 
+# bookends:LE-186 — observe every software artifact immediately before/after its required adversarial approval exit, including edits made during review.
+def retention_software_approval_exits(args, root):
+    exits = {
+        'intent-adversarial-review': ('approved', 'design', ['intent.json']),
+        'design-adversarial-review': ('approved', 'plan', ['design.json']),
+        'plan-adversarial-review': ('approved', 'implement', ['plan.json']),
+        'implementation-adversarial-review': ('approved', 'validation', ['implementation-report.json', 'reconciliation.json']),
+        'validation-adversarial-review': ('passed', 'end', ['validation-report.json']),
+    }
+    review_edits = {
+        'intent-review': ('intent.json', 'problem'),
+        'design-review': ('design.json', 'approach'),
+        'plan-review': ('plan.json', 'objective'),
+    }
+    approved, pending, observed, edited = [], [], set(), set()
+
+    def observe(phase, ctx):
+        # The previous callback saw the artifact bytes before the exit; this
+        # callback is the first public observation after that actual transition.
+        approved.extend(pending)
+        pending.clear()
+        entries = retained_view(ctx['call'], ctx['run_id'])
+        assert len(entries) == len(approved), (
+            'retention appeared before its owning-phase approval exit', phase,
+            [e['transition'] for e in entries], [e['transition'] for e in approved])
+        for entry, snapshot in zip(entries, approved):
+            assert entry['name'] == snapshot['name'], entry
+            assert entry['transition'] == snapshot['transition'], (
+                'retention used the wrong approval transition', entry, snapshot)
+            assert entry['exit'] == 'checked' and entry['bytes'] == snapshot['bytes'], entry
+        if phase in review_edits:
+            assert phase not in edited
+            name, field = review_edits[phase]
+            path = ctx['artifacts'] / name
+            value = json.loads(path.read_text())
+            value[field] += '\nApproved retention proof bytes authored during ' + phase + '.'
+            path.write_text(json.dumps(value))
+            edited.add(phase)
+        if phase in exits:
+            assert phase not in observed
+            event, target, names = exits[phase]
+            transition = {'source': phase, 'event': event, 'target': target}
+            pending.extend({'name': name, 'transition': transition,
+                            'bytes': (ctx['artifacts'] / name).read_bytes()} for name in names)
+            observed.add(phase)
+        return False
+
+    software_module().run(
+        SimpleNamespace(engine=args.engine, provider=args.software, mode='source', data_root=None),
+        ROOT / 'crates/software-change-provider/data/configs/high-rigor.json', root,
+        exercise=observe)
+    assert observed == set(exits) and edited == set(review_edits)
+    assert not pending and len(approved) == 6, 'every phase exit must be observed after commit'
+    print('external-work software-change exact adversarial approval exits and review-edited bytes passed')
+
+
+
+def _recovery_snapshot(ctx):
+    shown = ctx['show']()['result']
+    return {'context':shown['context'], 'history':ctx['call']('history',ctx['run_id'])['result'],
+            'state':shown['current_state'], 'visit':shown['state_visit']}
+
+
+def _recovery_refusal(ctx, argv, needle, *, durable_denial=False):
+    """Write refusals store nothing; checked denials may append only denial history."""
+    before = _recovery_snapshot(ctx)
+    response = ctx['call'](*argv)
+    assert response['status'] == 'rejected' and needle in json.dumps(response), response
+    after = _recovery_snapshot(ctx)
+    assert after['context'] == before['context'] and after['state'] == before['state'] and after['visit'] == before['visit']
+    if durable_denial:
+        assert after['history'][:len(before['history'])] == before['history']
+        added = after['history'][len(before['history']):]
+        assert added and all(row['action']['kind'] == 'transition' and
+                             row['action']['outcome']['outcome'] == 'denied' for row in added), added
+    else:
+        assert after['history'] == before['history'], (before,after)
+    return response
+
+
+def _recovery_inspect(ctx, command):
+    before = _recovery_snapshot(ctx)
+    result = ctx['invoke']([ctx['provider'],*command],ctx['show']())
+    assert _recovery_snapshot(ctx) == before, 'read-only helper changed durable state'
+    return result
+
+
+def _recovery_review(ctx, gate, subject, author, record_id, *, locator=None, result='pass', findings=''):
+    value = json.loads((ctx['artifacts'] / subject).read_text())
+    policy = ctx['profile']['review_policies'][gate][0]
+    selected_locator = locator or subject+'#/revision'
+    source_bytes = (ctx['artifacts'] / selected_locator.split('#',1)[0]).read_bytes()
+    snapshots = ctx['work'] / 'source-snapshots'
+    snapshots.mkdir(exist_ok=True)
+    captured = snapshots / (record_id+'.bytes')
+    assert not captured.exists(), 'Do not overwrite source proof.'
+    captured.write_bytes(source_bytes)
+    (snapshots / (record_id+'.json')).write_text(json.dumps({'locator':selected_locator,
+        'source_bytes':str(captured),'sha256':hashlib.sha256(source_bytes).hexdigest(),
+        'phase':'before-candidate-intake-and-append'},indent=2))
+    packet = {'show':ctx['show'](), 'assignment':{'gate':gate,'stage':'aggregate','group':policy['group'],
+              'subject':subject,'subject_revision':value['revision'],'author':{'name':author,'kind':'agent'}},
+              'request':{'text':'SCRIPTED mechanical fixture: inspect only supplied subject and locator; no semantic approval.'},
+              'original':{'text':json.dumps({'assessment_id':record_id,'judgments':[{
+                  'axis':policy['id'],'result':result,'findings':findings,
+                  'grounds':{'reason':'Scripted fixture inspected the supplied source bytes; mechanical proof only.',
+                             'evidence':[{'locator':selected_locator}]}}]})}}
+    before = _recovery_snapshot(ctx)
+    intake = ctx['invoke']([ctx['provider'],'review-candidates'],packet)
+    assert _recovery_snapshot(ctx) == before
+    assert len(intake['records']) == 1, intake
+    candidate = intake['records'][0]
+    stored = append(ctx,candidate['kind'],candidate['data'],record_id)
+    assert stored['status'] == 'completed' and stored['result']['context']['data'] == candidate['data'], stored
+    return stored['result']['context']
+
+
+def _recovery_ledger(ctx, gate, subject, findings=None, record_id=None):
+    value = json.loads((ctx['artifacts'] / subject).read_text())
+    return append(ctx,'finding-ledger',{'schema_version':'1','gate':gate,'subject':subject,
+        'subject_revision':value['revision'],'author':{'name':'fixture-driver','kind':'agent'},
+        'findings':findings or []},record_id)
+
+
+def _recovery_finding(source, disposition, status):
+    return {'id':'F-recovery','source':{'kind':'context-record','id':source['id']},
+            'policy_id':source['data']['policy_id'],
+            'statement':source['data']['findings'],
+            'disposition':disposition,'status':status,'reason':'Scripted exact-source disposition, not semantic review.',
+            'owner_phase':'design' if disposition == 'accepted' else None,'task_ids':[],
+            'review_axes':[source['data']['policy_id']] if disposition == 'accepted' else []}
+
+
+def _recovery_withdraw(ctx, record_id, withdrawal_id):
+    result = append(ctx,'record-withdrawal',{'record_ids':[record_id],'reason':'Obsolete scripted fixture evidence or supplemental command.',
+                    'attesting_driver':{'name':'fixture-driver','kind':'agent'}},withdrawal_id)
+    assert result['status'] == 'completed', result
+
+
+def _recovery_carry(ctx, source, subject, revision, record_id, *, checkpoint=None):
+    result = append(ctx,'evidence-applicability',{'origin':{'kind':'context-record','id':source},
+        'target':{'subject':subject,'revision':revision,'checkpoint':checkpoint},
+        'attesting_driver':{'name':'fixture-driver','kind':'agent'},
+        'reason':'Scripted fixture identity/revision wrapper changed; the original bounded judgment remains applicable.'},record_id)
+    assert result['status'] == 'completed', result
+
+
+def _recovery_fixture(args, root, name, configure, exercise, stop):
+    """Reuse the collected software journey and its durable command recorder."""
+    directory = root / name
+    directory.mkdir()
+    module = software_module()
+    log = module.CommandLog(directory / 'commands')
+    log.identity(args.engine,args.software)
+    state = {}
+    def hook(phase, ctx):
+        state['ctx'] = ctx
+        ctx['_recovery_log'] = log
+        if phase == stop:
+            state['reached'] = phase
+            raise _StopRun()
+        return exercise(phase,ctx)
+    try:
+        try:
+            module.run(SimpleNamespace(engine=args.engine,provider=args.software,mode='source',data_root=None),
+                       ROOT / 'crates/software-change-provider/data/configs/minimal.json',directory,
+                       configure=configure,exercise=hook,command_log=log)
+        except _StopRun:
+            pass
+        assert state.get('reached') == stop, state
+        ctx = state['ctx']
+        shown = ctx['show']()
+        history = ctx['call']('history',ctx['run_id'])
+        assert not shown['result']['has_overrides'], shown
+        admission = bool(shown['result'].get('workflow_graph',{}).get('admit',False))
+        receipt = {'status':'passed','mechanical_fixture':True,'semantic_review':False,
+            'checked_target_state':stop,'catalog':str(ctx['database']),'config':str(ctx['config']),
+            'artifact_root':str(ctx['artifacts']),'run_id':ctx['run_id'],
+            'command_index':str(log.index),'workflow_admit':admission,
+            'AC-1':ctx.get('_ac1_result', {'status':'blocked' if not admission else 'not-run',
+                'reason':'This recovery fixture does not execute the separate admission controls.'})}
+        (directory / 'before-cleanup-show.json').write_text(json.dumps(shown,indent=2))
+        (directory / 'checked-history.json').write_text(json.dumps(history,indent=2))
+        (directory / 'scenario.json').write_text(json.dumps(receipt,indent=2))
+        return receipt
+    finally:
+        if state.get('ctx'):
+            ctx = state['ctx']
+            # Cleanup is not the recovery outcome: capture the checked state first.
+            shown = ctx['show']()
+            ctx['call']('list')
+            if shown['result']['lifecycle'] == 'active':
+                terminated = ctx['call']('terminate',ctx['run_id'])
+                assert terminated['status'] == 'completed', terminated
+            (directory / 'final-catalog.json').write_text(json.dumps(ctx['call']('list'),indent=2))
+        log.finalize()
+
+
+def _recovery_policies(profile, gates, axis_id=None, floor=1):
+    selected = {}
+    for gate in gates:
+        selected[gate] = [copy.deepcopy(p) for p in profile['review_policies'][gate]
+                          if p['review_stage'] == 'aggregate' and (axis_id is None or p['id'] == axis_id)][:1]
+        assert selected[gate], gate
+        selected[gate][0]['required_authors'] = floor
+    _empty_review_policies(profile,None,None)
+    profile['review_policies'].update(selected)
+
+
+def _recovery_advice_change(ctx, occasions, record_id):
+    shown = ctx['show']()['result']
+    data = {'actor':{'name':'scripted-owner','kind':'human'},'reason':'Scripted immediate advice policy change.',
+            'state_visit':shown['state_visit'],'advice_departures':{'version':1,'occasions':occasions}}
+    response = append(ctx,'advice-policy-change',data,record_id)
+    assert response['status'] == 'completed', response
+    assert ctx['show']()['result']['advice_policy']['effective'] == data['advice_departures']
+
+
+def _recovery_occasion(ctx, occasion, record_id, *, triggered=False, revises=None):
+    shown = ctx['show']()['result']
+    data = {'source_state':shown['current_state'],'state_visit':shown['state_visit'],'event':occasion['event'],
+        'occasion_id':occasion['occasion_id'],'target':{'subject':'intent.json'},'triggered':triggered,
+        'trigger_source_ids':['advice-trigger'] if triggered else [],'response_ids':[],
+        'reason':None if triggered else 'No admissible atomic question on these supplied facts.'}
+    if revises:
+        data.update(revises=revises,revision_reason='Scripted driver correction after inspecting changed facts.')
+    response = append(ctx,'advice-occasion',data,record_id)
+    assert response['status'] == 'completed', response
+    return data
+
+
+# bookends:LE-16 bookends:LE-17 bookends:LE-166 — originals survive explicit driver correction/owner policy changes; answer disposition remains independent.
+# bookends:LE-189 bookends:LE-192 — public advice revision and owner policy changes preserve answer dispositions.
+# bookends:LE-188 — malformed typed advice is refused before persistence, including advice-off starts.
+def advice_recovery(args, root):
+    occasions = [{'state':'explore','event':'intent-ready','occasion_id':family+':explore:intent-ready'}
+                 for family in ['review-candidates','execution-or-authority-issue']]
+    def off(profile, repository, artifacts):
+        _empty_review_policies(profile,repository,artifacts)
+        profile['extra']['advice']['enabled'] = False
+        profile.pop('advice_departures',None)
+    def addition(phase, ctx):
+        if phase != 'explore':
+            return
+        initial = copy.deepcopy(ctx['show']()['result']['initial_input'])
+        assert not ctx['show']()['result']['advice_policy']['enabled']
+        _recovery_refusal(ctx,['append','--record-id','received-answer',ctx['run_id'],
+                              'advice-answer','{}'],'invalid answer shape')
+        append(ctx,'execution-issue',{'reason':'Scripted execution issue; only supplied facts selected.'},'advice-trigger')
+        _recovery_advice_change(ctx,occasions,'owner-add')
+        _recovery_refusal(ctx,['append','--record-id','received-answer',ctx['run_id'],
+                              'advice-answer','{}'],'invalid answer shape')
+        action = ctx['call']('show','--view','action',ctx['run_id'])
+        assert action['result']['advice_policy']['enabled']
+        _recovery_refusal(ctx,['event',ctx['run_id'],'intent-ready'],'no driver record')
+        original = _recovery_occasion(ctx,occasions[0],'occasion-original')
+        duplicate = dict(original,triggered=True,reason=None,trigger_source_ids=['advice-trigger'])
+        _recovery_refusal(ctx,['append','--record-id','duplicate',ctx['run_id'],'advice-occasion',json.dumps(duplicate)],'occasion-original')
+        _recovery_occasion(ctx,occasions[0],'occasion-triggered',triggered=True,revises='occasion-original')
+        _recovery_occasion(ctx,occasions[0],'occasion-corrected',revises='occasion-triggered')
+        _recovery_occasion(ctx,occasions[1],'occasion-B',triggered=True)
+        _recovery_advice_change(ctx,occasions[1:],'owner-remove-A')
+        refusal = _recovery_refusal(ctx,['event',ctx['run_id'],'intent-ready'],occasions[1]['occasion_id'])
+        assert occasions[0]['occasion_id'] not in json.dumps(refusal)
+        before = _recovery_snapshot(ctx)
+        request = ctx['invoke']([ctx['provider'],'advice-request'],{'show':ctx['show'](),
+            'occasion_id':occasions[1]['occasion_id'],'admissibility':{'bounded_judgment':True,'evidence_sufficient':True},
+            'judgments':{'claim':'The supplied execution-issue record explicitly describes an issue.'},
+            'source_context_ids':['advice-trigger'],'artifact_names':[],'documents':[]})
+        assert _recovery_snapshot(ctx) == before and len(request['questions']) == 1
+        response = {'answers':{'claim':{'type':'choice','choice':'supported',
+            'probabilities':{'supported':1.0,'contradicted':0.0,'not-established':0.0},'confidence':1.0}}}
+        actual = ctx['_recovery_log'].execute([sys.executable,'-c','print('+repr(json.dumps(response))+')'],raw=True)
+        assert actual.returncode == 0 and json.loads(actual.stdout) == response
+        answer = {'occasion':request['occasion'],'request':request,'response':json.loads(actual.stdout),
+            'author':{'name':'scripted-external-advisor','kind':'agent'},'original':{'text':actual.stdout}}
+        for key, value, needle in [
+            ('occasion','wrong-occasion','occasion must match'),
+            ('author',{'name':' ','kind':'agent'},'nonempty author'),
+            ('original',{},'genuine original'),
+            ('response',{'answers':{}},'claim'),
+        ]:
+            invalid = dict(answer, **{key:value})
+            _recovery_refusal(ctx,['append','--record-id','received-answer',ctx['run_id'],
+                                  'advice-answer',json.dumps(invalid)],needle)
+        accepted = append(ctx,'advice-answer',answer,'received-answer')
+        assert accepted['status'] == 'completed' and accepted['result']['context']['data'] == answer
+        _recovery_advice_change(ctx,[],'owner-disable')
+        _recovery_refusal(ctx,['event',ctx['run_id'],'intent-ready'],'received-answer/claim')
+        append(ctx,'advice-disposition',{'response_id':'received-answer','answer_id':'claim','occasion_id':request['occasion'],
+            'state_visit':ctx['show']()['result']['state_visit'],'target':request['target'],'disposition':'accept',
+            'reason':'The selected fixture record explicitly states an issue; mechanical judgment only.'},'reasoned-disposition')
+        final = ctx['show']()['result']
+        assert final['initial_input'] == initial and not final['advice_policy']['enabled']
+        assert next(r for r in final['context'] if r['id']=='occasion-original')['data'] == original
+        ctx['event']('intent-ready')
+        return True
+    receipts = [_recovery_fixture(args,root,'advice-off-start',off,addition,'design')]
+    def on(profile, repository, artifacts):
+        off(profile,repository,artifacts)
+        profile['extra']['advice']['enabled'] = True
+        profile['advice_departures'] = {'version':1,'occasions':occasions}
+    def removal(phase, ctx):
+        if phase != 'explore':
+            return
+        frozen = copy.deepcopy(ctx['show']()['result']['initial_input']['advice_departures'])
+        append(ctx,'execution-issue',{'reason':'Scripted pending issue.'},'advice-trigger')
+        _recovery_occasion(ctx,occasions[0],'due-A',triggered=True)
+        _recovery_occasion(ctx,occasions[1],'due-B',triggered=True)
+        _recovery_advice_change(ctx,occasions[1:],'owner-remove-declared-A')
+        denied = _recovery_refusal(ctx,['event',ctx['run_id'],'intent-ready'],occasions[1]['occasion_id'])
+        assert occasions[0]['occasion_id'] not in json.dumps(denied)
+        _recovery_occasion(ctx,occasions[1],'corrected-B',revises='due-B')
+        assert ctx['show']()['result']['advice_policy']['frozen'] == frozen
+        ctx['event']('intent-ready')
+        return True
+    receipts.append(_recovery_fixture(args,root,'advice-on-removal',on,removal,'design'))
+    return receipts
+
+
+# bookends:LE-115 — exact-source duties and replacement floors survive retirement/withdrawal; no history is rewritten.
+# bookends:LE-190 — retirement and withdrawal preserve exact findings, replacement coverage, and history.
+def evidence_recovery(args, root):
+    gate, challenge, subject = 'design-review','design-adversarial-review','design.json'
+    def configure(profile, repository, artifacts):
+        _recovery_policies(profile,[gate,challenge])
+        (artifacts / 'recovery-ground.txt').write_text('scripted source line one\nscripted source line two\n')
+    state = {'parent_visits':0,'challenge_visits':0}
+    def history_withdrawal(phase, ctx):
+        if phase == gate:
+            state['parent_visits'] += 1
+            if state['parent_visits'] == 1:
+                original = _recovery_review(ctx,gate,subject,'old-reader','formerly-valid',locator='recovery-ground.txt#L2-L2')
+                state['original'] = copy.deepcopy(original)
+                revision = original['data']['subject_revision']
+                _recovery_carry(ctx,original['id'],subject,revision,'carry-before-exclusion')
+                _recovery_ledger(ctx,gate,subject)
+            else:
+                # Challenge entry preserves the earlier ordinary clearance. After
+                # explicit re-appraisal, this owning gate reads current evidence.
+                denied = _recovery_refusal(ctx,['event',ctx['run_id'],'approved'],'recovery-ground.txt#L2-L2',durable_denial=True)
+                assert denied['code'] == 'software-change-review-incomplete', denied
+                assert denied['details']['phase'] == 'evidence', denied
+                assert any(axis['axis'] == 'intent-faithful' and axis['review_stage'] == 'aggregate'
+                           and any(item['category'] == 'malformed'
+                                   and any('recovery-ground.txt#L2-L2' in reason and 'outside the source' in reason
+                                           for reason in item.get('reasons',[]))
+                                   for item in axis['diagnostics'])
+                           for axis in denied['details']['diagnostics']), denied
+                _recovery_withdraw(ctx,'formerly-valid','withdraw-after-pass')
+                packet = _recovery_inspect(ctx,['commission','--slot',gate,'--stage','aggregate'])
+                assert not any(r['id'] in ['formerly-valid','carry-before-exclusion'] for r in packet['context']), packet
+                _recovery_refusal(ctx,['event',ctx['run_id'],'approved'],'independence',durable_denial=True)
+                history = ctx['call']('history',ctx['run_id'])['result']
+                assert history[:len(state['passed_history'])] == state['passed_history'], 'withdrawal rewrote an already-committed parent gate'
+                original = next(r for r in ctx['show']()['result']['context'] if r['id']=='formerly-valid')
+                assert original == state['original']
+                _recovery_review(ctx,gate,subject,'replacement-reader','replacement-parent')
+            ctx['event']('approved')
+            if state['parent_visits'] == 1:
+                state['passed_history'] = ctx['call']('history',ctx['run_id'])['result']
+            return True
+        if phase == challenge:
+            state['challenge_visits'] += 1
+            if state['challenge_visits'] == 1:
+                _recovery_review(ctx,challenge,subject,'challenger','original-challenge')
+                _recovery_ledger(ctx,challenge,subject)
+                (ctx['artifacts'] / 'recovery-ground.txt').write_text('scripted source line one\n')
+                packet = _recovery_inspect(ctx,['commission','--slot',challenge,'--stage','aggregate'])
+                assert {'formerly-valid','carry-before-exclusion'} <= {
+                    row['record_id'] for row in packet['record_diagnostics'] if row['reason']}, packet
+                assert packet['missing_inputs'], packet
+                # Neither a parent citation drift nor a missing displayed parent
+                # claim automatically reopens a passed ordinary gate. The current
+                # challenge return has intact grounds. Choose the supported revise
+                # route to prove current citation refusal and replacement coverage
+                # in the owning ordinary gate, with no late ordinary write here.
+                ctx['event']('revise')
+                return True
+            packet = _recovery_inspect(ctx,['commission','--slot',challenge,'--stage','aggregate'])
+            assert not packet['missing_inputs'], packet
+            assert not any(r['id'] in ['formerly-valid','carry-before-exclusion'] for r in packet['context']), packet
+            _recovery_review(ctx,challenge,subject,'replacement-challenger','fresh-challenge')
+            ctx['event']('approved')
+            return True
+    receipts = [_recovery_fixture(args,root,'citation-drift-withdrawal-history',configure,history_withdrawal,'plan')]
+
+    # bookends:LE-191 — parent diagnostics preserve normal ordinary clearance;
+    # current challenge evidence/ledger/floors still block, including final validation.
+    def normal_clearance_case(case_gate, case_challenge, case_subject, departure, target, name):
+        case = {}
+        def setup(profile, repository, artifacts):
+            _recovery_policies(profile,[case_gate,case_challenge])
+            (artifacts / 'parent-drift.txt').write_text('parent first line\nparent second line\n')
+            (artifacts / 'challenge-drift.txt').write_text('challenge first line\nchallenge second line\n')
+        def exercise(phase, ctx):
+            if phase == case_gate:
+                case['parent'] = _recovery_review(ctx,case_gate,case_subject,'normal-parent','normal-parent',
+                                                  locator='parent-drift.txt#L2-L2')
+                parent_revision = case['parent']['data']['subject_revision']
+                parent_checkpoint = ({'phase':'validation','report_revision':parent_revision}
+                                     if case_subject == 'validation-report.json' else None)
+                _recovery_carry(ctx,'normal-parent',case_subject,parent_revision,'normal-parent-carry',
+                                checkpoint=parent_checkpoint)
+                _recovery_ledger(ctx,case_gate,case_subject,record_id='normal-ordinary-ledger')
+                case['ordinary_ledger'] = next(r for r in ctx['show']()['result']['context']
+                                               if r['id']=='normal-ordinary-ledger')
+                ctx['event']('approved')
+                case['ordinary_history'] = ctx['call']('history',ctx['run_id'])['result']
+                return True
+            if phase != case_challenge:
+                return
+            case['challenge'] = _recovery_review(ctx,case_challenge,case_subject,'normal-challenger','normal-challenge',
+                                                 locator='challenge-drift.txt#L2-L2')
+            (ctx['artifacts'] / 'parent-drift.txt').write_text('parent first line\n')
+            packet = _recovery_inspect(ctx,['commission','--slot',case_challenge,'--stage','aggregate'])
+            diagnostics = {r['record_id']:r['reason'] for r in packet['record_diagnostics']}
+            assert {'normal-parent','normal-parent-carry'} <= diagnostics.keys(), packet
+            assert all('outside the source' in diagnostics[rid]
+                       for rid in ['normal-parent','normal-parent-carry']), packet
+            assert packet['missing_inputs'], packet
+            # The malformed parent cannot make a missing current challenge ledger pass.
+            _recovery_refusal(ctx,['event',ctx['run_id'],departure],'finding ledger missing or malformed',
+                              durable_denial=True)
+            _recovery_ledger(ctx,case_challenge,case_subject,record_id='normal-challenge-ledger')
+            (ctx['artifacts'] / 'challenge-drift.txt').write_text('challenge first line\n')
+            packet = _recovery_inspect(ctx,['commission','--slot',case_challenge,'--stage','aggregate'])
+            assert any(r['record_id']=='normal-challenge' and 'outside the source' in r['reason']
+                       for r in packet['record_diagnostics']), packet
+            denied = _recovery_refusal(ctx,['event',ctx['run_id'],departure],'challenge-drift.txt#L2-L2',
+                                       durable_denial=True)
+            assert denied['code'] == 'software-change-review-incomplete', denied
+            assert denied['details']['phase'] == 'evidence', denied
+            assert any(axis['axis'] == case['challenge']['data']['policy_id'] and axis['review_stage'] == 'aggregate'
+                       and any(item['category'] == 'malformed'
+                               and any('challenge-drift.txt#L2-L2' in reason and 'outside the source' in reason
+                                       for reason in item.get('reasons',[]))
+                               for item in axis['diagnostics'])
+                       for axis in denied['details']['diagnostics']), denied
+            _recovery_withdraw(ctx,'normal-challenge','withdraw-current-challenge')
+            packet = _recovery_inspect(ctx,['commission','--slot',case_challenge,'--stage','aggregate'])
+            assert not any(r['id']=='normal-challenge' for r in packet['context']), packet
+            _recovery_refusal(ctx,['event',ctx['run_id'],departure],'independence',durable_denial=True)
+            _recovery_review(ctx,case_challenge,case_subject,'normal-replacement','normal-challenge-replacement')
+            packet = _recovery_inspect(ctx,['commission','--slot',case_challenge,'--stage','aggregate'])
+            assert {'normal-parent','normal-parent-carry'} <= {
+                r['record_id'] for r in packet['record_diagnostics'] if r['reason']}, packet
+            current = {r['id']:r for r in ctx['show']()['result']['context']}
+            assert current['normal-parent'] == case['parent']
+            assert current['normal-challenge'] == case['challenge']
+            assert current['normal-ordinary-ledger'] == case['ordinary_ledger']
+            assert current['normal-ordinary-ledger']['data']['subject_revision'] == json.loads(
+                (ctx['artifacts'] / case_subject).read_text())['revision']
+            assert not current['normal-ordinary-ledger']['data']['findings']
+            assert not any(r['kind']=='record-withdrawal' and 'normal-parent' in r['data']['record_ids']
+                           for r in current.values()), 'parent was cleared instead of preserving ordinary approval'
+            # A real checked departure, not a stateless allow or cleanup termination,
+            # proves parent diagnostics alone do not reopen ordinary clearance.
+            ctx['event'](departure)
+            assert ctx['show']()['result']['current_state'] == target
+            history = ctx['call']('history',ctx['run_id'])['result']
+            assert history[:len(case['ordinary_history'])] == case['ordinary_history']
+            return True
+        return _recovery_fixture(args,root,name,setup,exercise,target)
+    receipts.append(normal_clearance_case(gate,challenge,subject,'approved','plan',
+                                          'citation-drift-normal-challenge-clearance'))
+    receipts.append(normal_clearance_case('validation-review','validation-adversarial-review',
+                                          'validation-report.json','passed','end',
+                                          'citation-drift-final-validation-clearance'))
+
+    def retired(phase, ctx):
+        if phase == gate:
+            append(ctx,'reviewer-manifest',{'gate':gate,'authors':[{'name':'old-reader','kind':'agent'}],'reason':'Scripted original roster.'},'roster-before')
+            source = _recovery_review(ctx,gate,subject,'old-reader','retired-source',locator='recovery-ground.txt#L2-L2')
+            _recovery_carry(ctx,source['id'],subject,source['data']['subject_revision'],'retired-carry')
+            _recovery_ledger(ctx,gate,subject)
+            (ctx['artifacts'] / 'recovery-ground.txt').write_text('scripted source line one\n')
+            packet = _recovery_inspect(ctx,['commission','--slot',gate,'--stage','aggregate'])
+            assert any(row['record_id']=='retired-source' for row in packet['record_diagnostics']), packet
+            _recovery_refusal(ctx,['event',ctx['run_id'],'approved'],'malformed',durable_denial=True)
+            append(ctx,'reviewer-manifest',{'gate':gate,'authors':[{'name':'new-reader','kind':'agent'}],'reason':'Replace the original scripted fixture reader.'},'roster-after')
+            _recovery_ledger(ctx,gate,subject,[_recovery_finding(source,'retired-author','recorded')],'retirement-ledger')
+            _recovery_refusal(ctx,['event',ctx['run_id'],'approved'],'independence',durable_denial=True)
+            _recovery_review(ctx,gate,subject,'new-reader','retirement-replacement')
+            ctx['event']('approved')
+            return True
+        if phase == challenge:
+            packet = _recovery_inspect(ctx,['commission','--slot',challenge,'--stage','aggregate'])
+            assert not packet['missing_inputs'] and not packet['record_diagnostics'], packet
+            assert not any(r['id'] in ['retired-source','retired-carry'] for r in packet['context']), packet
+            _recovery_review(ctx,challenge,subject,'challenger','retirement-challenge')
+            _recovery_ledger(ctx,challenge,subject)
+            ctx['event']('approved')
+            return True
+    receipts.append(_recovery_fixture(args,root,'citation-drift-retirement',configure,retired,'plan'))
+
+    def ordinary_only(profile, repository, artifacts):
+        configure(profile,repository,artifacts)
+        profile['review_policies'][challenge] = []
+    def pending(phase, ctx):
+        if phase != gate:
+            return
+        source = _recovery_review(ctx,gate,subject,'reader','pending-source',locator='recovery-ground.txt#L2-L2',
+                                  result='fail',findings='Scripted fixture finding requiring an exact-source disposition.')
+        finding = _recovery_finding(source,'accepted','unresolved')
+        _recovery_ledger(ctx,gate,subject,[finding],'accepted-ledger')
+        (ctx['artifacts'] / 'recovery-ground.txt').write_text('scripted source line one\n')
+        _recovery_withdraw(ctx,source['id'],'withdraw-failing-source')
+        _recovery_review(ctx,gate,subject,'replacement','pending-replacement')
+        _recovery_refusal(ctx,['event',ctx['run_id'],'approved'],'accepted_unresolved',durable_denial=True)
+        packet = _recovery_inspect(ctx,['commission','--slot',gate,'--stage','aggregate'])
+        assert any(r['kind']=='finding-ledger' and any(f['source']['id']==source['id'] and f['status']=='unresolved'
+                   for f in r['data']['findings']) for r in packet['context']), packet
+        finding.update(status='resolved',reason='Scripted fixture repair inspected; replacement evidence retained. Mechanical disposition only.')
+        _recovery_ledger(ctx,gate,subject,[finding],'resolved-ledger')
+        ctx['event']('approved')
+        assert any(r['id']==source['id'] and r['data']==source['data'] for r in ctx['show']()['result']['context'])
+        return True
+    receipts.append(_recovery_fixture(args,root,'withdrawal-retains-pending-finding',ordinary_only,pending,'plan'))
+
+    obsolete = {'spec':{'id':'obsolete-supplement','command':sys.executable,'args':['-c','raise SystemExit("obsolete command must not run")'],
+                       'owner':'fixture-driver','obligation':'Supplemental scripted command which became obsolete.'}}
+    def supplemental(phase, ctx):
+        if phase == 'explore':
+            append(ctx,'validation-command',obsolete,'obsolete-command')
+        if phase == 'validation':
+            before = _recovery_inspect(ctx,['commission','--slot','validation-draft'])
+            assert {p['id'] for p in before['commission']['proof_commands']} == {'helper-test','obsolete-supplement'}
+            _recovery_withdraw(ctx,'obsolete-command','withdraw-obsolete-command')
+            after = _recovery_inspect(ctx,['commission','--slot','validation-draft'])
+            plan = json.loads((ctx['artifacts'] / 'plan.json').read_text())
+            assert after['commission']['proof_commands'] == plan['proof_commands']
+    receipts.append(_recovery_fixture(args,root,'supplemental-command-withdrawal',_empty_review_policies,supplemental,'end'))
+    return receipts
+
+
+# bookends:LE-115 bookends:LE-173 — every effective counted reconstruction is compared; old source identities remain historical.
+def comparison_recovery(args, root):
+    def configure(profile, repository, artifacts):
+        _recovery_policies(profile,['intent-review'],'intent-sufficient',2)
+        (artifacts / 'recovery-ground.txt').write_text('scripted first line\nscripted second line\n')
+    state = {}
+    def hook(phase, ctx):
+        gate, subject = 'intent-review','intent.json'
+        if phase == 'explore':
+            path = ctx['artifacts'] / subject
+            old_bytes = path.read_text()
+            old = json.loads(old_bytes)
+            append(ctx,'reviewer-manifest',{'gate':gate,'authors':[{'name':'retired-reader','kind':'agent'}],
+                'reason':'Scripted original roster.'},'cold-roster-before')
+            for name, record_id in [('carried-reader','carried-original'),('retired-reader','retired-original'),('withdrawn-reader','withdrawn-original')]:
+                _recovery_review(ctx,gate,subject,name,record_id)
+            current = copy.deepcopy(old)
+            current['revision'] += '-identity-only'
+            path.write_text(json.dumps(current))
+            for artifact in ctx['artifacts'].glob('*.json'):
+                value = json.loads(artifact.read_text())
+                if value.get('intent_revision') == old['revision']:
+                    value['intent_revision'] = current['revision']
+                    artifact.write_text(json.dumps(value))
+            append(ctx,'user-steering',{'target':{'kind':'all'},'instruction':'SCRIPTED owner-source: preserve the exact prior intent; only its revision wrapper changed.',
+                'intent_baseline':{'revision':old['revision'],'locator':str(path)+'@prior','sha256':'sha256:'+hashlib.sha256(old_bytes.encode()).hexdigest(),
+                                   'json_bytes':old_bytes}},'cold-owner-baseline')
+            state['old_revision'] = old['revision']
+        if phase != gate:
+            return
+        intent = json.loads((ctx['artifacts'] / subject).read_text())
+        records = {r['id']:r for r in ctx['show']()['result']['context']}
+        _recovery_carry(ctx,'carried-original',subject,intent['revision'],'eligible-carry')
+        _recovery_carry(ctx,'retired-original',subject,intent['revision'],'carry-before-retirement')
+        append(ctx,'reviewer-manifest',{'gate':gate,'authors':[{'name':'fresh-reader','kind':'agent'}],
+            'reason':'Scripted replacement roster.'},'cold-roster-after')
+        finding = _recovery_finding(records['retired-original'],'retired-author','recorded')
+        _recovery_ledger(ctx,gate,subject,[finding],'cold-retirement-ledger')
+        _recovery_withdraw(ctx,'withdrawn-original','withdraw-cold-return')
+        _recovery_review(ctx,gate,subject,'fresh-reader','fresh-current')
+        # R14 allows later conforming evidence to clear malformed debt. Make
+        # this citation stale after establishing the intended counted coverage,
+        # so the negative tests an uncorrected malformed reconstruction.
+        invalid_return = _recovery_review(ctx,gate,subject,'nonconforming-reader','later-invalid-return',locator='recovery-ground.txt#L2-L2')
+        (ctx['artifacts'] / 'recovery-ground.txt').write_text('scripted first line\n')
+        denied = _recovery_refusal(ctx,['event',ctx['run_id'],'approved'],'outside the source',durable_denial=True)
+        assert denied['details']['phase'] == 'evidence' and 'malformed' in json.dumps(denied['details']), denied
+        packet = _recovery_inspect(ctx,['commission','--slot',gate,'--stage','aggregate'])
+        assert any(row['record_id']=='later-invalid-return' and row['reason'] for row in packet['record_diagnostics']), packet
+        _recovery_withdraw(ctx,'later-invalid-return','withdraw-invalid-cold-return')
+        assert next(r for r in ctx['show']()['result']['context'] if r['id']=='later-invalid-return') == invalid_return
+        _recovery_refusal(ctx,['event',ctx['run_id'],'approved'],'missing current intent-comparison',durable_denial=True)
+        def compare(ids, record_id):
+            data = {'subject_revision':intent['revision'],'baseline':intent['baseline'],'reconstruction_ids':ids,
+                'actor':{'name':'scripted-owner-authorized-driver','kind':'agent'},'authority':'SCRIPTED explicit owner authorization for mechanical fixture comparison',
+                'dispositions':[{'reconstruction_id':rid,'alternative':'Scripted implementation freedom; no semantic judging claim.',
+                    'disposition':'implementation-freedom','note':'Mechanical identity/coverage fixture only.'} for rid in ids]}
+            response = append(ctx,'intent-comparison',data,record_id)
+            assert response['status'] == 'completed', response
+        compare(['carried-original','fresh-current'],'first-comparison')
+        _recovery_review(ctx,gate,subject,'another-reader','additional-current')
+        _recovery_refusal(ctx,['event',ctx['run_id'],'approved'],'every counted reconstruction',durable_denial=True)
+        compare(['carried-original','fresh-current','additional-current'],'complete-three-comparison')
+        _recovery_withdraw(ctx,'additional-current','withdraw-additional-return')
+        compare(['carried-original','fresh-current'],'effective-two-comparison')
+        original = next(r for r in ctx['show']()['result']['context'] if r['id']=='carried-original')
+        assert original['data']['subject_revision'] == state['old_revision']
+        ctx['event']('approved')
+        return True
+    return [_recovery_fixture(args,root,'counted-fresh-carried-comparison',configure,hook,'design')]
+
+
+# bookends:LE-188 — public invalid-write refusals preserve context and allow conforming recovery.
+def admission_recovery(args, root):
+    """Six declared AC-1 controls through real append; no semantic judging."""
+    directory = root / 'admission-controls'
+    directory.mkdir()
+    marker = directory / 'validator-unavailable'
+    shim = directory / 'provider-transport.py'
+    real_provider = str(Path(args.software).resolve())
+    shim.write_text(
+        '#!' + sys.executable + '\n'
+        'import json, os, pathlib, subprocess, sys\n'
+        'if sys.argv[1:]:\n'
+        '    os.execv(' + repr(real_provider) + ', [' + repr(real_provider)
+        + ', *sys.argv[1:]])\n'
+        'payload = sys.stdin.buffer.read()\n'
+        'packet = json.loads(payload) if payload else {}\n'
+        'if packet.get("operation") == "admit" and pathlib.Path('
+        + repr(str(marker)) + ').exists():\n'
+        '    sys.stderr.write("SCRIPTED required admission transport unavailable\\n")\n'
+        '    sys.exit(74)\n'
+        'result = subprocess.run([' + repr(real_provider)
+        + ', *sys.argv[1:]], input=payload)\n'
+        'sys.exit(result.returncode)\n')
+    shim.chmod(0o755)
+    outcome = {'status': 'blocked', 'mechanical_only': True,
+               'reason': 'Required integrated admission has not been observed.',
+               'cases': _recovery_admission_prerequisites([])['cases'],
+               'success_controls': []}
+
+    def configure(profile, repository, artifacts):
+        _recovery_policies(profile, ['intent-review'])
+
+    def snapshot(ctx):
+        value = _recovery_snapshot(ctx)
+        with sqlite3.connect(ctx['database'].resolve().as_uri() + '?mode=rw',
+                             uri=True) as database:
+            # WAL sidecars need initialization; keep SQL strictly read-only.
+            database.execute('PRAGMA query_only=ON')
+            row = database.execute(
+                'SELECT last_sequence FROM runs WHERE id = ?',
+                (ctx['run_id'],)).fetchone()
+        assert row is not None, 'Fixture run must exist.'
+        value['last_sequence'] = row[0]
+        return value
+
+    def attempt(ctx, name, kind, data, *, rule=None, needle=None, unavailable=False):
+        captures = ctx['work'] / 'admission-controls'
+        captures.mkdir(exist_ok=True)
+        candidate = captures / (name + '.candidate.json')
+        with candidate.open('x') as output:
+            json.dump(data, output, indent=2)
+        before = snapshot(ctx)
+        if unavailable:
+            marker.write_text('Only the required admit transport is unavailable.\n')
+        try:
+            result = ctx['_recovery_log'].execute(
+                [ctx['engine'], '--database', ctx['database'], '--config', ctx['config'],
+                 '--json', 'append', '--record-id', name, ctx['run_id'], kind,
+                 '@' + str(candidate)], cwd=ctx['repository'], raw=True)
+        finally:
+            if unavailable:
+                marker.unlink()
+        response = json.loads(result.stdout)
+        after = snapshot(ctx)
+        for label, value in [('before', before), ('response', response), ('after', after)]:
+            with (captures / (name + '.' + label + '.json')).open('x') as output:
+                json.dump(value, output, indent=2)
+        assert before == after, (name, before, after)
+        assert name not in {r['id'] for r in after['context']}, name
+        assert result.returncode != 0, response
+        if unavailable:
+            assert response['status'] == 'error' and response['code'] == 'provider-execution-failed', response
+            assert 'provider-exited-nonzero' in response['message'] and 'exit code 74' in response['message'], response
+        else:
+            assert response['status'] == 'rejected' and response['code'] == 'record-refused', response
+            assert response['details']['record_id'] == name and response['details']['rule'] == rule, response
+            assert needle in response['details']['message'], response
+        return {'scenario': name, 'criterion': 'AC-1', 'status': 'passed',
+                'public_refusal_proved': True, 'candidate': str(candidate),
+                'record_id': name, 'code': response['code'], 'rule': rule,
+                'candidate_sha256': hashlib.sha256(candidate.read_bytes()).hexdigest(),
+                'context_history_state_visit_sequence_unchanged': True,
+                'captures': str(captures)}
+
+    def success(ctx, name, kind, data):
+        captures = ctx['work'] / 'admission-controls'
+        captures.mkdir(exist_ok=True)
+        refused_candidate = captures / (name + '.candidate.json')
+        if refused_candidate.exists():
+            assert json.loads(refused_candidate.read_bytes()) == data
+        before = snapshot(ctx)
+        if refused_candidate.exists():
+            stored = ctx['call']('append', '--record-id', name, ctx['run_id'], kind,
+                                 '@' + str(refused_candidate))
+        else:
+            stored = append(ctx, kind, data, name)
+        assert stored['status'] == 'completed', stored
+        after = snapshot(ctx)
+        assert after['context'][:-1] == before['context']
+        record = after['context'][-1]
+        assert record['id'] == name and record['kind'] == kind and record['data'] == data
+        assert after['history'][:-1] == before['history']
+        assert after['last_sequence'] == before['last_sequence'] + 1
+        assert after['state'] == before['state'] and after['visit'] == before['visit']
+        for label, value in [('before', before), ('response', stored), ('after', after)]:
+            with (captures / (name + '.success.' + label + '.json')).open('x') as output:
+                json.dump(value, output, indent=2)
+        return {'record_id': name, 'kind': kind, 'status': 'completed',
+                'exact_data_persisted': True, 'one_context_history_sequence_append': True,
+                'same_refused_id_and_payload_replayed': refused_candidate.exists(),
+                'capture_prefix': name + '.success',
+                'refused_candidate_sha256': hashlib.sha256(refused_candidate.read_bytes()).hexdigest()
+                    if refused_candidate.exists() else None}
+
+    def hook(phase, ctx):
+        if phase != 'intent-review':
+            return False
+        advertised = bool(ctx['show']()['result'].get('workflow_graph', {}).get('admit', False))
+        if not advertised:
+            outcome.update(observed_workflow_admit=False)
+            ctx['_ac1_result'] = copy.deepcopy(outcome)
+            return False
+        intent_raw = (ctx['artifacts'] / 'intent.json').read_bytes()
+        intent_bytes = intent_raw.decode('utf-8')
+        intent = json.loads(intent_bytes)
+        baseline = {'revision': intent['revision'], 'locator': 'intent.json',
+                    'sha256': 'sha256:' + hashlib.sha256(intent_raw).hexdigest(),
+                    'json_bytes': intent_bytes}
+        steering = {'target': {'kind': 'all'},
+                    'instruction': 'SCRIPTED exact retained baseline; mechanical admission control only.',
+                    'intent_baseline': baseline}
+        policy = ctx['profile']['review_policies']['intent-review'][0]
+        (ctx['artifacts'] / 'ac1-citation.txt').write_text('Scripted citation control.\n')
+        review = {'gate': 'intent-review', 'policy_id': policy['id'],
+                  'subject': 'intent.json', 'subject_revision': intent['revision'],
+                  'config_version': ctx['profile']['config_version'],
+                  'review_stage': 'aggregate', 'group': policy['group'],
+                  'author': {'name': 'scripted-ac1-reviewer', 'kind': 'agent'},
+                  'review_contract_version': 3, 'assessment_id': 'ac1-conforming-control',
+                  'result': 'pass', 'findings': '',
+                  'grounds': {'reason': 'SCRIPTED mechanical admission fixture, not semantic review.',
+                              'evidence': [{'locator': 'ac1-citation.txt#L1'}]}}
+        cases = []
+        bad = copy.deepcopy(steering)
+        bad['intent_baseline']['sha256'] = 'sha256:' + '0' * 64
+        assert bad['intent_baseline']['sha256'] != baseline['sha256']
+        cases.append(attempt(ctx, 'direct-steering-bad-digest', 'user-steering', bad,
+                             rule='steering-shape-references', needle='exact-byte digest'))
+        bad = copy.deepcopy(steering)
+        bad['intent_baseline']['revision'] = 'different-' + baseline['revision']
+        cases.append(attempt(ctx, 'direct-steering-bad-revision', 'user-steering', bad,
+                             rule='steering-shape-references', needle='revision disagrees'))
+        bad = copy.deepcopy(steering)
+        bad['supersedes'] = ['no-earlier-steering']
+        cases.append(attempt(ctx, 'direct-steering-invalid-supersedes', 'user-steering', bad,
+                             rule='steering-shape-references', needle='unknown or non-earlier steering'))
+        bad = copy.deepcopy(review)
+        bad['grounds']['evidence'][0]['locator'] = 'ac1-citation.txt#L2'
+        cases.append(attempt(ctx, 'direct-evidence-out-of-bounds', 'review-evidence', bad,
+                             rule='review-shape-policy', needle='outside the source'))
+        bad = copy.deepcopy(review)
+        bad['grounds']['evidence'][0]['locator'] = 'ac1-citation.txt'
+        cases.append(attempt(ctx, 'direct-evidence-no-selector', 'review-evidence', bad,
+                             rule='review-shape-policy', needle='selector'))
+        cases.append(attempt(ctx, 'required-validator-unavailable', 'user-steering', steering,
+                             unavailable=True))
+        controls = [success(ctx, 'required-validator-unavailable', 'user-steering', steering),
+                    success(ctx, 'ac1-valid-review', 'review-evidence', review)]
+        _recovery_ledger(ctx, 'intent-review', 'intent.json', record_id='ac1-current-ledger')
+        ctx['event']('approved')
+        outcome.update(status='passed', reason='All six direct-append controls and conforming successors completed.',
+                       observed_workflow_admit=True, cases=cases, success_controls=controls,
+                       checked_success_transition='intent-review approved to design',
+                       real_provider={'path': real_provider,
+                                      'sha256': hashlib.sha256(Path(real_provider).read_bytes()).hexdigest()},
+                       transport_shim={'path': str(shim), 'sha256': hashlib.sha256(shim.read_bytes()).hexdigest(),
+                                       'scope': 'Byte-delegating transport; only admit becomes unavailable while marker exists.'})
+        ctx['_ac1_result'] = copy.deepcopy(outcome)
+        return True
+
+    fixture_args = SimpleNamespace(engine=args.engine, software=str(shim))
+    receipt = _recovery_fixture(fixture_args, directory, 'public-append', configure, hook, 'design')
+    outcome['fixture'] = receipt
+    (directory / 'ac1-outcome.json').write_text(json.dumps(outcome, indent=2))
+    assert outcome['status'] == 'passed', 'AC-1 admission not advertised: retain blocked outcome, not passing proof.'
+    assert len(outcome['cases']) == 6 and all(row['public_refusal_proved'] for row in outcome['cases'])
+    return outcome
+
+
+def _recovery_admission_prerequisites(receipts):
+    advertised = any(receipt['workflow_admit'] for receipt in receipts)
+    status = 'not-run' if advertised else 'blocked'
+    return {'status':status, 'observed_workflow_admit':advertised,
+        'reason':'Complete C admission migration/production wiring and public parity proof remain controller-owned.',
+        'cases':[{'scenario':name,'criterion':'AC-1','status':status,'public_refusal_proved':False}
+                 for name in ['direct-steering-bad-digest','direct-steering-bad-revision','direct-steering-invalid-supersedes',
+                              'direct-evidence-out-of-bounds','direct-evidence-no-selector','required-validator-unavailable']]}
+
 def main():
     parser = argparse.ArgumentParser()
     for key in ['engine','software','policy','research','checker','output-root']:
         parser.add_argument('--'+key)
     parser.add_argument('--self-test',action='store_true')
+    parser.add_argument('--scenario',choices=['all','advice-recovery','evidence-recovery','comparison-recovery','admission-recovery'],default='all')
     args = parser.parse_args()
     # Bare invocation is the recognized CI collection form; full proof uses the parameterized run below.
     if args.self_test or len(sys.argv) == 1:
         self_test()
         return
-    for key in ['engine','software','policy','research','checker','output_root']:
+    required = ['engine','software','output_root'] if args.scenario != 'all' else ['engine','software','policy','research','checker','output_root']
+    for key in required:
         if not getattr(args,key):
             parser.error('--'+key.replace('_','-')+' is required')
         setattr(args,key,str(Path(getattr(args,key)).resolve()))
     root = Path(args.output_root)
+    if args.scenario != 'all':
+        assert root != ROOT and not root.is_relative_to(ROOT), 'Proof root must be external.'
+        assert not root.exists() or not any(root.iterdir()), 'Use a fresh proof root; preserve original captures.'
     root.mkdir(parents=True,exist_ok=True)
     trap = root / 'trap-bin'
     trap.mkdir(exist_ok=True)
@@ -2154,6 +3511,25 @@ def main():
         script.write_text('#!/bin/sh\nprintf "%s\\n" "$0" >> '+json.dumps(str(sentinel))+'\nexit 99\n')
         script.chmod(0o755)
     os.environ['PATH'] = str(trap)+os.pathsep+os.environ['PATH']
+    if args.scenario == 'admission-recovery':
+        outcome = admission_recovery(args,root)
+        assert not sentinel.exists(), 'External execution trap fired.'
+        (root / 'recovery-outcome.json').write_text(json.dumps({'scenario':args.scenario,
+            'status':'passed','mechanical_only':True,'AC-1':outcome},indent=2))
+        print('external-work admission-recovery passed; six public controls and conforming checked completion')
+        return
+    if args.scenario != 'all':
+        selected = {'advice-recovery':advice_recovery,'evidence-recovery':evidence_recovery,'comparison-recovery':comparison_recovery}
+        receipts = selected[args.scenario](args,root)
+        assert not sentinel.exists(), 'External execution trap fired.'
+        (root / 'recovery-outcome.json').write_text(json.dumps({'scenario':args.scenario,'status':'passed',
+            'mechanical_only':True,'receipts':receipts,'AC-1':_recovery_admission_prerequisites(receipts)},indent=2))
+        print('external-work '+args.scenario+' passed; AC-1 admission prerequisite remains separately blocked')
+        return
+    recovery_receipts = advice_recovery(args,root) + evidence_recovery(args,root) + comparison_recovery(args,root)
+    admission_outcome = admission_recovery(args,root)
+    (root / 'recovery-outcome.json').write_text(json.dumps({'status':'passed','mechanical_only':True,
+        'receipts':recovery_receipts,'AC-1':admission_outcome},indent=2))
     retirement_root = root / 'retirement'
     retirement_root.mkdir()
     retirement(args,retirement_root)
@@ -2175,7 +3551,13 @@ def main():
         SimpleNamespace(engine=args.engine,provider=args.software,data_root=str(ROOT),mode='source'),
         ROOT / 'crates/software-change-provider/data/configs/minimal.json',root,
         exercise=owner_update_hook))
+    retention_minimal_profile(args,software_runs[-1])
     provider_specific(args,root)
+    retention_provider_runs(args,root)
+    retained_work = retention_software_revisions(args,root)
+    retention_software_overrides(args,root)
+    retention_software_approval_exits(args,root)
+    reclaim_legacy_catalog(args,root,retained_work)
     early_review_briefs(args,root)
     generated = raw([sys.executable,ROOT / 'scripts/generate-prd-journey.py','--mode','source',
                      '--engine',args.engine,'--provider',args.research,'--checker',args.checker,

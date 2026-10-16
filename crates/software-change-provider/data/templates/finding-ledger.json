@@ -17,7 +17,7 @@
           "id": "review-evidence-1"
         },
         "policy_id": "intent-faithful",
-        "statement": "Accepted in-scope material finding after driver triage.",
+        "summary": "Driver explanation only; omitted statement derives exact immutable source findings.",
         "disposition": "accepted",
         "reason": "The driver accepted the candidate and routed it to the owning phase.",
         "owner_phase": "design",

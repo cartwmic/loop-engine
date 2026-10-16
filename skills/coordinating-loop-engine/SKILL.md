@@ -14,9 +14,9 @@ Outcome: each driver finishes or returns a durable blocker independently of chat
    skill at its crate-local skills directory. Generate-PRD additionally requires
    using-generate-prd beside the research skill. The coordinator does not replace policy.
 3. Confirm exact profile bytes/hash and separate external role/model commands,
-   budget and proof owner. Verify model availability before each launch; no fallback.
+   owner-set spend/resource limits (none by default) and proof owner. Verify model availability before each launch; no fallback.
 4. Give each driver a durable handoff: outcome, provider/skill, working directory,
-   source references, write ownership, confirmations, serial dependency budget,
+   source references, write ownership, confirmations, serial dependency closure,
    escalation owner, catalog/run identity, artifact locators, next observation and
    return destination. Do not copy test isolation into production without permission.
 5. Observe each run passively with monitor or status show. External execution remains
@@ -26,8 +26,14 @@ Outcome: each driver finishes or returns a durable blocker independently of chat
 6. A blocked driver returns completed outcomes, retained failed outputs, unresolved
    cleanup/ownership, concrete blocker, required decision and resume references.
    Keep successful peers independent; do not restart them to unblock another.
-7. Resume from current action/full show and actual files, not a chat summary. Budget
-   serial closure, proof and review; escalate before expensive unapproved reruns.
+7. Resume from current action/full show and actual files, not a chat summary. Plan
+   serial closure, proof and review; ordinary authorized reruns need no new approval.
+   Set no outer kill deadline absent an owner limit, explicit resource constraint or
+   justified acceptance/execution need. Waiting/polling never terminates work. Stop for
+   owner cancellation, such a limit or a stall diagnosed from observable progress,
+   never silence or elapsed time alone. Preserve the diagnosis and original failed
+   attempt; verify process ownership/cleanup and no overlapping writer before retry.
+   Escalate scope/acceptance changes or exceeding owner-set spend/resource limits.
 8. Separate execution facts, conformance and independent judgment in final handoff.
    Preserve pending calibration, Git authorization and hosted-delivery obligations.
 

@@ -28,11 +28,24 @@ For predictable artifact ownership, copy the profile and set `artifact_root` to 
 
 Start a run with the profile through `loop-engine start`, using a dedicated database and explicit provider TOML whose command is the absolute built provider path. The [skill](skills/using-software-change-provider/SKILL.md) owns input preparation, commission, review intake and progression; load it before driving a run. Early commissions with `missing_inputs` are not ready. External reviewers return judgments and drivers explicitly append accepted evidence and send events after fresh action/full observations.
 
+### Optional narratives and owner checkpoints
+
+The current source provider's `minimal-15`, `standard-15` and `high-rigor-15` profiles default both options off. Enable selected phases during setup, before confirming and starting the run:
+
 ```sh
+target/debug/software-change setup --rigor standard --decline-advice --output /absolute/profile.json --set narrative.design=true --set checkpoint.design=true
 target/debug/loop-engine --help
 ```
 
+The output profile and `profile.json.explain.json` expose the selected lists and materialized narrative review policies. Narratives can cover design, plan and validation; checkpoints can cover intent, design, plan, implementation and validation. Use `false` to disable a phase before start. Options, review stages and author floors freeze at start; editing the source profile cannot change an active run. Existing `-14` runs retain their obligations and runtime. The installed 0.24.1 predecessor does not provide these options.
+
+After configured JSON reviews clear, each selected phase adds a narrative draft and configured ordinary/challenge narrative reviews. Separate `<phase>-narrative.md` files remain readable among the run's artifacts; `<phase>-narrative.json` binds each to its exact approved JSON revision and bytes. Later phases continue to use the JSON. Preserve the artifact directory and the last reviewed markdown; deleting the directory loses the narratives.
+
+A configured `<phase>-checkpoint` waits for an `owner-decision` about the current narrative binding, or the artifact when no narrative is enabled. Artifact rejection returns to the phase draft for a new revision and review. Narrative rejection requires a new narrative identity and review while unchanged artifact reviews remain valid. Decisions retain the owner's verbatim words in history; actor identities are conventions without human authentication. Owner approval leaves proof, criterion/goal and reconciliation duties in force. Load the [skill's narrative/checkpoint procedure](skills/using-software-change-provider/SKILL.md#optional-narratives-and-owner-checkpoints) for binding, commissioning, decision intake and recovery.
+
 Use root `README.md` for a first-run catalog example and root `AGENTS.md` for repository operations (paths relative to the checkout root). Follow the [local agent guide](AGENTS.md) when editing this crate.
+
+Runs started with this provider retain approved artifacts in the catalog: whenever a checked approval or an owner override moves a run out of a phase, the engine stores that phase's exact bytes as a `retained-artifacts` context record (intent.json; design.json; plan.json; implementation-report.json with reconciliation.json; validation-report.json). Drafts between exits are not kept; an unchanged re-exit references the earlier copy. Read them from full `show` after the artifact files are deleted.
 
 ## Validation
 

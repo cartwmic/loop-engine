@@ -26,8 +26,8 @@ The engine never executes agents, advisors or proof commands.
 
 Display and hash the exact per-run profile, confirm its identity, all live policies,
 groups/stages, self-review rules and author counts with the user, and rehash before
-start. Separately confirm external role/model commands, write ownership, budget and
-proof owner. Never substitute a model or silently reduce an axis/floor.
+start. Separately confirm external role/model commands, write ownership, owner-set
+spend/resource limits (none by default) and proof owner. Never substitute a model or silently reduce an axis/floor.
 Started runs retain frozen policy; inspect effective author-counts and use only
 explicit owner-attested amendments for supported count changes.
 
@@ -92,6 +92,9 @@ projection while retaining original text. Top-level self_review must be truthful
 explicitly enabled for eligible authors by the frozen profile. Declared current target authors
 then count once as labeled self-review, not independent or cold review. Required counts
 change only through authorized durable author-count amendment.
+
+Passing semantic review retains the target's exact bytes as an engine-committed
+`retained-artifacts` record; keep the target unchanged until the event completes.
 
 ## Explicit historical review context
 

@@ -19,12 +19,14 @@ pub use advice::{
     AdviceQuestion, AdviceRequest, AdviceResponse, AdviceScoreLevel, ADVICE_CAPTURE_KIND,
     ADVICE_COMMAND_INPUT_KEY, ADVICE_PROTOCOL_VERSION,
 };
-pub(crate) use advice_transition::{unanswered_due_occasions, validate_advice_exception};
 pub use advice_transition::{
-    AdviceAuthor, AdviceDeparture, AdviceDepartureMap, AdviceExceptionAttestation, AdviceOriginal,
-    ExternalAdviceAnswer, ADVICE_ANSWER_RECORD_KIND, ADVICE_APPLICABILITY_RECORD_KIND,
-    ADVICE_DEPARTURES_INPUT_KEY, ADVICE_DISPOSITION_RECORD_KIND, ADVICE_OCCASION_RECORD_KIND,
+    effective_advice_policy, validate_advice_record, AdviceAuthor, AdviceDeparture,
+    AdviceDepartureMap, AdviceExceptionAttestation, AdviceOriginal, AdvicePolicyChange,
+    EffectiveAdvicePolicy, ExternalAdviceAnswer, ADVICE_ANSWER_RECORD_KIND,
+    ADVICE_APPLICABILITY_RECORD_KIND, ADVICE_DEPARTURES_INPUT_KEY, ADVICE_DISPOSITION_RECORD_KIND,
+    ADVICE_OCCASION_RECORD_KIND, ADVICE_POLICY_CHANGE_RECORD_KIND,
 };
+pub(crate) use advice_transition::{unanswered_due_occasions, validate_advice_exception};
 pub use execution_contract::{
     BindingAmendment, ContextFilter, DriverActAuthor, DriverActDocuments, DriverActEvidence,
     DriverActRequest, ExecutionOwnershipState, InvocationControls, OwnedExecution, ProcessIdentity,
@@ -32,7 +34,7 @@ pub use execution_contract::{
 };
 pub use invocation::project_invocation_status;
 pub use model::{
-    check_known_output_conflicts, AllowResponse, AssignmentLabel, CompletionMode,
+    check_known_output_conflicts, AllowResponse, AssignmentLabel, CaptureExit, CompletionMode,
     ContextAppendEffect, ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation,
     DurableEvaluationResult, EvaluationFeedback, EvaluationRequest, EvaluationResult, EventId,
     FanOutRecoveryAdapterUsage, FanOutRecoveryApproval, FanOutRecoveryDerivation,
@@ -44,20 +46,22 @@ pub use model::{
     WorkSlotBinding, WorkSlotId, WorkSlotInvocation, WorkerAttempt, Workflow, WorkflowId,
 };
 pub use operations::{
-    execute_append, execute_event, execute_history, execute_list, execute_show, execute_start,
-    execute_terminate, lineage_for_transition, project_show, request_from_snapshot, AppendRequest,
-    EventRequest, EventResult, HistoryRequest, ListRequest, ProjectionError, RequestableEvent,
-    ShowProjection, ShowRequest, StartRequest, TerminateRunRequest,
+    execute_append, execute_append_with_gateway, execute_event, execute_history, execute_list,
+    execute_show, execute_start, execute_terminate, lineage_for_transition, project_show,
+    request_from_snapshot, AppendRequest, EventRequest, EventResult, HistoryRequest, ListRequest,
+    ProjectionError, RequestableEvent, ShowProjection, ShowRequest, StartRequest,
+    TerminateRunRequest,
 };
 pub use outcome::{OperationOutcome, OperationStatus, OutcomeIssue};
 pub use ports::{
-    AppendAdviceAttemptRequest, AppendContextRequest, AppendContextResult, CarryAct, CarryRequest,
-    CheckedEvaluationSnapshot, CheckedEvaluationSnapshotRequest, CommitTransitionRequest,
-    CommitTransitionResult, CreateRunRequest, CreateRunResult, EngineOrigin, EvidenceApplicability,
-    OriginReference, Persistence, PersistenceConflict, PersistenceError, PersistenceFailure,
-    PersistenceRejection, ProviderError, ProviderGateway, ProviderResolutionError,
-    ProviderResolver, RecordDenialRequest, RecordDenialResult, RunSummary, ShowData,
-    TerminateRequest, TerminateResult, ENGINE_ORIGIN_KEY, EVIDENCE_APPLICABILITY_KIND, ORIGIN_KEY,
+    Admission, AdmitRequest, AppendAdviceAttemptRequest, AppendContextRequest, AppendContextResult,
+    AppendSnapshot, CandidateRecord, CarryAct, CarryRequest, CheckedEvaluationSnapshot,
+    CheckedEvaluationSnapshotRequest, CommitTransitionRequest, CommitTransitionResult,
+    CreateRunRequest, CreateRunResult, EngineOrigin, EvidenceApplicability, OriginReference,
+    Persistence, PersistenceConflict, PersistenceError, PersistenceFailure, PersistenceRejection,
+    ProviderError, ProviderGateway, ProviderResolutionError, ProviderResolver, RecordDenialRequest,
+    RecordDenialResult, Refusal, RunSummary, ShowData, TerminateRequest, TerminateResult,
+    ENGINE_ORIGIN_KEY, EVIDENCE_APPLICABILITY_KIND, ORIGIN_KEY,
 };
 pub use workflow::{
     resolve_transition, validate_workflow, workflow_validation_errors, TransitionResolutionError,

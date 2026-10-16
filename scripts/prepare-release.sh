@@ -68,13 +68,18 @@ cargo build --locked \
   -p research-provider \
   -p bookends-check
 
-scripts/bookends-check-gate.sh
+metadata="$(cargo metadata --format-version 1 --no-deps)"
+BIN_DIR="$(printf '%s' "$metadata" | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"] + "/debug")')"
+test -x "$BIN_DIR/bookends-check"
+unset BOOKENDS_BYPASS BOOKENDS_UPDATE_STREAM BOOKENDS_REMOTE
+PATH="$BIN_DIR:$PATH" scripts/bookends-check-gate.sh
 cargo fmt --all -- --check
-dist generate --check
+python3 scripts/generate-release.py --check
 dist plan --output-format=json > /tmp/loop-engine-dist-plan.json
 python3 scripts/assert-dist-plan.py /tmp/loop-engine-dist-plan.json
 python3 scripts/assert-release-gates.py
-python3 scripts/assert-push-main-preflight.py
 
 echo "release v$version is prepared"
-echo "review Cargo.toml and Cargo.lock, then commit, tag, push, and dispatch release.yml"
+echo "review Cargo.toml and Cargo.lock; obtain separate owner authorization to commit/push"
+echo "require successful push-event ci.yml for the exact dispatched SHA, then authorize a dry-run dispatch"
+echo "only after successful dry-run proof and separate publication authorization, dispatch release.yml with tag=v$version"

@@ -4,9 +4,10 @@
 //! duties cannot drift. Bare describe emits the historical sixteen-state
 //! union. A new contract-v3 input adds the provider-owned reconciliation hop;
 //! when `review_policies` is present, only its live review states are emitted
-//! and ready/approved/passed rewire onto the next live successor.
+//! and ready/approved/passed rewire onto the next live successor. Frozen
+//! extra.narratives/checkpoints add only the selected phase-exit hops.
 
-use crate::overlay;
+use crate::{narratives, overlay};
 use loop_core::{State, Transition, WorkSlot, Workflow};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -52,7 +53,7 @@ fn bookends_citation_hint() -> String {
     ["bookends", ":LE-", "<n>"].concat()
 }
 
-/// Owning-phase check-free revise from a review state to an earlier draft.
+/// Owning-phase check-free revise to a phase draft.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OwningRevise {
     pub event: &'static str,
@@ -140,7 +141,7 @@ pub(crate) const PHASES: &[Phase] = &[
         name: "plan",
         draft_state: "plan",
         draft_title: "Plan",
-        draft_instructions: "Build the dependency graph in `crates/software-change-provider/data/templates/task-packet.md`: inspect the frozen intent `operating_context` and include per-task objective, affected user or operator paths, observable completion outcome, dependencies, source-of-truth references, deliverables, out-of-scope work, validation, and handoff contract. Require realistic black-box proof when practical or a concrete impracticality reason and substitute; leave replaceable mechanisms free inside frozen decisions. Preserve meaningful dependencies; the driver may group and execute work freely. Plan shape, not implementation prose, is the target. Before `plan-ready`, read run-frozen obligations via `show`.",
+        draft_instructions: "Build the dependency graph in `crates/software-change-provider/data/templates/task-packet.md`: inspect the frozen intent `operating_context` and include per-task objective, affected user or operator paths, observable completion outcome, dependencies, source-of-truth references, deliverables, out-of-scope work, validation, and handoff contract. Require realistic black-box proof when practical or a concrete impracticality reason and substitute; leave replaceable mechanisms free inside frozen decisions. Preserve meaningful dependencies; the driver may group and execute work freely. Split work into tasks that do not share writable files or state unless one depends on the other, and declare a dependency only where a real contract, context or hard-input need exists. Plan shape, not implementation prose, is the target. Before `plan-ready`, read run-frozen obligations via `show`.",
         draft_slot: "plan-draft",
         ready_event: "plan-ready",
         draft_revises: &[],
@@ -157,7 +158,7 @@ pub(crate) const PHASES: &[Phase] = &[
         name: "implementation",
         draft_state: "implement",
         draft_title: "Implement",
-        draft_instructions: "Perform external work against the accepted plan and frozen intent `operating_context`; do not add excluded hostile or multi-tenant requirements or waive stated outcomes and outside obligations. Document the implementation and validation report shapes using `crates/software-change-provider/data/templates/implementation-report.md` and `crates/software-change-provider/data/templates/validation-report.md`. Doc integration is part of this change: update authoritative repository documents rather than leaving a parallel change truth. Before `implementation-ready`, read run-frozen obligations via `show`. If returning from reconciliation through `revise-implementation`, preserve already-authorized document edits, do not reapply them, and finalize the implementation report/checkpoint against the current post-reconciliation tree before `implementation-ready`. If the owner rejects earlier work, choose `revise-plan` to plan, `revise-design` to design, or `revise-intent` to explore directly; no implementation report is required for these check-free routes. The driver/harness owns any external work and its cleanup; ensure your own external work is quiescent before departing. Routes preserve artifacts, context and denial history; neither engine nor provider classifies the defect or rolls back the repository. Only routes in this run's stored graph are available; upgrading does not add them to historical runs.",
+        draft_instructions: "Perform external work against the accepted plan and frozen intent `operating_context`; do not add excluded hostile or multi-tenant requirements or waive stated outcomes and outside obligations. Tasks with no dependency path between them (no chain of declared dependencies in either direction) are dispatched concurrently by default; state a reason when running them serially. Document the implementation and validation report shapes using `crates/software-change-provider/data/templates/implementation-report.md` and `crates/software-change-provider/data/templates/validation-report.md`. Doc integration is part of this change: update authoritative repository documents rather than leaving a parallel change truth. Before `implementation-ready`, read run-frozen obligations via `show`. If returning from reconciliation through `revise-implementation`, preserve already-authorized document edits, do not reapply them, and finalize the implementation report/checkpoint against the current post-reconciliation tree before `implementation-ready`. For earlier-phase defects, choose `revise-plan` to plan, `revise-design` to design, or `revise-intent` to explore directly; no implementation report is required for these check-free routes. The driver/harness owns any external work and its cleanup; ensure your own external work is quiescent before departing. Routes preserve artifacts, context and denial history; neither engine nor provider classifies the defect or rolls back the repository. Only routes in this run's stored graph are available; upgrading does not add them to historical runs.",
         draft_slot: "implement",
         ready_event: "implementation-ready",
         draft_revises: &[REVISE_PLAN, REVISE_DESIGN, REVISE_INTENT],
@@ -189,6 +190,180 @@ pub(crate) const PHASES: &[Phase] = &[
     },
 ];
 
+/// Conditional states share the owning row of PHASES; in particular intent
+/// repairs go to explore, implementation repairs to implement, and validation
+/// approval still concerns validation-report.json.
+pub(crate) const APPROVED_ARTIFACT_KIND: &str = "approved-artifact";
+pub(crate) const ARTIFACT_ADMITTED_KIND: &str = "artifact-admitted";
+pub(crate) const NARRATIVE_ADMITTED_KIND: &str = "narrative-admitted";
+pub(crate) const OWNER_DECISION_KIND: &str = "owner-decision";
+pub(crate) const NARRATIVE_READY_EVENT: &str = "narrative-ready";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NarrativeStates {
+    pub draft: &'static str,
+    pub draft_slot: &'static str,
+    pub review: &'static str,
+    pub challenge: &'static str,
+    pub subject: &'static str,
+    pub markdown: &'static str,
+    pub artifact_revise: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PhaseOptions {
+    pub phase: &'static Phase,
+    pub checkpoint: &'static str,
+    pub narrative: Option<NarrativeStates>,
+}
+
+pub(crate) const PHASE_OPTIONS: &[PhaseOptions] = &[
+    PhaseOptions {
+        phase: &PHASES[0],
+        checkpoint: "intent-checkpoint",
+        narrative: None,
+    },
+    PhaseOptions {
+        phase: &PHASES[1],
+        checkpoint: "design-checkpoint",
+        narrative: Some(NarrativeStates {
+            draft: "design-narrative",
+            draft_slot: "design-narrative-draft",
+            review: "design-narrative-review",
+            challenge: "design-narrative-adversarial-review",
+            subject: "design-narrative.json",
+            markdown: "design-narrative.md",
+            artifact_revise: "revise-design",
+        }),
+    },
+    PhaseOptions {
+        phase: &PHASES[2],
+        checkpoint: "plan-checkpoint",
+        narrative: Some(NarrativeStates {
+            draft: "plan-narrative",
+            draft_slot: "plan-narrative-draft",
+            review: "plan-narrative-review",
+            challenge: "plan-narrative-adversarial-review",
+            subject: "plan-narrative.json",
+            markdown: "plan-narrative.md",
+            artifact_revise: "revise-plan",
+        }),
+    },
+    PhaseOptions {
+        phase: &PHASES[3],
+        checkpoint: "implementation-checkpoint",
+        narrative: None,
+    },
+    PhaseOptions {
+        phase: &PHASES[4],
+        checkpoint: "validation-checkpoint",
+        narrative: Some(NarrativeStates {
+            draft: "validation-narrative",
+            draft_slot: "validation-narrative-draft",
+            review: "validation-narrative-review",
+            challenge: "validation-narrative-adversarial-review",
+            subject: "validation-narrative.json",
+            markdown: "validation-narrative.md",
+            artifact_revise: "revise-validation",
+        }),
+    },
+];
+
+pub(crate) fn option_enabled(input: Option<&Value>, key: &str, phase: &str) -> bool {
+    input
+        .and_then(|v| v.get("extra"))
+        .and_then(|v| v.get(key))
+        .and_then(Value::as_array)
+        .is_some_and(|values| values.iter().any(|v| v.as_str() == Some(phase)))
+}
+
+/// Source ownership, including inserted states and the implementation-owned
+/// reconciliation hop. This says nothing about which states a frozen run has.
+pub(crate) fn phase_options_for_state(source: &str) -> Option<&'static PhaseOptions> {
+    PHASE_OPTIONS.iter().find(|options| {
+        let phase = options.phase;
+        source == phase.draft_state
+            || source == phase.parent_review
+            || source == phase.adversarial_review
+            || source == options.checkpoint
+            || (source == RECONCILIATION_STATE && phase.name == "implementation")
+            || options
+                .narrative
+                .is_some_and(|n| [n.draft, n.review, n.challenge].contains(&source))
+    })
+}
+
+/// One order/ownership rule for all active states, including conditional hops.
+fn earlier_phase_revises(source: &str) -> impl Iterator<Item = OwningRevise> {
+    let owner = phase_options_for_state(source).map(|o| o.phase.name);
+    let index = PHASES
+        .iter()
+        .position(|p| Some(p.name) == owner)
+        .unwrap_or(0);
+    [
+        REVISE_INTENT,
+        REVISE_DESIGN,
+        REVISE_PLAN,
+        REVISE_IMPLEMENTATION,
+    ]
+    .into_iter()
+    .take(index)
+    .rev()
+}
+
+const EARLIER_DRAFT_GUIDANCE: &str = "In newly started runs, every active state offers check-free `revise-intent`, `revise-design`, `revise-plan` and `revise-implementation` for whichever of those phases is earlier than its owning phase, directly to `explore`, `design`, `plan` and `implement` respectively. No artifact, report, owner rejection or override is required. These routes preserve artifacts, context, findings and history, roll back nothing, and grant no approval; every forward check still applies, including a fresh owner decision on the current revision at an enabled checkpoint. Earlier-started runs keep their stored graphs.";
+
+pub(crate) fn checkpoint_subject(options: &PhaseOptions, narrative_enabled: bool) -> &'static str {
+    options
+        .narrative
+        .filter(|_| narrative_enabled)
+        .map_or(options.phase.subject, |n| n.subject)
+}
+
+/// Routing-only contract for T5. These duties do not evaluate freshness,
+/// decisions, proof or completion. Use the exact stored edge, not a remembered
+/// terminal review ID; completion always reads validation-report.json.
+#[allow(dead_code)] // Consumed by the separate evaluator implementation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PhaseExitDuties {
+    pub completion_subject: Option<&'static str>,
+    pub record_accepted_implementation_proof: bool,
+    /// The last artifact hop entering a configured narrative/checkpoint.
+    /// With omitted review rooms this can be a draft or reconciliation hop.
+    pub approved_artifact: Option<&'static Phase>,
+}
+
+#[allow(dead_code)] // Routing API handed to T5; deliberately no gates here.
+pub(crate) fn phase_exit_duties(source: &str, event: &str, target: &str) -> PhaseExitDuties {
+    let approving = event == "approved"
+        || event == "passed"
+        || event == RECONCILIATION_READY_EVENT
+        || PHASES.iter().any(|p| event == p.ready_event);
+    let owner = phase_options_for_state(source);
+    let artifact_source = owner.is_some_and(|o| {
+        [
+            o.phase.draft_state,
+            o.phase.parent_review,
+            o.phase.adversarial_review,
+        ]
+        .contains(&source)
+            || source == RECONCILIATION_STATE
+    });
+    PhaseExitDuties {
+        completion_subject: (event == "passed" && target == "end").then_some(PHASES[4].subject),
+        record_accepted_implementation_proof: approving
+            && target == PHASES[4].draft_state
+            && owner.is_some_and(|o| o.phase.name == "implementation"),
+        approved_artifact: owner
+            .filter(|o| {
+                approving
+                    && artifact_source
+                    && (target == o.checkpoint || o.narrative.is_some_and(|n| target == n.draft))
+            })
+            .map(|o| o.phase),
+    }
+}
+
 fn reconciliation_instructions(bookends_enabled: bool) -> String {
     let mode = if bookends_enabled {
         "With Bookends enabled, reread the actual accepted PRD wording and every authoritative document it names; preserve live traceability and never treat a related ID as semantic coverage."
@@ -213,8 +388,9 @@ pub(crate) enum TransitionDuties {
         subject: &'static str,
         gate: Option<&'static str>,
     },
-    /// A checked handoff whose destination owns the next artifact. It has no
-    /// report, checkpoint, or other artifact prerequisite of its own.
+    /// A checked handoff with no source-artifact prerequisite. Reconciliation
+    /// entry uses this; checkpoint exits require T5's separate owner-decision
+    /// evaluation (and freshness on approval, never on rejection).
     CheckedNoArtifact,
     /// Check-free revise events are zero-obligation.
     CheckFree,
@@ -222,6 +398,9 @@ pub(crate) enum TransitionDuties {
 
 /// Look up evaluation duties for a source state and event from the phase table.
 pub(crate) fn duties_for(source: &str, event: &str) -> Option<TransitionDuties> {
+    if earlier_phase_revises(source).any(|revise| revise.event == event) {
+        return Some(TransitionDuties::CheckFree);
+    }
     if source == RECONCILIATION_STATE {
         if event == RECONCILIATION_READY_EVENT {
             return Some(TransitionDuties::Checked {
@@ -231,6 +410,43 @@ pub(crate) fn duties_for(source: &str, event: &str) -> Option<TransitionDuties> 
         }
         if event == REVISE_IMPLEMENTATION.event {
             return Some(TransitionDuties::CheckFree);
+        }
+    }
+
+    for options in PHASE_OPTIONS {
+        if source == options.checkpoint {
+            // T5 checks owner records, with freshness only on approving exits.
+            // No artifact prerequisite may trap a checked rejection route.
+            return (matches!(event, "approved" | "revise")
+                || (event == "revise-narrative" && options.narrative.is_some()))
+            .then_some(TransitionDuties::CheckedNoArtifact)
+            .or_else(|| {
+                (options.phase.next_draft.is_none() && event == "passed")
+                    .then_some(TransitionDuties::CheckedNoArtifact)
+            });
+        }
+        if let Some(n) = options.narrative {
+            if [n.draft, n.review, n.challenge].contains(&source) {
+                if event == n.artifact_revise || (source != n.draft && event == "revise") {
+                    return Some(TransitionDuties::CheckFree);
+                }
+                if (source == n.draft && event == NARRATIVE_READY_EVENT)
+                    || (source != n.draft && event == "approved")
+                    || (options.phase.next_draft.is_none() && event == "passed")
+                {
+                    return Some(TransitionDuties::Checked {
+                        subject: n.subject,
+                        gate: if source == n.review {
+                            Some(n.review)
+                        } else if source == n.challenge {
+                            Some(n.challenge)
+                        } else {
+                            None
+                        },
+                    });
+                }
+                return None;
+            }
         }
     }
 
@@ -294,12 +510,19 @@ fn review_duties(phase: &Phase, gate: &'static str, event: &str) -> Option<Trans
     None
 }
 
-/// Gate identifiers derived from the phase table, in table order.
+/// Artifact gate identifiers in phase order, then the conditional narrative
+/// gate catalog. Catalog membership does not enable a state.
 #[cfg(test)]
 pub(crate) fn phase_table_gate_ids() -> Vec<&'static str> {
     PHASES
         .iter()
         .flat_map(|phase| [phase.parent_review, phase.adversarial_review])
+        .chain(
+            PHASE_OPTIONS
+                .iter()
+                .filter_map(|o| o.narrative)
+                .flat_map(|n| [n.review, n.challenge]),
+        )
         .collect()
 }
 
@@ -344,6 +567,7 @@ pub(crate) fn describe_workflow(initial_input: Option<&Value>) -> Result<Workflo
         bookends_enabled,
         reconciliation_enabled,
         semantic_coverage,
+        initial_input,
     )?;
     apply_driver_act_opt_in(&mut workflow, initial_input)?;
     if initial_input.is_some_and(|v| matches!(v["contract_version"].as_u64(), Some(2..=4))) {
@@ -476,10 +700,36 @@ fn stitch(
     bookends_enabled: bool,
     reconciliation_enabled: bool,
     semantic_coverage: bool,
+    initial_input: Option<&Value>,
 ) -> Result<Workflow, String> {
     if let Some(value) = review_policies {
         if !value.is_object() {
             return Err("`review_policies` must be an object".to_owned());
+        }
+    }
+
+    for (key, allowed) in [
+        ("narratives", narratives::NARRATIVE_PHASES),
+        ("checkpoints", narratives::CHECKPOINT_PHASES),
+    ] {
+        if let Some(value) = initial_input
+            .and_then(|v| v.get("extra"))
+            .and_then(|v| v.get(key))
+        {
+            let values = value
+                .as_array()
+                .ok_or_else(|| format!("extra.{key} must be an array"))?;
+            let mut seen = BTreeSet::new();
+            for value in values {
+                let phase = value
+                    .as_str()
+                    .ok_or_else(|| format!("extra.{key} entries must be phase strings"))?;
+                if !allowed.contains(&phase) || !seen.insert(phase) {
+                    return Err(format!(
+                        "extra.{key} contains unknown or duplicate phase `{phase}`"
+                    ));
+                }
+            }
         }
     }
 
@@ -496,6 +746,30 @@ fn stitch(
         if adversarial_live {
             hops.push(Hop::Adversarial(phase));
         }
+        let options = PHASE_OPTIONS
+            .iter()
+            .find(|o| o.phase.name == phase.name)
+            .expect("every phase has an options row");
+        let narrative_enabled = option_enabled(initial_input, "narratives", phase.name);
+        if narrative_enabled {
+            let narrative = options.narrative.expect("validated narrative phase");
+            let (ordinary, challenge) = live_review_pair(
+                narrative.review,
+                narrative.challenge,
+                phase.name,
+                review_policies,
+            )?;
+            hops.push(Hop::Narrative(options));
+            if ordinary {
+                hops.push(Hop::NarrativeReview(options));
+            }
+            if challenge {
+                hops.push(Hop::NarrativeChallenge(options));
+            }
+        }
+        if option_enabled(initial_input, "checkpoints", phase.name) {
+            hops.push(Hop::Checkpoint(options, narrative_enabled));
+        }
     }
 
     let last_index = hops
@@ -507,7 +781,13 @@ fn stitch(
     let mut transitions = Vec::new();
     let mut work_slots = Vec::new();
     for (index, hop) in hops.iter().copied().enumerate() {
-        states.push(hop.state(bookends_enabled, semantic_coverage));
+        let mut state = hop.state(bookends_enabled, semantic_coverage);
+        if !matches!(hop, Hop::Parent(_) | Hop::Adversarial(_))
+            && earlier_phase_revises(hop.state_id()).next().is_some()
+        {
+            state.instructions = format!("{} {EARLIER_DRAFT_GUIDANCE}", state.instructions);
+        }
+        states.push(state);
         let event = hop_event(hop, index == last_index);
         let target = if index == last_index {
             "end"
@@ -551,7 +831,68 @@ fn stitch(
                 ));
             }
         }
-        work_slots.push(hop.slot(event));
+        if let Hop::Narrative(options)
+        | Hop::NarrativeReview(options)
+        | Hop::NarrativeChallenge(options) = hop
+        {
+            let narrative = options.narrative.expect("narrative hop");
+            if !matches!(hop, Hop::Narrative(_)) {
+                transitions.push(Transition::check_free(
+                    hop.state_id(),
+                    "revise",
+                    narrative.draft,
+                ));
+            }
+            transitions.push(Transition::check_free(
+                hop.state_id(),
+                narrative.artifact_revise,
+                options.phase.draft_state,
+            ));
+        }
+        if let Hop::Checkpoint(options, narrative_enabled) = hop {
+            transitions.push(Transition::checked(
+                hop.state_id(),
+                "revise",
+                options.phase.draft_state,
+            ));
+            if narrative_enabled {
+                transitions.push(Transition::checked(
+                    hop.state_id(),
+                    "revise-narrative",
+                    options.narrative.expect("narrative enabled").draft,
+                ));
+            }
+        }
+        // Keep every pre-existing edge (including same-phase narrative repair
+        // and checked checkpoint rejection), adding only missing earlier drafts.
+        for revise in earlier_phase_revises(hop.state_id()) {
+            if !transitions.iter().any(|edge| {
+                edge.source.as_str() == hop.state_id() && edge.event.as_str() == revise.event
+            }) {
+                transitions.push(Transition::check_free(
+                    hop.state_id(),
+                    revise.event,
+                    revise.target,
+                ));
+            }
+        }
+        let mut slot = hop.slot(event);
+        if let Some(options) = phase_options_for_state(hop.state_id()).filter(|o| {
+            option_enabled(initial_input, "narratives", o.phase.name)
+                || option_enabled(initial_input, "checkpoints", o.phase.name)
+        }) {
+            slot.stdin_context_kinds
+                .extend([APPROVED_ARTIFACT_KIND, ARTIFACT_ADMITTED_KIND].map(str::to_owned));
+            if option_enabled(initial_input, "narratives", options.phase.name) {
+                slot.stdin_context_kinds
+                    .push(NARRATIVE_ADMITTED_KIND.to_owned());
+            }
+            if option_enabled(initial_input, "checkpoints", options.phase.name) {
+                slot.stdin_context_kinds
+                    .push(OWNER_DECISION_KIND.to_owned());
+            }
+        }
+        work_slots.push(slot);
     }
     states.push(State::new("end", "End", END_INSTRUCTIONS, true));
 
@@ -562,35 +903,47 @@ fn stitch(
 }
 
 fn live_reviews(phase: &Phase, review_policies: Option<&Value>) -> Result<(bool, bool), String> {
+    live_review_pair(
+        phase.parent_review,
+        phase.adversarial_review,
+        phase.name,
+        review_policies,
+    )
+}
+
+fn live_review_pair(
+    parent: &str,
+    challenge: &str,
+    phase_name: &str,
+    review_policies: Option<&Value>,
+) -> Result<(bool, bool), String> {
     let Some(policies) = review_policies else {
         return Ok((true, true));
     };
-    let parent_live = nonempty_policy_list(policies.get(phase.parent_review));
-    let adversarial_live = nonempty_policy_list(policies.get(phase.adversarial_review));
+    let parent_live = nonempty_policy_list(policies.get(parent));
+    let adversarial_live = nonempty_policy_list(policies.get(challenge));
     if adversarial_live && !parent_live {
         return Err(format!(
             "adversarial review `{}` for the {} phase is nonempty while parent review `{}` is empty or absent",
-            phase.adversarial_review, phase.name, phase.parent_review
+            challenge, phase_name, parent
         ));
     }
     if adversarial_live {
         let parent_ids = axis_ids(
-            policies
-                .get(phase.parent_review)
-                .expect("a live parent list is present"),
-            phase.parent_review,
+            policies.get(parent).expect("a live parent list is present"),
+            parent,
         )?;
         let adversarial_ids = axis_ids(
             policies
-                .get(phase.adversarial_review)
+                .get(challenge)
                 .expect("a live adversarial list is present"),
-            phase.adversarial_review,
+            challenge,
         )?;
         for id in &adversarial_ids {
             if !parent_ids.contains(id) {
                 return Err(format!(
                     "adversarial axis `{id}` on `{}` is not on the {} phase parent list `{}`",
-                    phase.adversarial_review, phase.name, phase.parent_review
+                    challenge, phase_name, parent
                 ));
             }
         }
@@ -630,6 +983,10 @@ enum Hop {
     Reconciliation,
     Parent(&'static Phase),
     Adversarial(&'static Phase),
+    Narrative(&'static PhaseOptions),
+    NarrativeReview(&'static PhaseOptions),
+    NarrativeChallenge(&'static PhaseOptions),
+    Checkpoint(&'static PhaseOptions, bool),
 }
 
 impl Hop {
@@ -639,6 +996,10 @@ impl Hop {
             Self::Reconciliation => RECONCILIATION_STATE,
             Self::Parent(phase) => phase.parent_review,
             Self::Adversarial(phase) => phase.adversarial_review,
+            Self::Narrative(o) => o.narrative.expect("narrative hop").draft,
+            Self::NarrativeReview(o) => o.narrative.expect("narrative hop").review,
+            Self::NarrativeChallenge(o) => o.narrative.expect("narrative hop").challenge,
+            Self::Checkpoint(o, _) => o.checkpoint,
         }
     }
 
@@ -674,6 +1035,29 @@ impl Hop {
                 ),
                 false,
             ),
+            Self::Narrative(o) | Self::NarrativeReview(o) | Self::NarrativeChallenge(o) => {
+                let n = o.narrative.expect("narrative hop");
+                let title = match self {
+                    Self::Narrative(_) => format!("{} narrative", o.phase.draft_title),
+                    Self::NarrativeReview(_) => format!("{} narrative review", o.phase.draft_title),
+                    _ => format!("{} narrative challenge review", o.phase.draft_title),
+                };
+                State::new(
+                    self.state_id(),
+                    title,
+                    narrative_instructions(o, n, self),
+                    false,
+                )
+            }
+            Self::Checkpoint(o, narrative_enabled) => State::new(
+                o.checkpoint,
+                format!(
+                    "{} owner checkpoint",
+                    o.phase.parent_review_title.trim_end_matches(" review")
+                ),
+                checkpoint_instructions(o, narrative_enabled),
+                false,
+            ),
             Self::Adversarial(phase) => {
                 let title = adversarial_title(phase.parent_review_title);
                 let instructions =
@@ -697,12 +1081,23 @@ impl Hop {
         if matches!(self, Self::Draft(phase) if phase.name == "implementation") {
             kinds.push(RECONCILIATION_DECISION_KIND.to_owned());
         }
-        if matches!(self, Self::Parent(_) | Self::Adversarial(_)) {
+        if matches!(
+            self,
+            Self::Parent(_)
+                | Self::Adversarial(_)
+                | Self::NarrativeReview(_)
+                | Self::NarrativeChallenge(_)
+        ) {
             kinds.extend([
                 "command-evidence".to_owned(),
                 "criterion-verdict".to_owned(),
                 "goal-verdict".to_owned(),
             ]);
+        }
+        if matches!(self, Self::Draft(phase)|Self::Parent(phase)|Self::Adversarial(phase) if phase.name=="intent")
+            || matches!(self,Self::Checkpoint(options,_) if options.phase.name=="intent")
+        {
+            kinds.push("intent-correction".to_owned());
         }
         slot.with_stdin_context_kinds(kinds)
     }
@@ -713,6 +1108,10 @@ impl Hop {
             Self::Reconciliation => RECONCILIATION_DRAFT_SLOT,
             Self::Parent(phase) => phase.parent_review,
             Self::Adversarial(phase) => phase.adversarial_review,
+            Self::Narrative(o) => o.narrative.expect("narrative hop").draft_slot,
+            Self::NarrativeReview(_) | Self::NarrativeChallenge(_) | Self::Checkpoint(_, _) => {
+                self.state_id()
+            }
         }
     }
 }
@@ -724,8 +1123,53 @@ fn hop_event(hop: Hop, last: bool) -> &'static str {
     match hop {
         Hop::Draft(phase) => phase.ready_event,
         Hop::Reconciliation => RECONCILIATION_READY_EVENT,
-        Hop::Parent(_) | Hop::Adversarial(_) => "approved",
+        Hop::Narrative(_) => NARRATIVE_READY_EVENT,
+        Hop::Parent(_)
+        | Hop::Adversarial(_)
+        | Hop::NarrativeReview(_)
+        | Hop::NarrativeChallenge(_)
+        | Hop::Checkpoint(_, _) => "approved",
     }
+}
+
+fn narrative_instructions(options: &PhaseOptions, n: NarrativeStates, hop: Hop) -> String {
+    let phase = options.phase;
+    let common = format!(
+        "The authoritative artifact is `{}`; never change its bytes during narrative work. Use the latest `approved-artifact` record for its revision and SHA-256 hash (the exact bytes), and the latest `artifact-admitted` record. The binding must cite that approval record. A changed artifact needs a new single-use artifact revision, fresh artifact reviews and a new narrative. Use check-free `{}` to return to `{}` for an artifact defect.",
+        phase.subject, n.artifact_revise, phase.draft_state,
+    );
+    match hop {
+        Hop::Narrative(_) => format!(
+            "Only now, after the configured artifact reviews have cleared, write `{}` and its binding `{}` under the run's artifact_root using `crates/software-change-provider/data/templates/narrative.md` and `crates/software-change-provider/data/narrative-schema.json`. Write plain English for an engineer without Loop Engine context. Bind the exact approved artifact subject, revision and hash and the markdown file name and hash. Choose a never-admitted `<artifact revision>/<positive counter>` revision; every rewrite needs a new counter and fresh narrative review. Request the shown checked `{}` event (or `passed` if this is the final hop). Admission records the markdown hash as `narrative-admitted`; later approvals require that latest admitted revision and unchanged markdown bytes. {common}",
+            n.markdown, n.subject, NARRATIVE_READY_EVENT,
+        ),
+        _ => {
+            let stage = if matches!(hop, Hop::NarrativeChallenge(_)) {
+                crate::commission::CHALLENGE_GUIDANCE
+            } else {
+                "Commission comprehensive independent ordinary narrative review; triage accepted findings before append."
+            };
+            format!(
+                "{stage} Use `software-change commission --slot {}` with full show. Review `{}`, `{}`, `{}` and frozen `intent.json` together under the materialized policy stages and author counts. Retain genuine `review-evidence` and a driver `finding-ledger` for the binding's composite revision; the provider executes no reviewers and judges no findings. Approvals require the latest admitted narrative revision and matching markdown hash, and the artifact must still match its latest approved revision and hash. Use check-free `revise` to rewrite only the narrative in `{}` with a new counter and fresh narrative reviews, keeping unchanged artifact reviews. {common}",
+                hop.slot_id(), n.markdown, n.subject, phase.subject, n.draft,
+            )
+        }
+    }
+}
+
+fn checkpoint_instructions(options: &PhaseOptions, narrative_enabled: bool) -> String {
+    let subject = checkpoint_subject(options, narrative_enabled);
+    let narrative = if narrative_enabled {
+        format!(" The narrative binding must carry the latest `narrative-admitted` revision and its markdown must match the admitted hash. Checked `revise-narrative` requires target `narrative` and returns to `{}`: rewrite under a new counter, re-review, then obtain a fresh owner decision; unchanged artifact reviews stay valid.", options.narrative.expect("narrative enabled").draft)
+    } else {
+        String::new()
+    };
+    format!(
+        "Wait for the owner's decision on `{subject}` at its current approved revision. Use `software-change commission --slot {}` with full show for the owner view. Append `owner-decision` with closed data {{checkpoint, subject, subject_revision, decision: approve|reject, target, reason, text, actor:{{name,kind}}}}. Set checkpoint to `{}` and subject to `{subject}`; actor has a nonempty name and kind human, agent or script. Retain the owner's words verbatim in nonempty text. A rejection needs a nonempty reason and target `artifact`{}; do not invent approval. The latest well-formed decision for this checkpoint across all revisions must approve this exact subject and revision before checked `approved` (or final `passed`). Approving exits require the artifact's latest admitted revision/hash and unchanged bytes against the latest `approved-artifact` record. Checked `revise` requires an owner rejection targeting `artifact` and returns to `{}` for a new artifact revision and fresh reviews{} and a fresh decision. Rejection routes check the recorded decision, not file freshness, so already edited files do not prevent recovery.{narrative} Decisions and rejections remain in history; an override is not owner approval.",
+        options.checkpoint, options.checkpoint,
+        if narrative_enabled { " or `narrative`" } else { "" },
+        options.phase.draft_state, if narrative_enabled { ", a new narrative" } else { "" },
+    )
 }
 
 fn adversarial_title(parent_title: &str) -> String {
@@ -742,7 +1186,8 @@ fn adversarial_instructions(
 ) -> String {
     with_bookends_guidance(
         &format!(
-            "This challenge review follows parent `{}` and must meaningfully falsify that parent's pass claim only with current supplied evidence, a violated frozen obligation, a concrete consequence for change success, and why existing validation does not resolve the issue. Reject hypothetical threats, invented requirements, silence or style complaints, and mechanism-for-its-own-sake findings; do not waive material failures. {}",
+            "{} This challenge review follows parent `{}` and must meaningfully falsify that parent's pass claim only with current supplied evidence, a violated frozen obligation, a concrete consequence for change success, and why existing validation does not resolve the issue. Reject hypothetical threats, invented requirements, silence or style complaints, and mechanism-for-its-own-sake findings; do not waive material failures. {}",
+            crate::commission::CHALLENGE_GUIDANCE,
             phase.parent_review, phase.parent_review_instructions
         ),
         bookends_enabled,
@@ -773,6 +1218,737 @@ mod tests {
     use super::*;
     use loop_core::TransitionKind;
     use serde_json::json;
+
+    fn shipped_profiles() -> Vec<Value> {
+        [
+            include_str!("../data/configs/minimal.json"),
+            include_str!("../data/configs/standard.json"),
+            include_str!("../data/configs/high-rigor.json"),
+        ]
+        .into_iter()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect()
+    }
+
+    fn enable_options(input: &mut Value, narrative_mask: usize, checkpoint_mask: usize) {
+        input["extra"]["narratives"] = json!(narratives::NARRATIVE_PHASES
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| narrative_mask & (1 << index) != 0)
+            .map(|(_, name)| *name)
+            .collect::<Vec<_>>());
+        input["extra"]["checkpoints"] = json!(narratives::CHECKPOINT_PHASES
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| checkpoint_mask & (1 << index) != 0)
+            .map(|(_, name)| *name)
+            .collect::<Vec<_>>());
+        for options in PHASE_OPTIONS {
+            if !option_enabled(Some(input), "narratives", options.phase.name) {
+                continue;
+            }
+            let n = options.narrative.unwrap();
+            for (gate, template) in [(n.review, "ordinary"), (n.challenge, "challenge")] {
+                let mut rows = input["extra"]["narrative_review"][template].clone();
+                for row in rows.as_array_mut().unwrap() {
+                    row["group"] = json!(row["group"]
+                        .as_str()
+                        .unwrap()
+                        .replace("{phase}", options.phase.name));
+                }
+                input["review_policies"][gate] = rows;
+            }
+        }
+    }
+
+    fn edge<'a>(workflow: &'a Workflow, source: &str, event: &str) -> &'a Transition {
+        workflow
+            .transitions
+            .iter()
+            .find(|edge| edge.source.as_str() == source && edge.event.as_str() == event)
+            .unwrap_or_else(|| panic!("missing {source}/{event}"))
+    }
+
+    #[test]
+    fn off_successor_graphs_match_predecessor_except_exact_accepted_deltas() {
+        use sha2::{Digest, Sha256};
+        // Captured before T4 through public describe; also exact-byte equal to
+        // installed 0.24.1 describe with the corresponding HEAD -14 profile.
+        // Preserve complete historical workflow hashes; only the exact accepted
+        // instruction/context delivery deltas below are inverted for comparison.
+        // AC-8 (intent revision 5): before hashing, apply the exact inverse of the
+        // accepted LE-184 delta (two literal instruction sentences and the listed
+        // parallelism-honest axes); any other difference from 0.24.1 fails.
+        const LE184_SENTENCES: [&str; 2] = [
+            " Split work into tasks that do not share writable files or state unless one depends on the other, and declare a dependency only where a real contract, context or hard-input need exists.",
+            " Tasks with no dependency path between them (no chain of declared dependencies in either direction) are dispatched concurrently by default; state a reason when running them serially.",
+        ];
+        let snapshots = [
+            "9ee5121cbf31c6488edac046d752072e17cd3a35f3d139a0d74bec9dd4848e15",
+            "f70cc5d07332379ba335219cee3272ac072cce98aaf7c83f4e9078e9e3aa5fc4",
+            "68ea101e7b21ccc9257456e092e34014385b8827531c7a6adee8284bccaf08ee",
+        ];
+        for (mut input, expected) in shipped_profiles().into_iter().zip(snapshots) {
+            let workflow = describe_workflow(Some(&input)).unwrap();
+            let mut value = serde_json::to_value(&workflow).unwrap();
+            // Keep historical hashes unchanged. The only new delivery delta is
+            // one correction kind on these newly described intent slots; take
+            // its exact inverse on this comparison copy, never stored workflows.
+            let mut corrected_slots = 0;
+            for slot in value["work_slots"].as_array_mut().unwrap() {
+                let is_intent = ["intent-draft", "intent-review", "intent-adversarial-review"]
+                    .contains(&slot["id"].as_str().unwrap());
+                let kinds = slot["stdin_context_kinds"].as_array_mut().unwrap();
+                assert_eq!(
+                    kinds
+                        .iter()
+                        .filter(|kind| **kind == "intent-correction")
+                        .count(),
+                    usize::from(is_intent)
+                );
+                if is_intent {
+                    kinds.retain(|kind| *kind != "intent-correction");
+                    corrected_slots += 1;
+                }
+            }
+            assert_eq!(corrected_slots, 3);
+            // New-run draft routing deliberately supersedes predecessor parity.
+            // Invert only these exact accepted additions; retain the old hashes.
+            let added = [
+                ("design", "revise-intent", "explore"),
+                ("plan", "revise-design", "design"),
+                ("plan", "revise-intent", "explore"),
+                (RECONCILIATION_STATE, "revise-plan", "plan"),
+                (RECONCILIATION_STATE, "revise-design", "design"),
+                (RECONCILIATION_STATE, "revise-intent", "explore"),
+                ("validation", "revise-plan", "plan"),
+                ("validation", "revise-design", "design"),
+                ("validation", "revise-intent", "explore"),
+            ];
+            for (source, event, target) in added {
+                let expected =
+                    serde_json::to_value(Transition::check_free(source, event, target)).unwrap();
+                let edges = value["transitions"].as_array_mut().unwrap();
+                assert_eq!(edges.iter().filter(|e| **e == expected).count(), 1);
+                edges.retain(|e| *e != expected);
+            }
+            for source in [
+                "design",
+                "plan",
+                "implement",
+                RECONCILIATION_STATE,
+                "validation",
+            ] {
+                let state = value["states"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|s| s["id"] == source)
+                    .unwrap();
+                let text = state["instructions"].as_str().unwrap();
+                assert_eq!(text.matches(EARLIER_DRAFT_GUIDANCE).count(), 1);
+                let old = text
+                    .strip_suffix(&format!(" {EARLIER_DRAFT_GUIDANCE}"))
+                    .unwrap()
+                    .to_owned();
+                state["instructions"] = json!(if source == "implement" {
+                    assert_eq!(
+                        old.matches("For earlier-phase defects, choose `revise-plan`")
+                            .count(),
+                        1
+                    );
+                    old.replacen(
+                        "For earlier-phase defects, choose `revise-plan`",
+                        "If the owner rejects earlier work, choose `revise-plan`",
+                        1,
+                    )
+                } else {
+                    old
+                });
+            }
+            for sentence in LE184_SENTENCES {
+                let mut holders: Vec<&mut Value> = value["states"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .filter(|state| {
+                        state["instructions"]
+                            .as_str()
+                            .is_some_and(|text| text.contains(sentence))
+                    })
+                    .collect();
+                assert_eq!(holders.len(), 1, "{sentence}");
+                let text = holders[0]["instructions"].as_str().unwrap().to_owned();
+                assert_eq!(text.matches(sentence).count(), 1, "{sentence}");
+                holders[0]["instructions"] = json!(text.replacen(sentence, "", 1));
+            }
+            // B's accepted challenge-guidance delta changes instructions only.
+            // Invert that exact prefix, retaining the predecessor graph receipt.
+            for state in value["states"].as_array_mut().unwrap() {
+                if state["id"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("-adversarial-review")
+                {
+                    let prefix = format!("{} ", crate::commission::CHALLENGE_GUIDANCE);
+                    let text = state["instructions"].as_str().unwrap();
+                    state["instructions"] = json!(text
+                        .strip_prefix(&prefix)
+                        .expect("exact challenge guidance prefix"));
+                }
+                if let Some(axes) = state
+                    .get_mut("action_guidance")
+                    .and_then(|guidance| guidance.get_mut("review_axes"))
+                    .and_then(Value::as_array_mut)
+                {
+                    axes.retain(|axis| axis["id"] != "parallelism-honest");
+                }
+            }
+            let bytes = serde_json::to_vec(&value).unwrap();
+            assert_eq!(
+                format!("{:x}", Sha256::digest(bytes)),
+                expected,
+                "{}",
+                input["config_version"]
+            );
+            for key in ["narratives", "checkpoints", "narrative_review"] {
+                input["extra"].as_object_mut().unwrap().remove(key);
+            }
+            assert_eq!(
+                describe_workflow(Some(&input)).unwrap(),
+                workflow,
+                "absent options and inert template"
+            );
+        }
+    }
+
+    #[test]
+    fn every_shipped_option_combination_stitches_order_routes_slots_and_duties() {
+        for base in shipped_profiles() {
+            for narrative_mask in 0..8 {
+                for checkpoint_mask in 0..32 {
+                    let mut input = base.clone();
+                    enable_options(&mut input, narrative_mask, checkpoint_mask);
+                    let workflow = describe_workflow(Some(&input)).unwrap();
+                    let off = describe_workflow(Some(&base)).unwrap();
+                    let mut expected = Vec::new();
+                    for options in PHASE_OPTIONS {
+                        let phase = options.phase;
+                        expected.push(phase.draft_state);
+                        if phase.name == "implementation" {
+                            expected.push(RECONCILIATION_STATE);
+                        }
+                        expected.extend([phase.parent_review, phase.adversarial_review]);
+                        let narrative_enabled =
+                            option_enabled(Some(&input), "narratives", phase.name);
+                        let checkpoint_enabled =
+                            option_enabled(Some(&input), "checkpoints", phase.name);
+                        if narrative_enabled {
+                            let n = options.narrative.unwrap();
+                            expected.extend([n.draft, n.review, n.challenge]);
+                            for id in [n.draft, n.review, n.challenge] {
+                                assert_eq!(
+                                    check_free_target(&workflow, id, n.artifact_revise),
+                                    phase.draft_state
+                                );
+                                assert_eq!(phase_options_for_state(id), Some(options));
+                            }
+                            for id in [n.review, n.challenge] {
+                                assert_eq!(check_free_target(&workflow, id, "revise"), n.draft);
+                            }
+                            assert_eq!(slot(&workflow, n.draft_slot).state.as_str(), n.draft);
+                            assert_eq!(
+                                slot(&workflow, n.draft_slot).event.as_str(),
+                                NARRATIVE_READY_EVENT
+                            );
+                            assert_eq!(
+                                checked_hop(&workflow, phase.adversarial_review),
+                                ("approved", n.draft)
+                            );
+                        }
+                        if checkpoint_enabled {
+                            expected.push(options.checkpoint);
+                            let revise = edge(&workflow, options.checkpoint, "revise");
+                            assert_eq!(revise.kind, TransitionKind::Checked);
+                            assert_eq!(revise.target.as_str(), phase.draft_state);
+                            assert_eq!(
+                                checkpoint_subject(options, narrative_enabled),
+                                if narrative_enabled {
+                                    options.narrative.unwrap().subject
+                                } else {
+                                    phase.subject
+                                }
+                            );
+                            if narrative_enabled {
+                                let revise =
+                                    edge(&workflow, options.checkpoint, "revise-narrative");
+                                assert_eq!(revise.kind, TransitionKind::Checked);
+                                assert_eq!(
+                                    revise.target.as_str(),
+                                    options.narrative.unwrap().draft
+                                );
+                            } else {
+                                assert!(!workflow
+                                    .transitions
+                                    .iter()
+                                    .any(|e| e.source.as_str() == options.checkpoint
+                                        && e.event.as_str() == "revise-narrative"));
+                            }
+                        }
+                        // Existing artifact repairs remain byte-identical, even
+                        // when the approving edge now enters a conditional hop.
+                        for id in [phase.parent_review, phase.adversarial_review] {
+                            let before = off
+                                .transitions
+                                .iter()
+                                .filter(|e| {
+                                    e.source.as_str() == id && e.kind == TransitionKind::CheckFree
+                                })
+                                .collect::<Vec<_>>();
+                            let after = workflow
+                                .transitions
+                                .iter()
+                                .filter(|e| {
+                                    e.source.as_str() == id && e.kind == TransitionKind::CheckFree
+                                })
+                                .collect::<Vec<_>>();
+                            assert_eq!(before, after);
+                        }
+                        for work_slot in &workflow.work_slots {
+                            if phase_options_for_state(work_slot.state.as_str()) != Some(options) {
+                                continue;
+                            }
+                            let kinds = &work_slot.stdin_context_kinds;
+                            let enabled = narrative_enabled || checkpoint_enabled;
+                            assert_eq!(kinds.iter().any(|k| k == APPROVED_ARTIFACT_KIND), enabled);
+                            assert_eq!(kinds.iter().any(|k| k == ARTIFACT_ADMITTED_KIND), enabled);
+                            assert_eq!(
+                                kinds.iter().any(|k| k == NARRATIVE_ADMITTED_KIND),
+                                narrative_enabled
+                            );
+                            assert_eq!(
+                                kinds.iter().any(|k| k == OWNER_DECISION_KIND),
+                                checkpoint_enabled
+                            );
+                            assert!(!work_slot.driver_act_allowed);
+                            if !enabled {
+                                assert_eq!(
+                                    work_slot,
+                                    slot(&off, work_slot.id.as_str()),
+                                    "unrelated slot changed"
+                                );
+                            }
+                        }
+                    }
+                    expected.push("end");
+                    assert_eq!(state_ids(&workflow), expected);
+                    let forward = workflow
+                        .transitions
+                        .iter()
+                        .filter(|e| {
+                            e.event.as_str() != "revise" && !e.event.as_str().starts_with("revise-")
+                        })
+                        .collect::<Vec<_>>();
+                    for (index, e) in forward.iter().enumerate() {
+                        assert_eq!(e.source.as_str(), expected[index]);
+                        assert_eq!(e.target.as_str(), expected[index + 1]);
+                        assert_eq!(e.kind, TransitionKind::Checked);
+                        assert_eq!(e.event.as_str() == "passed", index == forward.len() - 1);
+                    }
+                    for e in &workflow.transitions {
+                        let duties = duties_for_transition(
+                            e.source.as_str(),
+                            e.event.as_str(),
+                            e.target.as_str(),
+                        )
+                        .expect("all new and old edges have duties");
+                        assert_eq!(
+                            duties == TransitionDuties::CheckFree,
+                            e.kind == TransitionKind::CheckFree
+                        );
+                        let exit = phase_exit_duties(
+                            e.source.as_str(),
+                            e.event.as_str(),
+                            e.target.as_str(),
+                        );
+                        assert_eq!(
+                            exit.completion_subject,
+                            if e.event.as_str() == "passed" {
+                                Some("validation-report.json")
+                            } else {
+                                None
+                            }
+                        );
+                        assert_eq!(
+                            exit.record_accepted_implementation_proof,
+                            e.target.as_str() == "validation"
+                                && !e.event.as_str().starts_with("revise")
+                        );
+                    }
+                    for state in &workflow.states {
+                        let source = state.id.as_str();
+                        let Some(owner) = phase_options_for_state(source) else {
+                            assert_eq!(source, "end");
+                            assert!(!workflow.transitions.iter().any(|e| e.source == state.id));
+                            continue;
+                        };
+                        let index = PHASES
+                            .iter()
+                            .position(|p| p.name == owner.phase.name)
+                            .unwrap();
+                        for (earlier_index, (event, target)) in [
+                            ("revise-intent", "explore"),
+                            ("revise-design", "design"),
+                            ("revise-plan", "plan"),
+                            ("revise-implementation", "implement"),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
+                            let edges = workflow
+                                .transitions
+                                .iter()
+                                .filter(|e| {
+                                    e.source.as_str() == source && e.event.as_str() == event
+                                })
+                                .collect::<Vec<_>>();
+                            if earlier_index < index {
+                                assert_eq!(edges.len(), 1, "{source}/{event}");
+                                assert_eq!(edges[0].target.as_str(), target);
+                                assert_eq!(edges[0].kind, TransitionKind::CheckFree);
+                                assert_eq!(
+                                    duties_for(source, event),
+                                    Some(TransitionDuties::CheckFree)
+                                );
+                                let exit = phase_exit_duties(source, event, target);
+                                assert_eq!(exit.completion_subject, None);
+                                assert_eq!(exit.approved_artifact, None);
+                                assert!(!exit.record_accepted_implementation_proof);
+                            } else if earlier_index > index {
+                                assert!(edges.is_empty(), "no later-phase route: {source}/{event}");
+                            } else if !owner
+                                .narrative
+                                .is_some_and(|n| [n.draft, n.review, n.challenge].contains(&source))
+                                && source != RECONCILIATION_STATE
+                            {
+                                assert!(
+                                    edges.is_empty(),
+                                    "no new same-phase route: {source}/{event}"
+                                );
+                            }
+                        }
+                    }
+                    assert_eq!(workflow.work_slots.len(), workflow.states.len() - 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn narrative_policy_omission_and_orphans_follow_existing_review_semantics() {
+        for (parent, challenge, last) in [
+            (false, false, "validation-narrative"),
+            (true, false, "validation-narrative-review"),
+            (true, true, "validation-narrative-adversarial-review"),
+        ] {
+            let mut input = json!({"extra":{"narratives":["validation"]},"review_policies":{}});
+            if parent {
+                input["review_policies"]["validation-narrative-review"] = json!([axis("a")]);
+            }
+            if challenge {
+                input["review_policies"]["validation-narrative-adversarial-review"] =
+                    json!([axis("a")]);
+            }
+            let workflow = describe_workflow(Some(&input)).unwrap();
+            assert_eq!(has_state(&workflow, "validation-narrative-review"), parent);
+            assert_eq!(
+                has_state(&workflow, "validation-narrative-adversarial-review"),
+                challenge
+            );
+            assert_eq!(
+                checked_hop(&workflow, "validation"),
+                ("validation-ready", "validation-narrative")
+            );
+            assert_eq!(checked_hop(&workflow, last), ("passed", "end"));
+            input["extra"]["checkpoints"] = json!(["validation"]);
+            let workflow = describe_workflow(Some(&input)).unwrap();
+            let expected_event = if parent {
+                "approved"
+            } else {
+                NARRATIVE_READY_EVENT
+            };
+            assert_eq!(
+                checked_hop(&workflow, last),
+                (expected_event, "validation-checkpoint")
+            );
+            assert_eq!(
+                slot(&workflow, "validation-checkpoint").event.as_str(),
+                "passed"
+            );
+        }
+        let mut input = json!({"extra":{"narratives":["design"]}, "review_policies": {
+            "design-narrative-adversarial-review":[axis("a")]
+        }});
+        assert!(describe_workflow(Some(&input))
+            .unwrap_err()
+            .contains("empty or absent"));
+        input["review_policies"]["design-narrative-review"] = json!([axis("b")]);
+        assert!(describe_workflow(Some(&input))
+            .unwrap_err()
+            .contains("not on"));
+        // Live policies alone never turn on a narrative phase.
+        input["extra"]["narratives"] = json!([]);
+        assert!(!has_state(
+            &describe_workflow(Some(&input)).unwrap(),
+            "design-narrative-review"
+        ));
+    }
+
+    #[test]
+    fn new_state_titles_and_instructions_explain_sources_freshness_and_repairs() {
+        let mut input = shipped_profiles().remove(2);
+        enable_options(&mut input, 7, 31);
+        let workflow = describe_workflow(Some(&input)).unwrap();
+        for options in PHASE_OPTIONS {
+            let checkpoint = workflow
+                .states
+                .iter()
+                .find(|s| s.id.as_str() == options.checkpoint)
+                .unwrap();
+            assert!(checkpoint.title.ends_with("owner checkpoint"));
+            for text in [
+                "owner-decision",
+                "verbatim",
+                "nonempty reason",
+                "latest well-formed",
+                "not file freshness",
+                "history",
+                "override is not owner approval",
+                options.phase.draft_state,
+            ] {
+                assert!(
+                    checkpoint.instructions.contains(text),
+                    "{} missing {text}",
+                    options.checkpoint
+                );
+            }
+            if let Some(n) = options.narrative {
+                for id in [n.draft, n.review, n.challenge] {
+                    let state = workflow
+                        .states
+                        .iter()
+                        .find(|s| s.id.as_str() == id)
+                        .unwrap();
+                    assert!(state.title.contains("narrative"));
+                    assert!(!state.title.contains("adversarial"));
+                    for text in [
+                        n.subject,
+                        n.markdown,
+                        options.phase.subject,
+                        "latest",
+                        "hash",
+                        n.artifact_revise,
+                    ] {
+                        assert!(state.instructions.contains(text), "{id} missing {text}");
+                    }
+                    if id != n.draft {
+                        assert!(state.instructions.contains("frozen `intent.json`"));
+                        assert!(state.instructions.contains("finding-ledger"));
+                        assert!(state.action_guidance.as_ref().unwrap()["review_axes"].is_array());
+                    }
+                }
+                assert_eq!(
+                    duties_for(n.draft, NARRATIVE_READY_EVENT),
+                    Some(TransitionDuties::Checked {
+                        subject: n.subject,
+                        gate: None
+                    })
+                );
+                assert_eq!(
+                    duties_for(n.review, "approved"),
+                    Some(TransitionDuties::Checked {
+                        subject: n.subject,
+                        gate: Some(n.review)
+                    })
+                );
+                assert_eq!(
+                    duties_for(n.challenge, "approved"),
+                    Some(TransitionDuties::Checked {
+                        subject: n.subject,
+                        gate: Some(n.challenge)
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn phase_exit_routing_moves_completion_and_implementation_proof_without_evaluating_them() {
+        for source in [
+            "validation",
+            "validation-review",
+            "validation-adversarial-review",
+            "validation-narrative",
+            "validation-narrative-review",
+            "validation-narrative-adversarial-review",
+            "validation-checkpoint",
+        ] {
+            assert_eq!(
+                phase_exit_duties(source, "passed", "end").completion_subject,
+                Some("validation-report.json")
+            );
+        }
+        for source in [
+            "implement",
+            RECONCILIATION_STATE,
+            "implementation-review",
+            "implementation-adversarial-review",
+            "implementation-checkpoint",
+        ] {
+            let event = if source == "implement" {
+                "implementation-ready"
+            } else if source == RECONCILIATION_STATE {
+                RECONCILIATION_READY_EVENT
+            } else {
+                "approved"
+            };
+            assert!(
+                phase_exit_duties(source, event, "validation").record_accepted_implementation_proof
+            );
+            assert!(
+                !phase_exit_duties(source, "revise", "implement")
+                    .record_accepted_implementation_proof
+            );
+        }
+        for options in PHASE_OPTIONS {
+            for source in [
+                options.phase.draft_state,
+                options.phase.parent_review,
+                options.phase.adversarial_review,
+            ] {
+                let event = if source == options.phase.draft_state {
+                    options.phase.ready_event
+                } else {
+                    "approved"
+                };
+                assert_eq!(
+                    phase_exit_duties(source, event, options.checkpoint).approved_artifact,
+                    Some(options.phase)
+                );
+                assert_eq!(
+                    phase_exit_duties(options.checkpoint, "revise", options.phase.draft_state)
+                        .approved_artifact,
+                    None
+                );
+            }
+        }
+        assert_eq!(
+            phase_exit_duties(
+                RECONCILIATION_STATE,
+                RECONCILIATION_READY_EVENT,
+                "implementation-checkpoint"
+            )
+            .approved_artifact,
+            Some(&PHASES[3])
+        );
+        assert_eq!(duties_for("intent-checkpoint", "revise-narrative"), None);
+        assert_eq!(
+            duties_for("implementation-checkpoint", "revise-narrative"),
+            None
+        );
+    }
+
+    #[test]
+    fn bare_describe_refuses_malformed_phase_options_instead_of_panicking() {
+        for extra in [
+            json!({"narratives":["intent"]}),
+            json!({"checkpoints":["reconciliation"]}),
+            json!({"narratives":true}),
+            json!({"checkpoints":[1]}),
+            json!({"narratives":["design","design"]}),
+        ] {
+            assert!(describe_workflow(Some(&json!({"extra":extra}))).is_err());
+        }
+    }
+
+    #[test]
+    fn reviewless_enabled_graphs_keep_ready_events_and_reconciliation_proof_boundary() {
+        let mut input = shipped_profiles().remove(0);
+        enable_options(&mut input, 7, 31);
+        input["review_policies"] = json!({});
+        let workflow = describe_workflow(Some(&input)).unwrap();
+        for options in PHASE_OPTIONS {
+            let phase = options.phase;
+            assert!(!has_state(&workflow, phase.parent_review));
+            assert!(!has_state(&workflow, phase.adversarial_review));
+            if let Some(n) = options.narrative {
+                assert!(!has_state(&workflow, n.review));
+                assert!(!has_state(&workflow, n.challenge));
+                assert_eq!(
+                    checked_hop(&workflow, phase.draft_state),
+                    (phase.ready_event, n.draft)
+                );
+                assert_eq!(
+                    checked_hop(&workflow, n.draft),
+                    (NARRATIVE_READY_EVENT, options.checkpoint)
+                );
+            } else if phase.name == "implementation" {
+                assert_eq!(
+                    checked_hop(&workflow, "implement"),
+                    (phase.ready_event, RECONCILIATION_STATE)
+                );
+                assert_eq!(
+                    checked_hop(&workflow, RECONCILIATION_STATE),
+                    (RECONCILIATION_READY_EVENT, options.checkpoint)
+                );
+            } else {
+                assert_eq!(
+                    checked_hop(&workflow, phase.draft_state),
+                    (phase.ready_event, options.checkpoint)
+                );
+            }
+        }
+        assert_eq!(
+            edge(&workflow, "implementation-checkpoint", "approved")
+                .target
+                .as_str(),
+            "validation"
+        );
+        input["extra"]["checkpoints"] = json!(["validation"]);
+        let workflow = describe_workflow(Some(&input)).unwrap();
+        let entry = edge(&workflow, RECONCILIATION_STATE, RECONCILIATION_READY_EVENT);
+        assert_eq!(entry.target.as_str(), "validation");
+        assert!(
+            phase_exit_duties(
+                entry.source.as_str(),
+                entry.event.as_str(),
+                entry.target.as_str()
+            )
+            .record_accepted_implementation_proof
+        );
+    }
+
+    #[test]
+    fn absent_policies_keep_union_reviews_for_enabled_narratives() {
+        let workflow =
+            describe_workflow(Some(&json!({"extra":{"narratives":["design"]}}))).unwrap();
+        assert_eq!(
+            checked_hop(&workflow, "design-adversarial-review"),
+            ("approved", "design-narrative")
+        );
+        assert_eq!(
+            checked_hop(&workflow, "design-narrative"),
+            (NARRATIVE_READY_EVENT, "design-narrative-review")
+        );
+        assert_eq!(
+            checked_hop(&workflow, "design-narrative-review"),
+            ("approved", "design-narrative-adversarial-review")
+        );
+        assert_eq!(
+            checked_hop(&workflow, "design-narrative-adversarial-review"),
+            ("approved", "plan")
+        );
+    }
 
     fn union() -> Workflow {
         describe_workflow(None).expect("union")
@@ -929,6 +2105,16 @@ mod tests {
             if id.ends_with("-review") {
                 expected.extend(["command-evidence", "criterion-verdict", "goal-verdict"]);
             }
+            if [
+                "intent-draft",
+                "intent-review",
+                "intent-adversarial-review",
+                "intent-checkpoint",
+            ]
+            .contains(&id)
+            {
+                expected.push("intent-correction");
+            }
             assert_eq!(
                 slot.get("stdin_context_kinds"),
                 Some(&json!(expected)),
@@ -938,7 +2124,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_backtracking_only_implement_gains_three_check_free_owning_routes() {
+    fn recovery_backtracking_preserves_implementation_routes_and_extends_earlier_drafts() {
         for workflow in [
             union(),
             describe_workflow(Some(&json!({"review_policies": {}}))).unwrap(),
@@ -965,13 +2151,21 @@ mod tests {
                     Some(TransitionDuties::CheckFree)
                 );
             }
-            for state in ["explore", "design", "plan"] {
-                assert!(!workflow
-                    .transitions
-                    .iter()
-                    .any(|edge| edge.source.as_str() == state
-                        && edge.kind == TransitionKind::CheckFree));
-            }
+            assert!(!workflow.transitions.iter().any(|edge| {
+                edge.source.as_str() == "explore" && edge.kind == TransitionKind::CheckFree
+            }));
+            assert_eq!(
+                check_free_target(&workflow, "design", "revise-intent"),
+                "explore"
+            );
+            assert_eq!(
+                check_free_target(&workflow, "plan", "revise-design"),
+                "design"
+            );
+            assert_eq!(
+                check_free_target(&workflow, "plan", "revise-intent"),
+                "explore"
+            );
             assert_eq!(
                 check_free_target(&workflow, "validation", "revise-implementation"),
                 "implement"
@@ -1472,6 +2666,9 @@ mod tests {
             }
             if id.ends_with("-review") {
                 expected.extend(["command-evidence", "criterion-verdict", "goal-verdict"]);
+            }
+            if ["intent-review", "intent-draft"].contains(&id) {
+                expected.push("intent-correction");
             }
             assert_eq!(slot(&mixed, id).stdin_context_kinds, expected);
         }

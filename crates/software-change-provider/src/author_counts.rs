@@ -369,4 +369,57 @@ mod tests {
         proposal["self_review"] = json!(true);
         assert!(propose(&resolved, proposal).is_err());
     }
+
+    #[test]
+    fn materialized_narrative_counts_preserve_shipped_floors_and_exact_amendment_targets() {
+        for (source, floor, stages) in [
+            (include_str!("../data/configs/minimal.json"), 1, 1),
+            (include_str!("../data/configs/standard.json"), 2, 1),
+            (include_str!("../data/configs/high-rigor.json"), 2, 2),
+        ] {
+            let mut profile: Value = serde_json::from_str(source).unwrap();
+            profile["extra"]["bookends"] = json!(true);
+            for phase in ["design", "plan", "validation"] {
+                for (pass, suffix) in [("ordinary", "review"), ("challenge", "adversarial-review")]
+                {
+                    let gate = format!("{phase}-narrative-{suffix}");
+                    let mut axes = profile["extra"]["narrative_review"][pass].clone();
+                    for axis in axes.as_array_mut().unwrap() {
+                        axis["group"] =
+                            json!(axis["group"].as_str().unwrap().replace("{phase}", phase));
+                    }
+                    profile["review_policies"][gate] = axes;
+                }
+            }
+            let resolved = resolve(&profile, &json!([]));
+            let counts = targets(&resolved.effective);
+            let narrative_counts: Vec<_> = counts
+                .iter()
+                .filter(|(k, _)| k.contains("-narrative-"))
+                .collect();
+            assert_eq!(narrative_counts.len(), 6 * 3 * stages);
+            assert!(narrative_counts.iter().all(|(_, count)| **count == floor));
+            assert!(!narrative_counts
+                .iter()
+                .any(|(key, _)| key.ends_with("ids-grounded")));
+            let context = json!([amendment(
+                "owner-count",
+                json!([{
+                    "gate":"design-narrative-review","stage":"aggregate","axis":"narrative-faithful"
+                }]),
+                floor,
+                3
+            )]);
+            let changed = resolve(&profile, &context);
+            assert!(changed.blocked.is_empty());
+            let key = "review.design-narrative-review.aggregate.narrative-faithful";
+            assert_eq!(changed.base[key], floor);
+            assert_eq!(targets(&changed.effective)[key], 3);
+            for (target, count) in counts {
+                if target != key {
+                    assert_eq!(targets(&changed.effective)[&target], count);
+                }
+            }
+        }
+    }
 }

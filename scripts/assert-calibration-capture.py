@@ -16,7 +16,7 @@ from typing import Any
 
 COVERAGE_CASES = ("sufficient", "related-insufficient", "implementation-defect")
 COVERAGE_GATES = ("intent-review", "intent-adversarial-review")
-FORBIDDEN_METADATA_KEYS = {"expected", "observed", "oracle"}
+FORBIDDEN_METADATA_KEYS = {"expected", "observed", "oracle", "fixture_class", "seed_label", "expected_result"}
 ORDINARY_COVERAGE_PROMPT = (
     "Judge ids-grounded only. Confirm each promised enduring outcome is checked against "
     "the actual accepted requirement text and every authoritative document it explicitly "
@@ -83,13 +83,20 @@ def framed_digest(records: list[tuple[str, bytes]]) -> str:
 def reviewer_display_label(
     records: list[tuple[str, bytes]], index: int, subject: str, template: str
 ) -> str:
-    """Recompute neutral packet framing without exposing canonical labels."""
+    """Render a neutral role label without exposing canonical fixture labels."""
     label = records[index][0]
     fixed_labels = {
         "system-developer-instruction:data/calibration/reviewer-instruction.txt": "reviewer instruction",
         "example_prompt": "selected review prompt",
         "reviewer-protocol:data/reviewer-protocol.md": "review protocol",
         "request-json": "canonical request JSON",
+        "review-worker-preamble:data/review-worker-preamble.txt": "shipped review-worker preamble",
+        "assignment-json": "frozen narrative assignment",
+        "schema:data/narrative-schema.json": "narrative binding schema",
+        "markdown": f"narrative markdown: {subject.removesuffix('.json')}.md",
+        "approved-artifact": "exact approved artifact",
+        "frozen-intent": "frozen intent: intent.json",
+        "challenge-context": "ordinary review and cleared finding dispositions",
     }
     if label in fixed_labels:
         return fixed_labels[label]
@@ -102,6 +109,7 @@ def reviewer_display_label(
     predecessor_labels = {
         "required predecessor:data/calibration/fixtures/intent-good.json": "required predecessor: intent",
         "required predecessor:data/calibration/fixtures/design-good.json": "required predecessor: design",
+        "required predecessor:data/calibration/fixtures/design-layered.json": "required predecessor design",
         "required predecessor:data/calibration/fixtures/plan-good.json": "required predecessor: plan",
         "required predecessor:data/calibration/fixtures/implementation-report-good.json": "required predecessor: implementation report",
     }
@@ -148,7 +156,7 @@ def expected_specs(args: argparse.Namespace) -> list[dict[str, str]]:
     specs = [parse_row_key(value) for value in args.row_key]
     for case in args.coverage_case:
         for gate in COVERAGE_GATES:
-            config = "high-rigor-14"
+            config = "high-rigor-15"
             fixture = f"requirement-coverage-{case}"
             specs.append(
                 {
@@ -187,8 +195,47 @@ def preparation_for(root: Path, spec: dict[str, str]) -> tuple[Path, dict[str, A
     return candidates[0]
 
 
+NARRATIVE_PREDECESSORS = {
+    # Mirrors prepare-calibration-input.py required_narrative_predecessors; the
+    # frozen intent is supplied as its own "frozen-intent" record, not a predecessor.
+    "design": (),
+    "plan": ("design-good",),
+    "validation": ("design-good", "plan-good", "implementation-report-good"),
+}
+
+
+def required_predecessors(gate: str, fixture_id: str) -> tuple[str, ...]:
+    if "-narrative-" in gate:
+        phase = gate.split("-narrative-", 1)[0]
+        if phase not in NARRATIVE_PREDECESSORS:
+            fail(f"unsupported narrative calibration gate: {gate}")
+        return NARRATIVE_PREDECESSORS[phase]
+    family = gate.split("-", 1)[0]
+    predecessors = {
+        "intent": (),
+        "design": ("intent-good",),
+        "plan": ("intent-good", "design-good"),
+        "implementation": ("intent-good", "design-good", "plan-good"),
+        "validation": ("intent-good", "design-good", "plan-good", "implementation-report-good"),
+    }
+    if family == "plan" and fixture_id == "plan-serial-honest":
+        return ("intent-good", "design-layered")
+    if family not in predecessors:
+        fail(f"unsupported calibration gate: {gate}")
+    return predecessors[family]
+
+
 def verify_preparation(root: Path, case_dir: Path, metadata: dict[str, Any], spec: dict[str, str]) -> dict[str, Any]:
     reject_oracle_keys(metadata, str(case_dir / "preparation.json"))
+    allowed_metadata = {
+        "schema_version", "kind", "row_key", "config_version", "gate", "policy_id",
+        "review_stage", "subject", "subject_revision", "fixture_id", "profile", "template",
+        "source_records", "request_path", "instructions_path", "input_sha256", "prompt_sha256",
+        "instructions_sha256", "coverage_case", "coverage_gate", "output_format",
+        "challenge_context_provenance",
+    }
+    if set(metadata) - allowed_metadata:
+        fail(f"unsupported preparation metadata fields: {case_dir}")
     for field in (
         "schema_version",
         "kind",
@@ -244,6 +291,13 @@ def verify_preparation(root: Path, case_dir: Path, metadata: dict[str, Any], spe
         if not isinstance(label, str) or not label:
             fail(f"source record label is not non-empty: {path}")
         records.append((label, content))
+    predecessor_labels = [label for label, _ in records if label.startswith("required predecessor:")]
+    expected_predecessor_labels = [
+        f"required predecessor:data/calibration/fixtures/{fixture}.json"
+        for fixture in required_predecessors(spec["gate"], spec["fixture_id"])
+    ]
+    if predecessor_labels != expected_predecessor_labels:
+        fail(f"required predecessor selection mismatch: {case_dir}")
     if records[0][0] != "system-developer-instruction:data/calibration/reviewer-instruction.txt":
         fail(f"reviewer instruction is not first source record: {case_dir}")
     if records[-1][0] != "request-json":
@@ -287,7 +341,66 @@ def verify_preparation(root: Path, case_dir: Path, metadata: dict[str, Any], spe
             fail(f"coverage packet has wrong or mixed rubric prompt: {case_dir}")
         if sum(label == "example_prompt" for label, _ in records) != 1:
             fail(f"coverage packet must contain exactly one rubric: {case_dir}")
+    if "-narrative-" in spec["gate"]:
+        verify_current_narrative(metadata, spec)
     return {"records": records, "instructions": instructions}
+
+
+def producer_module():
+    import importlib.util
+    path = Path(__file__).with_name("prepare-calibration-input.py")
+    spec = importlib.util.spec_from_file_location("calibration_producer", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def verify_current_narrative(metadata: dict, spec: dict) -> None:
+    producer = producer_module()
+    repository = Path(__file__).resolve().parent.parent
+    data = repository / "crates/software-change-provider/data"
+    profile_path = data / f"configs/{metadata['profile']}.json"
+    identity = producer.parse_row_key(spec["row_key"])
+    manifest = read_json(data / "calibration/manifest.json", "manifest")
+    row = producer.manifest_row(manifest, identity)
+    current_hash = producer.make_case(repository=repository,
+        procedure=(data / "calibration/PROCEDURE.md").read_bytes(),
+        manifest=manifest,
+        profile_path=profile_path, profile=read_json(profile_path, "profile"),
+        output_root=repository, identity=identity, hash_only=True)
+    if current_hash != metadata["input_sha256"] or current_hash != row.get("input_sha256"):
+        fail("narrative packet differs from actual current shipped sources or selected manifest row")
+    if metadata.get("output_format") != "review-worker-batch-v3":
+        fail("narrative packet missing explicit shipped output contract")
+    provenance = "synthetic-corpus-stimulus-not-genuine-review" if spec["gate"].endswith("adversarial-review") else "not-supplied"
+    if metadata.get("challenge_context_provenance") != provenance:
+        fail("narrative challenge context provenance mismatch")
+
+
+def narrative_judgment(returned: bytes, prep: dict) -> dict:
+    """Select the actual raw batch judgment; do not project a fabricated record."""
+    value = json.loads(returned)
+    if (not isinstance(value, dict) or set(value) != {"review_contract_version", "review_stage", "author", "judgments"}
+        or value["review_contract_version"] != 3 or value["review_stage"] != prep["review_stage"]
+        or value["author"] != {"name": "calibration-reviewer", "kind": "agent"}):
+        fail("narrative raw batch contract/assignment mismatch")
+    rows = value["judgments"]
+    if not isinstance(rows, list) or len(rows) != 1:
+        fail("narrative raw batch must contain the one assigned axis")
+    row = rows[0]
+    if (not isinstance(row, dict) or set(row) != {"axis", "result", "findings", "grounds"}
+        or row["axis"] != prep["policy_id"] or row["result"] not in ("pass", "fail")
+        or not isinstance(row["findings"], str)
+        or (row["result"] == "pass" and row["findings"] != "")
+        or (row["result"] == "fail" and not row["findings"].strip())):
+        fail("narrative raw judgment identity/result/findings invalid")
+    grounds = row["grounds"]
+    if (not isinstance(grounds, dict) or set(grounds) != {"reason", "evidence"}
+        or not isinstance(grounds["reason"], str) or not grounds["reason"].strip()
+        or not isinstance(grounds["evidence"], list) or not grounds["evidence"]
+        or any(not isinstance(e, dict) or set(e) != {"locator"} or not isinstance(e["locator"], str) or not e["locator"].strip() for e in grounds["evidence"])):
+        fail("narrative raw judgment grounds incomplete")
+    return row
 
 
 def receipt_candidates(root: Path) -> list[tuple[Path, dict[str, Any]]]:
@@ -381,6 +494,8 @@ def verify_receipt(
         content = read_bytes(Path(value), field)
         if field == "captured_stdout" and content != returned:
             fail(f"returned judgment differs from captured worker stdout: {receipt_path}")
+    if "-narrative-" in prep["gate"]:
+        narrative_judgment(returned, prep)
     # Preserve the facade's own raw streams and the worker's selected output;
     # this check never parses or changes the returned judgment.
     return {
@@ -399,6 +514,7 @@ def verify_receipt(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--preparation-only", action="store_true", help="Verify supplied packets without requiring or inventing reviewer returns")
     parser.add_argument("--row-key", action="append", default=[])
     parser.add_argument("--coverage-case", action="append", choices=COVERAGE_CASES, default=[])
     return parser
@@ -415,6 +531,11 @@ def main() -> int:
             case_dir, metadata = preparation_for(root, spec)
             verify_preparation(root, case_dir, metadata, spec)
             preparations.append((spec, case_dir, metadata))
+        if args.preparation_only:
+            print(json.dumps({"status": "prepared-only-observations-pending", "cases": [
+                {"row_key": spec["row_key"], "input_sha256": metadata["input_sha256"], "instructions_sha256": metadata["instructions_sha256"]}
+                for spec, _directory, metadata in preparations]}, indent=2))
+            return 0
         receipts = receipt_candidates(root)
         if not receipts:
             fail(f"no pending driver capture indexes found under {root}")

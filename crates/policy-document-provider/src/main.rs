@@ -22,6 +22,10 @@ fn run() -> i32 {
     let mut args = std::env::args_os();
     let _ = args.next();
     if let Some(command) = args.next() {
+        if command == "--version" || command == "-V" {
+            println!("policy-document {}", env!("CARGO_PKG_VERSION"));
+            return 0;
+        }
         if command == "setup" {
             let rest: Vec<String> = args.map(|arg| arg.to_string_lossy().into_owned()).collect();
             return loop_integrations::profile_setup::run(
@@ -74,6 +78,7 @@ fn run() -> i32 {
     match value.get("operation").and_then(Value::as_str) {
         Some("describe") => describe(value),
         Some("evaluate") => evaluate(value),
+        Some("capture") => capture(value),
         Some(other) => protocol_error(format!("unsupported provider operation `{other}`")),
         None => protocol_error("request must contain string operation".into()),
     }
@@ -82,7 +87,7 @@ fn describe(value: Value) -> i32 {
     match serde_json::from_value::<DescribeRequest>(value) {
         Ok(req) if req.operation == "describe" => {
             let _ = req.initial_input;
-            write_json(&workflow::workflow())
+            write_json(&workflow::workflow().with_capture(true))
         }
         Ok(_) => protocol_error("describe request has wrong operation".into()),
         Err(e) => protocol_error(format!("invalid describe request: {e}")),
@@ -99,8 +104,46 @@ fn evaluate(value: Value) -> i32 {
         Err(error) => evaluation_error(&error),
     }
 }
+/// The target document leaves the run when semantic review passes to end.
+fn capture(value: Value) -> i32 {
+    use loop_integrations::retention::{
+        capture_response, retained_artifacts_effect, CaptureRequest, RetainedArtifact,
+    };
+    let request = match serde_json::from_value::<CaptureRequest>(value) {
+        Ok(request) if request.operation == "capture" => request,
+        Ok(_) => return protocol_error("capture request has wrong operation".into()),
+        Err(e) => return protocol_error(format!("invalid capture request: {e}")),
+    };
+    let route = (
+        request.transition.kind,
+        request.transition.source.as_str(),
+        request.transition.event.as_str(),
+    );
+    if route != (TransitionKind::Checked, "semantic-review", "passed") {
+        return write_json(&capture_response(None));
+    }
+    let target = &request.initial_input["target"];
+    let (Some(name), Some(path)) = (target["id"].as_str(), target["path"].as_str()) else {
+        return evaluation_error("capture requires frozen target id and path");
+    };
+    if !Path::new(path).is_absolute() {
+        return evaluation_error("capture requires an absolute frozen target path");
+    }
+    match retained_artifacts_effect(
+        &request.context,
+        &request.transition,
+        request.exit,
+        &[RetainedArtifact::new(name, path)],
+    ) {
+        Ok(effect) => write_json(&capture_response(Some(effect))),
+        Err(error) => evaluation_error(&format!("could not read target for capture: {error}")),
+    }
+}
+
 fn evaluation_response(request: &EvaluateRequest) -> Result<Value, String> {
-    if request.workflow != workflow::workflow() {
+    // Runs frozen before capture existed carry no capture flag; topology is
+    // what must match.
+    if request.workflow.clone().with_capture(false) != workflow::workflow() {
         return Ok(protocol::unsupported());
     }
     let checked = request.transition.kind == TransitionKind::Checked;

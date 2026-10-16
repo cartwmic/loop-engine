@@ -19,6 +19,30 @@ fn invoke(input: &[u8]) -> Output {
         .expect("policy-document process should exit")
 }
 
+fn assert_version(flag: &str) {
+    let output = Command::new(workspace_integration::binary("policy-document"))
+        .arg(flag)
+        .stdin(Stdio::null())
+        .output()
+        .expect("policy-document binary should run");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("policy-document {}\n", env!("CARGO_PKG_VERSION"))
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn version_long_flag_prints_exact_package_version() {
+    assert_version("--version");
+}
+
+#[test]
+fn version_short_flag_prints_exact_package_version() {
+    assert_version("-V");
+}
+
 #[test]
 fn unknown_describe_envelope_field_exits_with_protocol_error() {
     let output = invoke(br#"{"operation":"describe","unexpected":true}"#);

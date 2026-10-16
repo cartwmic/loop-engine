@@ -116,7 +116,53 @@ fn run_protocol() -> i32 {
     match operation.as_str() {
         "describe" => describe(request),
         "evaluate" => evaluate(request),
+        "capture" => capture(request),
         other => protocol_error(format!("unsupported provider operation `{other}`")),
+    }
+}
+
+/// Each forward checked transition leaves one research phase with its artifact.
+fn exiting_artifact(transition: &loop_core::Transition) -> Option<&'static str> {
+    if !transition.kind.is_checked() {
+        return None;
+    }
+    match (transition.source.as_str(), transition.event.as_str()) {
+        ("scope", "scoped") => Some("brief.json"),
+        ("gather", "gathered") => Some("sources.json"),
+        ("verify", "verified") => Some("verification.json"),
+        ("synthesize", "completed") => Some("report.json"),
+        _ => None,
+    }
+}
+
+fn capture(request: Value) -> i32 {
+    use loop_integrations::retention::{
+        capture_response, retained_artifacts_effect, CaptureRequest, RetainedArtifact,
+    };
+    let request = match serde_json::from_value::<CaptureRequest>(request) {
+        Ok(request) if request.operation == "capture" => request,
+        Ok(_) => return protocol_error("capture request has the wrong operation".into()),
+        Err(error) => return protocol_error(format!("invalid capture request: {error}")),
+    };
+    let Some(name) = exiting_artifact(&request.transition) else {
+        return write_json(&capture_response(None));
+    };
+    let Some(root) = request
+        .initial_input
+        .get("artifact_root")
+        .and_then(Value::as_str)
+        .filter(|root| Path::new(root).is_absolute())
+    else {
+        return evaluation_error("capture requires an absolute frozen artifact_root");
+    };
+    match retained_artifacts_effect(
+        &request.context,
+        &request.transition,
+        request.exit,
+        &[RetainedArtifact::new(name, Path::new(root).join(name))],
+    ) {
+        Ok(effect) => write_json(&capture_response(Some(effect))),
+        Err(error) => evaluation_error(&format!("could not read artifact for capture: {error}")),
     }
 }
 
@@ -140,7 +186,7 @@ fn describe(request: Value) -> i32 {
     };
     let _ = request.initial_input;
 
-    write_json(&workflow::research_workflow())
+    write_json(&workflow::research_workflow().with_capture(true))
 }
 
 fn evaluate(request: Value) -> i32 {

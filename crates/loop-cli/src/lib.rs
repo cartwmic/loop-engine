@@ -6,6 +6,7 @@
 //! and integration crates respectively.
 
 pub mod monitor;
+mod reclaim;
 mod targeted_read;
 mod terminal_explorer;
 mod visibility;
@@ -1005,6 +1006,9 @@ where
     if let Some(execution) = targeted_read::dispatch(&args) {
         return execution;
     }
+    if let Some(execution) = reclaim::dispatch(&args) {
+        return execution;
+    }
     let json_requested = args.iter().enumerate().any(|(index, arg)| {
         arg == "--json"
             || arg == "--machine-readable"
@@ -1134,8 +1138,8 @@ fn execute_operation(
                 args.data,
                 now_timestamp(),
             );
-            let outcome =
-                core::execute_append(request, &persistence).map(CliAppendContextResult::from);
+            let outcome = core::execute_append_with_gateway(request, &persistence, &gateway)
+                .map(CliAppendContextResult::from);
             render_operation(operation, output, &outcome)
         }
         PrimaryCommand::Event {
@@ -1830,6 +1834,7 @@ fn bounded_show_packet(
         "state_visit":snapshot["run"]["state_visit"],"current_state_instructions":instructions,
         "action_guidance":state["action_guidance"],"requestable_events":events,"work_slots":slots,
         "override_summary":snapshot["run"]["override_summary"],
+        "advice_policy":snapshot["advice_policy"],
         "invocations":snapshot["invocations"],"assignments":snapshot["assignments"],
         "delta_sequence":snapshot["delta_sequence"],"completeness":snapshot["completeness"],
         "workflow":workflow_lane,"execution":execution_lane,"worker":worker_lane,
@@ -1949,6 +1954,7 @@ fn render_bounded_show_human(packet: &Value, view: &str) -> String {
             lines.push(format!("  error: {error}"));
         }
     }
+    lines.push(format!("advice policy: {}", packet["advice_policy"]));
     lines.push(format!("completeness: {}", packet["completeness"]));
     lines.join("\n") + "\n"
 }
@@ -1962,6 +1968,17 @@ fn show_packet(
     database: &Path,
 ) -> Value {
     let mut value = serde_json::to_value(&projection).expect("show projection serializes");
+    value["advice_policy"] = match projection.workflow_graph.as_ref() {
+        Some(workflow) => match core::effective_advice_policy(
+            &projection.initial_input,
+            workflow,
+            &projection.context,
+        ) {
+            Ok(policy) => json!(policy),
+            Err(reason) => json!({"state":"unavailable","reason":reason}),
+        },
+        None => json!({"state":"unavailable","reason":"show omitted stored workflow"}),
+    };
     let lanes = visibility::show_lanes(&value, view, database);
     let object = value.as_object_mut().expect("show projection is an object");
     object.insert("view".into(), json!(view));
@@ -2302,7 +2319,7 @@ fn usage(command: Option<&str>) -> String {
         Some("explore") => "Usage: loop-engine [--database DB] explore RUN_ID\n\nRead-only interactive workflow navigator. Requires a TTY; arrows or j/k move the one-column list, [ and ] scroll detail, g/G jump, and q exits.\n".to_owned(),
         Some("terminate") => "Usage: loop-engine [options] terminate <run-id>\n".to_owned(),
         Some("list") => "Usage: loop-engine [options] list\n".to_owned(),
-        _ => "Usage: loop-engine [options] COMMAND\n\nCommands:\n  start PROVIDER JSON [LABEL]\n  list\n  show RUN_ID\n  append RUN_ID KIND JSON\n  event RUN_ID EVENT\n  history RUN_ID\n  terminate RUN_ID\n  read RUN_ID --kind KIND\n  explore RUN_ID\n  monitor --run RUN_ID --database PATH\n\nGlobal options:\n  --json, -j\n  --database PATH\n  --config PATH\n  --timeout-ms MILLISECONDS\n  --help, -h\n  --version, -V\n".to_owned(),
+        _ => "Usage: loop-engine [options] COMMAND\n\nCommands:\n  start PROVIDER JSON [LABEL]\n  list\n  show RUN_ID\n  append RUN_ID KIND JSON\n  event RUN_ID EVENT\n  history RUN_ID\n  terminate RUN_ID\n  read RUN_ID --kind KIND\n  explore RUN_ID\n  monitor --run RUN_ID --database PATH\n  reclaim [--apply]\n\nGlobal options:\n  --json, -j\n  --database PATH\n  --config PATH\n  --timeout-ms MILLISECONDS\n  --help, -h\n  --version, -V\n".to_owned(),
     }
 }
 #[cfg(test)]
@@ -3376,5 +3393,68 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
             .expect("show result must be an object");
         assert!(!result.contains_key("provider"));
         assert!(!result.contains_key("artifact_root"));
+    }
+    #[test]
+    fn advice_policy_full_and_action_packets_expose_effective_and_frozen_maps() {
+        let workflow = core::Workflow::new(
+            "advice",
+            "work",
+            vec![
+                core::State::new("work", "Work", "External work", false),
+                core::State::new("done", "Done", "", true),
+            ],
+            vec![core::Transition::check_free("work", "finish", "done")],
+        );
+        let frozen = json!({"version":1,"occasions":[{"state":"work","event":"finish","occasion_id":"review"}]});
+        let run = core::Run::new(
+            "run",
+            None,
+            workflow,
+            core::ProviderAssociation::new(json!({})),
+            json!({"advice_departures":frozen}),
+            "work",
+            core::Lifecycle::Active,
+            4_u64.into(),
+            8_u64.into(),
+            Timestamp::from_unix_millis(1),
+        );
+        let change = core::ContextRecord::new(
+            "owner-off",
+            core::ADVICE_POLICY_CHANGE_RECORD_KIND,
+            json!({"actor":{"name":"owner","kind":"human"},"reason":"No new advice",
+                "state_visit":4,"advice_departures":{"version":1,"occasions":[]}}),
+            8_u64.into(),
+            Timestamp::from_unix_millis(1),
+        );
+        let projection = core::project_show(core::ShowData {
+            run,
+            context: vec![change],
+            checked_evaluations: vec![],
+        })
+        .unwrap();
+        let full = show_packet(
+            projection.into(),
+            "full",
+            Timestamp::from_unix_millis(2),
+            Path::new("/unused/test.sqlite"),
+        );
+        assert_eq!(full["advice_policy"]["frozen"], frozen);
+        assert_eq!(full["advice_policy"]["enabled"], false);
+        assert_eq!(
+            full["advice_policy"]["change_record_ids"],
+            json!(["owner-off"])
+        );
+        assert_eq!(full["initial_input"]["advice_departures"], frozen);
+        assert_eq!(full["context"][0]["id"], "owner-off");
+        let snapshot = json!({"run":{"run_id":"run","current_state":"work","lifecycle":"active"},
+            "advice_policy":full["advice_policy"],"completeness":{"advice_policy":"available"}});
+        let action = bounded_show_packet(
+            snapshot,
+            "action",
+            Path::new("/unused/test.sqlite"),
+            std::time::Instant::now(),
+        );
+        assert_eq!(action["advice_policy"], full["advice_policy"]);
+        assert!(render_bounded_show_human(&action, "action").contains("owner-off"));
     }
 }

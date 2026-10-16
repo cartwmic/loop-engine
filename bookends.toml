@@ -2,8 +2,10 @@ prd = "docs/PRD.md"
 
 [classes.e2e_journey]
 pathspecs = [
+  "tests/workspace-integration/tests/c_packets_admission.rs",
   "scripts/external-work-journey.py",
   "scripts/software-change-journey.py",
+  "scripts/narrative-checkpoint-journey.py",
   "scripts/policy-document-journey.py",
   "scripts/research-journey.py",
   "scripts/generate-prd-journey.py",
@@ -11,12 +13,13 @@ pathspecs = [
   "crates/bookends-check/tests/backlog_t09_public.rs",
   "crates/loop-cli/tests/engine/backlog_t01.rs",
   "crates/software-change-provider/tests/provider/backlog_t05.rs",
+  "crates/software-change-provider/tests/provider/challenge_clearance.rs",
   "crates/software-change-provider/tests/provider/backlog_t10.rs",
   "crates/loop-cli/tests/engine/backlog_t02.rs",
   "crates/loop-cli/tests/engine/backlog_t03.rs",
   "crates/loop-cli/tests/workers/backlog_t04.rs",
 ]
-required_ci_jobs = ["baseline-and-source-journey"]
+required_ci_jobs = ["tests"]
 
 [classes.contract]
 pathspecs = [
@@ -27,4 +30,4 @@ pathspecs = [
   "crates/loop-cli/tests/engine/backlog_t03.rs",
   "crates/loop-cli/tests/workers/backlog_t04.rs",
 ]
-required_ci_jobs = ["baseline-and-source-journey"]
+required_ci_jobs = ["tests"]

@@ -84,8 +84,6 @@ fn evaluate(root: &TestDir, mut records: Vec<Value>) -> Value {
                 continue;
             }
             let statement = finding["statement"].as_str().unwrap_or("candidate");
-            let accepted_unresolved =
-                finding["disposition"] == "accepted" && finding["status"] == "unresolved";
             source_records.push(json!({
                 "id": source_id,
                 "kind": "review-evidence",
@@ -93,8 +91,11 @@ fn evaluate(root: &TestDir, mut records: Vec<Value>) -> Value {
                     "gate": gate,
                     "policy_id": finding["policy_id"],
                     "review_stage": "aggregate",
-                    "result": if accepted_unresolved { "fail" } else { "pass" },
-                    "findings": if accepted_unresolved { statement } else { "" },
+                    // Disposition does not erase the original candidate.
+                    // Keep its exact text in an earlier fail; the later
+                    // conforming pass still supplies current review coverage.
+                    "result": "fail",
+                    "findings": statement,
                     "author": {"name": "reviewer", "kind": "agent"},
                     "subject": subject,
                     "subject_revision": revision,

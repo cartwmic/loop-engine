@@ -13,7 +13,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.24.1"
+version = "0.26.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 publish = false
@@ -28,7 +28,11 @@ installers = ["shell"]
 auto-includes = true
 checksum = "sha256"
 dispatch-releases = true
-pr-run-mode = "upload"
+pr-run-mode = "skip"
+github-build-setup = "release-gate-steps.yml"
+global-artifacts-jobs = ["./archive-check"]
+# The checked wrapper replaces only stock CI comparison, not other generation checks.
+allow-dirty = ["ci"]
 
 [profile.dist]
 inherits = "release"

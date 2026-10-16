@@ -48,7 +48,8 @@ fn missing_policies_errors_on_first_check_and_leaves_engine_state_unchanged() {
             "steering-incorporation",
             "command-evidence",
             "criterion-verdict",
-            "goal-verdict"
+            "goal-verdict",
+            "intent-correction"
         ]
     );
 

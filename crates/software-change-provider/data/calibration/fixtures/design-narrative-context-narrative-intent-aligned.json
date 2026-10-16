@@ -1,0 +1,36 @@
+{
+  "ordinary_review": {
+    "kind": "review-evidence",
+    "data": {
+      "gate": "design-narrative-review",
+      "policy_id": "narrative-intent-aligned",
+      "review_stage": "aggregate",
+      "result": "pass",
+      "findings": "",
+      "subject": "design-narrative.json",
+      "subject_revision": "r15/1",
+      "author": {
+        "name": "ordinary-reader",
+        "kind": "agent"
+      },
+      "grounds": {
+        "reason": "The described outcome remains within the frozen intent, acceptance obligations and non-goals; accepted risks do not waive those obligations.",
+        "evidence": [
+          {
+            "locator": "design-narrative.md#L1"
+          }
+        ]
+      }
+    }
+  },
+  "finding_ledger": {
+    "author": {
+      "name": "corpus-driver",
+      "kind": "script"
+    },
+    "gate": "design-narrative-review",
+    "subject": "design-narrative.json",
+    "subject_revision": "r15/1",
+    "findings": []
+  }
+}

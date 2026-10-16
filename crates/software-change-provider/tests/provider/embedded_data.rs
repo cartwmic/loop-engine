@@ -58,7 +58,19 @@ fn dump(destination: &Path) -> std::process::Output {
     // A relocated executable and unrelated cwd must not load checkout data.
     let binary = destination.parent().unwrap().join("software-change");
     if !binary.exists() {
-        fs::copy(workspace_integration::binary("software-change"), &binary).unwrap();
+        // Keep the destination writer out of the multithreaded test parent's FD table.
+        let mut copier = Command::new("/bin/cp");
+        copier
+            .arg(workspace_integration::binary("software-change"))
+            .arg(&binary);
+        let output = super::bounded_process::run(&mut copier, "relocated executable copy")
+            .expect("relocated executable copy should complete");
+        assert!(
+            output.status.success(),
+            "relocated executable copy failed: {:?}; stderr: {:?}",
+            output.status,
+            output.stderr
+        );
     }
     let mut command = Command::new(binary);
     command
@@ -96,7 +108,7 @@ fn data_dump_matches_tree_and_refuses_existing_targets_without_writing() {
         let mut profile: serde_json::Value =
             serde_json::from_slice(&fs::read(data.join(format!("configs/{name}.json"))).unwrap())
                 .unwrap();
-        assert_eq!(profile["config_version"], format!("{name}-14"));
+        assert_eq!(profile["config_version"], format!("{name}-16"));
         assert_eq!(profile["contract_version"], 4);
         let expected_authors = if name == "minimal" { 1 } else { 2 };
         assert_eq!(

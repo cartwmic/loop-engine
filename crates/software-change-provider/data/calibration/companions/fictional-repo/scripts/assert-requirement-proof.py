@@ -1,168 +1,123 @@
 #!/usr/bin/env python3
-"""Check exact acceptance-to-proof mapping against supplied repository evidence."""
-
-from __future__ import annotations
-
-import re
-import sys
+"""NEW four-acceptance exact map/inventory + hash-bound genuine proof checker."""
+import argparse
+import ast
+import hashlib
+import json
 from pathlib import Path
+import re
 
-ACCEPTANCE_REQUIREMENTS = (
+REQUIREMENTS = (
     "A caller can inspect the frozen policies and artifact schemas before evaluating a transition.",
     "A malformed subject artifact is denied with each violated structural rule named.",
     "A checked transition refuses stale, self-authored, duplicate-author, or configured-obligation-incomplete evidence.",
     "The reference workflow reaches its terminal state only after its configured validation obligations are satisfied.",
 )
-EXPECTED_PROOFS = (
-    (
-        "fictional-repo/provider/tests/a1.rs::standard_run_progresses_schema_deny_then_evidence_deny_then_allow",
-        "fictional-repo/provider/tests/a15.rs::every_shipped_profile_starts_and_exposes_policies_and_schemas",
-        "fictional-repo/provider/tests/describe_protocol.rs::describe_matches_committed_snapshot_byte_for_byte",
-        "scripts/production-journey.py::frozen_profile_is_inspectable_before_transition",
-    ),
-    (
-        "schema::tests::instance_collects_object_rules_and_nested_properties",
-        "fictional-repo/provider/tests/evaluate.rs::schema_deny_reports_every_simultaneous_structural_violation",
-        "absent_artifact_is_schema_deny",
-        "unparseable_artifact_is_schema_deny",
-        "revision_link_mismatch_is_schema_deny_naming_both_artifacts",
-        "schema_deny_is_byte_identical_when_only_context_varies",
-        "scripts/production-journey.py::malformed_artifact_denial_names_all_rules",
-    ),
-    (
-        "fictional-repo/provider/src/evidence.rs::stale_revision_does_not_satisfy_and_names_both_revisions",
-        "stale_config_does_not_satisfy_and_names_both_versions",
-        "subject_author_identity_requires_exact_name_and_kind_pair",
-        "n_two_requires_distinct_non_subject_authors_and_rejects_standing_fail",
-        "fictional-repo/provider/tests/evaluate.rs::evidence_phase_denies_with_configured_axis_diagnostics",
-        "scripts/production-journey.py::evidence_denial_reports_each_configured_reason",
-    ),
-    (
-        "scripts/production-journey.py::terminal_validation_gate",
-        "python3 fictional-repo/scripts/assert-doc-authority.py",
-    ),
-)
-INVENTORY_PATH = Path("implementation-evidence/repo-state-2026-08-12.txt")
-INVENTORY_HEADING = "## Executable proof inventory"
-INVENTORY_PREFIX = "proof: "
-BACKTICK = re.compile(r"`([^`]+)`")
-NON_PROOF_INLINE_CODE = frozenset({"validation→end"})
-PUBLIC_JOURNEY_PATH = Path("scripts/production-journey.py")
-PUBLIC_JOURNEY_REQUIRED = (
-    "subprocess.run(",
-    "expected_exit =",
-    "EVIDENCE_CASES = (",
-    "intent-evidence-deficit-",
-    "assert data(denied).get(\"transition\") is None",
-    "append_record(engine, config, run_id, fixtures, repair_fixture)",
-    "validate_setup(args.engine, args.config, args.profile, args.fixtures)",
-)
 
 
-def read_text(path: Path) -> str:
-    try:
-        return path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as error:
-        raise ValueError(f"cannot read {path}: {error}") from error
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def matrix_proofs(matrix: Path, requirement: str) -> tuple[str, ...]:
-    text = read_text(matrix)
-    found = None
-    for line in text.splitlines():
-        cells = line.split("|")
-        if len(cells) < 4 or cells[1].strip() != requirement:
-            continue
-        if found is not None:
-            raise ValueError(f"duplicate acceptance requirement in proof matrix: {requirement}")
-        found = tuple(
-            token for token in BACKTICK.findall(cells[2]) if token not in NON_PROOF_INLINE_CODE
-        )
-    if found is None:
-        raise ValueError(f"acceptance requirement missing from proof matrix: {requirement}")
-    if not found:
-        raise ValueError(f"proof mapping missing for requirement: {requirement}")
-    return found
+def check(root, receipt_path, binding_path, repair_path, evidence_path):
+    inventory = json.loads((root / "implementation-evidence/source-inventory.json").read_text())
+    mapping = json.loads((root / "implementation-evidence/four-acceptance-proof-map.json").read_text())
+    assert [row["requirement"] for row in mapping] == list(REQUIREMENTS), "four exact acceptance rows"
+    matrix = (root / "implementation-evidence/requirement-to-proof.md").read_text()
+    references = set()
+    for expected in mapping:
+        rows = [line.split("|") for line in matrix.splitlines()
+                if line.startswith("| " + expected["requirement"] + " |")]
+        assert len(rows) == 1, "missing/duplicate exact matrix requirement"
+        actual = re.findall(r"`([^`]+)`", rows[0][2])
+        assert actual == expected["proofs"], "matrix proof names disagree"
+        references.update(actual)
+    assert references == set(inventory["proof_inventory"]), "proof inventory differs"
+    for reference in references:
+        filename, name = reference.split("::", 1)
+        path = root / filename
+        assert path.is_file(), "proof source absent"
+        if path.suffix == ".rs":
+            assert re.search(r"fn\s+" + re.escape(name) + r"\s*\(", path.read_text()), "Rust proof name absent"
+        else:
+            tree = ast.parse(path.read_text())
+            assert any(isinstance(node, ast.FunctionDef) and node.name == name
+                       for node in ast.walk(tree)), "Python proof name absent"
+    actual_files = {str(p.relative_to(root)): sha(p) for p in sorted(root.rglob("*"))
+                    if p.is_file() and p.name != "source-inventory.json"}
+    assert actual_files == inventory["files_sha256"], "covered source inventory differs"
+    journey = (root / "scripts/production-journey.py").read_text()
+    prefix = "for record in good[:-1]:"
+    repair = "append(missing)"
+    assert prefix in journey and repair in journey, "public journey lacks actual deficit/repair"
+    assert journey.index(prefix) < journey.index("for defect in") < journey.index(repair), "public journey preloads coverage"
+
+    binding = json.loads(binding_path.read_text())
+    assert sha(receipt_path) == binding["runtime_receipt_sha256"], "runtime receipt identity mismatch"
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["status"] == "passed" and len(receipt["journeys"]) == 3
+    assert all(j["state"] == "end" and j["history"] for j in receipt["journeys"])
+    assert receipt["fixture_before"] == receipt["fixture_after"] == binding["v8_source_sha256"]
+    assert receipt["provider_sha256"] == binding["provider_sha256"]
+    for filename, expected in binding["unchanged_runtime_files"].items():
+        assert sha(root / filename) == expected, "runtime input changed"
+    for filename, entry in binding["runtime_prefixes"].items():
+        if filename in binding["focused_evidence_runtime_changes"]:
+            continue  # Original v8 prefix remains historical; actual v13 proof binds current bytes below.
+        content = (root / filename).read_bytes()
+        assert hashlib.sha256(content[:entry["bytes"]]).hexdigest() == entry["sha256"], "runtime body changed"
+        assert content[entry["bytes"]:].decode().lstrip().startswith(entry["test_only_marker"])
+    assert (root / "scripts/production-journey.py").read_bytes() == Path(binding["v8_journey"]).read_bytes()
+    repair = json.loads(repair_path.read_text())
+    assert repair["status"] == "passed" and len(repair["cases"]) == 2
+    assert repair["cases"][0]["label"] == "old-red" and repair["cases"][0]["contract"]["contract_pass"] is False
+    assert repair["cases"][1]["label"] == "new-green" and repair["cases"][1]["contract"]["contract_pass"] is True
+    assert repair["cases"][1]["corrected_continuation"] == "design-review"
+    assert repair["current_source_sha256"] == binding["focused_proof_source_sha256"], "original repair execution source differs"
+    current_source = {str(p.relative_to(root)): sha(p) for p in sorted(root.rglob("*")) if p.is_file()}
+    changed_since_repair = {name for name in set(current_source) | set(repair["current_source_sha256"])
+                            if current_source.get(name) != repair["current_source_sha256"].get(name)}
+    allowed_docs = {"implementation-evidence/four-acceptance-proof-map.json",
+                    "implementation-evidence/requirement-to-proof.md",
+                    "implementation-evidence/source-inventory.json", "scripts/assert-requirement-proof.py"}
+    evidence = json.loads(evidence_path.read_text())
+    assert sha(evidence_path) == binding["evidence_proof_receipt_sha256"], "evidence receipt identity mismatch"
+    assert evidence["status"] == "passed" and evidence["contract_pass"] is True
+    assert evidence["source_before"] == evidence["source_after"] == binding["evidence_proof_source_sha256"], "original evidence execution source differs"
+    expected_cases = [("valid-control", "completed", False),
+                      ("missing-config-restoration", "rejected", True),
+                      ("stale-with-sufficient", "completed", False),
+                      ("stale-noncounting", "rejected", False),
+                      ("stale-malformed-order-unchanged", "completed", False),
+                      ("standing-fail-and-own-restoration", "rejected", True)]
+    assert [(case["case"], case["event_status"], case["same_author_restoration"])
+            for case in evidence["cases"]] == expected_cases, "evidence scenario outcomes differ"
+    assert all(case["context_unchanged"] is True for case in evidence["cases"])
+    changed_since_evidence = {name for name in set(current_source) | set(evidence["source_before"])
+                             if current_source.get(name) != evidence["source_before"].get(name)}
+    assert changed_since_evidence <= allowed_docs, "runtime/test/data changed after evidence proof"
+    assert set(binding["document_only_successor_paths"]) == allowed_docs
+    assert set(binding["focused_evidence_runtime_changes"]) == {"provider/src/evidence.rs"}
+    assert changed_since_repair <= allowed_docs | {"provider/src/evidence.rs"}, "unproved runtime changes after original repair"
+    for filename, entry in binding["focused_evidence_runtime_changes"].items():
+        assert repair["current_source_sha256"][filename] == entry["before_sha256"]
+        assert sha(root / filename) == evidence["source_before"][filename] == entry["after_sha256"]
+        assert entry["scope"] == "required revision/config shape guard only, original stale author/verdict order preserved"
+    for filename, entry in binding["focused_runtime_changes"].items():
+        assert sha(root / filename) == entry["after_sha256"]
+        assert entry["scope"] == "propagate linked-parent containment error; ordinary parent mismatch/missing unchanged"
+    print("four exact acceptance rows, actual named source inventory, deficit/repair, and genuine runtime receipt agree; not semantic review")
 
 
-def proof_inventory(state: Path) -> tuple[str, ...]:
-    text = read_text(state)
-    if "HEAD: repo-state-2026-08-12" not in text:
-        raise ValueError(f"repository-state evidence has unexpected HEAD: {state}")
-    try:
-        start = text.splitlines().index(INVENTORY_HEADING) + 1
-    except ValueError as error:
-        raise ValueError(f"repository-state evidence missing {INVENTORY_HEADING}") from error
-
-    entries = []
-    for line in text.splitlines()[start:]:
-        if line.startswith("## "):
-            break
-        if not line.strip():
-            continue
-        if not line.startswith(INVENTORY_PREFIX):
-            raise ValueError(f"malformed executable proof inventory line: {line}")
-        identifier = line[len(INVENTORY_PREFIX) :]
-        if not identifier:
-            raise ValueError("executable proof inventory contains empty identifier")
-        if identifier in entries:
-            raise ValueError(f"duplicate executable proof inventory identifier: {identifier}")
-        entries.append(identifier)
-    if not entries:
-        raise ValueError("executable proof inventory is empty")
-    return tuple(entries)
-
-
-def check(root: Path) -> None:
-    matrix = root / "implementation-evidence" / "requirement-to-proof.md"
-    state = root / INVENTORY_PATH
-    actual_by_requirement = tuple(matrix_proofs(matrix, requirement) for requirement in ACCEPTANCE_REQUIREMENTS)
-    for requirement, actual, expected in zip(ACCEPTANCE_REQUIREMENTS, actual_by_requirement, EXPECTED_PROOFS):
-        if actual != expected:
-            raise ValueError(
-                f"proof mapping mismatch for {requirement}: expected {expected!r}, found {actual!r}"
-            )
-
-    actual_inventory = proof_inventory(state)
-    expected_inventory = tuple(proof for proofs in EXPECTED_PROOFS for proof in proofs)
-    if actual_inventory != expected_inventory:
-        raise ValueError(
-            "executable proof inventory mismatch: "
-            f"expected {expected_inventory!r}, found {actual_inventory!r}"
-        )
-
-    journey = read_text(root / PUBLIC_JOURNEY_PATH)
-    missing_journey_contract = [
-        marker for marker in PUBLIC_JOURNEY_REQUIRED if marker not in journey
-    ]
-    if missing_journey_contract:
-        raise ValueError(
-            "public journey contract is incomplete: "
-            f"missing {missing_journey_contract!r}"
-        )
-    if "intent-evidence-good.json" in journey:
-        raise ValueError(
-            "public evidence journey preloads complete intent evidence; "
-            "use an explicit deficit and repair fixture"
-        )
-
-
-def main() -> int:
-    root = Path(sys.argv[1]) if len(sys.argv) == 2 else Path(__file__).resolve().parents[1]
-    if len(sys.argv) > 2:
-        print("assert-requirement-proof: expected zero or one root argument", file=sys.stderr)
-        return 1
-    try:
-        root = root.resolve()
-        if not root.is_dir():
-            raise ValueError(f"companion root is not a directory: {root}")
-        check(root)
-    except (OSError, UnicodeError, ValueError) as error:
-        print(f"assert-requirement-proof: {error}", file=sys.stderr)
-        return 1
-    print("assert-requirement-proof: passed")
-    return 0
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument("--binding", type=Path, required=True)
+    parser.add_argument("--repair-proof", type=Path, required=True)
+    parser.add_argument("--evidence-proof", type=Path, required=True)
+    args = parser.parse_args()
+    check(Path(__file__).resolve().parents[1], args.receipt, args.binding, args.repair_proof, args.evidence_proof)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

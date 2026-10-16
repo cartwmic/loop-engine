@@ -190,6 +190,16 @@ pub(crate) fn verify(
     artifact_root: &Path,
     working_directory: &Path,
 ) -> Result<Checkpoint, String> {
+    verify_with_bytes(phase, artifact_root, working_directory).map(|(checkpoint, _)| checkpoint)
+}
+
+// Return the exact bytes checked by this read, not a reserialization that could
+// silently relabel a retained compact checkpoint as newly formatted proof.
+fn verify_with_bytes(
+    phase: CheckpointPhase,
+    artifact_root: &Path,
+    working_directory: &Path,
+) -> Result<(Checkpoint, Vec<u8>), String> {
     let artifact_root = existing_absolute_directory(artifact_root, "artifact_root")?;
     let checkpoint_path = artifact_root.join(phase.checkpoint_file());
     refuse_checkpoint_symlink(&checkpoint_path)?;
@@ -229,7 +239,7 @@ pub(crate) fn verify(
             );
         }
     }
-    Ok(verified)
+    Ok((verified, stored_bytes))
 }
 
 /// Preserve the exact implementation checkpoint admitted to validation.
@@ -241,8 +251,17 @@ pub(crate) fn verify(
 /// and to the terminal implementation-review approval.
 pub(crate) fn record_accepted_implementation_from_cwd(artifact_root: &Path) -> Result<(), String> {
     let artifact_root = existing_absolute_directory(artifact_root, "artifact_root")?;
-    let accepted = verify_from_cwd(CheckpointPhase::Implementation, &artifact_root)?;
-    let bytes = serialize_checkpoint(&accepted, "accepted implementation proof")?;
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let (accepted, bytes) =
+        verify_with_bytes(CheckpointPhase::Implementation, &artifact_root, &cwd)?;
+    // A formatting-only regeneration is not a second reviewed proof. Keep the
+    // existing immutable entry and its actual checksum, never rewrite it.
+    if read_implementation_proof_history(&artifact_root, true)?
+        .iter()
+        .any(|stored| stored == &accepted)
+    {
+        return Ok(());
+    }
     let digest = sha256_digest(&bytes);
     let history = implementation_proof_history(&artifact_root, true)?;
     let path = history.join(format!("{}.json", digest.trim_start_matches("sha256:")));
@@ -353,13 +372,9 @@ fn read_implementation_proof_history(
             )
         })?;
         validate_checkpoint_values(&checkpoint, CheckpointPhase::Implementation, &path)?;
-        let canonical = serialize_checkpoint(&checkpoint, &path.display().to_string())?;
-        if bytes != canonical {
-            return Err(format!(
-                "{} is not the exact compact serialization of its checkpoint",
-                path.display()
-            ));
-        }
+        // The actual immutable bytes above are the content-addressed identity.
+        // Whitespace/pretty encoding is not proof authority; closed shape and
+        // semantic/internal identity checks remain unchanged.
         checkpoints.push(checkpoint);
     }
     Ok(checkpoints)
@@ -1430,7 +1445,10 @@ fn is_digest(value: &str) -> bool {
 }
 
 fn serialize_checkpoint(checkpoint: &Checkpoint, label: &str) -> Result<Vec<u8>, String> {
-    serde_json::to_vec(checkpoint).map_err(|error| format!("could not serialize {label}: {error}"))
+    // Formatting applies only to the outer file. All state/report/content
+    // digest computation above deliberately retains its original byte encoding.
+    serde_json::to_vec_pretty(checkpoint)
+        .map_err(|error| format!("could not serialize {label}: {error}"))
 }
 
 fn sha256_digest(bytes: &[u8]) -> String {
@@ -1533,6 +1551,128 @@ mod tests {
                 state_sha256: sha256_digest(b"state"),
             },
         }
+    }
+
+    #[test]
+    fn pretty_serialization_preserves_semantics_and_internal_digest_values() {
+        let checkpoint = sample_checkpoint();
+        let compact = serde_json::to_vec(&checkpoint).unwrap();
+        let pretty = serialize_checkpoint(&checkpoint, "test").unwrap();
+        assert!(std::str::from_utf8(&pretty).unwrap().lines().count() > 10);
+        assert!(std::str::from_utf8(&pretty)
+            .unwrap()
+            .contains("\n  \"schema_version\""));
+        assert_eq!(
+            serde_json::from_slice::<Checkpoint>(&pretty).unwrap(),
+            checkpoint
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&compact).unwrap(),
+            serde_json::from_slice::<Value>(&pretty).unwrap()
+        );
+        assert_ne!(sha256_digest(&compact), sha256_digest(&pretty));
+        assert!(!pretty.ends_with(b"\n")); // serde's one default pretty encoder; no extra layer
+    }
+
+    fn write_history(root: &Path, bytes: &[u8]) -> PathBuf {
+        let history = implementation_proof_history(root, true).unwrap();
+        let path = history.join(format!(
+            "{}.json",
+            sha256_digest(bytes).trim_start_matches("sha256:")
+        ));
+        fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn history_accepts_exact_compact_pretty_and_other_whitespace_without_rewriting() {
+        let checkpoint = sample_checkpoint();
+        let compact = serde_json::to_vec(&checkpoint).unwrap();
+        let pretty = serialize_checkpoint(&checkpoint, "test").unwrap();
+        let manual = [b"\n\t".as_slice(), compact.as_slice(), b"  \n".as_slice()].concat();
+        for bytes in [compact, pretty, manual] {
+            let root = TempDir::new();
+            let path = write_history(&root.path, &bytes);
+            let history = read_implementation_proof_history(&root.path, false).unwrap();
+            assert_eq!(history, vec![checkpoint.clone()]);
+            assert_eq!(fs::read(path).unwrap(), bytes);
+            assert!(select_accepted_implementation(&checkpoint, &history).is_ok());
+        }
+    }
+
+    #[test]
+    fn history_refuses_raw_hash_closed_shape_and_semantic_digest_tampering() {
+        let checkpoint = sample_checkpoint();
+        let bytes = serialize_checkpoint(&checkpoint, "test").unwrap();
+        let root = TempDir::new();
+        let path = write_history(&root.path, &bytes);
+        fs::write(&path, [bytes.as_slice(), b"\n"].concat()).unwrap();
+        assert!(read_implementation_proof_history(&root.path, false)
+            .unwrap_err()
+            .contains("content digest"));
+        let root = TempDir::new();
+        let mut value = serde_json::to_value(&checkpoint).unwrap();
+        value["unexpected"] = serde_json::json!(true);
+        write_history(&root.path, &serde_json::to_vec_pretty(&value).unwrap());
+        assert!(read_implementation_proof_history(&root.path, false).is_err());
+        let root = TempDir::new();
+        let mut altered = checkpoint.clone();
+        altered.repository.state_sha256 = sha256_digest(b"different state");
+        write_history(&root.path, &serialize_checkpoint(&altered, "test").unwrap());
+        let history = read_implementation_proof_history(&root.path, false).unwrap();
+        assert!(select_accepted_implementation(&checkpoint, &history)
+            .unwrap_err()
+            .contains("repository state"));
+    }
+
+    #[test]
+    fn retention_uses_verified_bytes_and_does_not_duplicate_format_only_regeneration() {
+        let root = TempDir::new();
+        for name in [
+            "intent.json",
+            "design.json",
+            "plan.json",
+            "implementation-report.json",
+        ] {
+            fs::write(root.path.join(name), b"{\"revision\":\"1\"}").unwrap();
+        }
+        let cwd = std::env::current_dir().unwrap();
+        let checkpoint = create(CheckpointPhase::Implementation, &root.path, &cwd).unwrap();
+        let compact = serde_json::to_vec(&checkpoint).unwrap();
+        fs::write(root.path.join("implementation-checkpoint.json"), &compact).unwrap();
+        record_accepted_implementation_from_cwd(&root.path).unwrap();
+        let history = implementation_proof_history(&root.path, false).unwrap();
+        let files = fs::read_dir(&history)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(files.len(), 1);
+        assert_eq!(fs::read(&files[0]).unwrap(), compact);
+        let regenerated = create(CheckpointPhase::Implementation, &root.path, &cwd).unwrap();
+        assert_eq!(regenerated, checkpoint);
+        record_accepted_implementation_from_cwd(&root.path).unwrap();
+        assert_eq!(fs::read_dir(&history).unwrap().count(), 1);
+        assert_eq!(fs::read(&files[0]).unwrap(), compact);
+        verify_accepted_implementation_from_cwd(&root.path).unwrap();
+        let other = TempDir::new();
+        for name in [
+            "intent.json",
+            "design.json",
+            "plan.json",
+            "implementation-report.json",
+        ] {
+            fs::copy(root.path.join(name), other.path.join(name)).unwrap();
+        }
+        let manual = [b"\n ".as_slice(), compact.as_slice(), b"\n".as_slice()].concat();
+        fs::write(other.path.join("implementation-checkpoint.json"), &manual).unwrap();
+        record_accepted_implementation_from_cwd(&other.path).unwrap();
+        let files = fs::read_dir(implementation_proof_history(&other.path, false).unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(files.len(), 1);
+        assert_eq!(fs::read(&files[0]).unwrap(), manual);
+        verify_accepted_implementation_from_cwd(&other.path).unwrap();
     }
 
     #[test]

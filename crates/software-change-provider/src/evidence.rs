@@ -99,6 +99,15 @@ pub(crate) enum EvidenceDiagnostic {
         required: u64,
         distinct_present: usize,
     },
+    AssessmentMissing {
+        group: String,
+        author: AuthorIdentity,
+    },
+    AssessmentInconsistent {
+        group: String,
+        author: AuthorIdentity,
+        assessment_ids: Vec<String>,
+    },
     MixedAuthors {
         expected_stage: String,
         expected: Vec<AuthorIdentity>,
@@ -117,6 +126,8 @@ impl EvidenceDiagnostic {
             Self::Unverified { .. } => "unverified",
             Self::Independence { .. } => "independence",
             Self::MixedAuthors { .. } => "mixed_authors",
+            Self::AssessmentMissing { .. } => "assessment_missing",
+            Self::AssessmentInconsistent { .. } => "assessment_inconsistent",
         }
     }
 }
@@ -160,6 +171,13 @@ pub(crate) struct EvidenceEvaluation {
     /// Raw failures remain failures; these source IDs satisfied a judgment
     /// obligation only through an explicit driver disposition.
     pub(crate) satisfied_by_disposition: Vec<String>,
+    /// Direct review rows that the existing staged reader found conforming
+    /// for a configured stage/axis. This is a final-classification projection,
+    /// not an exclusion from context, supersession, ledger debt, or history.
+    /// A gate may consume it only after this evaluation is satisfied: R14
+    /// then guarantees any attributable malformed marks have been cleared.
+    #[serde(skip)]
+    pub(crate) classification_review_ids: BTreeSet<String>,
 }
 
 impl EvidenceEvaluation {
@@ -286,10 +304,31 @@ pub(crate) fn evaluate_evidence_with_dispositions(
     let mut global_malformed = Vec::new();
     let mut global_unverified = Vec::new();
 
+    let excluded = match software_change_provider::recovery::excluded_record_ids(
+        context,
+        gate,
+        subject,
+        artifact_root,
+    ) {
+        Ok(ids) => ids,
+        Err(error) => {
+            global_malformed.push(error);
+            BTreeSet::new()
+        }
+    };
+    let active_context: Vec<_> = context
+        .iter()
+        .filter(|row| !excluded.contains(row.id.as_str()))
+        .cloned()
+        .collect();
+
     // Stages 1–3: filter, attribute, then structurally conform. Iteration
     // order is the supplied append/sequence order; map insertion below is
     // therefore latest-wins without relying on wall-clock metadata.
     for (context_index, record) in context.iter().enumerate() {
+        if excluded.contains(record.id.as_str()) {
+            continue;
+        }
         if record.kind == REVIEW_EVIDENCE_KIND {
             let Some(data) = record.data.as_object() else {
                 continue;
@@ -297,7 +336,14 @@ pub(crate) fn evaluate_evidence_with_dispositions(
             let attribution = classify_attribution(data, context_index, gate, axis_namespace);
             match attribution {
                 Attribution::Current { axis } => {
-                    match parse_conforming(data, subject, artifact_root) {
+                    match parse_conforming_with_context(
+                        data,
+                        subject,
+                        artifact_root,
+                        false,
+                        &context[..context_index],
+                        false,
+                    ) {
                         Ok(mut conforming) => {
                             conforming.source_id = record.id.as_str().to_owned();
                             record_conforming(
@@ -325,7 +371,7 @@ pub(crate) fn evaluate_evidence_with_dispositions(
                 Attribution::Inert(inert) => inert_records.push(inert),
             }
         } else if record.kind == EVIDENCE_APPLICABILITY_KIND {
-            if loop_integrations::review_intake::superseded_origin(context, record) {
+            if loop_integrations::review_intake::superseded_origin(&active_context, record) {
                 continue;
             }
             let attribution =
@@ -435,19 +481,7 @@ pub(crate) fn evaluate_evidence_with_dispositions(
 
             // Subject-author evidence is structurally valid but never counts
             // toward any axis, using exact (name, kind) equality.
-            if (record.author == *subject_author && !policy.self_review())
-                || ledger.is_some_and(|ledger| {
-                    ledger.findings.iter().any(|finding| {
-                        finding.disposition
-                            == crate::finding_ledger::FindingDisposition::RetiredAuthor
-                            && context.iter().any(|source| {
-                                source.id.as_str() == finding.source.record_id()
-                                    && source.data.get("author")
-                                        == Some(&serde_json::json!(record.author))
-                            })
-                    })
-                })
-            {
+            if record.author == *subject_author && !policy.self_review() {
                 continue;
             }
 
@@ -554,6 +588,7 @@ pub(crate) fn evaluate_evidence_with_dispositions(
         informational,
         inert_records,
         satisfied_by_disposition,
+        classification_review_ids: BTreeSet::new(),
     }
 }
 
@@ -622,9 +657,26 @@ pub(crate) fn evaluate_staged_evidence_excluding(
         .collect();
     let mut latest: BTreeMap<(String, String, String, AuthorIdentity), ConformingEvidence> =
         BTreeMap::new();
+    let mut classification_review_ids = BTreeSet::new();
     let mut inert_records = Vec::new();
     let mut global_malformed = Vec::new();
     let mut global_unverified = Vec::new();
+
+    let mut excluded = excluded_records.clone();
+    match software_change_provider::recovery::excluded_record_ids(
+        context,
+        gate,
+        subject,
+        artifact_root,
+    ) {
+        Ok(ids) => excluded.extend(ids),
+        Err(error) => global_malformed.push(error),
+    }
+    let active_context: Vec<_> = context
+        .iter()
+        .filter(|row| !excluded.contains(row.id.as_str()))
+        .cloned()
+        .collect();
 
     let add_for_axis =
         |axis: &str, reasons: &[String], target: &mut BTreeMap<StageAxis, Vec<String>>| {
@@ -636,7 +688,7 @@ pub(crate) fn evaluate_staged_evidence_excluding(
         };
 
     for (context_index, record) in context.iter().enumerate() {
-        if excluded_records.contains(record.id.as_str()) {
+        if excluded.contains(record.id.as_str()) {
             continue;
         }
 
@@ -646,7 +698,14 @@ pub(crate) fn evaluate_staged_evidence_excluding(
             };
             match classify_attribution(data, context_index, gate, axis_namespace) {
                 Attribution::Current { axis } => {
-                    match parse_conforming_with_stage(data, subject, artifact_root, require_stage) {
+                    match parse_conforming_with_context(
+                        data,
+                        subject,
+                        artifact_root,
+                        require_stage,
+                        &context[..context_index],
+                        false,
+                    ) {
                         Ok(mut conforming) => {
                             conforming.source_id = record.id.as_str().to_owned();
                             if stages
@@ -654,6 +713,7 @@ pub(crate) fn evaluate_staged_evidence_excluding(
                                 .and_then(|axes| axes.get(&axis))
                                 .is_some()
                             {
+                                classification_review_ids.insert(record.id.as_str().to_owned());
                                 record_stage_conforming(
                                     &mut malformed,
                                     &mut unverified,
@@ -684,7 +744,7 @@ pub(crate) fn evaluate_staged_evidence_excluding(
                 Attribution::Inert(inert) => inert_records.push(inert),
             }
         } else if record.kind == EVIDENCE_APPLICABILITY_KIND {
-            if loop_integrations::review_intake::superseded_origin(context, record) {
+            if loop_integrations::review_intake::superseded_origin(&active_context, record) {
                 continue;
             }
             let attribution =
@@ -774,6 +834,7 @@ pub(crate) fn evaluate_staged_evidence_excluding(
             let mut distinct_present = BTreeSet::new();
             let mut satisfied_authors = BTreeSet::new();
             let mut present_authors = BTreeSet::new();
+            let mut assessment_causes = Vec::new();
 
             for ((record_stage, record_axis, _revision, _author), record) in &latest {
                 if record_stage != stage || record_axis != axis {
@@ -790,19 +851,7 @@ pub(crate) fn evaluate_staged_evidence_excluding(
                 {
                     continue;
                 }
-                if (record.author == *subject_author && !policy.self_review())
-                    || ledger.is_some_and(|ledger| {
-                        ledger.findings.iter().any(|finding| {
-                            finding.disposition
-                                == crate::finding_ledger::FindingDisposition::RetiredAuthor
-                                && context.iter().any(|source| {
-                                    source.id.as_str() == finding.source.record_id()
-                                        && source.data.get("author")
-                                            == Some(&serde_json::json!(record.author))
-                                })
-                        })
-                    })
-                {
+                if record.author == *subject_author && !policy.self_review() {
                     continue;
                 }
                 if ledger.and_then(|ledger| ledger.disposition_for(&record.source_id))
@@ -834,8 +883,14 @@ pub(crate) fn evaluate_staged_evidence_excluding(
                     }
                 }
             }
+            let raw_satisfied_count = satisfied_authors.len();
+            let mut stage_authors = present_authors.clone();
             if let Some(group) = policy.group() {
-                if config_version.ends_with("-14") {
+                if config_version
+                    .rsplit_once('-')
+                    .and_then(|(_, suffix)| suffix.parse::<u64>().ok())
+                    .is_some_and(|version| version >= 14)
+                {
                     let matches_group = |author: &AuthorIdentity| {
                         latest
                             .get(&(
@@ -848,45 +903,68 @@ pub(crate) fn evaluate_staged_evidence_excluding(
                     };
                     satisfied_authors.retain(&matches_group);
                     present_authors.retain(matches_group);
+                    stage_authors = present_authors.clone();
                 }
                 let members: Vec<_> = axes
                     .values()
                     .filter(|axis| axis.group() == Some(group))
                     .collect();
                 if members.len() > 1 {
-                    let complete = |author: &AuthorIdentity| {
-                        let mut assessment = None;
-                        members.iter().all(|member| {
-                            let peer = latest.get(&(
-                                stage.clone(),
-                                member.id().to_owned(),
-                                current_revision.to_owned(),
-                                author.clone(),
-                            ));
-                            peer.is_some_and(|peer| {
-                                if peer.config_version != config_version
-                                    || peer.group.as_deref() != Some(group)
-                                {
-                                    return false;
-                                }
-                                let Some(id) = peer.assessment_id.as_deref() else {
-                                    return false;
-                                };
-                                match assessment {
-                                    Some(previous) => previous == id,
-                                    None => {
-                                        assessment = Some(id);
-                                        true
-                                    }
-                                }
+                    for author in &present_authors {
+                        let peers = members
+                            .iter()
+                            .filter_map(|member| {
+                                latest
+                                    .get(&(
+                                        stage.clone(),
+                                        member.id().to_owned(),
+                                        current_revision.to_owned(),
+                                        author.clone(),
+                                    ))
+                                    .filter(|peer| {
+                                        peer.config_version == config_version
+                                            && peer.group.as_deref() == Some(group)
+                                    })
                             })
-                        })
+                            .collect::<Vec<_>>();
+                        if peers.len() == members.len() {
+                            let ids = peers
+                                .iter()
+                                .filter_map(|peer| peer.assessment_id.clone())
+                                .collect::<BTreeSet<_>>();
+                            if peers.iter().any(|peer| peer.assessment_id.is_none()) {
+                                assessment_causes.push(EvidenceDiagnostic::AssessmentMissing {
+                                    group: group.to_owned(),
+                                    author: author.clone(),
+                                });
+                            } else if ids.len() > 1 {
+                                assessment_causes.push(
+                                    EvidenceDiagnostic::AssessmentInconsistent {
+                                        group: group.to_owned(),
+                                        author: author.clone(),
+                                        assessment_ids: ids.into_iter().collect(),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    let complete = |author: &AuthorIdentity| {
+                        group_assessment_matches(
+                            &latest,
+                            stage,
+                            axis,
+                            policy,
+                            axes,
+                            current_revision,
+                            config_version,
+                            author,
+                        )
                     };
                     satisfied_authors.retain(&complete);
                     present_authors.retain(complete);
                 }
             }
-            current_authors.insert(key.clone(), present_authors);
+            current_authors.insert(key.clone(), stage_authors);
 
             let malformed_reasons = malformed.get(&key).expect("configured stage/axis");
             let unverified_reasons = unverified.get(&key).expect("configured stage/axis");
@@ -904,6 +982,9 @@ pub(crate) fn evaluate_staged_evidence_excluding(
                     });
                 }
                 axis_diagnostics.extend(failed_findings);
+                let metadata_only_shortage = !assessment_causes.is_empty()
+                    && raw_satisfied_count as u64 >= policy.required_authors();
+                axis_diagnostics.extend(assessment_causes);
                 if !malformed_reasons.is_empty() {
                     axis_diagnostics.push(EvidenceDiagnostic::Malformed {
                         reasons: malformed_reasons.clone(),
@@ -915,7 +996,9 @@ pub(crate) fn evaluate_staged_evidence_excluding(
                         .cloned()
                         .map(|reason| EvidenceDiagnostic::Unverified { reason }),
                 );
-                if (satisfied_authors.len() as u64) < policy.required_authors() {
+                if (satisfied_authors.len() as u64) < policy.required_authors()
+                    && !metadata_only_shortage
+                {
                     axis_diagnostics.push(EvidenceDiagnostic::Independence {
                         required: policy.required_authors(),
                         distinct_present: satisfied_authors.len(),
@@ -1012,6 +1095,7 @@ pub(crate) fn evaluate_staged_evidence_excluding(
         informational,
         inert_records,
         satisfied_by_disposition,
+        classification_review_ids,
     }
 }
 
@@ -1023,10 +1107,13 @@ fn record_stage_conforming(
     conforming: ConformingEvidence,
 ) {
     let key = (conforming.review_stage.clone(), axis);
-    malformed
-        .get_mut(&key)
-        .expect("configured stage/axis")
-        .clear();
+    // R14 clears malformed debt for the same gate/axis, not only the
+    // correction's stage. Verdict coverage and standings remain stage-keyed.
+    for ((_, pending_axis), reasons) in malformed.iter_mut() {
+        if pending_axis == &key.1 {
+            reasons.clear();
+        }
+    }
     unverified
         .get_mut(&key)
         .expect("configured stage/axis")
@@ -1093,7 +1180,7 @@ pub(crate) enum EvidenceParseError {
 }
 
 impl EvidenceParseError {
-    fn into_message(self) -> String {
+    pub(crate) fn into_message(self) -> String {
         match self {
             Self::Malformed(reasons) | Self::Unverified(reasons) => reasons.join("; "),
         }
@@ -1128,16 +1215,118 @@ fn record_conforming(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
+fn group_assessment_matches(
+    latest: &BTreeMap<(String, String, String, AuthorIdentity), ConformingEvidence>,
+    stage: &str,
+    axis: &str,
+    policy: &PolicyAxis,
+    axes: &BTreeMap<String, PolicyAxis>,
+    revision: &str,
+    config_version: &str,
+    author: &AuthorIdentity,
+) -> bool {
+    let Some(group) = policy.group() else {
+        return true;
+    };
+    if config_version
+        .rsplit_once('-')
+        .and_then(|(_, suffix)| suffix.parse::<u64>().ok())
+        .is_some_and(|version| version >= 14)
+        && !latest
+            .get(&(
+                stage.to_owned(),
+                axis.to_owned(),
+                revision.to_owned(),
+                author.clone(),
+            ))
+            .is_some_and(|record| record.group.as_deref() == Some(group))
+    {
+        return false;
+    }
+    let members: Vec<_> = axes
+        .values()
+        .filter(|axis| axis.group() == Some(group))
+        .collect();
+    if members.len() <= 1 {
+        return true;
+    }
+    let mut assessment = None;
+    members.iter().all(|member| {
+        latest
+            .get(&(
+                stage.to_owned(),
+                member.id().to_owned(),
+                revision.to_owned(),
+                author.clone(),
+            ))
+            .is_some_and(|peer| {
+                if peer.config_version != config_version || peer.group.as_deref() != Some(group) {
+                    return false;
+                }
+                let Some(id) = peer.assessment_id.as_deref() else {
+                    return false;
+                };
+                match assessment {
+                    Some(previous) => previous == id,
+                    None => {
+                        assessment = Some(id);
+                        true
+                    }
+                }
+            })
+    })
+}
+
 /// Parse one review-evidence object for use as an immutable source record.
 /// The returned values are the original judgment fields; callers must not
 /// replace its author, result, findings, or config identity with attestation
 /// metadata from another context record.
+/// Candidate eligibility shared by intake and table; aggregate author floors
+/// are separate and are never checked here.
+pub(crate) fn validate_direct_review(
+    gate: &str,
+    axis: &str,
+    self_review: bool,
+    direct: bool,
+) -> Result<(), String> {
+    if direct && axis == "intent-sufficient" && gate == "intent-review" {
+        return Err("cold intent-sufficient reconstruction cannot be self-review".into());
+    }
+    if direct && !self_review {
+        return Err("self review is not allowed for this axis".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn parse_evidence_record(
     value: &Value,
     expected_subject: &str,
     artifact_root: Option<&Value>,
 ) -> Result<ConformingEvidence, String> {
     parse_evidence_record_for_stage(value, expected_subject, artifact_root, false)
+}
+
+/// Resolve same-run citations against the original earlier prefix.
+pub(crate) fn parse_evidence_record_for_stage_with_context(
+    value: &Value,
+    expected_subject: &str,
+    artifact_root: Option<&Value>,
+    require_stage: bool,
+    context: &[ContextRecord],
+) -> Result<ConformingEvidence, String> {
+    let object = value
+        .as_object()
+        .ok_or("review-evidence source data must be an object")?;
+    parse_conforming_with_context(
+        object,
+        expected_subject,
+        artifact_root,
+        require_stage,
+        context,
+        false,
+    )
+    .map_err(EvidenceParseError::into_message)
 }
 
 pub(crate) fn parse_evidence_record_for_stage(
@@ -1166,6 +1355,37 @@ fn parse_conforming_with_stage(
     expected_subject: &str,
     artifact_root: Option<&Value>,
     require_stage: bool,
+) -> Result<ConformingEvidence, EvidenceParseError> {
+    parse_conforming_with_context(
+        data,
+        expected_subject,
+        artifact_root,
+        require_stage,
+        &[],
+        false,
+    )
+}
+
+/// Ledger sources retain identity and citation shape without rebinding files.
+pub(crate) fn parse_historical_evidence_record(
+    value: &Value,
+    expected_subject: &str,
+    require_stage: bool,
+) -> Result<ConformingEvidence, String> {
+    let data = value
+        .as_object()
+        .ok_or("review-evidence source data must be an object")?;
+    parse_conforming_with_context(data, expected_subject, None, require_stage, &[], true)
+        .map_err(EvidenceParseError::into_message)
+}
+
+pub(crate) fn parse_conforming_with_context(
+    data: &Map<String, Value>,
+    expected_subject: &str,
+    artifact_root: Option<&Value>,
+    require_stage: bool,
+    context: &[ContextRecord],
+    historical: bool,
 ) -> Result<ConformingEvidence, EvidenceParseError> {
     let mut reasons = Vec::new();
     for field in ["group", "assessment_id"] {
@@ -1213,7 +1433,14 @@ fn parse_conforming_with_stage(
         match grounds.as_ref() {
             Some(grounds) => {
                 let root = artifact_root.and_then(Value::as_str).map(Path::new);
-                if let Some(root) = root {
+                if historical {
+                    if let Err(error) = crate::criterion::validate_grounding_shape_version(
+                        grounds,
+                        review_contract_version,
+                    ) {
+                        reasons.push(error);
+                    }
+                } else if let Some(root) = root {
                     let target_revision = fs::read(root.join(expected_subject))
                         .ok()
                         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
@@ -1228,10 +1455,11 @@ fn parse_conforming_with_stage(
                             if data.get("subject_revision").and_then(Value::as_str)
                                 == Some(current) =>
                         {
-                            crate::criterion::validate_grounding_version(
+                            crate::criterion::validate_grounding_with_context(
                                 grounds,
                                 root,
                                 review_contract_version,
+                                context,
                             )
                         }
                         Some(_) => crate::criterion::validate_grounding_shape_version(
@@ -1350,7 +1578,7 @@ fn parse_applicable_evidence(
     )
 }
 
-fn parse_applicable_evidence_for_stage(
+pub(crate) fn parse_applicable_evidence_for_stage(
     context: &[ContextRecord],
     applicability_record: &ContextRecord,
     expected_subject: &str,
@@ -1397,37 +1625,7 @@ fn parse_applicable_evidence_at_with_stage(
     captured_batch: bool,
     require_stage: bool,
 ) -> Result<ConformingEvidence, EvidenceParseError> {
-    let applicability = serde_json::from_value::<EvidenceApplicability>(
-        applicability_record.data.clone(),
-    )
-    .map_err(|error| {
-        EvidenceParseError::Malformed(vec![format!(
-            "evidence-applicability data must contain only origin, target, attesting_driver, and reason: {error}"
-        )])
-    })?;
-    if applicability.origin.kind != "context-record" {
-        return Err(EvidenceParseError::Unverified(vec![
-            "evidence-applicability origin kind must be `context-record`".to_owned(),
-        ]));
-    }
-    if applicability.origin.id.trim().is_empty() {
-        return Err(EvidenceParseError::Unverified(vec![
-            "evidence-applicability origin.id must be non-empty".to_owned(),
-        ]));
-    }
-    if applicability.origin.assignment_id.is_some() {
-        return Err(EvidenceParseError::Unverified(vec![
-            "evidence-applicability context-record origin must not carry assignment_id".to_owned(),
-        ]));
-    }
-    validate_attesting_driver(&applicability.attesting_driver).map_err(|reason| {
-        EvidenceParseError::Malformed(vec![format!("evidence-applicability {reason}")])
-    })?;
-    if applicability.reason.trim().is_empty() {
-        return Err(EvidenceParseError::Malformed(vec![
-            "evidence-applicability reason must be non-empty".to_owned(),
-        ]));
-    }
+    let applicability = parse_applicability_shape(&applicability_record.data)?;
     validate_applicability_target(
         &applicability.target,
         expected_subject,
@@ -1466,7 +1664,7 @@ fn parse_applicable_evidence_at_with_stage(
         )]));
     }
 
-    let mut evidence = parse_conforming_with_stage(
+    let mut evidence = parse_conforming_with_context(
         source.data.as_object().ok_or_else(|| {
             EvidenceParseError::Malformed(vec![format!(
                 "evidence source context record `{}` is not an object",
@@ -1476,12 +1674,125 @@ fn parse_applicable_evidence_at_with_stage(
         expected_subject,
         artifact_root,
         require_stage,
+        &context[..context
+            .iter()
+            .position(|record| record.id == source.id)
+            .expect("resolved source")],
+        false,
     )?;
     // The driver explicitly attests that the immutable judgment applies to
     // this current target. It is not a semantic inference by the provider.
     evidence.source_id = source.id.as_str().to_owned();
     evidence.subject_revision = current_revision.to_owned();
     Ok(evidence)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn counted_aggregate_sources(
+    context: &[ContextRecord],
+    gate: &str,
+    subject: &str,
+    revision: &str,
+    subject_author: &AuthorIdentity,
+    config_version: &str,
+    policy: &PolicyAxis,
+    axes: &BTreeMap<String, PolicyAxis>,
+    artifact_root: Option<&Value>,
+    ledger: Option<&crate::finding_ledger::FindingLedgerSnapshot>,
+    require_stage: bool,
+) -> Result<Vec<ContextRecord>, String> {
+    let excluded = software_change_provider::recovery::excluded_record_ids(
+        context,
+        gate,
+        subject,
+        artifact_root,
+    )?;
+    let active: Vec<_> = context
+        .iter()
+        .filter(|row| !excluded.contains(row.id.as_str()))
+        .cloned()
+        .collect();
+    let mut latest = BTreeMap::new();
+    for record in &active {
+        let parsed = if record.kind == REVIEW_EVIDENCE_KIND {
+            parse_evidence_record_for_stage_with_context(
+                &record.data,
+                subject,
+                artifact_root,
+                require_stage,
+                &context[..context
+                    .iter()
+                    .position(|source| source.id == record.id)
+                    .expect("counted source")],
+            )
+            .map(|mut evidence| {
+                evidence.source_id = record.id.to_string();
+                evidence
+            })
+        } else if record.kind == EVIDENCE_APPLICABILITY_KIND {
+            if loop_integrations::review_intake::superseded_origin(&active, record) {
+                continue;
+            }
+            parse_applicable_evidence_for_stage(
+                context,
+                record,
+                subject,
+                revision,
+                artifact_root,
+                require_stage,
+            )
+            .map_err(EvidenceParseError::into_message)
+        } else {
+            continue;
+        };
+        let Ok(evidence) = parsed else {
+            continue;
+        };
+        if evidence.gate != gate
+            || !axes.contains_key(&evidence.policy_id)
+            || evidence.review_stage != "aggregate"
+            || evidence.subject_revision != revision
+        {
+            continue;
+        }
+        latest.insert(
+            (
+                "aggregate".to_owned(),
+                evidence.policy_id.clone(),
+                evidence.subject_revision.clone(),
+                evidence.author.clone(),
+            ),
+            evidence,
+        );
+    }
+    Ok(latest
+        .values()
+        .filter(|evidence| {
+            evidence.policy_id == policy.id()
+                && group_assessment_matches(
+                    &latest,
+                    "aggregate",
+                    policy.id(),
+                    policy,
+                    axes,
+                    revision,
+                    config_version,
+                    &evidence.author,
+                )
+                && evidence.config_version == config_version
+                && (evidence.author != *subject_author || policy.self_review())
+                && (evidence.result == EvidenceResult::Pass
+                    || ledger
+                        .and_then(|ledger| ledger.disposition_for(&evidence.source_id))
+                        .is_some())
+        })
+        .filter_map(|evidence| {
+            context
+                .iter()
+                .find(|row| row.id.as_str() == evidence.source_id)
+                .cloned()
+        })
+        .collect())
 }
 
 /// A batch may carry only a source already authorized in its launch snapshot.
@@ -1648,7 +1959,48 @@ struct ApplicabilityTarget {
     checkpoint: Option<Value>,
 }
 
-fn validate_applicability_target(
+/// Canonical new-write target; narrow read compatibility for old criterion/goal
+/// carry rows accepted by the former subject_revision gate implementation.
+pub(crate) fn canonical_target(target: &Value, historical_verdict: bool) -> Result<Value, String> {
+    let mut value = target.clone();
+    if let Some(alias) = value.get("subject_revision").cloned() {
+        if !historical_verdict || value.get("revision").is_some() {
+            return Err("applicability target requires canonical revision; ambiguous/conflicting aliases are refused".into());
+        }
+        if alias.as_str().is_none_or(|s| s.trim().is_empty()) {
+            return Err("historical applicability revision is invalid".into());
+        }
+        let object = value
+            .as_object_mut()
+            .ok_or("applicability target must be object")?;
+        object.remove("subject_revision");
+        object.insert("revision".into(), alias);
+    }
+    Ok(value)
+}
+
+pub(crate) fn parse_applicability_shape(
+    data: &Value,
+) -> Result<EvidenceApplicability, EvidenceParseError> {
+    let applicability: EvidenceApplicability = serde_json::from_value(data.clone()).map_err(|error| EvidenceParseError::Malformed(vec![format!("evidence-applicability data must contain only origin, target, attesting_driver, and reason: {error}")]))?;
+    if applicability.origin.kind != "context-record"
+        || applicability.origin.id.trim().is_empty()
+        || applicability.origin.assignment_id.is_some()
+    {
+        return Err(EvidenceParseError::Unverified(vec!["evidence-applicability requires an earlier context-record origin without assignment_id".into()]));
+    }
+    validate_attesting_driver(&applicability.attesting_driver).map_err(|reason| {
+        EvidenceParseError::Malformed(vec![format!("evidence-applicability {reason}")])
+    })?;
+    if applicability.reason.trim().is_empty() {
+        return Err(EvidenceParseError::Malformed(vec![
+            "evidence-applicability reason must be non-empty".into(),
+        ]));
+    }
+    Ok(applicability)
+}
+
+pub(crate) fn validate_applicability_target(
     value: &Value,
     expected_subject: &str,
     current_revision: &str,
@@ -2993,6 +3345,74 @@ mod tests {
     }
 
     #[test]
+    fn assessment_and_stage_identity_causes_are_not_false_independence_shortages() {
+        let entries:Vec<_>=["individual","aggregate"].into_iter().flat_map(|stage| ["axis-a","axis-b"].into_iter().map(move |axis| json!({"id":axis,"description":axis,"review_stage":stage,"required_authors":1,"group":format!("group-{stage}")}))).collect();
+        let config=parse_initial_input(&json!({"contract_version":3,"criterion_policy":{"required_authors":1,"goal_required_authors":1},"config_version":"cause-test-15","review_policies":{GATE:entries},"artifact_schemas":{SUBJECT:metadata_schema()}})).unwrap();
+        let stages = config
+            .staged_axes_for_gate(GATE)
+            .unwrap()
+            .iter()
+            .map(|(stage, axes)| (stage.as_str().to_owned(), axes.clone()))
+            .collect();
+        let mut records = Vec::new();
+        for stage in ["individual", "aggregate"] {
+            for axis in ["axis-a", "axis-b"] {
+                let mut data = evidence(
+                    GATE,
+                    axis,
+                    "pass",
+                    "",
+                    &author("reviewer", "agent"),
+                    SUBJECT,
+                    "1",
+                    "cause-test-15",
+                );
+                data["review_stage"] = json!(stage);
+                data["group"] = json!(format!("group-{stage}"));
+                data["assessment_id"] = json!(format!("return-{stage}"));
+                records.push(context_record(records.len() as u64 + 1, data));
+            }
+        }
+        let evaluate = |records: &[ContextRecord]| {
+            evaluate_staged_evidence_with_dispositions(
+                records,
+                GATE,
+                SUBJECT,
+                "1",
+                &author("writer", "human"),
+                "cause-test-15",
+                &stages,
+                config.axis_namespace(),
+                None,
+                None,
+                true,
+            )
+        };
+        assert!(evaluate(&records).is_satisfied());
+        let mut missing = records.clone();
+        for record in &mut missing {
+            record.data.as_object_mut().unwrap().remove("assessment_id");
+        }
+        let result = evaluate(&missing);
+        assert!(has_category(&result, "assessment_missing"));
+        assert!(!has_category(&result, "independence"));
+        let mut inconsistent = records.clone();
+        inconsistent[1].data["assessment_id"] = json!("different-return");
+        let result = evaluate(&inconsistent);
+        assert!(has_category(&result, "assessment_inconsistent"));
+        assert!(!has_category(&result, "independence"));
+        let mut mixed = records;
+        for record in &mut mixed {
+            if record.data["review_stage"] == "aggregate" {
+                record.data["author"]["name"] = json!("different-reviewer");
+            }
+        }
+        let result = evaluate(&mixed);
+        assert!(has_category(&result, "mixed_authors"));
+        assert!(!has_category(&result, "independence"));
+    }
+
+    #[test]
     fn filter_ignores_non_review_kind_and_non_object_data() {
         let config = config_with_axes(1);
         let reviewer = author("reviewer", "agent");
@@ -3081,6 +3501,182 @@ mod tests {
         );
         assert!(result.is_satisfied());
         assert!(result.diagnostics().is_empty());
+    }
+
+    fn assert_singleton_individual_group_membership(
+        config_version: &str,
+        wrong_group_counts: bool,
+    ) {
+        const PLAN_GATE: &str = "plan-review";
+        const PLAN_SUBJECT: &str = "plan.json";
+        const PLAN_AXIS: &str = "parallelism-honest";
+        const PLAN_GROUP: &str = "plan-review.individual.parallelism-honest";
+        let config = parse_initial_input(&json!({
+            "contract_version": 4,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+            "config_version": config_version,
+            "review_policies": {
+                PLAN_GATE: [{
+                    "id": PLAN_AXIS,
+                    "description": "whole-graph concurrency",
+                    "review_stage": "individual",
+                    "group": PLAN_GROUP
+                }]
+            },
+            "artifact_schemas": {PLAN_SUBJECT: metadata_schema()}
+        }))
+        .expect("singleton individual group config valid");
+        let reviewer = author("reviewer", "agent");
+        let owner = author("owner", "human");
+        let mut judgment = evidence(
+            PLAN_GATE,
+            PLAN_AXIS,
+            "pass",
+            "",
+            &reviewer,
+            PLAN_SUBJECT,
+            "1",
+            config_version,
+        );
+        judgment["review_stage"] = json!("individual");
+        judgment["group"] = json!("plan-review.individual.dependencies-honest");
+        let evaluate_judgment = |judgment| {
+            evaluate_staged_evidence_with_dispositions(
+                &[context_record(1, judgment)],
+                PLAN_GATE,
+                PLAN_SUBJECT,
+                "1",
+                &owner,
+                config.config_version(),
+                config.staged_axes_for_gate(PLAN_GATE).unwrap(),
+                config.axis_namespace(),
+                config.artifact_root(),
+                None,
+                true,
+            )
+        };
+        let result = evaluate_judgment(judgment.clone());
+        assert_eq!(
+            result.is_satisfied(),
+            wrong_group_counts,
+            "{config_version}"
+        );
+        if !wrong_group_counts {
+            assert_eq!(result.diagnostics().len(), 1);
+            assert_eq!(axis(&result).review_stage, "individual");
+            assert_eq!(axis(&result).axis, PLAN_AXIS);
+            assert_eq!(
+                axis(&result).diagnostics,
+                vec![EvidenceDiagnostic::Independence {
+                    required: 1,
+                    distinct_present: 0,
+                }]
+            );
+        }
+
+        judgment["group"] = json!(PLAN_GROUP);
+        assert!(
+            evaluate_judgment(judgment).is_satisfied(),
+            "{config_version}"
+        );
+    }
+
+    #[test]
+    fn successor_15_singleton_individual_group_rejects_wrong_group() {
+        assert_singleton_individual_group_membership("high-rigor-15", false);
+    }
+
+    #[test]
+    fn revision_14_singleton_individual_group_still_rejects_wrong_group() {
+        assert_singleton_individual_group_membership("high-rigor-14", false);
+    }
+
+    #[test]
+    fn custom_singleton_individual_group_still_counts_wrong_group() {
+        assert_singleton_individual_group_membership("custom-profile", true);
+    }
+
+    #[test]
+    fn staged_r14_correction_clears_axis_debt_without_borrowing_stage_coverage() {
+        let entries: Vec<_> = ["individual", "aggregate"]
+            .into_iter()
+            .map(|stage| {
+                json!({"id":"axis","description":"axis","review_stage":stage,
+                "required_authors":1,"group":format!("group-{stage}")})
+            })
+            .collect();
+        let config = parse_initial_input(&json!({
+            "contract_version":3,
+            "criterion_policy":{"required_authors":1,"goal_required_authors":1},
+            "config_version":"staged-r14-test-15",
+            "review_policies":{GATE:entries},
+            "artifact_schemas":{SUBJECT:metadata_schema()}
+        }))
+        .unwrap();
+        let stages = config
+            .staged_axes_for_gate(GATE)
+            .unwrap()
+            .iter()
+            .map(|(stage, axes)| (stage.as_str().to_owned(), axes.clone()))
+            .collect();
+        let judgment = |stage: &str, result: &str, findings: &str| {
+            let mut data = evidence(
+                GATE,
+                "axis",
+                result,
+                findings,
+                &author("reviewer", "agent"),
+                SUBJECT,
+                "1",
+                "staged-r14-test-15",
+            );
+            data["review_stage"] = json!(stage);
+            data["group"] = json!(format!("group-{stage}"));
+            data["assessment_id"] = json!(format!("return-{stage}"));
+            data
+        };
+        let evaluate = |records: &[ContextRecord]| {
+            evaluate_staged_evidence_with_dispositions(
+                records,
+                GATE,
+                SUBJECT,
+                "1",
+                &author("writer", "human"),
+                "staged-r14-test-15",
+                &stages,
+                config.axis_namespace(),
+                None,
+                None,
+                true,
+            )
+        };
+        let individual = context_record(1, judgment("individual", "pass", ""));
+        let aggregate = context_record(2, judgment("aggregate", "pass", ""));
+        assert!(evaluate(&[individual.clone(), aggregate.clone()]).is_satisfied());
+        let mut malformed = judgment("aggregate", "pass", "");
+        malformed.as_object_mut().unwrap().remove("findings");
+        let malformed = context_record(3, malformed);
+        let blocked = evaluate(&[individual.clone(), aggregate.clone(), malformed.clone()]);
+        assert!(!blocked.is_satisfied());
+        assert!(has_category(&blocked, "malformed"));
+        let repair = context_record(4, judgment("aggregate", "pass", ""));
+        let repaired = evaluate(&[
+            individual.clone(),
+            aggregate.clone(),
+            malformed.clone(),
+            repair.clone(),
+        ]);
+        assert!(repaired.is_satisfied());
+        assert!(!has_category(&repaired, "malformed"));
+        let no_individual = evaluate(&[aggregate.clone(), malformed.clone(), repair.clone()]);
+        assert!(!no_individual.is_satisfied());
+        assert!(!has_category(&no_individual, "malformed"));
+        assert!(has_category(&no_individual, "missing"));
+        let fail = context_record(1, judgment("individual", "fail", "standing failure"));
+        let failed = evaluate(&[fail, aggregate, malformed, repair]);
+        assert!(!failed.is_satisfied());
+        assert!(has_category(&failed, "failed"));
+        assert!(!has_category(&failed, "malformed"));
     }
 
     #[test]

@@ -148,7 +148,7 @@ where
     };
 
     if let Some(attestation) = request.override_attestation {
-        return commit_override(&run, &transition, attestation, persistence);
+        return commit_override(&run, &transition, attestation, gateway, persistence);
     }
 
     if transition.kind.is_check_free() {
@@ -239,21 +239,6 @@ fn enforce_advice_closure<P>(
 where
     P: Persistence + ?Sized,
 {
-    let enabled = run
-        .initial_input
-        .as_object()
-        .is_some_and(|input| input.contains_key(crate::ADVICE_DEPARTURES_INPUT_KEY));
-    if !enabled {
-        return if request.advice_exception.is_some() {
-            Err(OperationOutcome::rejected(
-                "advice-exception-disabled",
-                "this run has no frozen advice departure map",
-            ))
-        } else {
-            Ok(None)
-        };
-    }
-
     let context = persistence
         .load_context_records(&run.id)
         .map_err(persistence_error)?;
@@ -266,8 +251,17 @@ where
         run.control_revision.as_u64(),
         &context,
     )
-    .map_err(|message| OperationOutcome::rejected("advice-transition-incomplete", message))?
-    .expect("enabled map returns advice closure status");
+    .map_err(|message| OperationOutcome::rejected("advice-transition-incomplete", message))?;
+    let Some(due) = due else {
+        return if request.advice_exception.is_some() {
+            Err(OperationOutcome::rejected(
+                "advice-exception-disabled",
+                "this run has no effective advice departure map",
+            ))
+        } else {
+            Ok(None)
+        };
+    };
 
     match request.advice_exception.as_ref() {
         Some(exception) => {
@@ -319,15 +313,48 @@ where
     }
 }
 
-fn commit_override<P: Persistence + ?Sized>(
+fn commit_override<G, P>(
     run: &crate::Run,
     transition: &Transition,
     attestation: crate::StateVisitAttestation,
+    gateway: &G,
     persistence: &P,
-) -> OperationOutcome<Result> {
+) -> OperationOutcome<Result>
+where
+    G: ProviderGateway + ?Sized,
+    P: Persistence + ?Sized,
+{
     let lifecycle = match target_lifecycle(&run.workflow, transition) {
         Ok(value) => value,
         Err(issue) => return OperationOutcome::error_with_issue(issue),
+    };
+    // An override skips provider evaluation, but a capturing workflow still
+    // retains what the run is leaving with. Capture failure refuses the
+    // override rather than silently committing without the effect.
+    let capture_append = if run.workflow.capture && transition.kind.is_checked() {
+        let context = match persistence.load_context_records(&run.id) {
+            Ok(context) => context,
+            Err(error) => return persistence_error(error),
+        };
+        let mut context = context;
+        context.sort_by_key(|record| record.sequence);
+        let capture_request = crate::EvaluationRequest::new(
+            run.workflow.clone(),
+            run.initial_input.clone(),
+            context,
+            transition.clone(),
+            Vec::new(),
+        );
+        match gateway.capture(
+            &run.provider_association,
+            capture_request,
+            crate::CaptureExit::Override,
+        ) {
+            Ok(effect) => effect,
+            Err(error) => return provider_error(error),
+        }
+    } else {
+        None
     };
     let mut request = CommitTransitionRequest::new(
         run.id.clone(),
@@ -336,6 +363,7 @@ fn commit_override<P: Persistence + ?Sized>(
         transition.clone(),
         lifecycle,
     );
+    request.capture_append = capture_append;
     request.exception = Some(crate::TransitionOverride {
         attestation,
         skipped_bound_checks: Vec::new(),
@@ -380,19 +408,36 @@ where
     // `load_checked_evaluation_snapshot` is the complete persistence activity
     // for this phase.  The gateway call is deliberately made after it
     // returns, so provider execution is never inside a persistence boundary.
+    let capture_request = run.workflow.capture.then(|| evaluation_request.clone());
     let evaluation = match gateway.evaluate(&snapshot.run.provider_association, evaluation_request)
     {
         Ok(result) => result,
         Err(error) => return provider_error(error),
     };
     match evaluation {
-        EvaluationResult::Allow { context_append } => commit_checked_allow(
-            snapshot,
-            transition,
-            context_append,
-            advice_exception,
-            persistence,
-        ),
+        EvaluationResult::Allow { context_append } => {
+            // Capture runs only after an allow, with the same snapshot the
+            // provider evaluated. Failure refuses the event; nothing commits.
+            let capture_append = match capture_request {
+                Some(request) => match gateway.capture(
+                    &snapshot.run.provider_association,
+                    request,
+                    crate::CaptureExit::Checked,
+                ) {
+                    Ok(effect) => effect,
+                    Err(error) => return provider_error(error),
+                },
+                None => None,
+            };
+            commit_checked_allow(
+                snapshot,
+                transition,
+                context_append,
+                capture_append,
+                advice_exception,
+                persistence,
+            )
+        }
         EvaluationResult::Deny { feedback } => {
             record_checked_denial(snapshot, transition, feedback, persistence)
         }
@@ -410,6 +455,7 @@ fn commit_checked_allow<P>(
     snapshot: crate::CheckedEvaluationSnapshot,
     transition: &Transition,
     context_append: Option<crate::ContextAppendEffect>,
+    capture_append: Option<crate::ContextAppendEffect>,
     advice_exception: Option<crate::AdviceExceptionAttestation>,
     persistence: &P,
 ) -> OperationOutcome<Result>
@@ -428,7 +474,8 @@ where
         transition.clone(),
         resulting_lifecycle,
     )
-    .with_context_append(context_append);
+    .with_context_append(context_append)
+    .with_capture_append(capture_append);
     if let Some(exception) = advice_exception {
         request = request.with_advice_exception(exception);
     }
@@ -572,6 +619,8 @@ mod tests {
         snapshot_requests: RefCell<Vec<CheckedEvaluationSnapshotRequest>>,
         commit_requests: RefCell<Vec<CommitTransitionRequest>>,
         denial_requests: RefCell<Vec<RecordDenialRequest>>,
+        context: RefCell<Vec<ContextRecord>>,
+        append_requests: RefCell<Vec<AppendContextRequest>>,
         invocations: RefCell<Vec<WorkSlotInvocation>>,
         subjects: RefCell<std::collections::BTreeMap<String, String>>,
     }
@@ -635,10 +684,20 @@ mod tests {
             failure()
         }
 
+        fn load_append_snapshot(
+            &self,
+            request: &AppendContextRequest,
+        ) -> std::result::Result<crate::AppendSnapshot, PersistenceError> {
+            let run = self.load_authoritative_run(&request.run_id)?;
+            let context = self.context.borrow().clone();
+            Ok(crate::AppendSnapshot { run, context })
+        }
+
         fn append_context(
             &self,
-            _request: AppendContextRequest,
+            request: AppendContextRequest,
         ) -> std::result::Result<AppendContextResult, PersistenceError> {
+            self.append_requests.borrow_mut().push(request);
             failure()
         }
 
@@ -683,7 +742,7 @@ mod tests {
             &self,
             _run_id: &RunId,
         ) -> std::result::Result<Vec<ContextRecord>, PersistenceError> {
-            failure()
+            Ok(self.context.borrow().clone())
         }
 
         fn load_history(
@@ -1101,5 +1160,107 @@ mod tests {
             persistence.commit_requests.borrow()[0].resulting_lifecycle,
             Lifecycle::Final
         );
+    }
+    fn advice_context(id: &str, kind: &str, data: Value, sequence: u64) -> ContextRecord {
+        ContextRecord::new(
+            id,
+            kind,
+            data,
+            sequence.into(),
+            Timestamp::from_unix_millis(1),
+        )
+    }
+
+    fn advice_policy_change(occasions: Value) -> ContextRecord {
+        advice_context(
+            "owner-change",
+            crate::ADVICE_POLICY_CHANGE_RECORD_KIND,
+            json!({
+                "actor":{"name":"owner","kind":"human"},"state_visit":4,"reason":"Change pending advice",
+                "advice_departures":{"version":1,"occasions":occasions}
+            }),
+            3,
+        )
+    }
+
+    #[test]
+    fn advice_event_off_start_enablement_blocks_then_removal_allows_pending_departure() {
+        let current = run(Lifecycle::Active, "start");
+        let enabled = advice_policy_change(
+            json!([{"state":"start","event":"finish","occasion_id":"review"}]),
+        );
+        let persistence = FakePersistence::with_run(current.clone());
+        persistence.context.borrow_mut().push(enabled);
+        let gateway = FakeGateway::default();
+        let outcome = execute(Request::new("run-1", "finish"), &gateway, &persistence);
+        assert_eq!(
+            outcome.issue().unwrap().code,
+            "advice-transition-incomplete"
+        );
+        assert!(outcome
+            .issue()
+            .unwrap()
+            .message
+            .contains("no driver record"));
+        assert!(persistence.commit_requests.borrow().is_empty());
+        assert!(gateway.requests.borrow().is_empty());
+
+        let mut initial_on = current;
+        initial_on.initial_input["advice_departures"] = json!({"version":1,"occasions":[
+            {"state":"start","event":"finish","occasion_id":"review"}
+        ]});
+        let persistence = FakePersistence::with_run(initial_on);
+        persistence.context.borrow_mut().extend([
+            advice_context("source", "note", json!({}), 1),
+            advice_context(
+                "due",
+                crate::ADVICE_OCCASION_RECORD_KIND,
+                json!({
+                    "source_state":"start","state_visit":4,"event":"finish","occasion_id":"review",
+                    "target":{},"triggered":true,"trigger_source_ids":["source"],"response_ids":[]
+                }),
+                2,
+            ),
+            advice_policy_change(json!([])),
+        ]);
+        let transition = Transition::check_free("start", "finish", "done");
+        *persistence.commit.borrow_mut() = Some(Ok(successful_commit(
+            run(Lifecycle::Final, "done"),
+            transition,
+        )));
+        assert!(execute(Request::new("run-1", "finish"), &gateway, &persistence).is_completed());
+        assert_eq!(persistence.commit_requests.borrow().len(), 1);
+        assert!(gateway.requests.borrow().is_empty());
+    }
+
+    #[test]
+    fn advice_append_refusal_never_calls_storage_and_names_duplicate() {
+        let mut current = run(Lifecycle::Active, "start");
+        current.initial_input["advice_departures"] = json!({"version":1,"occasions":[
+            {"state":"start","event":"finish","occasion_id":"review"}
+        ]});
+        let data = json!({"source_state":"start","state_visit":4,"event":"finish","occasion_id":"review",
+            "target":{},"triggered":false,"reason":"No admissible question"});
+        let persistence = FakePersistence::with_run(current);
+        persistence.context.borrow_mut().push(advice_context(
+            "existing",
+            crate::ADVICE_OCCASION_RECORD_KIND,
+            data.clone(),
+            1,
+        ));
+        let outcome = crate::execute_append(
+            AppendContextRequest::new(
+                "run-1",
+                "duplicate",
+                crate::ADVICE_OCCASION_RECORD_KIND,
+                data,
+                Timestamp::from_unix_millis(1),
+            ),
+            &persistence,
+        );
+        assert_eq!(outcome.issue().unwrap().code, "advice-record-refused");
+        assert!(outcome.issue().unwrap().message.contains("existing"));
+        assert!(persistence.append_requests.borrow().is_empty());
+        assert_eq!(persistence.context.borrow().len(), 1);
     }
 }

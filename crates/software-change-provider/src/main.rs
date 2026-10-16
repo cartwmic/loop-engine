@@ -4,6 +4,7 @@
 //! errors use exit 1, and a successfully written result uses exit 0.
 
 mod artifacts;
+mod capture;
 mod checkpoint;
 mod config;
 mod criterion;
@@ -12,8 +13,11 @@ mod evidence;
 #[allow(dead_code)]
 mod finding_ledger;
 mod gates;
+mod narratives;
+mod option_evaluation;
 mod overlay;
 mod protocol;
+mod record_facts;
 mod recovery_contract;
 mod review_batch;
 mod review_candidates;
@@ -26,6 +30,7 @@ mod workflow;
 use protocol::{DescribeRequest, EvaluateRequest};
 use serde::Serialize;
 use serde_json::Value;
+use software_change_provider::{admission, commission};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -247,6 +252,8 @@ fn run_protocol() -> i32 {
     match operation.as_str() {
         "describe" => describe(request),
         "evaluate" => evaluate(request),
+        "capture" => capture_operation(request),
+        "admit" => admit_operation(request),
         other => protocol_error(format!("unsupported provider operation `{other}`")),
     }
 }
@@ -300,7 +307,7 @@ fn bookends_preview_from_args(args: &[String]) -> i32 {
 }
 
 fn provider_help() -> i32 {
-    println!("software-change\n\nCommands: author-counts, data-dump, bookends-preview, setup, advice-request, checkpoint, review-candidates, prepare-validation, commission, source-identity\nStdin operations: describe, evaluate\nsetup (--rigor minimal|standard|high | --profile FILE) --output FILE (--enable-advice | --decline-advice) [--bookends]");
+    println!("software-change\n\nCommands: author-counts, data-dump, bookends-preview, setup, advice-request, checkpoint, review-candidates, prepare-validation, commission, source-identity\nStdin operations: describe, evaluate, capture\nsetup (--rigor minimal|standard|high | --profile FILE) --output FILE (--enable-advice | --decline-advice) [--bookends]");
     0
 }
 
@@ -419,8 +426,69 @@ fn describe(request: Value) -> i32 {
         }
     }
     match workflow::describe_workflow(request.initial_input.as_ref()) {
-        Ok(workflow) => write_json(&workflow),
+        Ok(workflow) => write_json(&workflow.with_capture(true).with_admit(true)),
         Err(message) => protocol_error(message),
+    }
+}
+
+fn admit_operation(request: Value) -> i32 {
+    let request = match serde_json::from_value::<protocol::AdmitRequest>(request) {
+        Ok(request) if request.operation == "admit" => request,
+        Ok(_) => return protocol_error("admit request has wrong operation".into()),
+        Err(error) => return protocol_error(format!("invalid admit request: {error}")),
+    };
+    if request.workflow.id.as_str() != "software-change"
+        || !request
+            .workflow
+            .states
+            .iter()
+            .any(|state| state.id == request.current_state)
+        || request.record.id.as_str().trim().is_empty()
+        || request.record.kind.trim().is_empty()
+    {
+        return protocol_error("admit requires software-change workflow, known current state and nonblank candidate identity/kind".into());
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    let mut last = None;
+    for record in &request.context {
+        if !ids.insert(record.id.as_str())
+            || last.is_some_and(|sequence| sequence >= record.sequence)
+        {
+            return protocol_error(
+                "admit context must have unique IDs in durable sequence order".into(),
+            );
+        }
+        last = Some(record.sequence);
+    }
+    if ids.contains(request.record.id.as_str()) {
+        return protocol_error("admit candidate ID is already stored".into());
+    }
+    let ctx = match admission::AdmissionContext::new(
+        &request.initial_input,
+        &request.context,
+        request.current_state.as_str(),
+        request.state_visit,
+        &request.workflow,
+    ) {
+        Ok(ctx) => ctx,
+        Err(error) => return evaluation_error(&error),
+    };
+    match admission::check(&ctx, &request.record) {
+        Ok(()) => write_json(&serde_json::json!({})),
+        Err(refusal) => write_json(&serde_json::json!({"refused":refusal})),
+    }
+}
+
+fn capture_operation(request: Value) -> i32 {
+    let request =
+        match serde_json::from_value::<loop_integrations::retention::CaptureRequest>(request) {
+            Ok(request) if request.operation == "capture" => request,
+            Ok(_) => return protocol_error("capture request has the wrong operation".into()),
+            Err(error) => return protocol_error(format!("invalid capture request: {error}")),
+        };
+    match capture::capture(&request) {
+        Ok(response) => write_json(&response),
+        Err(message) => evaluation_error(&message),
     }
 }
 

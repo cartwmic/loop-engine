@@ -12,7 +12,7 @@ When editing or driving this provider, load the [skill](skills/using-software-ch
 
 For checkpoint operations, align the external driver's cwd and provider launch cwd with the same repository root: verification binds the provider process's current repository, not merely checkpoint's `--working-directory`. Do not move a checkpoint across repositories or recreate it to hide a Git/source change. Root Git approval rules remain separate.
 
-From the repository root, rebuild before testing changed provider behavior:
+From the repository root, inspect active catalogs and preserve frozen executable paths under checkout-root `AGENTS.md` before rebuilding changed provider behavior. For focused checks:
 
 ```sh
 cargo build --locked -p loop-cli -p software-change-provider
@@ -20,17 +20,17 @@ cargo test -p software-change-provider
 python3 scripts/run-central-tests.py --filter software_change
 ```
 
-Crate manifests set `autotests = false`: the Cargo command above runs unit tests, not the integration files under `tests/`. The central runner above is required after provider changes and builds its own fresh binary handoff.
+Crate manifests set `autotests = false`: the provider Cargo command above runs unit tests, not the integration files under `tests/`. The central runner executes focused integration checks and builds the required binaries. A narrower unit check may use `cargo test -p software-change-provider <filter>`.
 
-Final software-change calibration has an ignored completeness gate; the final-proof owner must explicitly run it with the central runner's fresh handoff:
+Final software-change calibration has an ignored completeness gate; the final-proof owner must explicitly run it:
 
 ```sh
-python3 scripts/run-central-tests.py --nextest --nextest-run-ignored only --filter calibration_manifest_has_no_pending_rows_for_final_validation
+cargo test -p workspace-integration --test workspace calibration_manifest_has_no_pending_rows_for_final_validation -- --ignored
 ```
 
 Ordinary tests alone do not establish complete calibration. If the gate reports pending rows, preserve the failure and report incomplete calibration rather than relabeling it.
 
-Use the root guide's source journey after provider changes; use its packaged-smoke rule only for packaging changes. Keep `src/embedded_data.rs` inventories current when adding bundled data. Root `AGENTS.md` owns catalog/environment safety, observation and Git approval rules.
+Final proof is checkout-root `scripts/baseline.sh` plus the root `AGENTS.md` boundary-table union: software-change changes require the full software-change and external-work journeys. Use the root packaged-smoke rule only for packaging changes. Draft/audit README/AGENTS through policy-document under the root document procedure. Release generation/checking uses checkout-root `python3 scripts/generate-release.py` / `python3 scripts/generate-release.py --check`, never stock workflow generation. Keep `src/embedded_data.rs` inventories current when adding bundled data. Root `AGENTS.md` owns catalog/environment safety, observation and Git approval rules.
 
 ## Completion
 

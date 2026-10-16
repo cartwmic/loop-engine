@@ -36,7 +36,7 @@ PYHASH
 
 When delivering historical judgments during revisions, load the skill’s Explicit historical review context section. Full show alone does not select prior judgments for reviewer delivery; selected stale findings are historical context, not current proof.
 
-From the repository root, rebuild before testing changed provider behavior:
+From the repository root, inspect active catalogs and preserve frozen executable paths under checkout-root `AGENTS.md` before rebuilding changed provider behavior. For focused checks:
 
 ```sh
 cargo build --locked -p loop-cli -p policy-document-provider
@@ -44,9 +44,9 @@ cargo test -p policy-document-provider
 python3 scripts/run-central-tests.py --filter policy_document
 ```
 
-Crate manifests set `autotests = false`: the Cargo command above runs unit tests, not the integration files under `tests/`. The central runner above is required after provider changes and builds its own fresh binary handoff.
+Crate manifests set `autotests = false`: the provider Cargo command above runs unit tests, not the integration files under `tests/`. The central runner executes focused integration checks and builds the required binaries. A narrower unit check may use `cargo test -p policy-document-provider <filter>`.
 
-Use the root guide's source journey after provider changes; use its packaged-smoke rule only for packaging changes. Keep `src/embedded_data.rs` inventories current when adding bundled data. Root `AGENTS.md` owns catalog/environment safety, observation rules and Git approval.
+Final proof is checkout-root `scripts/baseline.sh` plus the root `AGENTS.md` boundary-table union: policy-document changes require draft, audit and external-work journeys. Draft/audit README/AGENTS through this provider under the root document procedure, not direct unaudited edits. Release generation/checking uses checkout-root `python3 scripts/generate-release.py` / `python3 scripts/generate-release.py --check`, never stock workflow generation. Use the root packaged-smoke rule only for packaging changes. Keep `src/embedded_data.rs` inventories current when adding bundled data. Root `AGENTS.md` owns catalog/environment safety, observation rules and Git approval.
 
 ## Completion
 

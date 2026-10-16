@@ -1,0 +1,42 @@
+name: Check archive versions
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  archive-check:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-apple-darwin
+            runner: macos-14
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: artifacts-*
+          path: artifacts
+          merge-multiple: true
+      - name: Run every archived binary with --version
+        shell: bash
+        env:
+          DIST_PLAN: ${{ inputs.plan }}
+          ARCHIVE_TARGET: ${{ matrix.target }}
+        run: |
+          printf '%s\n' "$DIST_PLAN" > "$RUNNER_TEMP/archive-plan.json"
+          python3 scripts/archive-version-check.py \
+            --plan "$RUNNER_TEMP/archive-plan.json" \
+            --target "$ARCHIVE_TARGET" --artifact-dir artifacts

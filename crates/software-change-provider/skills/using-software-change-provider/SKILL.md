@@ -1,6 +1,6 @@
 ---
 name: using-software-change-provider
-description: Use when driving software-change intent, design, plan, implementation, reconciliation and validation with externally performed work, independent reviews and driver-owned finding disposition.
+description: Use when driving software-change phases, optional reviewed narratives and owner checkpoints with externally performed work, independent reviews and driver-owned finding disposition.
 ---
 
 # Using the software-change provider
@@ -9,8 +9,9 @@ description: Use when driving software-change intent, design, plan, implementati
 
 Discover the operator path, observable outcome, constraints, accepted risks and non-goals
 before drafting. Ask about consequential ambiguity; do not turn a chosen mechanism into
-intent. Budget the serial dependency closure, implementation report, proof and review.
-Escalate a concrete budget blocker instead of silently retrying.
+intent. Plan the serial dependency closure, implementation report, proof and review.
+Respect owner-set spend/resource limits (none by default); escalate a concrete limit
+blocker, not an ordinary rerun within authorized scope.
 Simple-first/YAGNI/KISS apply: complexity needs a current requirement/failure and an
 inadequate simpler alternative, not hypothetical future hardening.
 
@@ -34,10 +35,11 @@ The engine never executes agents, advisors or proof commands.
 
 Display and hash the exact per-run profile, confirm its identity, all live policies,
 groups/stages, self-review rules and author counts with the user, and rehash before
-start. Separately confirm external role/model commands, write ownership, budget and
-proof owner. Never substitute a model or silently reduce an axis/floor.
-Started runs retain frozen policy; inspect effective author-counts and use only
-explicit owner-attested amendments for supported count changes.
+start. Separately confirm external role/model commands, write ownership, owner-set
+spend/resource limits (none by default) and proof owner. Never substitute a model or silently reduce an axis/floor.
+Started runs retain frozen input; inspect effective author-counts and use only
+explicit owner-attested amendments for supported count changes. On supporting
+runtimes, owner advice-policy-change records govern the effective advice map.
 
 ## Setup
 
@@ -53,12 +55,192 @@ loop-engine --json --config /absolute/providers.toml start software-change @/abs
 ```
 
 `setup` edits policy only. Tools prepare or evaluate data, not external execution.
-Setup starts no run or worker. Inspect output/explanation and effective policy;
+Setup starts no run or worker. Current shipped source IDs are `minimal-16`, `standard-16` and `high-rigor-16`; setup refuses historical shipped IDs through -15 and reports these supported IDs. An identity bump is not semantic calibration or applicability. Preserve frozen older runtime/profile bytes. Inspect output/explanation and effective policy;
 --set, --add-axis and --remove-axis are explicit policy edits, not executor controls.
 Confirm every changed obligation, author floor and advice/Bookends state before start.
 Use --bookends only for an explicit opt-in. Read the resulting exact config/contract
 versions; do not apply current contracts to historical runs or silently migrate them.
 Register the absolute provider command under exact alias software-change.
+
+## Optional narratives and owner checkpoints
+
+Use the current source provider for this procedure. Its `minimal-16`, `standard-16`
+and `high-rigor-16` profiles default `extra.narratives` and `extra.checkpoints` to
+empty lists. Installed 0.24.1 and existing `-14` runs retain their earlier capabilities
+and obligations; do not change their runtime or infer these options from this skill.
+
+Choose phases through setup's boolean settings. For all supported phases:
+
+```sh
+software-change setup --rigor standard --decline-advice --output /absolute/profile.json \
+  --set narrative.design=true --set narrative.plan=true --set narrative.validation=true \
+  --set checkpoint.intent=true --set checkpoint.design=true --set checkpoint.plan=true \
+  --set checkpoint.implementation=true --set checkpoint.validation=true
+```
+
+Use `--rigor high` for high-rigor. A setting with `false` removes that phase;
+disabling a narrative also removes its two materialized review gates. Setup writes
+the phase lists under `extra` and `<phase>-narrative-review` /
+`<phase>-narrative-adversarial-review` under `review_policies`. Inspect
+`FILE.explain.json`: `overrides` records each choice and `effective` exposes
+`narratives`, `checkpoints` and review policies. Confirm exact output bytes before
+start. Lists, gates, stages, floors and self-review rules freeze with initial input;
+later profile-file edits have no effect on the active run.
+
+### Write and review the narrative
+
+1. Clear the phase's configured artifact ordinary review, then challenge review.
+   Wait for `<phase>-narrative` before writing prose. Reviewless routes ask for it
+   after their checked artifact exit; they establish no semantic artifact approval.
+   JSON stays authoritative and its bytes must remain unchanged during narrative work.
+2. Read the [writing guide](../../data/templates/narrative.md) and
+   [binding schema](../../data/narrative-schema.json). Write the standalone markdown
+   and canonical JSON binding under the run's `artifact_root`:
+
+   | Phase | Approved artifact | Markdown | Binding/review subject |
+   |---|---|---|---|
+   | design | design.json | design-narrative.md | design-narrative.json |
+   | plan | plan.json | plan-narrative.md | plan-narrative.json |
+   | validation | validation-report.json | validation-narrative.md | validation-narrative.json |
+
+   Use plain English for an engineer without Loop Engine context. Preserve material
+   qualifications, risks and evidence references. Validation prose distinguishes
+   delivered outcomes, successful/failed/missing proof and residual limitations.
+3. Bind the exact artifact subject, revision and lowercase 64-hex SHA-256, the latest
+   approved-artifact context record's actual ID, and markdown filename/hash. Set
+   `revision` to `<exact artifact revision>/<positive counter>` (e.g. `3/1`, no leading
+   zeroes); declare the actual author. The template contains the closed JSON example.
+   On reviewless exits approval may be nested as `data.approved_artifact` in an
+   `artifact-admitted` record; implementation facts may share a `reconciliation-decision`
+   record. Cite the enclosing engine context ID. Do not invent a separate nested ID.
+4. Observe and request the shown `narrative-ready` (or final `passed`). Admission
+   records `narrative-admitted` and pins that single-use revision to the markdown bytes.
+   An admitted revision can never be admitted again, including after restoring old prose.
+5. In `<phase>-narrative-review`, commission with completed full show; for example:
+
+   ```sh
+   software-change commission --slot design-narrative-review --stage aggregate < /absolute/full-show.json
+   ```
+
+   Inspect `missing_inputs`, `review_target`, `review_sources` and `approved_artifact`.
+   Supply the markdown, binding, approved artifact and frozen intent to reviewers.
+   For high-rigor, commission `individual` before `aggregate` with the same two
+   identities; first aggregate sessions receive no individual-stage judgments.
+   Citations must name sources they actually inspected. Follow Per-gate loop intake
+   with genuine requests/returns, `review-candidates`, accepted `review-evidence`
+   and the driver `finding-ledger` for the binding's composite revision.
+6. Cover the materialized `narrative-faithful`, `narrative-intent-aligned` and
+   `narrative-understandable` axes at each configured stage/group/floor. Shipped
+   minimal uses one aggregate author; standard uses two; high-rigor uses two at
+   individual and aggregate stages, preserving the configured author-set rules and
+   peer isolation. Inspect full show and `author-counts` for effective obligations.
+   Zero-review fixtures prove mechanics only and cannot stand in for high-rigor proof.
+7. Clear ordinary findings before commissioning `<phase>-narrative-adversarial-review`.
+   Challenge tests the clean conclusion. Request shown `approved`, or `passed` on
+   the last hop. JSON and markdown must still match the latest admissions and approval.
+
+For prose corrections use the narrative review's check-free `revise`, rewrite with
+an unused counter, and repeat both reviews. For a JSON defect use `revise-design`,
+`revise-plan` or `revise-validation` from the narrative draft/review to its phase draft.
+A new artifact revision needs fresh/appraised permissible artifact review, a fresh
+narrative prefix and a new decision. Preserve accepted findings and evidence history.
+
+### Wait for and record the owner decision
+
+At `<phase>-checkpoint`, commission that exact slot with completed full show.
+Read `owner_approval_view` and its current subject/revision/sources; its
+`owner_approval.status: not-performed` supplies no approval. The subject is the
+narrative binding when enabled, otherwise the artifact. Intent and implementation
+always use their artifacts. Ask the owner about those exact bytes and retain the
+answer verbatim. Follow checkout-root `docs/agent-usage.md` (Owner decision records)
+for the closed `owner-decision` example, ordinary append and checked event forms.
+
+- Approve: append the exact current checkpoint/subject/revision, `decision: approve`,
+  nonblank verbatim `text` and actual `actor`. Omit `target`/`reason` or use null.
+  Observe, then request shown `approved` (final validation uses `passed`).
+- Reject artifact: retain nonblank reason/text and `target: artifact`, even when the
+  checkpoint subject is the narrative. Checked `revise` returns to the phase draft
+  (`explore`, `design`, `plan`, `implement` or `validation`). Use a never-admitted
+  artifact revision and fresh or explicitly re-appraised eligible evidence; judgments
+  recorded before the latest artifact rejection cannot be carried by later applicability.
+  Repeat any enabled narrative review and obtain a fresh owner decision.
+- Reject narrative: retain reason/text and `target: narrative`. Checked
+  `revise-narrative` returns to `<phase>-narrative`; use a never-admitted composite
+  revision, repeat ordinary/challenge narrative reviews and obtain a new decision.
+  The unchanged artifact and its reviews stay valid. This route exists only with a narrative.
+- Earlier-phase correction: take the shown check-free `revise-intent`, `revise-design`,
+  `revise-plan` or `revise-implementation` to an earlier phase's draft, without a rejection
+  or any new artifact/report. This does not approve the checkpoint. Forward re-entry
+  requires current review and a fresh owner decision on the current subject revision.
+
+The latest well-formed decision for this checkpoint across all revisions controls.
+A later decision for another subject/revision leaves the current checkpoint pending;
+an old approval cannot revive. Malformed decisions are ignored with diagnostics.
+Actor kinds human/agent/script are supported claims; there is no human authentication.
+`intent-comparison` and checkpoint approval satisfy separate obligations. An override
+never supplies approval and remains visible as exceptional completion.
+
+### Freshness, recovery and completion
+
+In option-enabled phases, artifact admission records the current revision/hash at
+the checked artifact-bearing boundary and refuses any previously admitted revision.
+Implementation's `implementation-ready` handoff to reconciliation remains report-free;
+its report schema check/admission occurs at the post-reconciliation `reconciliation-ready` hop.
+Optional residual accepted_by is {name,kind}, never a scalar; see report templates.
+Finalize report/checkpoint for that reconciled tree before that hop, as required by
+the shown duties. Approving exits require the latest artifact admission and unchanged
+approved bytes; narrative exits also require the latest narrative admission and hash.
+Restoring an older revision or updating a hash under an admitted identity cannot pass.
+
+Checkpoint rejection routes use the recorded approved/admitted identity and matching
+rejection; they do not read prematurely edited files. If files are already changed or
+malformed, record the decision against the commissioned revision and take `revise` or
+`revise-narrative`, then repair in the draft with a new identity. Do not restore old
+bytes to disguise a rewrite or use an override to supply missing review.
+
+The final `passed` into end still checks the complete validation-report index,
+criterion/goal judgments, command evidence, proof/checkpoints, reconciliation and
+Bookends/candidate obligations where enabled. These duties follow the last optional
+narrative or checkpoint hop, including reviewless routes. Owner approval replaces none
+of them. Accepted implementation proof is recorded on the actual hop entering validation.
+Preserve each phase's last reviewed markdown, binding, artifact and context/history;
+retain prior reviewed bytes externally before overwriting a pair. Deleting the artifact
+directory loses its narratives. Share safety/redaction review is outside these options.
+
+## Provider-owned steering shape
+
+Before appending `user-steering`, load checkout-root
+`docs/agent-usage.md#software-change-steering-records` for the closed payload,
+targets, optional fields and exact prior-intent digest format. Retain the owner's
+words in `instruction`; the generic engine `{text}` example is not this provider's
+schema. Keep arbitrary authorization metadata out of this kind. On a release
+with complete provider admission, invalid fields/references fail before storage;
+correct the refusal, never bypass it. Incomplete source builds without admission
+still do not validate provider kinds merely because direct append completed.
+Older frozen runtimes can be blocked by malformed steering before supersession;
+preserve them and seek authorized replacement, not history edits or runtime migration.
+
+## Correction source and admission
+
+For a correction within accepted intent, append `intent-correction` data exactly as
+shown in the reviewer protocol or docs/agent-usage: subject/revision, exact prior_intent
+{revision,locator,sha256,json_bytes}, findings [{ledger_id,finding_id}], actual author
+and reason. Cite accepted intent-owned findings in the latest matching earlier intent
+ledger and actual prior reviewed revision; no made-up ledger/source/digest. Qualification
+precedes intent-ready/commission on later reviewed revisions. Real scope change still
+needs owner steering/authority. A correction is driver provenance, not owner words,
+finding discharge, semantic scope inference or checkpoint approval.
+
+Inspect commission's `intent_revision_baseline` actual record/source/delivery status
+and owner `intent_revision_view` exact delta/actors. Non-intent steering keeps the
+existing target/supersession selection, excluding unrelated/superseded instructions;
+review_record_sources lists actual delivered IDs. Supply missing necessary context,
+not invented citations. Frozen old workflow declarations are never rewritten.
+
+New runs advertising provider admission validate provider-owned append/intake records
+before storage; named rule refusals and unavailable/incompatible/malformed replies fail
+closed without context/history mutation. A valid write or helper preview is not semantic
+approval or aggregate readiness. Old runs keep their original frozen validator/runtime.
 
 ## Cold reconstruction comparison
 
@@ -90,8 +272,9 @@ outcomes, split independently varying ones, and name a practical evidence path o
 concrete reason proof is impractical. Word/conjunction counts are not findings.
 
 Inspect qualified user-steering originals and supersession, not incorporation summaries.
-Later material intent revisions need an exact prior-intent owner source for byte-bound
-delta; a driver paraphrase is not a baseline. Owner approval views from commission
+Later scope changes need an exact prior-intent owner source for byte-bound delta;
+a driver paraphrase is not a baseline. Within accepted intent, the driver may use the
+closed `intent-correction` payload below with actual accepted intent-owned findings. Owner approval views from commission
 are not owner approval. Keep drafter/reviewer/driver/owner identities separate.
 
 ## Gate map and artifact authoring
@@ -113,13 +296,21 @@ Use shown events (intent-ready, design-ready, plan-ready, implementation-ready,
 reconciliation-ready and validation-ready where present), not a remembered topology.
 Empty review lists omit rooms; zero axes require no fabricated evidence.
 Checked drafts validate shape/links. Reconciliation has no report/checkpoint prerequisite.
-Review states expose phase-owning revise routes. Validation-local report corrections
-stay in validation; repository-state mismatch uses shown revise-implementation.
+In new runs, every active state exposes check-free routes to each earlier phase's draft:
+`revise-intent` → `explore`, `revise-design` → `design`, `revise-plan` → `plan`, and
+`revise-implementation` → `implement`, only when the destination phase is earlier.
+Narrative/checkpoint states belong to their phase; reconciliation belongs to implementation.
+No artifact, report, rejection or override is needed. Routes preserve files, artifacts,
+context, findings and history, roll back nothing and approve nothing. Every forward check
+still applies. Earlier-started runs keep their stored graphs. Existing narrative corrections
+remain available, including same-phase routes. Validation-local report corrections stay
+in validation; repository-state mismatch uses shown revise-implementation.
 
 ## Per-gate loop and external commissioning
 
 1. Observe action/full. Perform the draft externally, then check schema/links before
    collecting judgments whose subject might otherwise change.
+   Tasks with no dependency path between them (no chain of declared dependencies in either direction) are dispatched concurrently by default; state a reason when running them serially.
 2. Pipe completed full show to `software-change commission --slot SLOT`; select
    --stage where needed. Read missing_inputs and supply them before launch.
    Preserve frozen operating context, selected steering, ledger and original sources.
@@ -130,10 +321,15 @@ stay in validation; repository-state mismatch uses shown revise-implementation.
 4. Preserve genuine request and original response. `software-change review-candidates`
    accepts stdin with show, assignment, request and original. assignment names gate,
    stage, group, author, subject and subject_revision. The original.text holds the
-   actual external return. Structured returns carry assessment_id and judgments with
+   actual external return. Intake derives one stable assessment_id from the exact
+   original-return bytes and assignment when absent; all fresh axes from that return
+   share it. Explicit consistent IDs are preserved, contradictions refuse. Returns carry judgments with
    axis, result, findings and grounds (reason plus evidence locators). Non-JSON returns
    need a driver-confirmed projection without invented outcomes. Inspect projected
-   records and refusal diagnostics.
+   records and refusal diagnostics. Cite only inspected sources: contained file
+   pointers/line ranges or allowed immutable `record:ACTUAL_CONTEXT_ID#JSON-Pointer`
+   over the complete ContextRecord. The reviewer protocol gives the eight-kind allowlist,
+   including intent-correction; use actual delivered `review_record_sources` IDs.
 5. Triage before append or mutation: accept only in-scope material failures or genuinely
    supported passes. Preserve grounds/evidence and self-review declarations. Disputed
    substantive candidates need focused independent reconsideration; reject provably
@@ -144,6 +340,23 @@ stay in validation; repository-state mismatch uses shown revise-implementation.
 
 ### Challenge review targets the clean conclusion
 
+Challenge independently tests whether the ordinary passing or sufficiency conclusion
+holds: assume it did not pass; why might it not have? Ordinary findings and their
+dispositions are context, not individual findings to rebut. Normal entry into the
+challenge state proves ordinary review passed; only its current-revision finding
+ledger is checked, not ordinary evidence again. The challenge outcome is independent
+of the append order of ordinary individual, aggregate and carried records.
+
+Separately, a challenge assessment counts only if first recorded after the latest
+relevant ordinary-review record for its corresponding obligations (review-evidence,
+evidence-applicability, finding-ledger, targeting author-count amendment, or
+intent-comparison where applicable). An earlier assessment, including a raw re-append,
+requires explicit evidence-applicability appended after that cutoff, or a fresh
+challenge. Ordinary-review writes are refused during the challenge; use the existing
+check-free `revise` route for correction and renewed ordinary approval. This applies
+to artifact and narrative challenges. Owner override remains exceptional and does
+not establish ordinary approval.
+
 Challenge review tests the ordinary group's clean conclusion. Its question is: what
 material defect remains in the current subject despite that conclusion? Commission it
 only after ordinary review has no unresolved accepted findings. Prior findings and their
@@ -151,6 +364,10 @@ dispositions are context for exposing a bad fix or an unjustified dismissal; the
 not targets to overturn. Disputes over open ordinary findings belong to triage
 reconsideration (step 5), never to challenge. The same sequence applies to reviews
 performed outside a run or gate, such as pre-run intent review, where nothing enforces it.
+
+Each forward phase exit (approval or override) retains that phase's artifact bytes as an
+engine-committed `retained-artifacts` record; write exiting artifacts before the event and
+do not append these records yourself. A capture failure refuses the event; fix and retry.
 
 ## Ledger, applicability and finding routing
 
@@ -161,6 +378,13 @@ owning phase; rejected/advisory entries use recorded/stale, null owner and empty
 For implementation findings, task_ids name honest frozen task owners; empty means no
 honest task owner, not permission to dodge work. External driver routes that repair.
 Revise the plan when decomposition is materially wrong.
+
+Omit ledger `statement` to derive exact immutable review/criterion/goal findings.
+If supplied, it must match exactly; arrays retain the existing literal two-character
+backslash-plus-n separator, not a newline. Optional string `summary` is driver explanation,
+not stable finding identity or replacement reviewer words. Check assessment_missing,
+assessment_inconsistent and mixed_authors as distinct causes; metadata defects do not
+justify fabricated independence shortfalls, missing group axes or reduced author floors.
 
 An advisory-finding-proposal is inert; inspect, accept/edit/reject, then append the
 separate authoritative ledger. Do not silently drop accepted unresolved findings on
@@ -206,6 +430,9 @@ Workers never stage/commit independently. Record pending/declined honestly; for 
 authorized commit inspect staged names/diff and verify actual HEAD identity. A reminder
 is not authorization. Settle Git before final identity-bound proof and keep tree stable.
 The external proof owner runs full stable-tree checks; reviewers consume retained outcomes.
+Implementation review must inspect the actual declared-baseline-to-covered-commit change,
+not only the report. The driver chooses meaningful inputs/tools; no tool ban or mandatory
+bundled diff is imposed. Supplied-only calibration inspects supplied companions only.
 Repeat only checks invalidated by changes, never make a post-report checker its prerequisite.
 
 Run evaluation from the intended repository checkout, not the artifact directory.
@@ -216,7 +443,11 @@ software-change checkpoint --phase implementation --artifact-root ABS --working-
 software-change checkpoint --phase validation --artifact-root ABS --working-directory ABS
 ```
 
-Both directories must exist and be absolute. This never changes Git. Checked admission
+Both directories must exist and be absolute. This never changes Git. Default generated
+checkpoint JSON is readable multiline two-space pretty JSON with no added final newline.
+Internal report/content/state digest calculation is unchanged; physical file SHA-256
+changes with formatting. Accepted history retains actual verified bytes/name and does
+not rewrite compact/manual proof or duplicate equivalent format-only regeneration. Checked admission
 retains implementation-proof-history; validation cannot replace that proof with mutable
 checkpoints. On stale proof, take shown revise-implementation, refresh reports/checkpoints
 for the same current tree, and refresh affected independent evidence before retry.
@@ -227,7 +458,11 @@ Execute required proof commands externally, preserving real argv, cwd, exit_code
 stdout/stderr, producer and source identity. Obtain identity with
 `software-change source-identity --working-directory ABS`; do not fabricate results.
 Feed `software-change prepare-validation` stdin with show, working_directory, revision,
-author, command_results and additions. Missing/failed/stale results need correction;
+author, command_results and additions. Before constructing result rows, load
+checkout-root `docs/agent-usage.md#software-change-external-command-results` for
+exact `id`, nested `source`, external attribution and output-reference fields.
+Adapt serialization of retained facts, not results; `proof_id` or `source_identity`
+alone is not the helper's input shape. Missing/failed/stale results need correction;
 the helper launches nothing and supplies no passing verdicts.
 Inspect diagnostics/commands_complete, append genuine addition_candidates and
 command_candidates with their proposed IDs, then complete report_draft.
@@ -249,17 +484,43 @@ does not categorically require fresh goal judgment.
 
 ## External advice, recovery and final handoff
 
-For enabled advice, inspect due occasion IDs. Prepare bounded, evidence-sufficient
-atomic claims with `software-change advice-request` stdin; the driver sends questions
-externally and appends actual typed advice-answer context. Every answer needs reasoned
-advice-disposition. No admissible question uses honest advice-occasion triggered:false
-with reason and empty trigger/response IDs. Timeout/invalid return is unanswered, not
-negative advice. Scoped owner exceptions never satisfy review, proof or Bookends.
+Inspect effective `show.result.advice_policy`, not frozen start-time flags or
+action-guidance prose. Supporting runtimes accept current-visit owner-attributed
+advice-policy-change complete maps immediately, including an advice-off start;
+removal releases unanswered advice but never received successful answer debt.
+Use exact shapes in checkout-root `docs/agent-usage.md` (Running advice and
+append-only recovery). Correct occasion bookkeeping in either direction with
+`revises` to the latest same occasion/state/visit/event and `revision_reason`;
+no owner ceremony or fresh-visit revise is needed for ordinary driver correction.
 
-On external timeout/failure, retain outputs and inspect partial edits, verify cleanup
-and no overlapping writer, then restore or deliberately incorporate changes. Route
-correction to its owner and refresh only invalidated evidence. Out-of-scope/budget material
-correction needs the owner's specific decision; visible residuals are not ordinary pass.
+Prepare bounded evidence-sufficient atomic claims with advice-request; frozen
+occasion families still bound selection. Send questions externally and append
+actual typed advice-answer originals and reasoned advice-disposition. Honest
+triggered:false needs a no-admissible-question reason and empty source/response
+IDs. Timeout/invalid return is unanswered, not negative advice. Scoped exceptions
+never satisfy review, proof, Bookends or missing successful-answer dispositions.
+
+Use record-withdrawal for obsolete earlier evidence/applicability/supplemental
+validation-command records, or valid manifest+ledger retirement. Failing review
+sources must already be exact-source ledgered; unresolved accepted findings remain
+until separately dispositioned. Excluded sources/carries never count, replacement
+floors stay binding, and already-passed history is unchanged. Commission record-ID
+diagnostics replace malformed-record aborts, not gate clearance. Ledger sources
+retain stored review identity/shape without re-reading mutable citations. Compare
+all current effective counted fresh/carried cold returns under their original IDs;
+excluded/noncounting returns remain historical, not owed comparison responses.
+Provider write refusal still depends on complete admission on the run's runtime;
+preview success or an unchecked append on an incomplete build does not establish it.
+
+For external execution, follow the engine companion: no outer kill deadline without
+an owner limit, explicit resource constraint or justified acceptance/execution need;
+waiting, silence and elapsed time alone are not a stall. On a real limit, cancellation,
+diagnosed progress stall or failure, retain the diagnosis and original attempt's outputs,
+inspect partial edits, verify cleanup and no overlapping writer, then restore or
+incorporate changes. Ordinary reruns within authorized scope need no new approval.
+Route correction to its owner and refresh only invalidated evidence. Scope/acceptance
+changes or exceeding owner-set spend/resource limits need the owner's specific decision;
+visible residuals are not ordinary pass.
 At actual end, return terminal observation, artifact/proof locators, criterion/goal
 coverage, review/ledger decisions, residuals and pending owner Git/delivery decisions.
 Synthetic journeys establish mechanics, not semantic approval or hosted exact-commit proof.

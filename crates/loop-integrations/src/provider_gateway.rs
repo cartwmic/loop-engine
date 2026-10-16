@@ -7,8 +7,9 @@
 
 use crate::provider::ProviderInvocation;
 use loop_core::{
-    AllowResponse, EvaluationFeedback, EvaluationRequest, EvaluationResult, ProviderAssociation,
-    ProviderError, ProviderGateway, Workflow,
+    Admission, AdmitRequest, AllowResponse, CaptureExit, ContextAppendEffect, EvaluationFeedback,
+    EvaluationRequest, EvaluationResult, ProviderAssociation, ProviderError, ProviderGateway,
+    Refusal, Workflow,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -209,6 +210,114 @@ impl ProviderGateway for SubprocessProviderGateway {
         let stdout = self.call(provider, request)?;
         let value = parse_json_response(&stdout, "evaluate")?;
         parse_evaluation_response(value)
+    }
+
+    fn admit(
+        &self,
+        provider: &ProviderAssociation,
+        mut request: AdmitRequest,
+    ) -> Result<Admission, ProviderError> {
+        request.context.sort_by_key(|record| record.sequence);
+        let request = serde_json::to_vec(&AdmitWireRequest {
+            operation: "admit",
+            request,
+        })
+        .map_err(|error| {
+            ProviderError::execution(
+                "provider-request-serialization-failed",
+                format!("could not serialize admit request: {error}"),
+            )
+        })?;
+        let stdout = self.call(provider, request)?;
+        parse_admission_response(parse_json_response(&stdout, "admit")?)
+    }
+
+    fn capture(
+        &self,
+        provider: &ProviderAssociation,
+        request: EvaluationRequest,
+        exit: CaptureExit,
+    ) -> Result<Option<ContextAppendEffect>, ProviderError> {
+        let EvaluateRequest {
+            workflow,
+            initial_input,
+            context,
+            transition,
+            ..
+        } = EvaluateRequest::from_core(request);
+        let request = serde_json::to_vec(&CaptureRequest {
+            operation: "capture",
+            workflow,
+            initial_input,
+            context,
+            transition,
+            exit,
+        })
+        .map_err(|error| {
+            ProviderError::execution(
+                "provider-request-serialization-failed",
+                format!("could not serialize capture request: {error}"),
+            )
+        })?;
+        let stdout = self.call(provider, request)?;
+        let value = parse_json_response(&stdout, "capture")?;
+        parse_capture_response(value)
+    }
+}
+
+#[derive(Serialize)]
+struct AdmitWireRequest {
+    operation: &'static str,
+    #[serde(flatten)]
+    request: AdmitRequest,
+}
+
+fn parse_admission_response(value: Value) -> Result<Admission, ProviderError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ProviderError::invalid_response("admit response must be a JSON object"))?;
+    if object.is_empty() {
+        return Ok(Admission::Admitted);
+    }
+    require_exact_keys(object, &["refused"], "admit response")?;
+    let refusal: Refusal = serde_json::from_value(object["refused"].clone()).map_err(|error| {
+        ProviderError::invalid_response(format!("admit response `refused` is invalid: {error}"))
+    })?;
+    if refusal.rule.trim().is_empty() || refusal.message.trim().is_empty() {
+        return Err(ProviderError::invalid_response(
+            "admit refusal rule and message must be non-empty strings",
+        ));
+    }
+    Ok(Admission::Refused(refusal))
+}
+
+/// The optional `capture` wire envelope: the evaluate context plus how the
+/// checked transition is being committed. Providers answer `{}` or
+/// `{"context_append": {kind, data}}`.
+#[derive(Serialize)]
+struct CaptureRequest {
+    operation: &'static str,
+    workflow: Workflow,
+    initial_input: Value,
+    context: Vec<loop_core::ContextRecord>,
+    transition: loop_core::Transition,
+    exit: CaptureExit,
+}
+
+fn parse_capture_response(value: Value) -> Result<Option<ContextAppendEffect>, ProviderError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| ProviderError::invalid_response("capture response must be a JSON object"))?;
+    require_allowed_keys(object, &["context_append"], "capture response")?;
+    match object.get("context_append") {
+        None => Ok(None),
+        Some(effect) => serde_json::from_value(effect.clone())
+            .map(Some)
+            .map_err(|error| {
+                ProviderError::invalid_response(format!(
+                    "capture response `context_append` is invalid: {error}"
+                ))
+            }),
     }
 }
 
@@ -627,6 +736,68 @@ mod tests {
                 Err(ProviderError::InvalidResponse { .. })
             ));
         }
+    }
+
+    #[test]
+    fn admission_reply_is_closed_and_requires_named_refusal() {
+        assert_eq!(
+            parse_admission_response(json!({})).unwrap(),
+            Admission::Admitted
+        );
+        assert_eq!(
+            parse_admission_response(json!({"refused": {
+                "rule": "fixture-rule", "message": "record r failed"
+            }}))
+            .unwrap(),
+            Admission::Refused(Refusal {
+                rule: "fixture-rule".into(),
+                message: "record r failed".into(),
+            })
+        );
+        for value in [
+            json!(null),
+            json!([]),
+            json!({"result": "allow"}),
+            json!({"refused": null}),
+            json!({"refused": {"rule": "r"}}),
+            json!({"refused": {"rule": "r", "message": "m", "extra": true}}),
+            json!({"refused": {"rule": "", "message": "m"}}),
+            json!({"refused": {"rule": "r", "message": " "}}),
+            json!({"refused": {"rule": "r", "message": "m"}, "extra": true}),
+        ] {
+            assert!(matches!(
+                parse_admission_response(value),
+                Err(ProviderError::InvalidResponse { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn admission_wire_is_flat_and_carries_candidate_without_allocated_sequence() {
+        let request = AdmitWireRequest {
+            operation: "admit",
+            request: AdmitRequest {
+                workflow: workflow().with_admit(true),
+                initial_input: json!({"frozen": true}),
+                context: vec![],
+                current_state: "start".into(),
+                state_visit: 7,
+                record: loop_core::CandidateRecord {
+                    id: "record-1".into(),
+                    kind: "opaque".into(),
+                    data: json!([null]),
+                },
+            },
+        };
+        let wire = serde_json::to_value(request).unwrap();
+        assert_eq!(wire.as_object().unwrap().len(), 7);
+        assert_eq!(wire["operation"], "admit");
+        assert_eq!(wire["state_visit"], 7);
+        assert_eq!(
+            wire["record"],
+            json!({"id": "record-1", "kind": "opaque", "data": [null]})
+        );
+        assert_eq!(wire["workflow"]["admit"], true);
     }
 
     #[test]

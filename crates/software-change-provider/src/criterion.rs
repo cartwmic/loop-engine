@@ -50,6 +50,17 @@ pub(crate) fn validate_grounding_version(
     artifact_root: &Path,
     version: Option<u32>,
 ) -> Result<(), String> {
+    validate_grounding_with_context(grounds, artifact_root, version, &[])
+}
+
+/// Record pointers address the complete immutable stored context record.
+pub(crate) fn validate_grounding_with_context(
+    grounds: &Value,
+    artifact_root: &Path,
+    version: Option<u32>,
+    context: &[loop_core::ContextRecord],
+) -> Result<(), String> {
+    validate_grounding_shape_version(grounds, version)?;
     if version == Some(3)
         && grounds.as_object().is_none_or(|object| {
             object.len() != 2 || !object.contains_key("reason") || !object.contains_key("evidence")
@@ -70,9 +81,6 @@ pub(crate) fn validate_grounding_version(
         .and_then(Value::as_array)
         .filter(|evidence| !evidence.is_empty() && (version != Some(2) || evidence.len() <= 8))
         .ok_or("grounds.evidence must contain source references")?;
-    let root = fs::canonicalize(artifact_root).map_err(|error| error.to_string())?;
-    let cwd = fs::canonicalize(std::env::current_dir().map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())?;
     let mut seen = BTreeSet::new();
     for reference in evidence {
         if version == Some(3)
@@ -109,6 +117,34 @@ pub(crate) fn validate_grounding_version(
         let (file, selector) = locator.split_once('#').ok_or_else(|| {
             format!("evidence locator `{locator}` needs a JSON Pointer or line selector")
         })?;
+        if let Some(id) = file.strip_prefix("record:") {
+            validate_record_locator(id, selector)?;
+            let matches: Vec<_> = context
+                .iter()
+                .filter(|record| record.id.as_str() == id)
+                .collect();
+            if matches.len() != 1 {
+                return Err(format!("record citation `{id}` is missing or ambiguous"));
+            }
+            let record = matches[0];
+            if !REVIEW_SOURCE_KINDS.contains(&record.kind.as_str()) {
+                return Err(format!(
+                    "record citation `{id}` has disallowed kind `{}`",
+                    record.kind
+                ));
+            }
+            let stored = serde_json::to_value(record).map_err(|e| e.to_string())?;
+            if stored.pointer(selector).is_none() {
+                return Err(format!("record citation `{locator}` does not resolve"));
+            }
+            if version != Some(3) {
+                return Err("record citations require review contract v3".into());
+            }
+            continue;
+        }
+        let root = fs::canonicalize(artifact_root).map_err(|error| error.to_string())?;
+        let cwd = fs::canonicalize(std::env::current_dir().map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
         let relative = Path::new(file.split_once(':').map_or(file, |(_, path)| path));
         if relative.as_os_str().is_empty()
             || relative.is_absolute()
@@ -220,6 +256,13 @@ pub(crate) fn validate_grounding_shape_version(
         let (file, selector) = locator
             .split_once('#')
             .ok_or_else(|| format!("evidence locator `{locator}` needs a selector"))?;
+        if let Some(id) = file.strip_prefix("record:") {
+            if version != Some(3) {
+                return Err("record citations require review contract v3".into());
+            }
+            validate_record_locator(id, selector)?;
+            continue;
+        }
         let relative = Path::new(file.split_once(':').map_or(file, |(_, path)| path));
         if relative.as_os_str().is_empty()
             || relative.is_absolute()
@@ -236,6 +279,39 @@ pub(crate) fn validate_grounding_shape_version(
         }
         if !selector.starts_with('/') && !selector.starts_with('L') {
             return Err(format!("evidence selector in `{locator}` is malformed"));
+        }
+    }
+    Ok(())
+}
+
+const REVIEW_SOURCE_KINDS: &[&str] = &[
+    "review-evidence",
+    "intent-comparison",
+    "user-steering",
+    "finding-ledger",
+    "evidence-applicability",
+    "criterion-verdict",
+    "goal-verdict",
+    "intent-correction",
+];
+
+fn validate_record_locator(id: &str, pointer: &str) -> Result<(), String> {
+    if id.is_empty()
+        || id
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '#' | '/' | '\\'))
+    {
+        return Err("record citation ID is malformed".into());
+    }
+    if !pointer.starts_with('/') {
+        return Err("record citation requires a JSON Pointer".into());
+    }
+    for token in pointer.split('/').skip(1) {
+        let mut bytes = token.bytes();
+        while let Some(byte) = bytes.next() {
+            if byte == b'~' && !matches!(bytes.next(), Some(b'0' | b'1')) {
+                return Err("record citation JSON Pointer escape is malformed".into());
+            }
         }
     }
     Ok(())

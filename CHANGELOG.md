@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.25.0] - 2026-10-11
+
+### Added
+
+- Software-change plans now expose safe parallel work through their existing dependencies. New `minimal-15`, `standard-15` and `high-rigor-15` profiles review missed parallelism, conflicting concurrent work and unnecessary task splitting with the `parallelism-honest` axis.
+- New software-change runs can opt into reviewed Markdown narratives at design, plan and validation, and owner checkpoints at intent, design, plan, implementation and validation. Both options default off. JSON artifacts remain authoritative, and revised artifacts invalidate their earlier narratives and decisions.
+- New runs of the shipped providers retain exact artifact bytes in the catalog at forward phase exits. Retained copies remain inspectable after artifact files are deleted; repeated identical content is deduplicated without losing exit history.
+- Operators can preview and explicitly apply `reclaim` to remove bulky legacy invocation details from finished or terminated runs. It preserves active runs and retained artifacts, reports retryable catalog contention, and returns freed space to the filesystem.
+
+### Changed
+
+- Main CI now separates lightweight checks from workspace tests and journey self-tests. Release dispatches require successful push CI for the exact commit, reproducible workflow generation with pinned cargo-dist, and successful archive checks before publication. Full source journeys remain a separate informational workflow.
+
+### Compatibility
+
+- Existing runs keep their frozen profiles and review obligations; they are not migrated to the new parallelism, narrative or checkpoint behavior.
+- Artifact retention applies to new capture-enabled runs and does not backfill old artifacts. Reclaim never runs automatically; applying it intentionally removes selected historical invocation details and any verification that depends on those details.
+
 ## [0.19.0] - 2026-09-07
 
 ### Recovery and review

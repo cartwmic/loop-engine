@@ -35,6 +35,7 @@ const FINDING_FIELDS: &[&str] = &[
     "source",
     "policy_id",
     "statement",
+    "summary",
     "disposition",
     "reason",
     "owner_phase",
@@ -72,6 +73,7 @@ pub(crate) struct Finding {
     pub(crate) source: FindingSource,
     pub(crate) policy_id: String,
     pub(crate) statement: String,
+    pub(crate) summary: Option<String>,
     pub(crate) disposition: FindingDisposition,
     pub(crate) reason: String,
     pub(crate) owner_phase: Option<String>,
@@ -680,7 +682,7 @@ fn finding_to_value(finding: &Finding) -> Value {
             "id": record_id,
         }),
     };
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "id": finding.id,
         "source": source,
         "policy_id": finding.policy_id,
@@ -701,7 +703,11 @@ fn finding_to_value(finding: &Finding) -> Value {
             FindingStatus::Stale => "stale",
             FindingStatus::Recorded => "recorded",
         },
-    })
+    });
+    if let Some(summary) = &finding.summary {
+        value["summary"] = Value::String(summary.clone());
+    }
+    value
 }
 
 fn ledger_pair_is_valid(gate: &str, subject: &str) -> bool {
@@ -726,7 +732,77 @@ fn ledger_record_matches_pair(record: &ContextRecord, gate: &str, subject: &str)
     }
 }
 
-fn parse_snapshot(
+/// Recovery consumes the same closed snapshots and identity continuity, but
+/// does not demand current artifact/checkpoint freshness of historical duties.
+pub(crate) fn latest_snapshot_for_recovery(
+    context: &[ContextRecord],
+    gate: &str,
+    subject: &str,
+    artifact_root: Option<&Value>,
+) -> Result<Option<FindingLedgerSnapshot>, String> {
+    latest_snapshot_for_recovery_scope(context, gate, subject, artifact_root, true)
+}
+
+/// Replay an already admitted withdrawal using immutable ledger identity only.
+/// Current routing is checked on admission and on the current ledger, never
+/// against an old prefix whose plan may have been legitimately superseded.
+pub(crate) fn latest_snapshot_for_withdrawal_replay(
+    context: &[ContextRecord],
+    gate: &str,
+    subject: &str,
+    artifact_root: Option<&Value>,
+) -> Result<Option<FindingLedgerSnapshot>, String> {
+    latest_snapshot_for_recovery_scope(context, gate, subject, artifact_root, false)
+}
+
+fn latest_snapshot_for_recovery_scope(
+    context: &[ContextRecord],
+    gate: &str,
+    subject: &str,
+    artifact_root: Option<&Value>,
+    validate_current_routing: bool,
+) -> Result<Option<FindingLedgerSnapshot>, String> {
+    let mut records: Vec<_> = context
+        .iter()
+        .filter(|record| {
+            record.kind == FINDING_LEDGER_KIND && ledger_record_matches_pair(record, gate, subject)
+        })
+        .collect();
+    records.sort_by_key(|record| record.sequence);
+    let mut snapshots = Vec::new();
+    let mut error = None;
+    for record in records {
+        match parse_snapshot_with_routing(
+            &record.data,
+            gate,
+            subject,
+            artifact_root,
+            None,
+            context,
+            record.sequence.as_u64(),
+            validate_current_routing,
+        ) {
+            Ok(snapshot) => {
+                snapshots.push(snapshot);
+                error = None;
+            }
+            Err(reasons) => {
+                error = Some(format!(
+                    "finding ledger `{}`: {}",
+                    record.id,
+                    reasons.join("; ")
+                ));
+            }
+        }
+    }
+    if let Some(error) = error {
+        return Err(error);
+    }
+    check_id_continuity(&snapshots).map_err(|reasons| reasons.join("; "))?;
+    Ok(snapshots.pop())
+}
+
+pub(crate) fn parse_snapshot(
     value: &Value,
     expected_gate: &str,
     expected_subject: &str,
@@ -734,6 +810,29 @@ fn parse_snapshot(
     config: Option<&ValidatedConfig>,
     context: &[ContextRecord],
     snapshot_sequence: u64,
+) -> Result<FindingLedgerSnapshot, Vec<String>> {
+    parse_snapshot_with_routing(
+        value,
+        expected_gate,
+        expected_subject,
+        artifact_root,
+        config,
+        context,
+        snapshot_sequence,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_snapshot_with_routing(
+    value: &Value,
+    expected_gate: &str,
+    expected_subject: &str,
+    artifact_root: Option<&Value>,
+    config: Option<&ValidatedConfig>,
+    context: &[ContextRecord],
+    snapshot_sequence: u64,
+    validate_current_routing: bool,
 ) -> Result<FindingLedgerSnapshot, Vec<String>> {
     let Some(object) = value.as_object() else {
         return Err(vec!["snapshot must be an object".to_owned()]);
@@ -764,6 +863,7 @@ fn parse_snapshot(
         config,
         context,
         snapshot_sequence,
+        validate_current_routing,
         &mut reasons,
     );
 
@@ -812,6 +912,7 @@ fn parse_findings(
     config: Option<&ValidatedConfig>,
     context: &[ContextRecord],
     snapshot_sequence: u64,
+    validate_current_routing: bool,
     reasons: &mut Vec<String>,
 ) -> Option<Vec<Finding>> {
     let Some(value) = value else {
@@ -836,6 +937,7 @@ fn parse_findings(
             config,
             context,
             snapshot_sequence,
+            validate_current_routing,
         ) {
             Ok(finding) => {
                 if !ids.insert(finding.id.clone()) {
@@ -860,6 +962,7 @@ fn parse_finding(
     config: Option<&ValidatedConfig>,
     context: &[ContextRecord],
     snapshot_sequence: u64,
+    validate_current_routing: bool,
 ) -> Result<Finding, Vec<String>> {
     let path = format!("findings[{index}]");
     let Some(object) = value.as_object() else {
@@ -874,7 +977,28 @@ fn parse_finding(
         ));
     }
     let policy_id = required_non_empty_string(object, "policy_id", &mut reasons);
-    let statement = required_non_empty_string(object, "statement", &mut reasons);
+    let statement = match object.get("statement") {
+        Some(Value::String(statement)) => Some(statement.clone()),
+        Some(_) => {
+            reasons.push(format!("`{path}.statement` must be a string when supplied"));
+            None
+        }
+        None => match source_statement(&object["source"], context) {
+            Ok(statement) => Some(statement),
+            Err(error) => {
+                reasons.push(format!("`{path}.statement`: {error}"));
+                None
+            }
+        },
+    };
+    let summary = match object.get("summary") {
+        None => None,
+        Some(Value::String(summary)) => Some(summary.clone()),
+        Some(_) => {
+            reasons.push(format!("`{path}.summary` must be a string"));
+            None
+        }
+    };
     let disposition = parse_disposition(object.get("disposition"), &path, &mut reasons);
     let reason = required_non_empty_string(object, "reason", &mut reasons);
     if reason
@@ -930,20 +1054,22 @@ fn parse_finding(
         );
     }
 
-    let current_snapshot = !context.iter().any(|record| {
-        record.kind == FINDING_LEDGER_KIND
-            && ledger_record_matches_pair(record, gate, subject)
-            && record.sequence.as_u64() > snapshot_sequence
-    }) && read_json_under_root(artifact_root, subject)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("revision")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
+    let current_snapshot = validate_current_routing
+        && !context.iter().any(|record| {
+            record.kind == FINDING_LEDGER_KIND
+                && ledger_record_matches_pair(record, gate, subject)
+                && record.sequence.as_u64() > snapshot_sequence
         })
-        .as_deref()
-        == Some(subject_revision);
+        && read_json_under_root(artifact_root, subject)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("revision")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .as_deref()
+            == Some(subject_revision);
     let current_unresolved = current_snapshot
         && disposition == Some(FindingDisposition::Accepted)
         && status == Some(FindingStatus::Unresolved);
@@ -997,6 +1123,7 @@ fn parse_finding(
         source: source.expect("source checked above"),
         policy_id: policy_id.expect("policy id checked above"),
         statement: statement.expect("statement checked above"),
+        summary,
         disposition: disposition.expect("disposition checked above"),
         reason: reason.expect("reason checked above"),
         owner_phase: owner_phase.expect("owner phase checked above"),
@@ -1004,6 +1131,38 @@ fn parse_finding(
         review_axes: review_axes.expect("review axes checked above"),
         status: status.expect("status checked above"),
     })
+}
+
+/// Preserve the literal criterion/goal `\\n` join convention used by source
+/// validation. Review text is already a string and is never paraphrased.
+pub(crate) fn source_statement(
+    reference: &Value,
+    context: &[ContextRecord],
+) -> Result<String, String> {
+    let id = reference["id"]
+        .as_str()
+        .filter(|id| !id.trim().is_empty())
+        .ok_or("missing source ID")?;
+    let records: Vec<_> = context
+        .iter()
+        .filter(|record| record.id.as_str() == id)
+        .collect();
+    if records.len() != 1 {
+        return Err("source is missing or ambiguous".into());
+    }
+    let record = records[0];
+    match record.kind.as_str() {
+        "review-evidence" => record.data["findings"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "source findings must be a string".into()),
+        "criterion-verdict" | "goal-verdict" => {
+            serde_json::from_value::<Vec<String>>(record.data["findings"].clone())
+                .map(|findings| findings.join("\\n"))
+                .map_err(|_| "source findings must be a string array".into())
+        }
+        _ => Err("unsupported finding source kind".into()),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1077,7 +1236,7 @@ fn parse_source(
                     .and_then(Value::as_str)
                     .ok_or("missing artifact_root")?,
             );
-            crate::validation::source(&record.data, &record.kind, context, root)?;
+            crate::validation::historical_source_record(record, context, root)?;
             if subject != "validation-report.json" || gate != "validation-review" {
                 return Err("criterion sources belong to validation-review ledger".into());
             }
@@ -1091,8 +1250,7 @@ fn parse_source(
             }
             let statements: Vec<String> = serde_json::from_value(record.data["findings"].clone())
                 .map_err(|e| e.to_string())?;
-            if record.data["result"] == "fail" && statement != Some(statements.join("\\n").as_str())
-            {
+            if statement != Some(statements.join("\\n").as_str()) {
                 return Err("criterion finding statement differs from original source".into());
             }
             if disposition == Some(FindingDisposition::Accepted)
@@ -1134,11 +1292,10 @@ fn parse_source(
         ));
         return None;
     }
-    let source_evidence = match evidence::parse_evidence_record_for_stage(
+    let source_evidence = match evidence::parse_historical_evidence_record(
         &record.data,
         subject,
-        artifact_root,
-        config.is_some_and(|config| config.contract_version() == 3),
+        config.is_some_and(|config| config.contract_version() >= 3),
     ) {
         Ok(evidence) => evidence,
         Err(error) => {
@@ -1177,9 +1334,7 @@ fn parse_source(
             reasons.push(format!("`{path}`: {error}"));
         }
     }
-    if source_evidence.result == evidence::EvidenceResult::Fail
-        && statement != Some(source_evidence.findings.as_str())
-    {
+    if statement != Some(source_evidence.findings.as_str()) {
         reasons.push(format!(
             "`{path}.source.id` evidence findings do not match the finding statement"
         ));
@@ -1200,7 +1355,88 @@ fn parse_source(
     })
 }
 
-fn validate_retirement(
+/// Intrinsic roster shape only; retirement still belongs to its ordered consumer.
+pub(crate) fn parse_manifest(data: &Value) -> Result<BTreeSet<evidence::AuthorIdentity>, String> {
+    let object = data
+        .as_object()
+        .ok_or("reviewer-manifest must be an object")?;
+    if !unknown_fields(object, &["gate", "authors", "reason"], "reviewer-manifest").is_empty()
+        || data["gate"].as_str().is_none_or(|s| s.trim().is_empty())
+        || data["reason"].as_str().is_none_or(|s| s.trim().is_empty())
+    {
+        return Err("reviewer-manifest has invalid shape or missing gate/reason".into());
+    }
+    let authors = data["authors"]
+        .as_array()
+        .ok_or("reviewer-manifest authors must be an array")?;
+    let mut roster = BTreeSet::new();
+    for value in authors {
+        let object = value.as_object().ok_or("invalid manifest author")?;
+        let author = evidence::AuthorIdentity::new(
+            value["name"].as_str().unwrap_or_default(),
+            value["kind"].as_str().unwrap_or_default(),
+        );
+        if !unknown_fields(object, AUTHOR_FIELDS, "reviewer-manifest.author").is_empty()
+            || !author.is_valid()
+        {
+            return Err("invalid manifest author".into());
+        }
+        if !roster.insert(author) {
+            return Err("reviewer-manifest has duplicate authors".into());
+        }
+    }
+    Ok(roster)
+}
+
+/// Candidate validity/continuity, not readiness: accepted-unresolved findings
+/// remain valid data and are blocked only by aggregate gate evaluation.
+pub(crate) fn validate_candidate(
+    candidate: &ContextRecord,
+    earlier: &[ContextRecord],
+    config: &ValidatedConfig,
+) -> Result<(), String> {
+    let gate = candidate.data["gate"]
+        .as_str()
+        .ok_or("ledger requires gate")?;
+    let subject = candidate.data["subject"]
+        .as_str()
+        .ok_or("ledger requires subject")?;
+    if crate::commission::review_subject(gate) != Some(subject) {
+        return Err("ledger gate/subject pair is invalid".into());
+    }
+    let parsed = parse_snapshot(
+        &candidate.data,
+        gate,
+        subject,
+        config.artifact_root(),
+        Some(config),
+        earlier,
+        candidate.sequence.as_u64(),
+    )
+    .map_err(|e| e.join("; "))?;
+    let mut snapshots = earlier
+        .iter()
+        .filter(|record| {
+            record.kind == FINDING_LEDGER_KIND && ledger_record_matches_pair(record, gate, subject)
+        })
+        .filter_map(|record| {
+            parse_snapshot(
+                &record.data,
+                gate,
+                subject,
+                config.artifact_root(),
+                Some(config),
+                earlier,
+                record.sequence.as_u64(),
+            )
+            .ok()
+        })
+        .collect::<Vec<_>>();
+    snapshots.push(parsed);
+    check_id_continuity(&snapshots).map_err(|e| e.join("; "))
+}
+
+pub(crate) fn validate_retirement(
     context: &[ContextRecord],
     gate: &str,
     author: &evidence::AuthorIdentity,
@@ -1219,51 +1455,7 @@ fn validate_retirement(
     let mut currently_present = false;
     let mut latest_error = None;
     for record in records {
-        let parsed_roster = (|| -> Result<BTreeSet<evidence::AuthorIdentity>, String> {
-            let object = record
-                .data
-                .as_object()
-                .ok_or("reviewer-manifest must be an object")?;
-            if !unknown_fields(object, &["gate", "authors", "reason"], "reviewer-manifest")
-                .is_empty()
-                || object
-                    .get("reason")
-                    .and_then(Value::as_str)
-                    .is_none_or(|s| s.trim().is_empty())
-            {
-                return Err(format!(
-                    "reviewer-manifest {} has invalid shape or missing reason",
-                    record.id
-                ));
-            }
-            let authors = object
-                .get("authors")
-                .and_then(Value::as_array)
-                .ok_or("reviewer-manifest authors must be an array")?;
-            let mut roster = BTreeSet::new();
-            for value in authors {
-                let object = value.as_object().ok_or("invalid manifest author")?;
-                let author = evidence::AuthorIdentity::new(
-                    object
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                    object
-                        .get("kind")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                );
-                if !unknown_fields(object, AUTHOR_FIELDS, "reviewer-manifest.author").is_empty()
-                    || !author.is_valid()
-                {
-                    return Err("invalid manifest author".to_owned());
-                }
-                if !roster.insert(author) {
-                    return Err("reviewer-manifest has duplicate authors".to_owned());
-                }
-            }
-            Ok(roster)
-        })();
+        let parsed_roster = parse_manifest(&record.data);
         match parsed_roster {
             Ok(roster) => {
                 currently_present = roster.contains(author);
@@ -1732,6 +1924,116 @@ mod tests {
             SemanticSequence::new(sequence),
             Timestamp::from_unix_millis(sequence as i64),
         )
+    }
+
+    #[test]
+    fn ledger_source_checks_identity_without_resolving_same_revision_file_citations() {
+        let root = TempRoot::new();
+        let config = config(&root);
+        fs::write(root.path.join("intent.json"), r#"{"revision":"r1"}"#).unwrap();
+        let mut source = source_evidence("original finding");
+        source.data["review_contract_version"] = json!(3);
+        source.data["review_stage"] = json!("aggregate");
+        source.data["grounds"] = json!({"reason":"Retained historical inspection", "evidence":[{"locator":"removed-source.json#/fact"}]});
+        assert!(evidence::parse_evidence_record_for_stage(
+            &source.data,
+            "intent.json",
+            Some(&root.value()),
+            true
+        )
+        .is_err());
+        let data = snapshot(&root, "original finding");
+        assert!(parse_snapshot(
+            &data,
+            "intent-review",
+            "intent.json",
+            Some(&root.value()),
+            Some(&config),
+            std::slice::from_ref(&source),
+            2
+        )
+        .is_ok());
+        for field in ["gate", "config_version", "findings", "result"] {
+            let mut invalid = source.clone();
+            invalid.data[field] = json!("not-original");
+            assert!(
+                parse_snapshot(
+                    &data,
+                    "intent-review",
+                    "intent.json",
+                    Some(&root.value()),
+                    Some(&config),
+                    &[invalid],
+                    2
+                )
+                .is_err(),
+                "{field}"
+            );
+        }
+        let mut malformed = source;
+        malformed.data["grounds"]["evidence"][0]["locator"] = json!("record:bad id#/data");
+        assert!(parse_snapshot(
+            &data,
+            "intent-review",
+            "intent.json",
+            Some(&root.value()),
+            Some(&config),
+            &[malformed],
+            2
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn omitted_statement_is_exact_source_and_summary_does_not_change_identity() {
+        let root = TempRoot::new();
+        let config = config(&root);
+        let source = source_evidence("Exact original findings");
+        let mut data = snapshot(&root, "Exact original findings");
+        data["findings"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("statement");
+        data["findings"][0]["summary"] = json!("Driver explanation, not finding identity");
+        let parsed = parse_snapshot(
+            &data,
+            "intent-review",
+            "intent.json",
+            Some(&root.value()),
+            Some(&config),
+            std::slice::from_ref(&source),
+            2,
+        )
+        .unwrap();
+        assert_eq!(parsed.findings[0].statement, "Exact original findings");
+        assert_eq!(
+            parsed.findings[0].summary.as_deref(),
+            Some("Driver explanation, not finding identity")
+        );
+        let identity = FindingIdentity::owned(&parsed.findings[0]);
+        data["findings"][0]["summary"] = json!("Another driver summary");
+        let changed = parse_snapshot(
+            &data,
+            "intent-review",
+            "intent.json",
+            Some(&root.value()),
+            Some(&config),
+            std::slice::from_ref(&source),
+            2,
+        )
+        .unwrap();
+        assert_eq!(FindingIdentity::owned(&changed.findings[0]), identity);
+        data["findings"][0]["statement"] = json!("Paraphrase");
+        assert!(parse_snapshot(
+            &data,
+            "intent-review",
+            "intent.json",
+            Some(&root.value()),
+            Some(&config),
+            &[source],
+            2
+        )
+        .is_err());
     }
 
     #[test]

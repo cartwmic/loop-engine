@@ -1,0 +1,36 @@
+{
+  "ordinary_review": {
+    "kind": "review-evidence",
+    "data": {
+      "gate": "plan-narrative-review",
+      "policy_id": "narrative-faithful",
+      "review_stage": "aggregate",
+      "result": "pass",
+      "findings": "",
+      "subject": "plan-narrative.json",
+      "subject_revision": "r15/1",
+      "author": {
+        "name": "ordinary-reader",
+        "kind": "agent"
+      },
+      "grounds": {
+        "reason": "The narrative preserves the approved artifact decisions and limitations; its material claims refer to the approved artifact and supplied sources.",
+        "evidence": [
+          {
+            "locator": "plan-narrative.md#L1"
+          }
+        ]
+      }
+    }
+  },
+  "finding_ledger": {
+    "author": {
+      "name": "corpus-driver",
+      "kind": "script"
+    },
+    "gate": "plan-narrative-review",
+    "subject": "plan-narrative.json",
+    "subject_revision": "r15/1",
+    "findings": []
+  }
+}

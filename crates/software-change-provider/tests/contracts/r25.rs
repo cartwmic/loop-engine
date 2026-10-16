@@ -7,13 +7,17 @@ use support::{
 };
 
 #[test]
-fn shipped_example_evidence_record_is_consumed_by_production_evaluation_parser() {
+fn historical_shipped_example_evidence_is_refused_against_current_frozen_profile() {
     let artifacts = TestDir::new("r25-artifacts");
     artifacts.write_json("intent.json", &load_fixture("intent-good.json"));
     let fixture = load_fixture("example-evidence.json");
     assert_eq!(fixture["kind"], "review-evidence");
     assert!(fixture["data"].is_object());
-    let config = config_artifact_root(load_profile("standard"), &artifacts);
+    let profile = load_profile("standard");
+    assert_eq!(fixture["data"]["config_version"], "standard-10");
+    assert_ne!(fixture["data"]["config_version"], profile["config_version"]);
+    let current_version = profile["config_version"].clone();
+    let config = config_artifact_root(profile, &artifacts);
 
     let mut request = base_request(
         config,
@@ -36,5 +40,27 @@ fn shipped_example_evidence_record_is_consumed_by_production_evaluation_parser()
     support::assert_exit(&output, 0);
     let output = response(&output);
     assert_eq!(output["result"], "deny");
-    assert!(output["feedback"]["details"]["diagnostics"].is_array());
+    assert_eq!(
+        output["feedback"]["code"],
+        "software-change-review-incomplete"
+    );
+    let details = &output["feedback"]["details"];
+    assert_eq!(details["phase"], "evidence");
+    // Original typed diagnostic-array assertion; the historical example remains
+    // noncounting input, never rewritten into current-config review evidence.
+    assert!(details["diagnostics"].is_array());
+    assert!(details["diagnostics"]
+        .as_array()
+        .expect("current axis diagnostics")
+        .iter()
+        .flat_map(|axis| axis["diagnostics"].as_array().expect("axis diagnostics"))
+        .any(|diagnostic| diagnostic["category"] == "missing"));
+    assert!(details["informational"]
+        .as_array()
+        .expect("informational axis diagnostics")
+        .iter()
+        .flat_map(|axis| axis["diagnostics"].as_array().expect("axis diagnostics"))
+        .any(|diagnostic| diagnostic["category"] == "stale_config"
+            && diagnostic["evidence_version"] == fixture["data"]["config_version"]
+            && diagnostic["run_version"] == current_version));
 }

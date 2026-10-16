@@ -5,7 +5,7 @@
     "kind": "human"
   },
   "intent_revision": "r15",
-  "approach": "A stateless provider binary evaluates caller-selected frozen initial input: the caller passes one full canonical profile as start initial_input, Loop Engine freezes that value, show projects it unchanged, and evaluate carries it unchanged; flat describe returns only the exact static workflow topology. A bounded generic schema checker validates contained authored artifacts and emits deterministic exhaustive structural violations; the checked transition evaluator consumes that output, maps every named violation into denial details before or without evidence satisfaction, then evaluates opaque external review evidence for the selected checked transition. Versioned configs, templates, and reviewer prompts remain inspectable reference data. This approach is required by compatibility with the existing Loop Engine provider boundary: it invokes one local subprocess per request, and this change cannot alter the reference workflow state or transition topology.",
+  "approach": "A stateless provider evaluates the engine-composed frozen initial input. Caller submits the full unchanged canonical profile. At start Loop Engine may add its allocated artifact_root when absent, preserving every submitted profile field; it freezes the composed value, which show and evaluate project unchanged. No provider catalog or mutable policy lookup is permitted. Flat describe accepts only operation and optional opaque initial_input, ignores the optional value and returns the exact unchanged static workflow topology. A bounded generic checker supplies exhaustive deterministic structural violations before independent external-evidence aggregation. Canonical templates/reviewer protocol are inspectable versioned data with exact-byte parity, not required undeclared initial_input fields.",
   "elements": [
     {
       "name": "protocol boundary",
@@ -52,7 +52,7 @@
       ]
     },
     {
-      "choice": "Preserve exact provider protocol contract: flat describe request {\"operation\":\"describe\"}; flat evaluate request fields operation, workflow, initial_input, context, transition, prior_evaluations; reject unknown fields; describe returns workflow; evaluate returns exactly {\"result\":\"allow\"}, {\"result\":\"unsupported\"}, or {\"result\":\"deny\",\"feedback\":{\"code\",\"message\",\"details\"?}}; exit 0 means valid response written, 1 evaluation/config failure with stderr/no stdout response, 2 protocol/usage failure with stderr/no stdout response; one request/process.",
+      "choice": "Preserve exact provider protocol contract: flat describe request has required operation:\"describe\" and only optional opaque initial_input; accept and ignore that optional input for static description and reject every other unknown field; flat evaluate request fields operation, workflow, initial_input, context, transition, prior_evaluations; reject unknown fields; describe returns workflow; evaluate returns exactly {\"result\":\"allow\"}, {\"result\":\"unsupported\"}, or {\"result\":\"deny\",\"feedback\":{\"code\",\"message\",\"details\"?}}; exit 0 means valid response written, 1 evaluation/config failure with stderr/no stdout response, 2 protocol/usage failure with stderr/no stdout response; one request/process.",
       "rationale": "Compatibility with the existing Loop Engine provider boundary requires one local subprocess per request and forbids changing the reference workflow state or transition topology. Recording this exact contract gives the plan worker a complete protocol boundary and leaves no request, response, exit, or process behavior to invent.",
       "rejected": [
         "Adding nested request envelopes or extra request fields.",
@@ -61,8 +61,8 @@
       ]
     },
     {
-      "choice": "Transport complete caller-selected canonical profile as immutable initial_input rather than profile identifier or repository lookup.",
-      "rationale": "Loop Engine already freezes initial_input, so exact run-frozen profile bytes make obligations inspectable/replayable and prevent provider environment/catalog drift; describe remains static workflow topology rather than selected-profile data.",
+      "choice": "Caller submits the full unchanged canonical profile. At start Loop Engine may add its allocated artifact_root when absent, preserving every submitted profile field; it freezes the composed value, which show and evaluate project unchanged. No provider catalog or mutable policy lookup is permitted.",
+      "rationale": "The existing engine performs artifact-root allocation before freezing, preserving canonical obligations; show/evaluate expose the immutable composed value without provider environment/catalog drift.",
       "rejected": [
         "Resolving profile identifier through provider catalog/environment.",
         "Loading mutable repository profile at evaluation.",
@@ -97,7 +97,7 @@
   "coverage": [
     {
       "acceptance": "A caller can inspect the frozen policies and artifact schemas before evaluating a transition.",
-      "delivered_by": "Decision 5 freezes complete caller-selected canonical profile transport; caller-selected full canonical profile is passed as start initial_input, frozen by Loop Engine, and projected unchanged through show and evaluate; flat describe returns only the exact static workflow topology."
+      "delivered_by": "Caller submits the full unchanged canonical profile. At start Loop Engine may add its allocated artifact_root when absent, preserving every submitted profile field; it freezes the composed value, which show and evaluate project unchanged. No provider catalog or mutable policy lookup is permitted. Frozen policies and schemas are inspectable through show; canonical templates/reviewer-protocol are inspectable through versioned data exposure, preserving exact bytes."
     },
     {
       "acceptance": "A malformed subject artifact is denied with each violated structural rule named.",

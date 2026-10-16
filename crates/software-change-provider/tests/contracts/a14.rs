@@ -57,6 +57,7 @@ const EXPECTED_TRANSITIONS: &[(&str, &str, &str, &str)] = &[
         "check-free",
     ),
     ("design", "design-ready", "design-review", "checked"),
+    ("design", "revise-intent", "explore", "check-free"),
     (
         "design-review",
         "approved",
@@ -79,6 +80,8 @@ const EXPECTED_TRANSITIONS: &[(&str, &str, &str, &str)] = &[
         "check-free",
     ),
     ("plan", "plan-ready", "plan-review", "checked"),
+    ("plan", "revise-design", "design", "check-free"),
+    ("plan", "revise-intent", "explore", "check-free"),
     (
         "plan-review",
         "approved",
@@ -178,6 +181,9 @@ const EXPECTED_TRANSITIONS: &[(&str, &str, &str, &str)] = &[
         "implement",
         "check-free",
     ),
+    ("validation", "revise-plan", "plan", "check-free"),
+    ("validation", "revise-design", "design", "check-free"),
+    ("validation", "revise-intent", "explore", "check-free"),
     (
         "validation-review",
         "approved",
@@ -581,12 +587,21 @@ fn describe_matches_snapshot_and_engine_prd_reference_topology() {
         "intent-review\n  ├─ approved [checked] → intent-adversarial-review",
         "  └─ revise [check-free] → explore",
         "intent-adversarial-review\n  ├─ approved [checked] → design",
-        "design\n  └─ design-ready [checked] → design-review",
+        concat!(
+            "design\n",
+            "  ├─ design-ready [checked] → design-review\n",
+            "  └─ revise-intent [check-free] → explore",
+        ),
         "design-review\n  ├─ approved [checked] → design-adversarial-review",
         "  ├─ revise [check-free] → design",
         "  └─ revise-intent [check-free] → explore",
         "design-adversarial-review\n  ├─ approved [checked] → plan",
-        "plan\n  └─ plan-ready [checked] → plan-review",
+        concat!(
+            "plan\n",
+            "  ├─ plan-ready [checked] → plan-review\n",
+            "  ├─ revise-design [check-free] → design\n",
+            "  └─ revise-intent [check-free] → explore",
+        ),
         "plan-review\n  ├─ approved [checked] → plan-adversarial-review",
         "  ├─ revise [check-free] → plan",
         "  ├─ revise-design [check-free] → design",
@@ -602,7 +617,14 @@ fn describe_matches_snapshot_and_engine_prd_reference_topology() {
         "  ├─ revise [check-free] → implement",
         "  ├─ revise-plan [check-free] → plan",
         "implementation-adversarial-review\n  ├─ approved [checked] → validation",
-        "validation\n  └─ validation-ready [checked] → validation-review",
+        concat!(
+            "validation\n",
+            "  ├─ validation-ready [checked] → validation-review\n",
+            "  ├─ revise-implementation [check-free] → implement\n",
+            "  ├─ revise-plan [check-free] → plan\n",
+            "  ├─ revise-design [check-free] → design\n",
+            "  └─ revise-intent [check-free] → explore",
+        ),
         "validation-review\n  ├─ approved [checked] → validation-adversarial-review",
         "  ├─ revise [check-free] → validation",
         "  ├─ revise-implementation [check-free] → implement",
@@ -911,6 +933,8 @@ fn validation_rechecks_external_results_and_reference_inputs_on_each_public_call
     for (field, value) in [
         ("exit_code", json!(1)),
         ("command", json!("wrong-command")),
+        // The artifact directory is not a declared proof source repository.
+        ("cwd", json!(artifacts.path())),
         ("producer", json!({"name":"loop-engine","kind":"script"})),
         ("source", json!({"head":"stale","state_sha256":"stale"})),
     ] {

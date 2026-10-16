@@ -92,6 +92,7 @@ def main():
     if args.mode == 'source':
         # bookends:LE-69 — the actual cargo-dist plan and publication-gate assertion retain research in the supported release matrix.
         root = Path(__file__).resolve().parents[1]
+        subprocess.run(['python3',str(root / 'scripts/generate-release.py'),'--check'],cwd=root,check=True)
         with tempfile.TemporaryDirectory(prefix='research-dist-plan-') as planned:
             manifest = Path(planned) / 'plan.json'
             result = subprocess.run(['dist','plan','--output-format=json'],cwd=root,text=True,capture_output=True)

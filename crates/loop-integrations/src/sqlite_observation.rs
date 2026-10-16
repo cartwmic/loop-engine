@@ -1,5 +1,5 @@
-use super::{decode_json, load_required_run, status_read_deadline};
-use loop_core::{PersistenceError, PersistenceFailure, RunId};
+use super::{decode_json, load_required_run, sqlite_failure, status_read_deadline};
+use loop_core::{PersistenceError, RunId};
 use rusqlite::{params, Connection, TransactionBehavior};
 
 const STATUS_INVOCATION_LIMIT: i64 = 20;
@@ -80,6 +80,21 @@ pub(super) fn read_bounded_observation(
             "completeness":{"run":"available","invocations":"unavailable","assignments":"unavailable"}
         });
         if std::time::Instant::now() < deadline {
+            match load_advice_policy(&transaction, &run, deadline) {
+                Ok(policy) => {
+                    output["advice_policy"] = policy;
+                    output["completeness"]["advice_policy"] = json!("available");
+                }
+                Err(error) => {
+                    output["advice_policy"] = json!({"state":"unavailable","reason":error});
+                    output["completeness"]["advice_policy"] = json!("unavailable");
+                }
+            }
+        } else {
+            output["advice_policy"] = json!({"state":"unavailable","reason":"observation deadline reached before advice policy sampling"});
+            output["completeness"]["advice_policy"] = json!("unavailable");
+        }
+        if std::time::Instant::now() < deadline {
             match load_status_invocations(&transaction, run_id, sampled_at_ms, deadline) {
                 Ok((total, items)) => {
                     let truncated = total > items.len() as u64;
@@ -147,6 +162,51 @@ pub(super) fn read_bounded_observation(
             Err(error)
         }
     }
+}
+
+// Read only policy changes, never the full context/captures on the bounded lane.
+fn load_advice_policy(
+    connection: &Connection,
+    run: &loop_core::Run,
+    deadline: std::time::Instant,
+) -> Result<serde_json::Value, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT record_id, sequence, data_json, created_at FROM context_records
+         WHERE run_id = ?1 AND kind = ?2 ORDER BY sequence ASC",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(
+            params![run.id.as_str(), loop_core::ADVICE_POLICY_CHANGE_RECORD_KIND],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    let mut context = Vec::new();
+    for row in rows {
+        if std::time::Instant::now() >= deadline {
+            return Err("observation deadline reached during advice policy sampling".into());
+        }
+        let (id, sequence, data, created_at) = row.map_err(|error| error.to_string())?;
+        context.push(loop_core::ContextRecord::new(
+            id,
+            loop_core::ADVICE_POLICY_CHANGE_RECORD_KIND,
+            decode_json(&data, "advice policy change").map_err(|error| error.to_string())?,
+            super::from_sqlite_u64(sequence, "semantic sequence")
+                .map_err(|error| error.to_string())?
+                .into(),
+            loop_core::Timestamp::from_unix_millis(created_at),
+        ));
+    }
+    let policy = loop_core::effective_advice_policy(&run.initial_input, &run.workflow, &context)?;
+    serde_json::to_value(policy).map_err(|error| error.to_string())
 }
 
 fn load_status_invocations(
@@ -396,6 +456,97 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn sqlite_failure(error: impl std::fmt::Display) -> PersistenceError {
-    PersistenceError::failure(PersistenceFailure::new("sqlite", error.to_string()))
+#[cfg(test)]
+mod advice_policy_tests {
+    use loop_core::{
+        AppendContextRequest, CreateRunRequest, Lifecycle, Persistence, ProviderAssociation, State,
+        Timestamp, Transition, Workflow,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn advice_policy_bounded_observation_resolves_only_policy_changes() {
+        let persistence = super::super::SqlitePersistence::open_in_memory().unwrap();
+        let workflow = Workflow::new(
+            "advice",
+            "work",
+            vec![
+                State::new("work", "Work", "", false),
+                State::new("done", "Done", "", true),
+            ],
+            vec![Transition::check_free("work", "finish", "done")],
+        );
+        persistence
+            .create_run(CreateRunRequest::new(
+                "run",
+                None,
+                workflow,
+                ProviderAssociation::new(json!({})),
+                json!({}),
+                "work",
+                Lifecycle::Active,
+                Timestamp::from_unix_millis(1),
+                "test",
+                None,
+            ))
+            .unwrap();
+        let deadline = || std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let before = persistence
+            .read_bounded_observation(&"run".into(), deadline(), true)
+            .unwrap();
+        assert_eq!(before["advice_policy"]["enabled"], false);
+        assert_eq!(before["advice_policy"]["frozen"], serde_json::Value::Null);
+        for (id, kind, data) in [
+            ("large-note", "note", json!({"not_policy":"unrelated data"})),
+            (
+                "owner-on",
+                loop_core::ADVICE_POLICY_CHANGE_RECORD_KIND,
+                json!({
+                    "actor":{"name":"owner","kind":"human"},"state_visit":0,"reason":"Advice now due",
+                    "advice_departures":{"version":1,"occasions":[{"state":"work","event":"finish","occasion_id":"review"}]}
+                }),
+            ),
+        ] {
+            persistence
+                .append_context(AppendContextRequest::new(
+                    "run",
+                    id,
+                    kind,
+                    data,
+                    Timestamp::from_unix_millis(2),
+                ))
+                .unwrap();
+        }
+        let after = persistence
+            .read_bounded_observation(&"run".into(), deadline(), true)
+            .unwrap();
+        assert_eq!(after["advice_policy"]["enabled"], true);
+        assert_eq!(
+            after["advice_policy"]["change_record_ids"],
+            json!(["owner-on"])
+        );
+        assert_eq!(after["completeness"]["advice_policy"], "available");
+        assert_eq!(
+            after["advice_policy"]["effective"]["occasions"][0]["occasion_id"],
+            "review"
+        );
+        persistence
+            .append_context(AppendContextRequest::new(
+                "run",
+                "invalid-policy",
+                loop_core::ADVICE_POLICY_CHANGE_RECORD_KIND,
+                json!({}),
+                Timestamp::from_unix_millis(3),
+            ))
+            .unwrap();
+        let invalid = persistence
+            .read_bounded_observation(&"run".into(), deadline(), false)
+            .unwrap();
+        assert_eq!(invalid["advice_policy"]["state"], "unavailable");
+        assert_eq!(invalid["completeness"]["advice_policy"], "unavailable");
+        assert!(
+            invalid["advice_policy"].get("enabled").is_none(),
+            "no stale fallback"
+        );
+    }
 }

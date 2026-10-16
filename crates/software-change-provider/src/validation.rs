@@ -1,6 +1,6 @@
 //! Named deterministic execution and checkpoint-bound external judgments.
 //! No catalog writes or semantic judgment. Pending names are never records.
-use crate::{checkpoint, criterion, protocol::ProofCommand, recovery_contract::RecoveryContract};
+use crate::{checkpoint, commission::ProofCommand, criterion, recovery_contract::RecoveryContract};
 use loop_core::ContextRecord;
 use serde_json::{json, Value};
 use std::{collections::BTreeSet, fs, path::Path};
@@ -58,7 +58,7 @@ fn record<'a>(context: &'a [ContextRecord], id: &str) -> Result<&'a ContextRecor
     }
     Ok(found[0])
 }
-fn commands(values: &Value) -> Result<Vec<ProofCommand>, String> {
+pub(crate) fn commands(values: &Value) -> Result<Vec<ProofCommand>, String> {
     let commands: Vec<ProofCommand> =
         serde_json::from_value(values.clone()).map_err(|e| format!("proof_commands: {e}"))?;
     let mut seen = BTreeSet::new();
@@ -121,10 +121,9 @@ pub(crate) fn prepare(input: &Value) -> Result<Value, String> {
     let revision = text(input, "revision")?;
     let packet = &show["result"];
     let root = Path::new(text(&packet["initial_input"], "artifact_root")?);
-    let counts = software_change_provider::author_counts::resolve(
-        &packet["initial_input"],
-        &packet["context"],
-    );
+    let context: Vec<ContextRecord> = serde_json::from_value(packet["context"].clone())
+        .map_err(|e| format!("invalid full context: {e}"))?;
+    let counts = crate::admission::effective_policy(&packet["initial_input"], &context);
     if !counts.blocked.is_empty() {
         return Err(format!(
             "invalid author-count amendment: {:?}",
@@ -132,8 +131,7 @@ pub(crate) fn prepare(input: &Value) -> Result<Value, String> {
         ));
     }
     let policy = contract(&counts.effective)?;
-    let commission =
-        software_change_provider::commission::inspect(show, Some("validation-draft"), None)?;
+    let commission = crate::commission::inspect(show, Some("validation-draft"), None)?;
     let mut specs = commands(&commission["commission"]["proof_commands"])?;
     let mut seen: BTreeSet<_> = specs.iter().map(|s| s.id.clone()).collect();
     let mut additions = vec![];
@@ -160,6 +158,28 @@ pub(crate) fn prepare(input: &Value) -> Result<Value, String> {
         .ok_or("missing command_results array")?;
     let mut candidates = vec![];
     let mut diagnostics = vec![];
+    let mut preview_packet = packet.clone();
+    let mut preview_context = context.clone();
+    for addition in &additions {
+        let candidate = loop_core::CandidateRecord {
+            id: text(addition, "record_id")?.into(),
+            kind: "validation-command".into(),
+            data: addition["data"].clone(),
+        };
+        preview_packet["context"] = json!(preview_context);
+        crate::admission::preview(&preview_packet, &candidate)
+            .map_err(|refusal| format!("{}: {}", refusal.rule, refusal.message))?;
+        let sequence = preview_context
+            .last()
+            .map_or(1, |row| row.sequence.as_u64() + 1);
+        preview_context.push(ContextRecord::new(
+            candidate.id,
+            candidate.kind,
+            candidate.data,
+            loop_core::SemanticSequence::new(sequence),
+            loop_core::Timestamp::from_unix_millis(0),
+        ));
+    }
     for spec in &specs {
         let id = format!("validation-{revision}-command-{}", spec.id);
         report["command_evidence_ids"]
@@ -183,7 +203,18 @@ pub(crate) fn prepare(input: &Value) -> Result<Value, String> {
         }
         let mut external_result = result.clone();
         external_result["external"] = json!(true);
-        candidates.push(json!({"kind":"command-evidence","record_id":id,"data":{"proof_id":spec.id,"spec":spec,"external_result":external_result}}));
+        let data = json!({"proof_id":spec.id,"spec":spec,"external_result":external_result});
+        preview_packet["context"] = json!(preview_context);
+        let candidate = loop_core::CandidateRecord {
+            id: id.clone().into(),
+            kind: "command-evidence".into(),
+            data: data.clone(),
+        };
+        if let Err(refusal) = crate::admission::preview(&preview_packet, &candidate) {
+            diagnostics.push(json!({"proof_id":spec.id,"status":"record-refused","rule":refusal.rule,"message":refusal.message}));
+            continue;
+        }
+        candidates.push(json!({"kind":"command-evidence","record_id":id,"data":data}));
     }
     let mut batches = vec![];
     for criterion in current_criteria(&intent)? {
@@ -226,6 +257,13 @@ pub(crate) fn prepare(input: &Value) -> Result<Value, String> {
 }
 
 fn verify_external_shape(result: &Value, spec: &ProofCommand) -> Result<(), String> {
+    verify_external_shape_mode(result, spec, true)
+}
+fn verify_external_shape_mode(
+    result: &Value,
+    spec: &ProofCommand,
+    resolve: bool,
+) -> Result<(), String> {
     if result["id"] != spec.id
         || result["command"] != spec.command
         || result["args"] != json!(spec.args)
@@ -233,7 +271,7 @@ fn verify_external_shape(result: &Value, spec: &ProofCommand) -> Result<(), Stri
         return Err("external command result does not match proof command".into());
     }
     let cwd = Path::new(text(result, "cwd")?);
-    if !cwd.is_absolute() || !cwd.is_dir() || result["exit_code"].as_i64().is_none() {
+    if !cwd.is_absolute() || (resolve && !cwd.is_dir()) || result["exit_code"].as_i64().is_none() {
         return Err("external result requires existing absolute cwd and integer exit_code".into());
     }
     let producer = &result["producer"];
@@ -264,7 +302,7 @@ fn verify_external_shape(result: &Value, spec: &ProofCommand) -> Result<(), Stri
             {
                 return Err(format!("invalid {key}"));
             }
-            if key.ends_with("_ref") {
+            if resolve && key.ends_with("_ref") {
                 let reference = Path::new(value.as_str().unwrap());
                 let resolved = if reference.is_absolute() {
                     reference.to_path_buf()
@@ -291,7 +329,7 @@ fn contained(root: &Path, path: &Path) -> Result<std::path::PathBuf, String> {
     }
     Ok(path)
 }
-fn command_evidence(
+pub(crate) fn command_evidence(
     data: &Value,
     root: &Path,
     expected: Option<&ProofCommand>,
@@ -476,7 +514,58 @@ fn command_evidence(
     Ok(raw)
 }
 
+/// Retained command shape/identity without reopening historical outputs or
+/// imposing current repository identity. Full write/current checks reuse command_evidence.
+pub(crate) fn command_shape(data: &Value) -> Result<(), String> {
+    text(data, "proof_id")?;
+    if let Some(result) = data.get("external_result") {
+        let spec = commands(&json!([data["spec"]]))?.remove(0);
+        if data["proof_id"] != spec.id
+            || result["external"] != true
+            || data.get("origin").is_some()
+            || data.get(loop_core::ENGINE_ORIGIN_KEY).is_some()
+        {
+            return Err("external command evidence has incompatible identity/origin".into());
+        }
+        verify_external_shape_mode(result, &spec, false)?;
+    } else if data["capture"]["format"] == "common-capture-v1" {
+        let spec = commands(&json!([data["spec"]]))?.remove(0);
+        if data["proof_id"] != spec.id {
+            return Err("common capture proof ID mismatch".into());
+        }
+        text(&data["capture"], "index")?;
+        capture_row(&spec, &data["execution_settings"])?;
+    } else {
+        text(&data["capture"], "summary")?;
+        text(&data["capture"], "assignment_id")?;
+    }
+    Ok(())
+}
+
+pub(crate) fn revalidation(
+    data: &Value,
+    known: Option<&BTreeSet<String>>,
+) -> Result<Vec<String>, String> {
+    text(data, "subject_revision")?;
+    text(data, "reason")?;
+    let affected: Vec<String> = serde_json::from_value(data["affected_criteria"].clone())
+        .map_err(|_| "invalid affected criteria")?;
+    if affected.iter().collect::<BTreeSet<_>>().len() != affected.len()
+        || affected.iter().any(|id| {
+            !criterion::is_criterion_id(id) || known.is_some_and(|known| !known.contains(id))
+        })
+    {
+        return Err("unknown or duplicate affected criteria".into());
+    }
+    if ![json!("material"), json!("report-index-only")].contains(&data["change_kind"]) {
+        return Err("revalidation requires explicit change_kind".into());
+    }
+    Ok(affected)
+}
+
 /// Validate the immutable source's shape without imposing current freshness.
+#[cfg(test)]
+#[allow(dead_code)] // Exercised by the library's shared historical/current source tests.
 pub(crate) fn source(
     data: &Value,
     kind: &str,
@@ -486,6 +575,7 @@ pub(crate) fn source(
     source_with_expected_target(data, kind, context, root, None, None)
 }
 
+#[allow(dead_code)] // Production admission uses the library compilation; binary tests reuse it.
 fn source_with_expected_target(
     data: &Value,
     kind: &str,
@@ -511,7 +601,7 @@ fn validate_source_target(
     let has_metadata = data.get("gate").is_some()
         || data.get("config_version").is_some()
         || data.get("review_stage").is_some();
-    if linked && (current_contract || has_metadata) {
+    if has_metadata || (linked && current_contract) {
         let gate = text(data, "gate")?;
         let config_version = text(data, "config_version")?;
         if text(data, "review_stage")? != "aggregate"
@@ -530,6 +620,48 @@ fn source_with_verified_commands(
     context: &[ContextRecord],
     root: &Path,
     verified_command_evidence_ids: Option<&BTreeSet<String>>,
+) -> Result<(), String> {
+    source_mode(
+        data,
+        kind,
+        context,
+        root,
+        verified_command_evidence_ids,
+        false,
+    )
+}
+
+pub(crate) fn historical_source(
+    data: &Value,
+    kind: &str,
+    context: &[ContextRecord],
+    root: &Path,
+) -> Result<(), String> {
+    validate_source_target(data, None, None)?;
+    source_mode(data, kind, context, root, None, true)
+}
+
+pub(crate) fn historical_source_record(
+    record: &ContextRecord,
+    context: &[ContextRecord],
+    root: &Path,
+) -> Result<(), String> {
+    historical_source(&record.data, &record.kind, context, root)?;
+    for id in ids(&record.data["evidence_context_ids"])? {
+        if self::record(context, &id)?.sequence >= record.sequence {
+            return Err("verdict evidence must be an earlier genuine record".into());
+        }
+    }
+    Ok(())
+}
+
+fn source_mode(
+    data: &Value,
+    kind: &str,
+    context: &[ContextRecord],
+    root: &Path,
+    verified_command_evidence_ids: Option<&BTreeSet<String>>,
+    historical: bool,
 ) -> Result<(), String> {
     let object = data.as_object().ok_or("verdict must be object")?;
     let fields = [
@@ -586,7 +718,11 @@ fn source_with_verified_commands(
     {
         return Err("invalid verdict result/findings".into());
     }
-    verify_verdict_origin(data, kind)?;
+    if historical {
+        verdict_origin_shape(data)?;
+    } else {
+        verify_verdict_origin(data, kind)?;
+    }
     if data["result"] == "pass"
         && data.get("reason").is_some()
         && data["evidence_context_ids"]
@@ -603,7 +739,19 @@ fn source_with_verified_commands(
                 "unsupported evidence reference `{id}`; name retained command evidence"
             ));
         }
-        if !verified_command_evidence_ids.is_some_and(|ids| ids.contains(evidence.id.as_str())) {
+        if historical {
+            command_shape(&evidence.data)?;
+            if data["result"] == "pass"
+                && evidence
+                    .data
+                    .get("external_result")
+                    .is_some_and(|r| r["exit_code"] != 0)
+            {
+                return Err("passing verdict references a failed command".into());
+            }
+        } else if !verified_command_evidence_ids
+            .is_some_and(|ids| ids.contains(evidence.id.as_str()))
+        {
             command_evidence(
                 &evidence.data,
                 root,
@@ -617,7 +765,42 @@ fn source_with_verified_commands(
     Ok(())
 }
 
-fn verify_verdict_origin(data: &Value, kind: &str) -> Result<Option<String>, String> {
+pub(crate) fn verdict_origin_shape(data: &Value) -> Result<(), String> {
+    if data.get("origin").is_none() && data.get(loop_core::ENGINE_ORIGIN_KEY).is_none() {
+        return Ok(());
+    }
+    let origin: loop_core::OriginReference =
+        serde_json::from_value(data["origin"].clone()).map_err(|e| e.to_string())?;
+    let engine: loop_core::EngineOrigin =
+        serde_json::from_value(data[loop_core::ENGINE_ORIGIN_KEY].clone())
+            .map_err(|e| e.to_string())?;
+    if origin.kind != "selected-assignment-output"
+        || origin.id != engine.invocation_id.as_str()
+        || origin.assignment_id.as_deref() != Some(engine.assignment_id.as_str())
+        || matches!(engine.selected_attempt, Some(0))
+        || engine
+            .slot_id
+            .as_deref()
+            .is_some_and(|slot| data["gate"].as_str() != Some(slot))
+        || engine.selected_output_sha256.len() != 71
+        || !engine.selected_output_sha256.starts_with("sha256:")
+        || !engine.selected_output_sha256[7..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err("invalid engine-resolved verdict origin".into());
+    }
+    if !matches!(
+        (engine.selected_attempt, engine.recovery_source.as_ref()),
+        (Some(1..), None) | (None, Some(_))
+    ) {
+        return Err("verdict has no selected raw or derived source identity".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_verdict_origin(data: &Value, kind: &str) -> Result<Option<String>, String> {
+    verdict_origin_shape(data)?;
     use sha2::{Digest, Sha256};
     if data.get("origin").is_none() && data.get(loop_core::ENGINE_ORIGIN_KEY).is_none() {
         return Ok(None);
@@ -716,7 +899,57 @@ pub(crate) fn evaluate(
     root: &Path,
     report: &Value,
     complete: bool,
+    workflow: &loop_core::Workflow,
+    excluded: &BTreeSet<String>,
 ) -> Result<Value, String> {
+    let root_value = Value::String(root.to_string_lossy().into_owned());
+    let mut recovery_excluded = software_change_provider::recovery::excluded_record_ids(
+        context,
+        "validation-review",
+        "validation-report.json",
+        Some(&root_value),
+    )?;
+    recovery_excluded.extend(software_change_provider::recovery::excluded_record_ids(
+        context,
+        "validation-adversarial-review",
+        "validation-report.json",
+        Some(&root_value),
+    )?);
+    let mut all_excluded = excluded.clone();
+    all_excluded.extend(recovery_excluded.iter().cloned());
+    let excluded = &all_excluded;
+    let mut selected = BTreeSet::new();
+    for value in report["command_evidence_ids"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(report["goal_verdict_ids"].as_array().into_iter().flatten())
+    {
+        if let Some(id) = value.as_str() {
+            selected.insert(id.to_owned());
+        }
+    }
+    for row in report["criteria"].as_array().into_iter().flatten() {
+        for id in row["verdict_ids"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            selected.insert(id.to_owned());
+        }
+    }
+    if let Some(repair) = context.iter().rev().find(|record| {
+        record.kind == "criterion-revalidation"
+            && record.data["subject_revision"] == report["revision"]
+            && !excluded.contains(record.id.as_str())
+    }) {
+        selected.insert(repair.id.as_str().to_owned());
+    }
+    let ctx = crate::admission::AdmissionContext::new(input, context, "validation", 0, workflow)?;
+    for (_, verdict) in crate::admission::classify_selected(&ctx, excluded, Some(&selected), &[]) {
+        verdict.map_err(|refusal| format!("{}: {}", refusal.rule, refusal.message))?;
+    }
     let policy = contract(input)?;
     let intent = read(&root.join("intent.json"))?;
     let implementation = read(&root.join("implementation-report.json"))?;
@@ -727,13 +960,8 @@ pub(crate) fn evaluate(
     }
     let plan = read(&root.join("plan.json"))?;
     let slots = crate::workflow::describe_workflow(Some(input))?.work_slots;
-    let selected = software_change_provider::commission::select(
-        context,
-        &slots,
-        "validation-draft",
-        Some(&plan),
-        None,
-    )?;
+    let selected =
+        crate::commission::select(context, &slots, "validation-draft", Some(&plan), None)?;
     let specs = commands(&json!(selected.proof_commands))?;
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let repository = checkpoint::repository_identity(&cwd)?;
@@ -745,6 +973,14 @@ pub(crate) fn evaluate(
     let mut verified_command_evidence_ids = BTreeSet::new();
     let command_ids = ids(&report["command_evidence_ids"])?;
     for id in &command_ids {
+        if recovery_excluded.contains(id) {
+            return Err(format!(
+                "command index references excluded record `{id}`; supply replacement coverage"
+            ));
+        }
+        if excluded.contains(id) {
+            continue;
+        }
         let r = record(context, id)?;
         let applicable = r.kind == "evidence-applicability";
         let r = if applicable {
@@ -758,13 +994,14 @@ pub(crate) fn evaluate(
             }
             author_identity(&declaration.attesting_driver)?;
             let revision = text(report, "revision")?;
-            if declaration.target["subject"] != "validation-report.json"
-                || declaration.target["revision"] != revision
-                || declaration.target["checkpoint"]
-                    != json!({"phase":"validation","report_revision":revision})
-            {
-                return Err("stale command applicability target/checkpoint".into());
-            }
+            let target = crate::evidence::canonical_target(&declaration.target, false)?;
+            crate::evidence::validate_applicability_target(
+                &target,
+                "validation-report.json",
+                revision,
+                Some(&json!(root)),
+                false,
+            )?;
             let original = record(context, &declaration.origin.id)?;
             if original.sequence >= r.sequence || original.data.get("external_result").is_none() {
                 return Err(
@@ -807,25 +1044,13 @@ pub(crate) fn evaluate(
     let mut covered = BTreeSet::new();
     let mut selected_ids = BTreeSet::new();
     let mut projection = Vec::new();
-    let repair = context
-        .iter()
-        .rev()
-        .find(|r| r.kind == "criterion-revalidation" && r.data["subject_revision"] == revision);
+    let repair = context.iter().rev().find(|r| {
+        r.kind == "criterion-revalidation"
+            && r.data["subject_revision"] == revision
+            && !excluded.contains(r.id.as_str())
+    });
     let affected = match repair {
-        Some(r) => {
-            text(&r.data, "reason")?;
-            let affected: Vec<String> = serde_json::from_value(r.data["affected_criteria"].clone())
-                .map_err(|_| "invalid affected criteria")?;
-            if affected.iter().collect::<BTreeSet<_>>().len() != affected.len()
-                || affected.iter().any(|id| !known.contains(id))
-            {
-                return Err("unknown or duplicate affected criteria".into());
-            }
-            if ![json!("material"), json!("report-index-only")].contains(&r.data["change_kind"]) {
-                return Err("revalidation requires explicit change_kind".into());
-            }
-            affected
-        }
+        Some(r) => revalidation(&r.data, Some(&known))?,
         None => Vec::new(),
     };
     let mut groups = Vec::new();
@@ -848,8 +1073,13 @@ pub(crate) fn evaluate(
         ids(&report["goal_verdict_ids"])?,
         policy.criterion_policy.goal_required_authors.get(),
     ));
+    let ledger_context: Vec<_> = context
+        .iter()
+        .filter(|record| record.kind != "finding-ledger" || !excluded.contains(record.id.as_str()))
+        .cloned()
+        .collect();
     let ledger = crate::finding_ledger::evaluate_finding_ledger(
-        context,
+        &ledger_context,
         "validation-review",
         "validation-report.json",
         revision,
@@ -869,6 +1099,17 @@ pub(crate) fn evaluate(
         let mut authors: BTreeSet<(String, String)> = BTreeSet::new();
         let mut self_authors = 0usize;
         for id in verdict_ids {
+            if recovery_excluded.contains(&id) {
+                if !complete {
+                    continue;
+                }
+                return Err(format!(
+                    "verdict index references excluded record `{id}`; supply replacement coverage"
+                ));
+            }
+            if excluded.contains(&id) {
+                continue;
+            }
             if !selected_ids.insert(id.clone()) {
                 return Err("duplicate selected verdict ID".into());
             }
@@ -899,18 +1140,20 @@ pub(crate) fn evaluate(
                 {
                     return Err("invalid criterion applicability attestation".into());
                 }
-                if d["origin"]["kind"] != "context-record"
-                    || d["target"]["subject"] != "validation-report.json"
-                    || d["target"]["subject_revision"] != revision
-                    || d["target"]["checkpoint"]
-                        != json!({"phase":"validation","report_revision":revision})
-                {
-                    return Err("stale criterion applicability target/checkpoint".into());
-                }
-                text(d, "reason")?;
-                text(&d["attesting_driver"], "name")?;
-                text(&d["attesting_driver"], "kind")?;
-                original = record(context, text(&d["origin"], "id")?)?;
+                let parsed = crate::evidence::parse_applicability_shape(d)
+                    .map_err(crate::evidence::EvidenceParseError::into_message)?;
+                original = record(context, &parsed.origin.id)?;
+                let target = crate::evidence::canonical_target(
+                    &parsed.target,
+                    matches!(original.kind.as_str(), "criterion-verdict" | "goal-verdict"),
+                )?;
+                crate::evidence::validate_applicability_target(
+                    &target,
+                    "validation-report.json",
+                    revision,
+                    Some(&json!(root)),
+                    false,
+                )?;
                 if original.sequence >= r.sequence {
                     return Err("carry requires original earlier verdict".into());
                 }
@@ -1014,7 +1257,7 @@ pub(crate) fn evaluate(
     Ok(json!({"rows":projection,"complete":complete}))
 }
 
-#[cfg(test)]
+#[allow(dead_code)] // Called by the one library rule table, not the binary copy.
 pub(crate) fn source_for_candidate(
     data: &Value,
     kind: &str,

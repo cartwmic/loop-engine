@@ -1,10 +1,10 @@
 #!/bin/sh
-# Portable bookends-check gate for pre-push and required CI.
+# Portable bookends-check gate for local proof and required push CI.
 # Prefer a PATH `bookends-check` binary; otherwise
 # `cargo run -p bookends-check --bin bookends-check`.
 # Bypass channel: BOOKENDS_BYPASS=<class>:<reason> (omit --bypass when unset/empty).
-# The pre-push hook and publication CI set BOOKENDS_UPDATE_STREAM=1 so the
-# wrapper passes Git's update stream through to the checker. Other callers use
+# Publication CI sets BOOKENDS_UPDATE_STREAM=1 so the wrapper passes Git's
+# update stream through to the checker. Other callers use
 # the ordinary current-working-tree check without blocking on stdin. Missing
 # history or a failed receipt is RED, never a skip.
 set -eu
@@ -29,9 +29,9 @@ fi
 if [ -n "$remote" ]; then
   set -- "$@" --remote "$remote"
 fi
-# The pre-push hook supplies the remote name as its first argument.  The
-# checker fetches from that actual source remote without interpreting the
-# remote URL as a refspec.
+# Callers supply BOOKENDS_REMOTE or the remote name as the first argument.
+# The checker fetches from that actual source remote without interpreting
+# the remote URL as a refspec.
 if [ -n "${BOOKENDS_BYPASS:-}" ]; then
   set -- "$@" --bypass "$BOOKENDS_BYPASS"
 fi

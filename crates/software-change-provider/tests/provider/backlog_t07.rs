@@ -265,7 +265,7 @@ fn review_evidence(run: &RunFixture, gate: &str, subject: &str, revision: &str, 
     for index in 0..run.required_authors {
         let author = format!("{prefix}-{index}");
         let id = format!("{prefix}-{gate}-{index}");
-        append(
+        let appended = append(
             run,
             "review-evidence",
             &id,
@@ -278,9 +278,18 @@ fn review_evidence(run: &RunFixture, gate: &str, subject: &str, revision: &str, 
                 "author": {"name": author, "kind": "script"},
                 "subject": subject,
                 "subject_revision": revision,
-                "config_version": run.config_version
+                "config_version": run.config_version,
+                "review_contract_version": 3,
+                "grounds": {
+                    "reason": "Scripted workflow control against the current subject revision; not a semantic review.",
+                    "evidence": [{"locator": format!("{subject}#/revision")}]
+                }
             }),
             &format!("{gate} evidence {index}"),
+        );
+        assert_eq!(
+            appended["status"], "completed",
+            "{gate} evidence: {appended}"
         );
     }
 }
@@ -460,15 +469,46 @@ fn drive_run(run: &RunFixture, foreign_intent_records: &[Value]) -> Value {
             "own-intent-challenge",
         );
     } else {
+        let mut refused_reviews = 0;
         for record in foreign_intent_records {
-            append(
+            let id = format!("foreign-{}", record["id"].as_str().expect("foreign id"));
+            let before = show(run, "foreign candidate snapshot");
+            let result = append(
                 run,
                 record["kind"].as_str().expect("foreign kind"),
-                &format!("foreign-{}", record["id"].as_str().expect("foreign id")),
+                &id,
                 record["data"].clone(),
                 "foreign policy record",
             );
+            if record["kind"] == "review-evidence" {
+                refused_reviews += 1;
+                assert_eq!(result["status"], "rejected", "{result}");
+                assert_eq!(result["code"], "record-refused", "{result}");
+                assert_eq!(result["details"]["record_id"], id, "{result}");
+                assert_eq!(result["details"]["rule"], "review-shape-policy", "{result}");
+                assert!(
+                    result["details"]["message"]
+                        .as_str()
+                        .expect("policy refusal")
+                        .contains("review config_version does not match frozen input"),
+                    "{result}"
+                );
+                let after = show(run, "foreign candidate remains absent");
+                assert_eq!(after["result"]["context"], before["result"]["context"]);
+                assert_eq!(
+                    after["result"]["current_state"],
+                    before["result"]["current_state"]
+                );
+            } else {
+                // Empty same-subject ledger is not a review/config claim.
+                assert_eq!(record["kind"], "finding-ledger");
+                assert_eq!(result["status"], "completed", "{result}");
+            }
         }
+        assert!(
+            refused_reviews > 0,
+            "fixture must attempt real foreign review evidence"
+        );
         let denied = event(run, "approved", "foreign policy evidence");
         assert_eq!(
             denied["status"], "rejected",
@@ -478,9 +518,32 @@ fn drive_run(run: &RunFixture, foreign_intent_records: &[Value]) -> Value {
             denied["code"], "software-change-review-incomplete",
             "{denied}"
         );
+        // No foreign review was stored, so the subsequent gate must
+        // diagnose the still-missing required own coverage, not stale_config.
         assert!(
-            denied.to_string().contains("stale_config"),
-            "wrong-run policy diagnostic omitted stale config: {denied}"
+            denied["details"]["diagnostics"]
+                .as_array()
+                .expect("axis diagnostics")
+                .iter()
+                .any(|axis| axis["axis"] == run.axis
+                    && axis["review_stage"] == "aggregate"
+                    && axis["diagnostics"]
+                        .as_array()
+                        .expect("causes")
+                        .iter()
+                        .any(|cause| cause["category"] == "missing"
+                            && cause["required"] == run.required_authors)),
+            "{denied}"
+        );
+        assert!(
+            !show(run, "no foreign policy contamination")["result"]["context"]
+                .as_array()
+                .expect("context")
+                .iter()
+                .any(|r| r["kind"] == "review-evidence"
+                    && r["id"]
+                        .as_str()
+                        .is_some_and(|id| id.starts_with("foreign-")))
         );
         review_evidence(run, "intent-review", "intent.json", "r15", "own-intent");
         review_ledger(

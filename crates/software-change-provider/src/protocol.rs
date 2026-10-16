@@ -11,7 +11,8 @@ use serde_json::{json, Value};
 /// Inert `validation-command` context data. Supplemental IDs must be new;
 /// consumers validate against frozen required IDs before using this record.
 /// Appending it does not execute, waive proof, or create acceptance criteria.
-pub(crate) use software_change_provider::commission::ProofCommand;
+#[cfg(test)]
+use software_change_provider::commission::ProofCommand;
 
 #[cfg(test)]
 mod command_contract_tests {
@@ -55,6 +56,51 @@ pub(crate) struct EvaluateRequest {
     pub(crate) prior_evaluations: Vec<DurableEvaluation>,
     #[serde(default)]
     pub(crate) driver_act: Option<loop_core::DriverActEvidence>,
+}
+
+/// Flat, closed optional admission envelope. Candidate DTO is closed too.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AdmitRequest {
+    pub(crate) operation: String,
+    pub(crate) workflow: Workflow,
+    pub(crate) initial_input: Value,
+    pub(crate) context: Vec<ContextRecord>,
+    pub(crate) current_state: loop_core::StateId,
+    pub(crate) state_visit: u64,
+    pub(crate) record: loop_core::CandidateRecord,
+}
+
+#[cfg(test)]
+mod admit_contract_tests {
+    use super::*;
+    #[test]
+    fn admit_is_flat_closed_and_requires_complete_typed_facts() {
+        let workflow = crate::workflow::describe_workflow(None).unwrap();
+        let value = json!({"operation":"admit","workflow":workflow,"initial_input":{},"context":[],"current_state":"explore","state_visit":0,"record":{"id":"note","kind":"opaque-note","data":false}});
+        assert!(serde_json::from_value::<AdmitRequest>(value.clone()).is_ok());
+        for key in [
+            "workflow",
+            "initial_input",
+            "context",
+            "current_state",
+            "state_visit",
+            "record",
+        ] {
+            let mut bad = value.clone();
+            bad.as_object_mut().unwrap().remove(key);
+            assert!(
+                serde_json::from_value::<AdmitRequest>(bad).is_err(),
+                "{key}"
+            );
+        }
+        let mut bad = value.clone();
+        bad["unexpected"] = json!(true);
+        assert!(serde_json::from_value::<AdmitRequest>(bad).is_err());
+        let mut bad = value;
+        bad["record"]["sequence"] = json!(1);
+        assert!(serde_json::from_value::<AdmitRequest>(bad).is_err());
+    }
 }
 
 /// Build the only valid allow response shape.

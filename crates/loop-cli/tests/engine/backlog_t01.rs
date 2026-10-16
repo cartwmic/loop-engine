@@ -1236,11 +1236,38 @@ fn external_work_supplied_typed_advice_closes_departure_public_binary() {
         "external-evidence",
         json!({"question":"bounded decision"}),
     );
-    append(
-        "occasion",
-        "advice-occasion",
-        json!({"state_visit":visit,"source_state":"start","event":"finish","occasion_id":"decision","target":target,"triggered":true,"trigger_source_ids":["trigger"],"response_ids":["answer"]}),
+    // A forward response reference refuses before storage. The occasion ID
+    // remains reusable after its actual earlier answer arrives.
+    let before = show_full(&fixture, "advice-external");
+    let before_history = history(&fixture, "advice-external");
+    let (_, refused) = cli_owned(
+        &fixture, &fixture.cwd_a,
+        vec![
+            "append".into(), "advice-external".into(), "advice-occasion".into(),
+            json!({"state_visit":visit,"source_state":"start","event":"finish","occasion_id":"decision","target":target,"triggered":true,"trigger_source_ids":["trigger"],"response_ids":["answer"]}).to_string(),
+            "--record-id".into(), "occasion".into(),
+        ],
     );
+    assert_eq!(refused["status"], "rejected", "{refused}");
+    assert_eq!(refused["code"], "advice-record-refused", "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("missing earlier response")
+                && message.contains("answer")),
+        "{refused}"
+    );
+    let after = show_full(&fixture, "advice-external");
+    assert_eq!(after["result"]["context"], before["result"]["context"]);
+    assert_eq!(
+        after["result"]["current_state"],
+        before["result"]["current_state"]
+    );
+    assert_eq!(
+        after["result"]["state_visit"],
+        before["result"]["state_visit"]
+    );
+    assert_eq!(history(&fixture, "advice-external"), before_history);
     append(
         "answer",
         "advice-answer",
@@ -1251,6 +1278,11 @@ fn external_work_supplied_typed_advice_closes_departure_public_binary() {
             "author":{"name":"External advisor","kind":"human"},
             "original":{"text":"Probability 0.8: supplied evidence supports it"}
         }),
+    );
+    append(
+        "occasion",
+        "advice-occasion",
+        json!({"state_visit":visit,"source_state":"start","event":"finish","occasion_id":"decision","target":target,"triggered":true,"trigger_source_ids":["trigger"],"response_ids":["answer"]}),
     );
     append(
         "disposition",

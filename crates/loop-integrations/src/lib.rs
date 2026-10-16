@@ -17,6 +17,11 @@ pub use sqlite::{SqlitePersistence, TargetedReadRequest};
 
 pub mod author_counts;
 
+pub mod owner_checkpoint;
+
 pub mod review_intake;
 
 pub mod profile_setup;
+
+pub mod reclaim;
+pub mod retention;

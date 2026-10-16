@@ -726,7 +726,20 @@ mod tests {
                 ));
             }
         }
-        fs::write(&script, body).expect("fake cargo");
+        let body_path = root.join("cargo.body");
+        fs::write(&body_path, body).expect("fake cargo body");
+        // Keep the executable's writable descriptor out of the test parent.
+        let copied = Command::new("/bin/cp")
+            .arg(&body_path)
+            .arg(&script)
+            .output()
+            .expect("spawn fake cargo copy");
+        assert!(
+            copied.status.success(),
+            "fake cargo copy failed: status={}, stderr={}",
+            copied.status,
+            String::from_utf8_lossy(&copied.stderr)
+        );
         let mut permissions = fs::metadata(&script)
             .expect("fake cargo metadata")
             .permissions();
@@ -737,6 +750,9 @@ mod tests {
 
     #[cfg(unix)]
     fn fake_build(mode: &str) -> Result<HashMap<&'static str, FreshBinary>, String> {
+        // Child scripts inherit the setter test's process-global environment.
+        // Hold its same lock until the child exits, not just during allocation.
+        let _guard = ENVIRONMENT_LOCK.lock().expect("environment lock");
         let root = tempfile::tempdir().expect("fake build root");
         let target = root.path().join("target");
         fs::create_dir(&target).expect("fake target");

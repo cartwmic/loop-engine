@@ -752,7 +752,8 @@ intent-adversarial-review
   └─ revise [check-free] → explore
 
 design
-  └─ design-ready [checked] → design-review
+  ├─ design-ready [checked] → design-review
+  └─ revise-intent [check-free] → explore
 
 design-review
   ├─ approved [checked] → design-adversarial-review
@@ -765,7 +766,9 @@ design-adversarial-review
   └─ revise-intent [check-free] → explore
 
 plan
-  └─ plan-ready [checked] → plan-review
+  ├─ plan-ready [checked] → plan-review
+  ├─ revise-design [check-free] → design
+  └─ revise-intent [check-free] → explore
 
 plan-review
   ├─ approved [checked] → plan-adversarial-review
@@ -800,7 +803,11 @@ implementation-adversarial-review
   └─ revise-intent [check-free] → explore
 
 validation
-  └─ validation-ready [checked] → validation-review
+  ├─ validation-ready [checked] → validation-review
+  ├─ revise-implementation [check-free] → implement
+  ├─ revise-plan [check-free] → plan
+  ├─ revise-design [check-free] → design
+  └─ revise-intent [check-free] → explore
 
 validation-review
   ├─ approved [checked] → validation-adversarial-review
@@ -845,11 +852,11 @@ Shipped software-change profiles omit `work_slot_bindings` (or `{}`), so draft s
 
 The provider may inspect repository state, documents, tests, reviews, or other software-specific information. Core understands none of those concepts.
 
-Review-state routing is explicit in this reference graph: external review operators select the phase owning an accepted material defect through `revise-intent`, `revise-design`, or `revise-plan`. Nearest `revise` from parent and adversarial review returns to that phase's draft. Validation-report-local defects stay in the validation draft: edit and recheck `validation-report.json`, then retry the next checked hop (`validation-ready` or `passed`). Validation-review and validation-adversarial-review also expose `revise-implementation` to implement. Candidate reviewer output is triaged before append or artifact mutation, and disputed candidates use focused external reconsideration. A late finding requires current evidence, violated in-scope obligation, concrete consequence, validation gap, and provenance as newly exposed, fix-introduced, or previously overlooked; prior visibility or reviewer overlook does not waive known materiality. Comprehensive-first review still bars drip-feeding, and unrelated reopening must meet independent scope/materiality burden. Quiet, progress, and thrash count per review state on the post-triage accepted-finding set; they replace a numeric breaker and never waive a known defect. These are provider/operator conventions, not Loop Engine core policy or a review subsystem.
+For newly started runs, every active non-terminal state offers check-free routes directly to each earlier phase draft: `revise-intent` to `explore`, `revise-design` to `design`, `revise-plan` to `plan`, and `revise-implementation` to `implement`. Narrative and owner-checkpoint states belong to their phase; reconciliation belongs to implementation. These added routes never enter non-draft, sideways or later-phase states, require no artifact, report, rejection or override, and approve nothing. Every existing route retains its meaning, including same-phase narrative corrections and checked checkpoint rejection routes. Routes preserve artifacts, context, findings and history, perform no repository rollback, and leave all forward checks and enabled fresh owner-decision requirements in force. Earlier-started runs keep their stored graphs; `end` has no routes. External review operators select the phase owning an accepted material defect using the shown routes. Nearest `revise` from parent and adversarial review returns to that phase's draft. Validation-report-local defects stay in the validation draft: edit and recheck `validation-report.json`, then retry the next checked hop (`validation-ready` or `passed`). Validation-review and validation-adversarial-review also expose `revise-implementation` to implement. Candidate reviewer output is triaged before append or artifact mutation, and disputed candidates use focused external reconsideration. A late finding requires current evidence, violated in-scope obligation, concrete consequence, validation gap, and provenance as newly exposed, fix-introduced, or previously overlooked; prior visibility or reviewer overlook does not waive known materiality. Comprehensive-first review still bars drip-feeding, and unrelated reopening must meet independent scope/materiality burden. Quiet, progress, and thrash count per review state on the post-triage accepted-finding set; they replace a numeric breaker and never waive a known defect. These are provider/operator conventions, not Loop Engine core policy or a review subsystem.
 
 ### 10.1 Run-Configured Semantic Review Policies
 
-The software-change provider's shipped review contract remains external and deterministic at its boundary. Binaries built from this candidate source expose identity through `--help`/`-h` and `--version`/`-V` before stdin; public v0.2.2 binaries predate those flags. Direct pushes to `main` reuse read-only production preflight at the pushed SHA. Calibration fixtures are supplied-material-only and use stable fictional path labels with shipped companions, so review does not resolve labels against a live checkout. Stale evidence is recovery context under `details.informational`; current unsatisfied obligations remain under blocking `details.diagnostics`.
+The software-change provider's shipped review contract remains external and deterministic at its boundary. Binaries built from this candidate source expose identity through `--help`/`-h` and `--version`/`-V` before stdin; public v0.2.2 binaries predate those flags. Direct pushes to `main` run blocking CI (`ci.yml`) at the pushed SHA. Calibration fixtures are supplied-material-only and use stable fictional path labels with shipped companions, so review does not resolve labels against a live checkout. Stale evidence is recovery context under `details.informational`; current unsatisfied obligations remain under blocking `details.diagnostics`.
 
 At run creation, the software-change workflow may receive semantic review policies in immutable initial input. These policies configure what must be reviewed at the live review gates. A present `review_policies` object is applied at `describe`: only nonempty gate lists keep those review states, and start snapshots that live graph. Core does not interpret `review_policies`. The snapshotted topology for an existing run does not change during that run.
 
@@ -1175,6 +1182,8 @@ active run's stored states, transitions, work-slot catalog, or instructions.
 - Status: live
 - Coverage: e2e/journey
 
+**Engine-owned advice qualification:** The engine's explicit advice-policy and occasion-closure rules under LE-166/189/192 select the effective map and latest linked occasion declaration without rewriting earlier context. This narrow engine-owned bookkeeping does not assign provider evidence truth, review approval or general provider-record supersession meaning.
+
 ### LE-19: Every checked evaluation receives all accumulated context records in durable append order.
 - Status: live
 - Coverage: e2e/journey
@@ -1415,9 +1424,13 @@ For an LE-166-enabled run, provider unavailability is still not a check-free gat
 - Status: live
 - Coverage: e2e/journey
 
+**Lean CI/release amendment:** The exact heading above is retained solely as historical requirement identity text. It does not require the retired pipeline; this body supersedes the heading's former operative pipeline description. Blocking CI in `ci.yml` runs only on pushes to `main` and requires formatting checks, all-target workspace Clippy with `-D warnings`, a locked workspace build, workspace tests, the bare self-tests of all five journey scripts (external-work, software-change, policy-document, research and generate-PRD), and the Bookends gate over every introduced reachable commit from main's tip before the push (`before`) through the pushed tip (`after`), not merely the pushed tip against its own parent. Bookends retains the history and continuity obligations of LE-125 and LE-133. A separate informational workflow runs the full source journeys on the same main pushes and exposes their pass or fail; it never gates Release, including when failed or still running.
+
 ### LE-69: cargo-dist plan and release-gate assertions include the research binary.
 - Status: live
 - Coverage: e2e/journey
+
+**Lean CI/release amendment:** Release is dispatch-only, with no push or pull-request trigger. Every dispatch, including dry-run, requires a prior successful push-event `ci.yml` run for the exact dispatched commit before artifact compilation; absent or unsuccessful exact-commit proof stops the already dispatched workflow before artifact compilation. On every dispatch, every executable in every built native release archive for macOS arm64 (`aarch64-apple-darwin`) and Linux x86_64 (`x86_64-unknown-linux-gnu`) must exit 0 for `--version` and report exactly one whole version token equal to that archive's release version, not a substring or prefix match. Publication is admitted only when archive-check succeeds; failed, skipped, cancelled or missing archive-check results cannot admit publication. The research binary remains included in cargo-dist plan and release-gate assertions and in the native release matrix for both targets.
 
 ### LE-70: The provider does not fetch, invoke models, or judge semantic truth.
 - Status: live
@@ -1811,7 +1824,7 @@ The driver-owned pointer refuses content mismatches, preserves pending versus ob
 - Status: live
 - Coverage: e2e/journey
 
-Live-ID disappearance, tombstone removal, reassignment and revival are refused in both full and CI-equivalent shallow clones. The gate obtains required parent history or fails closed, while genuine first adoption remains valid; publication checks cover the introduced history required by LE-133.
+Live-ID disappearance, tombstone removal, reassignment and revival are refused in both full and CI-equivalent shallow clones. The gate obtains required parent history or fails closed, while genuine first adoption remains valid; required push-to-main CI checks cover the introduced history required by LE-133.
 
 ### LE-126: Bookends bypass permission requires durable local invocation evidence and remains distinct from GREEN.
 - Status: live
@@ -1878,7 +1891,7 @@ The resulting exact effective policy, bindings, selected-file bytes/hash, Booken
 - Status: live
 - Coverage: e2e/journey
 
-Pre-push and required CI inspect every commit introduced by each updated ref, including merged branch commits, and check continuity against each relevant parent. Per-commit continuity (no silent removal, reassignment, revival, adoption removal, or tombstone games) still blocks wherever it appears, and incomplete history still fails closed. Coverage-timing findings on intermediate commits (eligible citations landing later in the same pushed range) are retained as visible diagnostics instead of blocking, provided the pushed tip tree is independently clean. Legitimate first adoption and permanent tombstones retain their meaning. Coverage of the published tip is checked against that tip's content. Known residual: landing an uncovered live ID then tombstoning it in the same range passes; tombstones are permanent and review-visible.
+Required push-to-main CI inspects every commit introduced by the main ref update, starting from main's tip before the push (`before`) through the pushed tip (`after`), including merged branch commits, and checks continuity against each relevant parent. For a generic supplied update stream, Bookends inspects every supplied updated ref using that ref's own old/new range and checks every introduced reachable commit, including merged branch commits, against each relevant parent. No installed local Git hook or retired hosted workflow is required. Per-commit continuity (no silent removal, reassignment, revival, adoption removal, or tombstone games) still blocks wherever it appears, and incomplete history still fails closed. Coverage-timing findings on intermediate commits (eligible citations landing later in the same pushed range) are retained as visible diagnostics instead of blocking, provided the pushed tip tree is independently clean. Legitimate first adoption and permanent tombstones retain their meaning. Coverage of the published tip is checked against that tip's content. Known residual: landing an uncovered live ID then tombstoning it in the same range passes; tombstones are permanent and review-visible.
 
 Local and hosted checks obtain required history before claiming complete coverage. Equivalent available history produces the same decision in full and shallow clones. Missing history, incomplete enumeration, interruption or a resource limit cannot produce complete GREEN. A new ref cannot use a guessed baseline to omit its ancestry. Explicit bypass retains its reason and durable invocation evidence under LE-126.
 
@@ -2161,6 +2174,8 @@ Only on new runs explicitly enabling a frozen advisory departure map, every rele
 
 **External-work successor qualification:** LE-167/172/176 remove advisor backend command/configuration, invocation and attempt dispatch, not configured substantive typed questions, choice/full probabilities/confidence, score/legend/full probabilities/confidence and Noul probability with optional confidence/rationale. Genuine externally produced answers and actual accept/partial/reject dispositions close configured occasions; a permitted no-admissible-question reason stays explicit. Missing required values cannot be projected into existence. Normal checked/check-free departure closure and visible scoped exception/refusal remain; advice is neither review approval nor proof/route authority.
 
+**Running-advice qualification:** For new runs on a release supporting LE-192, owner-attributed advice-policy-change records may replace the effective departure map during the run, including an advice-off start. The latest complete map governs the currently pending departure; addition makes a requirement due and removal releases unanswered advice. The frozen original and every change remain visible. LE-189 permits explicit same-visit occasion revision without an owner ceremony. Neither policy change nor occasion revision removes a successful received answer's reasoned-disposition duty. Earlier frozen runtimes retain their original prerequisites and are not migrated.
+
 ## 15. Complexity Guardrails
 
 The original v0.1 design targets were:
@@ -2419,3 +2434,81 @@ Drivers and harnesses run proof/test commands and use supported recording to ret
 Configured normal command-proof obligations have a supported external-result fulfillment path. Sufficient genuine results are not rerun merely to obtain an engine-owned capture, and the new product has no optional proof-command/matrix runner. Mechanical source/target/command/currentness checks and actual semantic proof relevance still govern admission and completion. Exit zero, valid metadata or an all-green summary alone does not establish delivery. Missing, wrong-repository, stale, failed or insufficient results remain pending or fail under the existing rules; correction/reuse cannot fabricate them.
 
 Preserve actual output and original attribution, and distinguish recording acceptance from independent judgment that command assertions prove the intended result. Deterministic provider calls and metadata inspection are not primary work execution. No private-call verification, arbitrary evidence quota or duplicate command-provenance registry is required.
+
+### LE-184: Software-change plans expose safe real parallelism and plan review checks it
+- Status: live
+- Coverage: e2e/journey
+
+Software-change plan guidance tells the driver to decompose work into tasks that do not share writable files or state unless one depends on the other, to declare a dependency only where a real contract, context or hard-input need exists, and, during implementation, to dispatch tasks with no dependency path between them concurrently by default, giving a reason when it runs them serially. Concurrency is expressed only through the plan's existing task dependencies; there is no separate concurrency or touched-files field, and nothing measures or enforces actual dispatch.
+
+Every shipped software-change rigor level reviews a plan's parallelism at ordinary and challenge plan review through a distinct `parallelism-honest` axis. It fails material missed parallelism across the whole dependency graph, unchained tasks that collide on the same files or state, and over-splitting that adds coordination cost without real concurrent gain. It passes an honest serial chain and a well-decomposed parallel plan. Whether each individual declared predecessor is needed remains `dependencies-honest`, and whether a task is bounded and small enough remains `task-sized`. Runs started on an earlier profile keep their frozen review obligations.
+
+### LE-185: Optional reviewed narratives and owner checkpoints for software-change runs
+- Status: live
+- Coverage: e2e/journey
+
+For new software-change runs, the owner may choose at setup, per run and frozen at start, (a) which of the design, plan and validation phases produce a plain-English markdown narrative and (b) which of the intent, design, plan, implementation and validation phase exits wait for an owner decision. Both are off in every shipped profile; a run with both off visits no narrative or checkpoint step and keeps its existing review obligations.
+
+A narrative is written only after that phase's JSON artifact has cleared its ordinary and challenge review, describes that exact artifact revision, and must itself clear ordinary and challenge review against the artifact and the frozen intent at the profile's stages and author counts before the run leaves the phase. The narrative step never changes the JSON, which stays authoritative for later phases. A new artifact revision makes its narrative and any owner decision stale. After the run ends, the last reviewed narrative for each enabled phase remains readable as its own markdown file among the run's artifacts.
+
+At a configured checkpoint a forward departure from the phase requires a recorded owner decision approving the current subject revision: the narrative when one is enabled, otherwise the artifact. A check-free route to an earlier phase draft under LE-193 needs no owner rejection or approval, grants no approval, and preserves every forward check. Forward re-entry requires a fresh owner decision on the current subject revision. A rejection carries the owner's reason and names its target: an artifact rejection sends the run through that phase's existing revise route; a narrative rejection requires a rewritten and re-reviewed narrative and a new owner decision while the unchanged artifact's reviews stay valid. Each decision record keeps the owner's verbatim decision text, and decisions and rejections remain visible in history. The decision record shape and its evaluation are a provider convention shared through loop-integrations without software-change-specific assumptions; core assigns them no approval meaning (LE-18), and the provider does not prove that a decision came from a human. Runs started before this capability keep their frozen obligations.
+
+### LE-186: Approved run artifacts remain inspectable after run files are deleted
+- Status: live
+- Coverage: e2e/journey
+
+For new runs of the shipped software-change, research and policy-document providers, each time a run leaves an artifact's owning phase forward, the exact content of that artifact as it stood at that moment is retained in the run catalog. Deleting the run's artifact directory, or any other file outside the catalog, does not lose that content: an operator can read every retained copy, in order, with its artifact name, the transition that retained it and when, through the ordinary inspection commands.
+
+Only phase exits are retained, not intermediate drafts or revisions written between exits. A later exit after a revise loop adds a new entry; an artifact whose bytes are unchanged since its last retained copy is recorded as exited again without storing its content a second time. An exit by owner override is retained and visibly marked as not checked. Core assigns this content no artifact, approval or revision meaning; runs started before this capability are not backfilled.
+
+### LE-187: Operators can reclaim legacy catalog space from finished runs
+- Status: live
+- Coverage: e2e/journey
+
+An operator can deliberately reclaim catalog space held by bulky per-invocation detail that earlier releases stored for work-slot invocations, such as worker command, argument and prompt payloads and their duplicated completion snapshots. Before changing anything the operator can see which finished runs would be affected and roughly how much space would be reclaimed. Applying it discards that detail only for final or terminated runs, keeps those runs listed, and returns the freed space so the catalog file on disk becomes smaller.
+
+Active runs and their data are unaffected, and cleanup does not refuse merely because other runs are active. While the catalog file is being shrunk, concurrent commands may briefly wait or fail with a clear retryable busy error, but nothing is corrupted or lost beyond the selected legacy detail. Inspection of a cleaned run may be degraded; original worker payloads for cleaned runs, and verification that depends on them, are intentionally no longer available. Cleanup never runs automatically.
+
+### LE-188: Context writes refuse records provably invalid at write time
+- Status: live
+- Coverage: e2e/journey
+
+For runs started on a release that provides it, every public context write, including direct append, refuses before persistence a record that can be deterministically proved invalid from the record, earlier records, frozen run policy and sources present at write time. The refusal names the record and the failing rule, and nothing is stored. Engine storage integrity (active observed run, unique record identity, append order and existence of a referenced origin) is checked first and is never waived. A record that carries or wraps another record, such as evidence applicability, is also checked against the rules that apply to what it carries. When required validation is unavailable or incompatible, the write fails closed. Preview helpers, writes and later evaluation apply one effective rule set, including obligations a frozen overlay adds, so a record previewed clean is not later refused for a reason checkable at write time. The engine stays provider-generic and assigns context no meaning (LE-18): provider-owned record kinds follow their provider's rules, engine-owned kinds follow engine rules, and semantic judgment is not validation. There is no exception that stores a refused record; a rule defect is corrected in the rule. A record valid when written that later becomes obsolete follows existing revision and applicability rules. Runs started earlier keep their frozen obligations.
+
+### LE-189: Advice-occasion records are checked at write and revisable within a visit
+- Status: live
+- Coverage: e2e/journey
+
+On advice-enabled runs the engine refuses an accidental duplicate or provably invalid advice-occasion record when written, naming any existing record. The driver may explicitly revise its own advice-occasion record within a state visit; the latest explicit revision governs that departure, originals remain in history, and successful answers keep their reasoned-disposition obligation.
+
+### LE-190: Obsolete records can be withdrawn without rewriting history
+- Status: live
+- Coverage: e2e/journey
+
+A driver may append an explicit withdrawal naming earlier records and a reason. Withdrawn records and validly retired authors' records, whether or not well-formed, do not count or block later commission, gate or final evaluation, and remain visible. Withdrawal never discharges an unresolved accepted finding or a received advice answer's disposition obligation, and never reopens an already-taken transition; later dependent checks require valid replacement coverage.
+
+### LE-191: Commissions report bad records instead of aborting
+- Status: live
+- Coverage: e2e/journey
+
+Software-change commissions produce their packet when a current record is malformed, naming each such record and reason as diagnostics, and exclude withdrawn and retired records consistently with gate evaluation. Progression gates and final validation remain blocked by a malformed, non-withdrawn record required for that check's current obligations until it is corrected by later valid evidence or withdrawn; the exact correction mechanics are left to design. A challenge entered through normal ordinary approval does not re-evaluate the ordinary review's evidence: parent diagnostics do not reopen that clearance; the current-revision ordinary finding ledger and the challenge's configured evidence obligations remain required.
+
+### LE-192: Owner can change advice requirements on a running run
+- Status: live
+- Coverage: e2e/journey
+
+The owner may enable or disable advisory mode and add or remove individual advice requirements on an active run without restarting it. A change applies from the moment it is recorded, including the pending departure: removal releases unanswered due advice and addition makes advice due before departure. Received successful answers keep their reasoned-disposition obligation. The frozen original and every change remain visible, and show exposes the effective advice policy. This qualifies LE-166's start-frozen advice map for runs on releases that support it.
+
+### LE-193: Software-change runs can return directly to any earlier phase draft
+- Status: live
+- Coverage: e2e/journey
+
+For new software-change runs, every active non-terminal state offers a check-free route directly to the draft state of each earlier phase: intent (`explore`), design (`design`), plan (`plan`) and implementation (`implement`). This includes draft, narrative, reconciliation and owner-checkpoint states when the run's frozen options include them. These added routes land only on earlier-phase draft states: none of them enters a review, challenge, narrative, checkpoint or reconciliation state, a later phase, or a sideways state. Every existing route keeps its meaning, including the existing narrative revise routes and the checked checkpoint rejection routes (`revise`, `revise-narrative`) of LE-185.
+
+Taking a route keeps artifacts, context, findings and history, rolls nothing back in the repository, and grants no approval. Every forward hop is checked again. An enabled owner checkpoint needs a fresh owner decision on the current subject revision when the run returns to it. This qualifies LE-185 only for backward departures from a checkpoint. Runs started earlier keep their stored graphs.
+
+### LE-194: Ordinary-review writes are refused while that review's challenge is under way
+- Status: live
+- Coverage: e2e/journey
+
+While a software-change run is in a review challenge state, a new write that belongs to the corresponding ordinary review is refused before it is stored. This covers ordinary review judgments, ordinary finding ledgers, required-author-count amendments targeting the ordinary review, intent-comparison during the intent challenge, and explicit applicability whose origin is an ordinary-review judgment. The refusal names the ordinary review and the existing revise route, and the run's context is unchanged. Challenge judgments and ledgers, applicability of challenge judgments, writes made in other states including early preparation under LE-174, and existing history are unaffected. The rule uses the shared every-write provider validation; it adds no route, reapproval shortcut or engine review concept, and an owner-attested override (LE-113) remains separate.

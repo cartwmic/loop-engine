@@ -27,7 +27,8 @@ struct ValidationCommandEnvelope {
     spec: ProofCommand,
 }
 
-fn validation_command(data: &Value) -> Result<ProofCommand, String> {
+#[doc(hidden)]
+pub fn validation_command(data: &Value) -> Result<ProofCommand, String> {
     if data.get("spec").is_some() {
         serde_json::from_value::<ValidationCommandEnvelope>(data.clone())
             .map(|envelope| envelope.spec)
@@ -36,6 +37,9 @@ fn validation_command(data: &Value) -> Result<ProofCommand, String> {
         serde_json::from_value::<ProofCommand>(data.clone()).map_err(|error| error.to_string())
     }
 }
+
+/// Shared driver/reviewer guidance for artifact and narrative challenge slots.
+pub const CHALLENGE_GUIDANCE: &str = "Independently test whether the ordinary review's passing or sufficiency conclusion holds: assume it did not pass; why might it not have? Use ordinary findings and their dispositions as context, not as individual findings to rebut. Normal entry into the challenge state proves ordinary review passed; only its current-revision finding ledger is checked, not ordinary evidence again. The challenge outcome is independent of the append order of ordinary individual, aggregate and carried records. Separately, a challenge assessment counts only if first recorded after the latest relevant ordinary-review record; an earlier assessment, including a raw re-append, requires explicit evidence-applicability appended after that cutoff. Ordinary-review writes are refused during the challenge; use the existing check-free revise route for correction and renewed ordinary approval. Owner override remains exceptional and does not prove ordinary approval.";
 
 pub const STEERING_KIND: &str = "user-steering";
 pub const INCORPORATION_KIND: &str = "steering-incorporation";
@@ -94,12 +98,80 @@ pub struct Commission {
     pub proof_commands: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_stage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guidance: Option<String>,
 }
 
 fn ids_valid(ids: &[String]) -> bool {
     !ids.is_empty()
         && ids.iter().all(|id| !id.trim().is_empty())
         && ids.iter().collect::<BTreeSet<_>>().len() == ids.len()
+}
+
+/// Intrinsic steering parser shared by commission selection and the rule table.
+/// A stale task-targeted record stays historical/inert as before.
+pub(crate) fn parse_steering(
+    data: &Value,
+    earlier: &[ContextRecord],
+    slots: &[WorkSlot],
+    plan: Option<&Value>,
+) -> Result<Steering, String> {
+    let steering: Steering = serde_json::from_value(data.clone()).map_err(|e| e.to_string())?;
+    if steering.instruction.trim().is_empty() {
+        return Err("steering requires instruction".into());
+    }
+    if let Some(baseline) = &steering.intent_baseline {
+        validate_intent_baseline(baseline)?;
+    }
+    if !steering.supersedes.is_empty() && !ids_valid(&steering.supersedes) {
+        return Err("steering has invalid supersedes IDs".into());
+    }
+    for id in &steering.supersedes {
+        if !earlier
+            .iter()
+            .any(|record| record.kind == STEERING_KIND && record.id.as_str() == id)
+        {
+            return Err(format!(
+                "steering supersedes unknown or non-earlier steering `{id}`"
+            ));
+        }
+    }
+    let revision = plan.and_then(|p| p["revision"].as_str());
+    match &steering.target {
+        Target::All => {}
+        Target::Slots { ids } => {
+            if !ids_valid(ids)
+                || ids
+                    .iter()
+                    .any(|id| !slots.iter().any(|slot| slot.id.as_str() == id))
+            {
+                return Err("steering has invalid slot targets".into());
+            }
+        }
+        Target::Tasks { plan_revision, ids } => {
+            if !ids_valid(ids) || plan_revision.trim().is_empty() {
+                return Err("steering has invalid task target".into());
+            }
+            if revision == Some(plan_revision.as_str()) {
+                let tasks: BTreeSet<_> = plan
+                    .and_then(|p| p["tasks"].as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|task| task["id"].as_str())
+                    .collect();
+                if ids.iter().any(|id| !tasks.contains(id.as_str())) {
+                    return Err("steering has unknown task target".into());
+                }
+            }
+        }
+    }
+    let stale_task = matches!(&steering.target, Target::Tasks { plan_revision, .. } if revision != Some(plan_revision.as_str()));
+    if !stale_task {
+        for update in &steering.proof_updates {
+            validate_update(update, plan)?;
+        }
+    }
+    Ok(steering)
 }
 
 /// No file writes, launches, semantic classification, or plan revision changes.
@@ -135,7 +207,7 @@ pub fn select(
     let mut parsed = Vec::new();
     let mut superseded = BTreeSet::new();
     let mut diagnostics = Vec::new();
-    for record in records {
+    for (index, record) in records.iter().enumerate() {
         if previous.is_some_and(|sequence| sequence >= record.sequence)
             || !seen.insert(record.id.as_str())
         {
@@ -149,73 +221,22 @@ pub fn select(
         if record.kind != STEERING_KIND {
             continue;
         }
-        let steering: Steering = serde_json::from_value(record.data.clone())
+        let steering = parse_steering(&record.data, &records[..index], slots, plan)
             .map_err(|e| format!("steering `{}`: {e}", record.id))?;
-        if steering.instruction.trim().is_empty() {
-            return Err(format!("steering `{}` requires instruction", record.id));
-        }
-        if let Some(baseline) = steering.intent_baseline.as_ref() {
-            validate_intent_baseline(baseline).map_err(|error| {
-                format!(
-                    "steering `{}` has invalid intent baseline: {error}",
-                    record.id
-                )
-            })?;
-        }
-        if !steering.supersedes.is_empty() && !ids_valid(&steering.supersedes) {
-            return Err(format!(
-                "steering `{}` has invalid supersedes IDs",
-                record.id
-            ));
-        }
-        for id in &steering.supersedes {
-            if !parsed
-                .iter()
-                .any(|(prior, _, _): &(&ContextRecord, Steering, bool)| prior.id.as_str() == id)
-            {
-                return Err(format!(
-                    "steering `{}` supersedes unknown or non-earlier steering `{id}`",
-                    record.id
-                ));
-            }
-            superseded.insert(id.clone());
-        }
+        superseded.extend(steering.supersedes.iter().cloned());
         let applies = match &steering.target {
             Target::All => true,
-            Target::Slots { ids } => {
-                if !ids_valid(ids)
-                    || ids
-                        .iter()
-                        .any(|id| !slots.iter().any(|s| s.id.as_str() == id))
-                {
-                    return Err(format!("steering `{}` has invalid slot targets", record.id));
-                }
-                ids.iter().any(|id| id == slot_id)
-            }
+            Target::Slots { ids } => ids.iter().any(|id| id == slot_id),
             Target::Tasks { plan_revision, ids } => {
-                if !ids_valid(ids) || plan_revision.trim().is_empty() {
-                    return Err(format!("steering `{}` has invalid task target", record.id));
-                }
                 if revision != Some(plan_revision.as_str()) {
                     diagnostics.push(format!("steering `{}` stale task revision `{plan_revision}` (current {revision:?}); not applied", record.id));
                     false
                 } else {
-                    if ids.iter().any(|id| !tasks.contains(id.as_str())) {
-                        return Err(format!("steering `{}` has unknown task target", record.id));
-                    }
                     slot_id == "implement"
                         && task_id.is_none_or(|task| ids.iter().any(|id| id == task))
                 }
             }
         };
-        // Validate execution updates even for another recipient: malformed durable
-        // instructions must not silently become executable on a later launch.
-        let stale_task = matches!(&steering.target, Target::Tasks { plan_revision, .. } if revision != Some(plan_revision.as_str()));
-        if !stale_task {
-            for update in &steering.proof_updates {
-                validate_update(update, plan)?;
-            }
-        }
         parsed.push((record, steering, applies));
     }
     let selected: BTreeSet<&str> = parsed
@@ -250,7 +271,11 @@ pub fn select(
         .iter()
         .filter_map(|p| p["id"].as_str().map(str::to_owned))
         .collect();
-    for record in records.iter().filter(|r| r.kind == "validation-command") {
+    let withdrawn = crate::recovery::withdrawn_record_ids(records, None)?;
+    for record in records
+        .iter()
+        .filter(|r| r.kind == "validation-command" && !withdrawn.contains(r.id.as_str()))
+    {
         let command = validation_command(&record.data)
             .map_err(|e| format!("invalid validation-command `{}`: {e}", record.id))?;
         if [
@@ -288,6 +313,9 @@ pub fn select(
         diagnostics,
         proof_commands,
         review_stage: None,
+        guidance: slot_id
+            .ends_with("-adversarial-review")
+            .then(|| CHALLENGE_GUIDANCE.to_owned()),
     })
 }
 
@@ -444,6 +472,18 @@ fn inspect_with_stage_raw(
     let mut records: Vec<ContextRecord> =
         serde_json::from_value(packet.get("context").cloned().ok_or("missing context")?)
             .map_err(|e| e.to_string())?;
+    // Apply recovery while the original history is still available, before
+    // frozen stdin-kind/stage selection can discard withdrawal or roster facts.
+    let artifact_root = packet
+        .get("artifact_root")
+        .or_else(|| packet["initial_input"].get("artifact_root"));
+    let exclusions = crate::recovery::excluded_record_ids(
+        &records,
+        slot_id,
+        review_subject(slot_id).unwrap_or("validation-report.json"),
+        artifact_root,
+    )?;
+    records.retain(|record| !exclusions.contains(record.id.as_str()));
     if let Some(stage) = requested_stage {
         if !matches!(stage, "individual" | "aggregate") {
             return Err("commission review stage must be `individual` or `aggregate`".to_owned());
@@ -504,13 +544,493 @@ fn inspect_with_stage_raw(
     }
 }
 
+fn narrative_options(slot: &str) -> Option<&'static crate::workflow::PhaseOptions> {
+    crate::workflow::PHASE_OPTIONS.iter().find(|options| {
+        options
+            .narrative
+            .is_some_and(|n| [n.review, n.challenge].contains(&slot))
+    })
+}
+
+fn checkpoint_options(slot: &str) -> Option<&'static crate::workflow::PhaseOptions> {
+    crate::workflow::PHASE_OPTIONS
+        .iter()
+        .find(|options| options.checkpoint == slot)
+}
+
+// Read only fixed provider filenames, and refuse links escaping the artifact root.
+// Markdown is a real UTF-8 source, not a JSON subject or a fabricated record.
+fn read_option_source(root: &Path, locator: &str, is_json: bool) -> Result<ReviewSource, String> {
+    let path = root.join(locator);
+    let unavailable = |error: &dyn std::fmt::Display| {
+        format!(
+            "mandatory review source `{locator}` is unavailable at {}: {error}",
+            path.display()
+        )
+    };
+    let canonical_root = root.canonicalize().map_err(|e| unavailable(&e))?;
+    let canonical_path = path.canonicalize().map_err(|e| unavailable(&e))?;
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err(format!(
+            "mandatory review source `{locator}` escapes artifact_root"
+        ));
+    }
+    let bytes = std::fs::read(&canonical_path).map_err(|e| unavailable(&e))?;
+    let value = if is_json {
+        serde_json::from_slice(&bytes)
+            .map_err(|e| format!("mandatory review source `{locator}` is not valid JSON: {e}"))?
+    } else {
+        std::str::from_utf8(&bytes).map_err(|e| {
+            format!("mandatory review source `{locator}` is not readable UTF-8: {e}")
+        })?;
+        Value::Null
+    };
+    Ok(ReviewSource {
+        locator: locator.to_owned(),
+        sha256: format!("sha256:{:x}", Sha256::digest(&bytes)),
+        bytes,
+        value,
+    })
+}
+
+fn source_projection(root: &Path, source: &ReviewSource) -> Value {
+    json!({"locator":source.locator,"path":root.join(&source.locator),
+        "sha256":source.sha256,"bytes":source.bytes.len()})
+}
+
+fn phase_identity(context: &[ContextRecord], kind: &str, phase: &str, subject: &str) -> Value {
+    crate::narratives::latest_phase_record(context, kind, phase, subject)
+        .map(|(record, fact)| {
+            json!({"record_id":record.id.as_str(),"record_kind":record.kind,
+            "sequence":record.sequence,"record":record,"fact_kind":kind,"fact":fact})
+        })
+        .unwrap_or(Value::Null)
+}
+
+struct PhaseCommission {
+    phase: &'static str,
+    subject: &'static str,
+    identity: Value,
+    approval: Value,
+    sources: Vec<ReviewSource>,
+    missing: Vec<String>,
+}
+
+fn phase_commission(
+    packet: &Value,
+    slot: &str,
+    root: &Path,
+    options: &'static crate::workflow::PhaseOptions,
+) -> Result<PhaseCommission, String> {
+    use crate::workflow::{
+        self, APPROVED_ARTIFACT_KIND, ARTIFACT_ADMITTED_KIND, NARRATIVE_ADMITTED_KIND,
+    };
+    let phase = options.phase.name;
+    let narrative_enabled =
+        workflow::option_enabled(Some(&packet["initial_input"]), "narratives", phase);
+    let narrative = options.narrative.filter(|_| narrative_enabled);
+    let subject = workflow::checkpoint_subject(options, narrative_enabled);
+    let context: Vec<ContextRecord> =
+        serde_json::from_value(packet["context"].clone()).map_err(|e| e.to_string())?;
+    let approval = phase_identity(
+        &context,
+        APPROVED_ARTIFACT_KIND,
+        phase,
+        options.phase.subject,
+    );
+    let identity = if narrative_enabled {
+        phase_identity(&context, NARRATIVE_ADMITTED_KIND, phase, subject)
+    } else {
+        approval.clone()
+    };
+    let mut missing = Vec::new();
+    if narrative_options(slot).is_some() && !narrative_enabled {
+        missing.push(format!(
+            "narrative phase `{phase}` is not enabled in frozen input"
+        ));
+    }
+    if checkpoint_options(slot).is_some()
+        && !workflow::option_enabled(Some(&packet["initial_input"]), "checkpoints", phase)
+    {
+        missing.push(format!(
+            "checkpoint phase `{phase}` is not enabled in frozen input"
+        ));
+    }
+    let mut locators = vec!["intent.json", options.phase.subject];
+    if let Some(n) = narrative {
+        locators.extend([n.subject, n.markdown]);
+    }
+    locators.dedup();
+    let mut sources = Vec::new();
+    for locator in locators {
+        match read_option_source(root, locator, locator.ends_with(".json")) {
+            Ok(source) => sources.push(source),
+            Err(error) => missing.push(error),
+        }
+    }
+    for (kind, projection) in [
+        (
+            ARTIFACT_ADMITTED_KIND,
+            phase_identity(
+                &context,
+                ARTIFACT_ADMITTED_KIND,
+                phase,
+                options.phase.subject,
+            ),
+        ),
+        (APPROVED_ARTIFACT_KIND, approval.clone()),
+    ] {
+        if projection.is_null() {
+            missing.push(format!("missing latest {kind} for `{phase}`"));
+        } else if let Some(artifact) = sources.iter().find(|s| s.locator == options.phase.subject) {
+            let fact = &projection["fact"];
+            if fact["revision"]
+                .as_str()
+                .is_none_or(|r| r.trim().is_empty())
+                || fact["revision"] != artifact.value["revision"]
+                || fact["sha256"].as_str() != artifact.sha256.strip_prefix("sha256:")
+            {
+                missing.push(format!(
+                    "current artifact must match latest {kind} revision and sha256"
+                ));
+            }
+        }
+    }
+    // Nested boundary facts share one real identity and must agree with each other.
+    if let Some((record, fact)) = crate::narratives::latest_phase_record(
+        &context,
+        APPROVED_ARTIFACT_KIND,
+        phase,
+        options.phase.subject,
+    ) {
+        if let Some(admission) =
+            crate::narratives::phase_record_fact(record, ARTIFACT_ADMITTED_KIND)
+        {
+            if admission["phase"] != phase
+                || ["subject", "revision", "sha256"]
+                    .iter()
+                    .any(|key| admission[key] != fact[key])
+            {
+                missing.push("nested artifact admission and approval facts disagree".to_owned());
+            }
+        }
+    }
+    if let Some(n) = narrative {
+        if identity.is_null() {
+            missing.push(format!("missing latest narrative admission for `{phase}`"));
+        }
+        if let Some(source) = sources.iter().find(|s| s.locator == n.subject) {
+            match crate::narratives::validate_binding(&source.value) {
+                Err(violations) => missing.extend(
+                    violations
+                        .iter()
+                        .map(|v| format!("narrative binding {}: {}", v.path, v.message)),
+                ),
+                Ok(binding) => {
+                    let fact = &approval["fact"];
+                    if binding.artifact.subject != options.phase.subject
+                        || binding.markdown.file != n.markdown
+                        || Some(binding.approved_artifact_record_id)
+                            != approval["record_id"].as_str()
+                        || Some(binding.artifact.revision) != fact["revision"].as_str()
+                        || Some(binding.artifact.sha256) != fact["sha256"].as_str()
+                    {
+                        missing.push("binding must cite latest approved artifact identity and exact phase files".to_owned());
+                    }
+                    if Some(binding.revision) != identity["fact"]["revision"].as_str() {
+                        missing.push(
+                            "binding must match latest admitted narrative revision".to_owned(),
+                        );
+                    }
+                    if let Some(markdown) = sources.iter().find(|s| s.locator == n.markdown) {
+                        let digest = markdown.sha256.strip_prefix("sha256:");
+                        if Some(binding.markdown.sha256) != digest
+                            || identity["fact"]["sha256"].as_str() != digest
+                        {
+                            missing.push(
+                                "markdown must match binding and latest narrative admission sha256"
+                                    .to_owned(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(PhaseCommission {
+        phase,
+        subject,
+        identity,
+        approval,
+        sources,
+        missing,
+    })
+}
+
+/// Optional phase packets use the same review selector; the additional view is
+/// descriptive only. It never records or attests to an owner's approval.
 pub fn inspect_with_stage(
     input: &Value,
     requested_slot: Option<&str>,
     task: Option<&str>,
     requested_stage: Option<&str>,
 ) -> Result<Value, String> {
-    match inspect_with_budgets(input, requested_slot, task, requested_stage, None) {
+    inspect_with_stage_excluding(
+        input,
+        requested_slot,
+        task,
+        requested_stage,
+        &BTreeSet::new(),
+        &[],
+    )
+}
+
+/// Shared classification after caller-supplied exclusions and before durable
+/// selection is exposed. Computing valid withdrawals/retirements is A-owned.
+pub fn inspect_with_stage_excluding(
+    input: &Value,
+    requested_slot: Option<&str>,
+    task: Option<&str>,
+    requested_stage: Option<&str>,
+    excluded_ids: &BTreeSet<String>,
+    extensions: &[crate::admission::Rule],
+) -> Result<Value, String> {
+    let original = input.get("result").unwrap_or(input);
+    let classify = original["initial_input"]["contract_version"]
+        .as_u64()
+        .is_some_and(|v| v >= 3);
+    let records: Vec<ContextRecord> = if classify {
+        serde_json::from_value(original["context"].clone()).map_err(|e| e.to_string())?
+    } else {
+        Vec::new()
+    };
+    let workflow: Option<loop_core::Workflow> = if classify {
+        Some(if let Some(graph) = original.get("workflow_graph") {
+            serde_json::from_value(graph.clone()).map_err(|e| e.to_string())?
+        } else {
+            crate::workflow::describe_workflow(Some(&original["initial_input"]))?
+        })
+    } else {
+        None
+    };
+    let ctx = workflow
+        .as_ref()
+        .map(|workflow| {
+            crate::admission::AdmissionContext::new(
+                &original["initial_input"],
+                &records,
+                original["current_state"].as_str().unwrap_or(""),
+                original["state_visit"].as_u64().unwrap_or(0),
+                workflow,
+            )
+        })
+        .transpose()?;
+    let admission = ctx.as_ref().map(|ctx| (ctx, extensions));
+    // Never erase originals before immutable ledger/correction/source lookup.
+    let mut output = inspect_with_stage_inner(
+        input,
+        requested_slot,
+        task,
+        requested_stage,
+        excluded_ids,
+        admission,
+    )?;
+    if let Some(ctx) = &ctx {
+        let selected: BTreeSet<String> = output["context"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|record| record["id"].as_str().map(str::to_owned))
+            .collect();
+        let mut diagnostics = output["record_diagnostics"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for (record, verdict) in
+            crate::admission::classify_selected(ctx, excluded_ids, Some(&selected), extensions)
+        {
+            if let Err(refusal) = verdict {
+                if !diagnostics.iter().any(|diagnostic| {
+                    diagnostic["record_id"] == record.id.as_str()
+                        && diagnostic["rule"] == refusal.rule
+                }) {
+                    diagnostics.push(json!({
+                        "record_id":record.id,"rule":refusal.rule,"reason":refusal.message
+                    }));
+                }
+            }
+        }
+        if !diagnostics.is_empty() {
+            output["record_diagnostics"] = json!(diagnostics);
+        }
+    }
+    Ok(output)
+}
+
+fn inspect_with_stage_inner(
+    input: &Value,
+    requested_slot: Option<&str>,
+    task: Option<&str>,
+    requested_stage: Option<&str>,
+    excluded_ids: &BTreeSet<String>,
+    admission: Option<(
+        &crate::admission::AdmissionContext<'_>,
+        &[crate::admission::Rule],
+    )>,
+) -> Result<Value, String> {
+    let mut effective_input = input.clone();
+    if let Some(packet) = effective_input
+        .get_mut("result")
+        .filter(|packet| packet.get("initial_input").is_some())
+    {
+        let context: Vec<ContextRecord> = serde_json::from_value(packet["context"].clone())
+            .map_err(|e| format!("invalid full context: {e}"))?;
+        let resolution = crate::admission::effective_policy(&packet["initial_input"], &context);
+        let gate = requested_slot
+            .or_else(|| packet["slot_id"].as_str())
+            .unwrap_or("");
+        if resolution.blocked.iter().any(|key| {
+            key.starts_with(&format!("review.{gate}."))
+                || (gate.starts_with("validation") && matches!(key.as_str(), "criterion" | "goal"))
+        }) {
+            return Err("invalid author-count amendment blocks commission".into());
+        }
+        packet["initial_input"] = resolution.effective;
+    }
+    let input = &effective_input;
+    let packet = input.get("result").unwrap_or(input);
+    let slot = requested_slot.or_else(|| packet["slot_id"].as_str());
+    let options = slot.and_then(|s| narrative_options(s).or_else(|| checkpoint_options(s)));
+    let Some(options) = options.filter(|_| input.get("result").is_some()) else {
+        return inspect_review_with_stage_excluding(
+            input,
+            requested_slot,
+            task,
+            requested_stage,
+            excluded_ids,
+            admission,
+        );
+    };
+    if requested_stage.is_some_and(|stage| !matches!(stage, "individual" | "aggregate")) {
+        return Err("commission review stage must be `individual` or `aggregate`".to_owned());
+    }
+    let slot = slot.expect("option slot");
+    let root = packet
+        .get("artifact_root")
+        .or_else(|| packet["initial_input"].get("artifact_root"))
+        .and_then(Value::as_str)
+        .ok_or("missing artifact_root")?;
+    let root = Path::new(root);
+    let phase = phase_commission(packet, slot, root, options)?;
+    let mut output = if phase.missing.is_empty() {
+        inspect_review_with_stage_excluding(
+            input,
+            Some(slot),
+            task,
+            requested_stage,
+            excluded_ids,
+            admission,
+        )?
+    } else {
+        inspect_with_stage_raw(input, Some(slot), task, requested_stage)?
+    };
+    let mut missing = output["missing_inputs"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    missing.extend(phase.missing.iter().map(|s| json!(s)));
+    output["missing_inputs"] = json!(missing);
+    output["artifact_root"] = json!(root);
+    output["commission"]["review_stage"] = json!(requested_stage);
+    output["phase"] = json!(phase.phase);
+    output["approved_artifact"] = phase.approval;
+    let sources = json!(phase
+        .sources
+        .iter()
+        .map(|s| source_projection(root, s))
+        .collect::<Vec<_>>());
+    if checkpoint_options(slot).is_some() {
+        let subject_source = phase
+            .sources
+            .iter()
+            .find(|s| s.locator == phase.subject)
+            .map(|s| source_projection(root, s));
+        let narrative_source = options
+            .narrative
+            .and_then(|n| phase.sources.iter().find(|s| s.locator == n.markdown))
+            .map(|s| source_projection(root, s));
+        output["owner_approval_view"] = json!({
+            "checkpoint":slot,"phase":phase.phase,"subject":phase.subject,
+            "subject_revision":phase.identity["fact"]["revision"],
+            "subject_record_id":phase.identity["record_id"],"subject_identity":phase.identity,
+            "subject_source":subject_source,"narrative_source":narrative_source,"sources":sources,
+            "owner_approval":{"status":"not-performed"},
+            "decision_guidance":"Ask the owner to approve or reject this exact subject revision. Append an owner-decision context record with checkpoint, subject, subject_revision, decision (approve or reject), actor and the owner's nonempty verbatim text. A rejection must name target artifact or, when a narrative is enabled, narrative, and a nonempty reason. Artifact rejection uses revise; narrative rejection uses revise-narrative. This view is not an owner approval; do not paraphrase the owner's text or invent an approval command."
+        });
+        if phase.phase == "intent" {
+            if let Some(intent_source) = phase
+                .sources
+                .iter()
+                .find(|source| source.locator == "intent.json")
+            {
+                let context: Vec<ContextRecord> = serde_json::from_value(packet["context"].clone())
+                    .map_err(|error| error.to_string())?;
+                let references: Vec<_> = context.iter().collect();
+                output["owner_approval_view"]["intent_revision_view"] = owner_approval_view(
+                    &intent_source.value,
+                    &intent_source.sha256,
+                    &references,
+                    &context,
+                    &packet["initial_input"],
+                );
+            }
+        }
+    } else {
+        output["review_contract_version"] = json!(3);
+        output["review_target"] = json!({"phase":phase.phase,"subject":phase.subject,
+            "revision":phase.sources.iter().find(|s| s.locator == phase.subject)
+                .and_then(|s| s.value["revision"].as_str()),"admitted_identity":phase.identity});
+        output["review_sources"] = sources;
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+fn inspect_review_with_stage(
+    input: &Value,
+    requested_slot: Option<&str>,
+    task: Option<&str>,
+    requested_stage: Option<&str>,
+) -> Result<Value, String> {
+    inspect_review_with_stage_excluding(
+        input,
+        requested_slot,
+        task,
+        requested_stage,
+        &BTreeSet::new(),
+        None,
+    )
+}
+
+fn inspect_review_with_stage_excluding(
+    input: &Value,
+    requested_slot: Option<&str>,
+    task: Option<&str>,
+    requested_stage: Option<&str>,
+    excluded_ids: &BTreeSet<String>,
+    admission: Option<(
+        &crate::admission::AdmissionContext<'_>,
+        &[crate::admission::Rule],
+    )>,
+) -> Result<Value, String> {
+    match inspect_with_budgets(
+        input,
+        requested_slot,
+        task,
+        requested_stage,
+        excluded_ids,
+        admission,
+    ) {
         Ok(mut output) => {
             let mut missing = output["missing_inputs"]
                 .as_array()
@@ -565,7 +1085,29 @@ fn missing_parent_claims(
     let (revision, _) = read_review_sources(Path::new(root), subject)?;
     let records: Vec<ContextRecord> =
         serde_json::from_value(packet["context"].clone()).map_err(|error| error.to_string())?;
-    let available = latest_aggregate_by_axis_author(&records, parent, subject, &revision)?;
+    let root_value = Value::String(root.to_owned());
+    let excluded =
+        crate::recovery::excluded_record_ids(&records, parent, subject, Some(&root_value))?;
+    let available_records: Vec<_> = records
+        .iter()
+        .filter(|row| {
+            !excluded.contains(row.id.as_str())
+                && crate::evidence::parse_evidence_record_for_stage_with_context(
+                    &row.data,
+                    subject,
+                    Some(&root_value),
+                    false,
+                    &records[..records
+                        .iter()
+                        .position(|source| source.id == row.id)
+                        .expect("parent source")],
+                )
+                .is_ok()
+        })
+        .cloned()
+        .collect();
+    let available =
+        latest_aggregate_by_axis_author(&available_records, parent, subject, &revision)?;
     Ok(axes.iter().filter_map(|axis| axis["id"].as_str())
         .filter(|axis| !available.keys().any(|(available_axis, _, _)| available_axis == axis))
         .map(|axis| format!("challenge `{gate}` is missing current parent aggregate claim `{axis}` for `{subject}`"))
@@ -580,7 +1122,8 @@ struct ReviewSource {
     value: Value,
 }
 
-fn review_subject(gate: &str) -> Option<&'static str> {
+#[doc(hidden)]
+pub fn review_subject(gate: &str) -> Option<&'static str> {
     match gate {
         "intent-review" | "intent-adversarial-review" => Some("intent.json"),
         "design-review" | "design-adversarial-review" => Some("design.json"),
@@ -589,7 +1132,7 @@ fn review_subject(gate: &str) -> Option<&'static str> {
             Some("implementation-report.json")
         }
         "validation-review" | "validation-adversarial-review" => Some("validation-report.json"),
-        _ => None,
+        _ => narrative_options(gate).and_then(|options| options.narrative.map(|n| n.subject)),
     }
 }
 
@@ -600,11 +1143,17 @@ fn parent_gate(gate: &str) -> Option<&'static str> {
         "plan-adversarial-review" => Some("plan-review"),
         "implementation-adversarial-review" => Some("implementation-review"),
         "validation-adversarial-review" => Some("validation-review"),
-        _ => None,
+        _ => narrative_options(gate)
+            .and_then(|options| options.narrative)
+            .filter(|n| n.challenge == gate)
+            .map(|n| n.review),
     }
 }
 
 fn read_review_sources(root: &Path, subject: &str) -> Result<(String, Vec<ReviewSource>), String> {
+    let narrative_subject = crate::workflow::PHASE_OPTIONS
+        .iter()
+        .any(|options| options.narrative.is_some_and(|n| n.subject == subject));
     let mut paths = vec!["intent.json"];
     if subject != "intent.json" {
         paths.push(subject);
@@ -612,6 +1161,14 @@ fn read_review_sources(root: &Path, subject: &str) -> Result<(String, Vec<Review
     let mut sources = Vec::new();
     let mut subject_value = None;
     for locator in paths {
+        if narrative_subject {
+            let source = read_option_source(root, locator, true)?;
+            if locator == subject {
+                subject_value = Some(source.value.clone());
+            }
+            sources.push(source);
+            continue;
+        }
         let path = root.join(locator);
         let bytes = std::fs::read(&path).map_err(|error| {
             format!(
@@ -631,6 +1188,19 @@ fn read_review_sources(root: &Path, subject: &str) -> Result<(String, Vec<Review
             bytes,
             value,
         });
+    }
+    if let Some(narrative) = crate::workflow::PHASE_OPTIONS
+        .iter()
+        .filter_map(|options| options.narrative.map(|n| (options, n)))
+        .find(|(_, n)| n.subject == subject)
+    {
+        for locator in [narrative.1.markdown, narrative.0.phase.subject] {
+            sources.push(read_option_source(
+                root,
+                locator,
+                locator.ends_with(".json"),
+            )?);
+        }
     }
     let revision = subject_value
         .as_ref()
@@ -812,11 +1382,66 @@ fn active_intent_baseline(records: &[&ContextRecord]) -> Option<(String, IntentB
         parsed.push((*record, steering));
     }
     parsed.into_iter().rev().find_map(|(record, steering)| {
-        (!superseded.contains(record.id.as_str()))
+        (!superseded.contains(record.id.as_str()) && owner_source_targets_intent(record))
             .then_some(steering.intent_baseline)
             .flatten()
             .map(|baseline| (record.id.as_str().to_owned(), baseline))
     })
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct IntentRevisionBaseline {
+    pub record_id: String,
+    pub source_kind: &'static str,
+    pub baseline: IntentBaseline,
+    pub correction: Option<crate::intent_correction::Correction>,
+}
+
+/// One qualified prior-byte selector for admission, commission and owner view.
+/// No numeric revision guess, prose scope inference or invented owner statement.
+pub fn intent_revision_baseline(
+    records: &[ContextRecord],
+    initial: &Value,
+    intent: &Value,
+) -> Result<Option<IntentRevisionBaseline>, String> {
+    let current = intent["revision"]
+        .as_str()
+        .filter(|revision| !revision.trim().is_empty())
+        .ok_or("intent has no revision")?;
+    let prior = crate::intent_correction::prior_reviewed_revision(records, current);
+    let owner_records: Vec<_> = records.iter().collect();
+    if let Some((record_id, baseline)) = active_intent_baseline(&owner_records) {
+        validate_intent_baseline(&baseline)?;
+        if prior
+            .as_deref()
+            .is_none_or(|revision| revision == baseline.revision)
+        {
+            return Ok(Some(IntentRevisionBaseline {
+                record_id,
+                source_kind: "user-steering",
+                baseline,
+                correction: None,
+            }));
+        }
+    }
+    for (index, record) in records.iter().enumerate().rev().filter(|(_, record)| {
+        record.kind == "intent-correction" && record.data["subject_revision"] == current
+    }) {
+        let correction =
+            crate::intent_correction::validate(&record.data, initial, &records[..index])?;
+        if prior.as_deref() == Some(correction.prior_intent.revision.as_str()) {
+            return Ok(Some(IntentRevisionBaseline {
+                record_id: record.id.as_str().into(),
+                source_kind: "intent-correction",
+                baseline: correction.prior_intent.clone(),
+                correction: Some(correction),
+            }));
+        }
+    }
+    if let Some(prior) = prior {
+        return Err(format!("later intent revision `{current}` has no exact qualified prior baseline for `{prior}`; supply owner user-steering intent_baseline for a scope change, or a ledger-cited intent-correction for an accepted intent finding"));
+    }
+    Ok(None)
 }
 
 fn ledger_sources(record: Option<&ContextRecord>) -> BTreeSet<String> {
@@ -906,6 +1531,7 @@ fn validation_record_ids(
     ids
 }
 
+#[cfg(test)]
 fn project_review_context(
     records: &[ContextRecord],
     gate: &str,
@@ -914,43 +1540,220 @@ fn project_review_context(
     requested_stage: Option<&str>,
     root: &Path,
 ) -> Result<Vec<ContextRecord>, String> {
+    project_review_context_with_diagnostics(
+        records,
+        records,
+        gate,
+        subject,
+        revision,
+        requested_stage,
+        root,
+    )
+    .map(|(selected, _)| selected)
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn project_review_context_with_diagnostics(
+    records: &[ContextRecord],
+    recovery_context: &[ContextRecord],
+    gate: &str,
+    subject: &str,
+    revision: &str,
+    requested_stage: Option<&str>,
+    root: &Path,
+) -> Result<(Vec<ContextRecord>, Vec<Value>), String> {
+    project_review_context_with_diagnostics_excluding(
+        records,
+        recovery_context,
+        gate,
+        subject,
+        revision,
+        requested_stage,
+        root,
+        &BTreeSet::new(),
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_review_context_with_diagnostics_excluding(
+    records: &[ContextRecord],
+    recovery_context: &[ContextRecord],
+    gate: &str,
+    subject: &str,
+    revision: &str,
+    requested_stage: Option<&str>,
+    root: &Path,
+    requested_exclusions: &BTreeSet<String>,
+    admission: Option<(
+        &crate::admission::AdmissionContext<'_>,
+        &[crate::admission::Rule],
+    )>,
+) -> Result<(Vec<ContextRecord>, Vec<Value>), String> {
+    let root_value = Value::String(root.to_string_lossy().into_owned());
+    let mut diagnostics = Vec::new();
+    let mut excluded = requested_exclusions.clone();
+    for candidate_gate in std::iter::once(gate).chain(parent_gate(gate)) {
+        match crate::recovery::excluded_record_ids(
+            recovery_context,
+            candidate_gate,
+            subject,
+            Some(&root_value),
+        ) {
+            Ok(ids) => excluded.extend(ids),
+            Err(reason) => {
+                let record_id = recovery_context
+                    .iter()
+                    .find(|row| {
+                        row.kind == crate::recovery::RECORD_WITHDRAWAL_KIND
+                            && reason.contains(&format!("record `{}`", row.id))
+                    })
+                    .map(|row| row.id.to_string());
+                diagnostics.push(json!({"record_id":record_id,"reason":reason}));
+            }
+        }
+    }
+    let mut admission_refusals = BTreeMap::new();
+    if let Some((ctx, extensions)) = admission {
+        let selected: BTreeSet<String> = records
+            .iter()
+            .filter(|record| {
+                let relevant_gate = record.data["gate"] == gate
+                    || parent_gate(gate).is_some_and(|parent| record.data["gate"] == parent);
+                (matches!(
+                    record.kind.as_str(),
+                    "review-evidence" | "finding-ledger" | "reviewer-manifest"
+                ) && relevant_gate)
+                    || (record.kind == "evidence-applicability"
+                        && record.data["target"]["subject"] == subject
+                        && record.data["target"]["revision"] == revision)
+                    || (matches!(
+                        record.kind.as_str(),
+                        "intent-comparison" | "intent-correction"
+                    ) && subject == "intent.json"
+                        && record.data["subject_revision"] == revision)
+            })
+            .map(|record| record.id.to_string())
+            .collect();
+        for (record, result) in
+            crate::admission::classify_selected(ctx, &excluded, Some(&selected), extensions)
+        {
+            if let Err(refusal) = result {
+                admission_refusals.insert(record.id.to_string(), refusal);
+            }
+        }
+    }
+    let mut usable = Vec::new();
+    for record in records
+        .iter()
+        .filter(|row| !excluded.contains(row.id.as_str()))
+    {
+        if let Some(refusal) = admission_refusals.get(record.id.as_str()) {
+            diagnostics.push(json!({
+                "record_id":record.id,"rule":refusal.rule,"reason":refusal.message
+            }));
+            if record.kind == "finding-ledger" {
+                usable.push(record.clone());
+            }
+            continue;
+        }
+        let relevant_gate = record.data["gate"] == gate
+            || parent_gate(gate).is_some_and(|parent| record.data["gate"] == parent);
+        let check = if record.kind == "review-evidence" && relevant_gate {
+            crate::evidence::parse_evidence_record_for_stage_with_context(
+                &record.data,
+                subject,
+                Some(&root_value),
+                false,
+                &recovery_context[..recovery_context
+                    .iter()
+                    .position(|source| source.id == record.id)
+                    .expect("packet source")],
+            )
+            .map(|_| ())
+        } else if record.kind == "evidence-applicability"
+            && record.data["target"]["subject"] == subject
+            && record.data["target"]["revision"] == revision
+        {
+            let source = record.data["origin"]["id"]
+                .as_str()
+                .and_then(|id| recovery_context.iter().find(|row| row.id.as_str() == id));
+            if source.is_none_or(|source| source.kind == "review-evidence") {
+                crate::evidence::parse_applicable_evidence_for_stage(
+                    recovery_context,
+                    record,
+                    subject,
+                    revision,
+                    Some(&root_value),
+                    false,
+                )
+                .map(|_| ())
+                .map_err(crate::evidence::EvidenceParseError::into_message)
+            } else {
+                Ok(())
+            }
+        } else if record.kind == "evidence-applicability"
+            && record.data["target"]["subject"] == "validation-report.json"
+        {
+            let source_id = record.data["origin"]["id"].as_str().ok_or_else(|| {
+                format!(
+                    "validation applicability `{}` has no original verdict source",
+                    record.id
+                )
+            });
+            source_id.and_then(|id| {
+                let source = recovery_context.iter().find(|row| row.id.as_str() == id)
+                    .ok_or_else(|| format!("validation applicability `{}` is missing its original verdict `{id}`", record.id))?;
+                if !matches!(source.kind.as_str(), "criterion-verdict" | "goal-verdict")
+                    || source.data["subject"] != subject || source.data["checkpoint"] != "validation-checkpoint.json"
+                    || record.data["target"]["subject_revision"] != revision
+                    || record.data["target"]["checkpoint"] != json!({"phase":"validation","report_revision":revision}) {
+                    return Err(format!("validation applicability `{}` does not reference a validation verdict for `{subject}`", record.id));
+                }
+                Ok(())
+            })
+        } else if record.kind == "finding-ledger" && relevant_gate {
+            let gate = record.data["gate"].as_str().unwrap_or_default();
+            let prefix: Vec<_> = recovery_context
+                .iter()
+                .filter(|row| row.sequence <= record.sequence)
+                .cloned()
+                .collect();
+            crate::finding_ledger::latest_snapshot_for_recovery(
+                &prefix,
+                gate,
+                subject,
+                Some(&root_value),
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        match check {
+            Ok(()) => usable.push(record.clone()),
+            Err(reason) => {
+                diagnostics.push(json!({"record_id":record.id,"reason":reason}));
+                // Keep the immutable ledger's recorded duties visible in the
+                // packet even when it is malformed; it is never gate clearance.
+                if record.kind == "finding-ledger" {
+                    usable.push(record.clone());
+                }
+            }
+        }
+    }
+    let records = usable.as_slice();
     let parent = parent_gate(gate);
     let parent_aggregate_ids = if let Some(parent) = parent {
         let parent_aggregates =
             latest_aggregate_by_axis_author(records, parent, subject, revision)?;
-        if parent_aggregates.is_empty() {
-            return Err(format!("challenge `{gate}` is missing current parent aggregate grounds for `{subject}`; inspect the ordinary parent review commission"));
-        }
-        for record in parent_aggregates.values() {
-            if record
-                .data
-                .get("review_contract_version")
-                .and_then(Value::as_u64)
-                .is_none_or(|v| !matches!(v, 2 | 3))
-            {
-                return Err(format!(
-                    "challenge parent `{}` has no supported versioned grounds; inspect its selected output",
-                    record.id
-                ));
-            }
-            crate::criterion::validate_grounding_version(
-                record.data.get("grounds").ok_or_else(|| {
-                    format!("challenge parent `{}` is missing grounds", record.id)
-                })?,
-                root,
-                record
-                    .data
-                    .get("review_contract_version")
-                    .and_then(Value::as_u64)
-                    .map(|v| v as u32),
-            )
-            .map_err(|error| {
-                format!(
-                    "challenge parent `{}` grounds are unavailable: {error}",
-                    record.id
-                )
-            })?;
-        }
+        let mut parent_aggregates = parent_aggregates;
+        parent_aggregates.retain(|_, record| {
+            if record.data.get("review_contract_version").and_then(Value::as_u64).is_none_or(|v| !matches!(v, 2 | 3)) {
+                diagnostics.push(json!({"record_id":record.id,"reason":"challenge parent has no supported versioned grounds"}));
+                false
+            } else { true }
+        });
         parent_aggregates
             .values()
             .map(|record| record.id.as_str().to_owned())
@@ -1020,44 +1823,41 @@ fn project_review_context(
     }
     for (ledger_gate, ledger) in [(gate, own_ledger)] {
         let Some(ledger) = ledger else { continue };
-        let findings = ledger
-            .data
-            .get("findings")
-            .and_then(Value::as_array)
-            .ok_or_else(|| format!("confirmation ledger `{}` has no findings array", ledger.id))?;
+        let Some(findings) = ledger.data.get("findings").and_then(Value::as_array) else {
+            diagnostics.push(
+                json!({"record_id":ledger.id,"reason":"confirmation ledger has no findings array"}),
+            );
+            continue;
+        };
         for finding in findings {
-            let source_id = finding
-                .pointer("/source/id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    format!(
-                        "confirmation ledger `{}` has a finding without an exact source locator",
-                        ledger.id
-                    )
-                })?;
-            let source = records
-                .iter()
-                .find(|record| record.id.as_str() == source_id)
-                .ok_or_else(|| format!("mandatory confirmation finding source `{source_id}` is missing; inspect retained source for {ledger_gate}/{subject}"))?;
-            if !matches_finding_source(source, ledger_gate, subject)
-                || (matches!(source.kind.as_str(), "criterion-verdict" | "goal-verdict")
-                    && finding.get("policy_id").and_then(Value::as_str)
-                        != Some(
-                            source
-                                .data
-                                .get("criterion_id")
-                                .and_then(Value::as_str)
-                                .unwrap_or("goal"),
-                        ))
-            {
-                return Err(format!("mandatory confirmation finding source `{source_id}` has the wrong gate or subject"));
+            let check = || -> Result<(), String> {
+                let source_id = finding
+                    .pointer("/source/id")
+                    .and_then(Value::as_str)
+                    .ok_or("confirmation finding has no exact source locator")?;
+                let source = recovery_context.iter().find(|row| row.id.as_str() == source_id)
+                    .ok_or_else(|| format!("mandatory confirmation finding source `{source_id}` is missing; inspect retained source for {ledger_gate}/{subject}"))?;
+                if !matches_finding_source(source, ledger_gate, subject)
+                    || (matches!(source.kind.as_str(), "criterion-verdict" | "goal-verdict")
+                        && finding.get("policy_id").and_then(Value::as_str)
+                            != Some(
+                                source
+                                    .data
+                                    .get("criterion_id")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("goal"),
+                            ))
+                {
+                    return Err(format!("mandatory confirmation finding source `{source_id}` has the wrong gate or subject"));
+                }
+                Ok(())
+            };
+            if let Err(reason) = check() {
+                diagnostics.push(json!({"record_id":ledger.id,"reason":reason}));
             }
-            // The checked ledger validates original verdict bytes, commands,
-            // revision, checkpoint and source identity with validation::source.
-            // Commission keeps the cited original for focused confirmation.
         }
     }
-    let validation_ids = if gate.starts_with("validation-") {
+    let validation_ids = if matches!(gate, "validation-review" | "validation-adversarial-review") {
         validation_record_ids(root, records)
     } else {
         BTreeMap::new()
@@ -1102,7 +1902,7 @@ fn project_review_context(
             continue;
         }
         if record.kind == "evidence-applicability" {
-            if gate.starts_with("validation-")
+            if matches!(gate, "validation-review" | "validation-adversarial-review")
                 && validation_ids
                     .get("evidence-applicability")
                     .is_some_and(|ids| ids.contains(record.id.as_str()))
@@ -1121,6 +1921,10 @@ fn project_review_context(
                     .iter()
                     .find(|candidate| candidate.id.as_str() == source_id)
                     .ok_or_else(|| format!("validation applicability `{}` is missing its original verdict `{source_id}`", record.id))?;
+                let target = crate::evidence::canonical_target(
+                    &record.data["target"],
+                    matches!(source.kind.as_str(), "criterion-verdict" | "goal-verdict"),
+                )?;
                 if !matches!(source.kind.as_str(), "criterion-verdict" | "goal-verdict")
                     || source.data.get("subject").and_then(Value::as_str) != Some(subject)
                     || source.data.get("checkpoint").and_then(Value::as_str)
@@ -1130,11 +1934,7 @@ fn project_review_context(
                         .pointer("/target/subject")
                         .and_then(Value::as_str)
                         != Some(subject)
-                    || record
-                        .data
-                        .pointer("/target/subject_revision")
-                        .and_then(Value::as_str)
-                        != Some(revision)
+                    || target["revision"].as_str() != Some(revision)
                     || record.data.pointer("/target/checkpoint")
                         != Some(&json!({"phase":"validation","report_revision":revision}))
                 {
@@ -1194,7 +1994,9 @@ fn project_review_context(
                 findings.retain(|finding| {
                     let source = finding.pointer("/source/id").and_then(Value::as_str);
                     source.is_some_and(|id| {
-                        !excluded_ids.contains(id) && selected_review_ids.contains(id)
+                        (!excluded_ids.contains(id) && selected_review_ids.contains(id))
+                            || (finding["disposition"] == "accepted"
+                                && finding["status"] == "unresolved")
                     })
                 });
             }
@@ -1206,9 +2008,13 @@ fn project_review_context(
             }
             continue;
         }
-        if record.kind == "user-steering"
+        if record.kind == "user-steering" {
+            selected.push(record.clone());
+            continue;
+        }
+        if record.kind == "intent-correction"
             && subject == "intent.json"
-            && owner_source_targets_intent(record)
+            && record.data["subject_revision"] == revision
         {
             selected.push(record.clone());
             continue;
@@ -1224,7 +2030,7 @@ fn project_review_context(
             selected.push(record.clone());
         }
     }
-    Ok(selected)
+    Ok((selected, diagnostics))
 }
 
 fn commission_size_info(
@@ -1261,7 +2067,11 @@ fn inspect_with_budgets(
     requested_slot: Option<&str>,
     task: Option<&str>,
     requested_stage: Option<&str>,
-    _legacy_budget_info: Option<&Value>,
+    excluded_ids: &BTreeSet<String>,
+    admission: Option<(
+        &crate::admission::AdmissionContext<'_>,
+        &[crate::admission::Rule],
+    )>,
 ) -> Result<Value, String> {
     let show = input.get("result");
     let packet = show.unwrap_or(input);
@@ -1302,47 +2112,28 @@ fn inspect_with_budgets(
         .and_then(Value::as_str)
         .ok_or("missing artifact_root")?;
     let (revision, sources) = read_review_sources(Path::new(root), subject.unwrap())?;
-    if subject == Some("intent.json") {
-        let material_later_revision = records.iter().any(|record| {
-            matches!(record.kind.as_str(), "review-evidence" | "finding-ledger")
-                && matches!(
-                    record.data.get("gate").and_then(Value::as_str),
-                    Some("intent-review" | "intent-adversarial-review")
-                )
-                && record.data.get("subject").and_then(Value::as_str) == Some("intent.json")
-                && record.data.get("subject_revision").and_then(Value::as_str)
-                    != Some(revision.as_str())
-        });
-        let owner_records: Vec<_> = records.iter().collect();
-        let active_baseline = active_intent_baseline(&owner_records);
-        let prior_revision = records
+    let revision_baseline = if subject == Some("intent.json") {
+        let intent = &sources
             .iter()
-            .rev()
-            .find(|record| {
-                (matches_review(record, "intent-review", "intent.json")
-                    || matches_review(record, "intent-adversarial-review", "intent.json"))
-                    && record.data.get("subject_revision").and_then(Value::as_str)
-                        != Some(revision.as_str())
-            })
-            .and_then(|record| record.data.get("subject_revision"))
-            .and_then(Value::as_str);
-        let has_matching_baseline = active_baseline
-            .as_ref()
-            .is_some_and(|(_, baseline)| Some(baseline.revision.as_str()) == prior_revision);
-        if material_later_revision && !has_matching_baseline {
-            return Err(format!(
-                "material intent revision has no exact owner baseline for prior revision {prior_revision:?}; supply a qualified owner user-steering intent_baseline with exact bytes/digest and original locator before commissioning (current: intent.json)"
-            ));
-        }
-    }
-    records = project_review_context(
+            .find(|source| source.locator == "intent.json")
+            .expect("intent source")
+            .value;
+        intent_revision_baseline(&full_context_records, &packet["initial_input"], intent)?
+    } else {
+        None
+    };
+    let (selected, recovery_diagnostics) = project_review_context_with_diagnostics_excluding(
         &records,
+        &full_context_records,
         slot_id,
         subject.unwrap(),
         &revision,
         requested_stage,
         Path::new(root),
+        excluded_ids,
+        admission,
     )?;
+    records = selected;
     let alignment_required = slot_id == "intent-adversarial-review"
         && packet["initial_input"]["review_policies"][slot_id]
             .as_array()
@@ -1362,7 +2153,8 @@ fn inspect_with_budgets(
                 })
                 .cloned(),
         );
-        crate::intent_comparison::validate(&full_context_records, intent).err()
+        crate::intent_comparison::validate(&full_context_records, intent, &packet["initial_input"])
+            .err()
     } else {
         None
     };
@@ -1374,6 +2166,7 @@ fn inspect_with_budgets(
         projected["context"] = context_value;
     }
     let mut output = inspect_with_stage_raw(&projected, Some(slot_id), task, None)?;
+    output["record_diagnostics"] = json!(recovery_diagnostics);
     let selected_ids = if output.get("record_ids").is_some() {
         output["record_ids"].as_array().cloned().unwrap_or_default()
     } else {
@@ -1391,7 +2184,9 @@ fn inspect_with_budgets(
         selected.extend(
             records
                 .iter()
-                .filter(|record| record.kind == "user-steering")
+                .filter(|record| {
+                    record.kind == "user-steering" && owner_source_targets_intent(record)
+                })
                 .map(|record| record.id.as_str().to_owned()),
         );
         let ordered_ids: Vec<_> = records
@@ -1452,6 +2247,17 @@ fn inspect_with_budgets(
     output["review_target"] = json!({"subject":subject,"revision":revision});
     output["review_sources"] = json!(sources.iter().map(|source|json!({"locator":source.locator,"sha256":source.sha256,"bytes":source.bytes.len()})).collect::<Vec<_>>());
     output["review_budget"] = size_info;
+    output["review_record_sources"] = json!(selected_records
+        .iter()
+        .map(|record| json!({"record_id":record.id,"kind":record.kind}))
+        .collect::<Vec<_>>());
+    if let Some(baseline) = revision_baseline {
+        let record = full_context_records
+            .iter()
+            .find(|record| record.id.as_str() == baseline.record_id)
+            .expect("selected baseline record");
+        output["intent_revision_baseline"] = json!({"source":baseline,"record":record,"delivered_in_context":selected_records.iter().any(|selected| selected.id==record.id)});
+    }
     if subject == Some("intent.json") {
         let intent = sources
             .iter()
@@ -1463,6 +2269,7 @@ fn inspect_with_budgets(
             &intent.sha256,
             &final_context,
             &full_context_records,
+            &packet["initial_input"],
         );
     }
     Ok(output)
@@ -1473,6 +2280,7 @@ fn owner_approval_view(
     current_sha256: &str,
     context: &[&ContextRecord],
     actor_context: &[ContextRecord],
+    initial: &Value,
 ) -> Value {
     let owner_sources: Vec<_> = context
         .iter()
@@ -1487,36 +2295,25 @@ fn owner_approval_view(
             })
         })
         .collect();
-    let baseline = active_intent_baseline(context);
-    let prior_revision_exists = actor_context.iter().any(|record| {
-        (matches_review(record, "intent-review", "intent.json")
-            || matches_review(record, "intent-adversarial-review", "intent.json"))
-            && record.data.get("subject_revision").and_then(Value::as_str)
-                != intent.get("revision").and_then(Value::as_str)
-    });
-    let exact_diff = baseline.map(|(record_id, baseline)| match validate_intent_baseline(&baseline) {
-        Ok(previous) => json!({
-            "status":"available",
-            "source_record_id":record_id,
-            "baseline_source":{"locator":baseline.locator,"sha256":baseline.sha256,"bytes":baseline.json_bytes.len()},
-            "from_revision":baseline.revision,
-            "to_revision":intent.get("revision"),
-            "changes":json_diff(&previous, intent, "")
-        }),
-        Err(error) => json!({"status":"invalid-source","source_record_id":record_id,"diagnostic":error})
-    }).unwrap_or_else(|| if prior_revision_exists {
-        json!({
-            "status":"missing-prior-intent-bytes",
-            "diagnostic":"Exact wording delta is unavailable because no qualified retained prior-intent bytes were supplied; do not substitute a driver paraphrase.",
-            "locator":"intent.json"
-        })
-    } else {
-        json!({
-            "status":"initial-draft-no-prior-intent",
-            "diagnostic":"No earlier reviewed intent exists; compare the full draft against the retained qualified owner-source statements.",
-            "owner_source_locator":"user-steering context records"
-        })
-    });
+    let exact_diff = match intent_revision_baseline(actor_context, initial, intent) {
+        Ok(Some(source)) => match validate_intent_baseline(&source.baseline) {
+            Ok(previous) => {
+                json!({"status":"available","source_record_id":source.record_id,"source_kind":source.source_kind,
+                "source_locator":format!("record:{}#/data/{}/json_bytes",source.record_id,if source.source_kind=="intent-correction" {"prior_intent"} else {"intent_baseline"}),
+                "baseline_source":{"locator":source.baseline.locator,"sha256":source.baseline.sha256,"bytes":source.baseline.json_bytes.len()},
+                "correction":source.correction,"from_revision":source.baseline.revision,"to_revision":intent.get("revision"),"changes":json_diff(&previous,intent,"")})
+            }
+            Err(error) => {
+                json!({"status":"invalid-source","source_record_id":source.record_id,"diagnostic":error})
+            }
+        },
+        Err(error) => {
+            json!({"status":"missing-prior-intent-bytes","diagnostic":error,"locator":"intent.json"})
+        }
+        Ok(None) => {
+            json!({"status":"initial-draft-no-prior-intent","diagnostic":"No earlier reviewed intent exists; compare the full draft against retained qualified owner-source statements.","owner_source_locator":"user-steering context records"})
+        }
+    };
     let mut reviewers = BTreeSet::new();
     let mut drivers = BTreeSet::new();
     for record in actor_context {
@@ -1552,7 +2349,7 @@ fn owner_approval_view(
     })
 }
 
-fn validate_intent_baseline(baseline: &IntentBaseline) -> Result<Value, String> {
+pub(crate) fn validate_intent_baseline(baseline: &IntentBaseline) -> Result<Value, String> {
     if baseline.revision.trim().is_empty()
         || baseline.locator.trim().is_empty()
         || baseline.sha256
@@ -1672,7 +2469,19 @@ mod tests {
         )
     }
 
-    fn typed_record(id: &str, kind: &str, n: u64, data: Value) -> ContextRecord {
+    fn typed_record(id: &str, kind: &str, n: u64, mut data: Value) -> ContextRecord {
+        if kind == "review-evidence" {
+            data.as_object_mut()
+                .unwrap()
+                .entry("config_version")
+                .or_insert(json!("fixture-1"));
+        }
+        if kind == "evidence-applicability" {
+            data.as_object_mut()
+                .unwrap()
+                .entry("attesting_driver")
+                .or_insert(json!({"name":"driver","kind":"agent"}));
+        }
         ContextRecord::new(
             id,
             kind,
@@ -1994,7 +2803,7 @@ mod tests {
     }
 
     #[test]
-    fn confirmation_refuses_missing_mandatory_finding_source() {
+    fn recovery_confirmation_diagnoses_missing_mandatory_finding_source() {
         let prior_aggregate = typed_record(
             "aggregate-old",
             "review-evidence",
@@ -2014,16 +2823,20 @@ mod tests {
                 "findings":[{"source":{"kind":"context-record","id":"missing-source"},"statement":"mandatory confirmation finding","disposition":"accepted","status":"unresolved"}]
             }),
         );
-        let error = project_review_context(
-            &[prior_aggregate, ledger],
+        let records = vec![prior_aggregate, ledger];
+        let (_, diagnostics) = project_review_context_with_diagnostics(
+            &records,
+            &records,
             "design-review",
             "design.json",
             "2",
             None,
             Path::new("/unused-for-design"),
         )
-        .unwrap_err();
-        assert!(error.contains("mandatory confirmation finding source `missing-source` is missing"));
+        .unwrap();
+        assert!(json!(diagnostics)
+            .to_string()
+            .contains("mandatory confirmation finding source `missing-source` is missing"));
     }
 
     #[test]
@@ -2168,7 +2981,8 @@ mod tests {
         ] {
             let mut bad = records.clone();
             bad[0] = invalid;
-            assert!(project_review_context(
+            assert!(project_review_context_with_diagnostics(
+                &bad,
                 &bad,
                 "validation-review",
                 "validation-report.json",
@@ -2176,12 +2990,15 @@ mod tests {
                 Some("aggregate"),
                 &root
             )
-            .unwrap_err()
-            .contains(expected));
+            .unwrap()
+            .1
+            .iter()
+            .any(|diagnostic| diagnostic["reason"].as_str().unwrap().contains(expected)));
         }
         let mut bad = records;
         bad[3].data["target"]["subject_revision"] = json!("v1");
-        assert!(project_review_context(
+        assert!(project_review_context_with_diagnostics(
+            &bad,
             &bad,
             "validation-review",
             "validation-report.json",
@@ -2189,8 +3006,13 @@ mod tests {
             Some("aggregate"),
             &root
         )
-        .unwrap_err()
-        .contains("does not reference a validation verdict"));
+        .unwrap()
+        .1
+        .iter()
+        .any(|diagnostic| diagnostic["reason"]
+            .as_str()
+            .unwrap()
+            .contains("does not reference a validation verdict")));
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2333,7 +3155,7 @@ mod tests {
     }
 
     #[test]
-    fn challenge_refuses_absent_parent_aggregate_ground() {
+    fn recovery_challenge_diagnoses_absent_parent_aggregate_ground() {
         let parent = typed_record(
             "parent-without-ground",
             "review-evidence",
@@ -2344,16 +3166,21 @@ mod tests {
                 "result":"pass","findings":""
             }),
         );
-        let error = project_review_context(
-            &[parent],
+        let records = vec![parent];
+        let (selected, diagnostics) = project_review_context_with_diagnostics(
+            &records,
+            &records,
             "design-adversarial-review",
             "design.json",
             "4",
             None,
             Path::new("/unused-for-design"),
         )
-        .unwrap_err();
-        assert!(error.contains("supported versioned grounds"));
+        .unwrap();
+        assert!(selected.is_empty());
+        assert!(json!(diagnostics)
+            .to_string()
+            .contains("supported versioned grounds"));
     }
 
     #[test]
@@ -2391,8 +3218,13 @@ mod tests {
                 "author":{"name":"coordinating-driver","kind":"human"}
             }),
         );
-        let view =
-            owner_approval_view(&intent, &sha, &[&owner], &[owner.clone(), reviewer, driver]);
+        let view = owner_approval_view(
+            &intent,
+            &sha,
+            &[&owner],
+            &[owner.clone(), reviewer, driver],
+            &json!({}),
+        );
         assert_eq!(view["current_intent"]["value"], intent);
         assert_eq!(
             view["exact_substantive_wording_delta"]["status"],
@@ -2435,5 +3267,642 @@ mod tests {
             .contains("no content quota"));
         assert!(info.get("initial_limit_bytes").is_none());
         assert!(info.get("calls").is_none());
+    }
+
+    fn narrative_fixture(phase: &str, nested: bool) -> (Value, std::path::PathBuf) {
+        // Wall-clock timestamps can repeat within this fixture's fast loop.
+        // Allocate atomically; never reuse or clear a directory from another call.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let root = loop {
+            let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let candidate = std::env::temp_dir().join(format!(
+                "commission-narrative-{}-{serial}",
+                std::process::id(),
+            ));
+            match std::fs::create_dir(&candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("allocate narrative fixture: {error}"),
+            }
+        };
+        let mut profile: Value =
+            serde_json::from_str(include_str!("../data/configs/high-rigor.json")).unwrap();
+        profile["artifact_root"] = json!(root);
+        profile["extra"]["narratives"] = json!([phase]);
+        profile["extra"]["checkpoints"] =
+            json!(["intent", "design", "plan", "implementation", "validation"]);
+        for (pass, suffix) in [("ordinary", "review"), ("challenge", "adversarial-review")] {
+            let mut axes = profile["extra"]["narrative_review"][pass].clone();
+            for axis in axes.as_array_mut().unwrap() {
+                axis["group"] = json!(axis["group"].as_str().unwrap().replace("{phase}", phase));
+            }
+            profile["review_policies"][format!("{phase}-narrative-{suffix}")] = axes;
+        }
+        let options = crate::workflow::PHASE_OPTIONS
+            .iter()
+            .find(|o| o.phase.name == phase)
+            .unwrap();
+        let n = options.narrative.unwrap();
+        std::fs::write(
+            root.join("intent.json"),
+            br#"{"revision":"1","outcome":"frozen outcome"}"#,
+        )
+        .unwrap();
+        let artifact = br#"{"revision":"3","author":{"name":"writer","kind":"agent"}}"#;
+        std::fs::write(root.join(options.phase.subject), artifact).unwrap();
+        let markdown = b"# Proposed outcome\nThe approved artifact describes a bounded change.\n";
+        std::fs::write(root.join(n.markdown), markdown).unwrap();
+        let artifact_hash = format!("{:x}", Sha256::digest(artifact));
+        let markdown_hash = format!("{:x}", Sha256::digest(markdown));
+        let binding = json!({"revision":"3/1","author":{"name":"writer","kind":"agent"},
+            "artifact":{"subject":options.phase.subject,"revision":"3","sha256":artifact_hash},
+            "approved_artifact_record_id":if nested {"admission"} else {"approval"},
+            "markdown":{"file":n.markdown,"sha256":markdown_hash}});
+        std::fs::write(root.join(n.subject), serde_json::to_vec(&binding).unwrap()).unwrap();
+        let approval = binding["artifact"].clone();
+        let mut admission = approval.clone();
+        admission["phase"] = json!(phase);
+        if nested {
+            admission["approved_artifact"] = approval.clone();
+        }
+        let mut context = vec![typed_record("admission", "artifact-admitted", 1, admission)];
+        if !nested {
+            context.push(typed_record("approval", "approved-artifact", 2, approval));
+        }
+        context.push(typed_record(
+            "narrative",
+            "narrative-admitted",
+            3,
+            json!({"phase":phase,"revision":"3/1","sha256":markdown_hash}),
+        ));
+        let graph =
+            serde_json::to_value(crate::workflow::describe_workflow(Some(&profile)).unwrap())
+                .unwrap();
+        (
+            json!({"operation":"show","status":"completed","result":{"workflow_id":"software-change",
+            "artifact_root":root,"initial_input":profile,"context":context,"work_slots":graph["work_slots"]}}),
+            root,
+        )
+    }
+
+    #[test]
+    fn non_intent_reviews_deliver_only_effective_targeted_steering_and_real_ids() {
+        let root = std::env::temp_dir().join(format!(
+            "commission-steering-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        for name in [
+            "intent",
+            "design",
+            "plan",
+            "implementation-report",
+            "validation-report",
+        ] {
+            std::fs::write(
+                root.join(format!("{name}.json")),
+                std::fs::read(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join(format!("data/calibration/fixtures/{name}-good.json")),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let mut initial: Value =
+            serde_json::from_str(include_str!("../data/configs/minimal.json")).unwrap();
+        initial["artifact_root"] = json!(root);
+        let graph = crate::workflow::describe_workflow(Some(&initial)).unwrap();
+        let records = vec![
+            typed_record(
+                "old",
+                "user-steering",
+                1,
+                json!({"target":{"kind":"all"},"instruction":"old"}),
+            ),
+            typed_record(
+                "all-current",
+                "user-steering",
+                2,
+                json!({"target":{"kind":"all"},"instruction":"current","supersedes":["old"]}),
+            ),
+            typed_record(
+                "design-only",
+                "user-steering",
+                3,
+                json!({"target":{"kind":"slots","ids":["design-review"]},"instruction":"design"}),
+            ),
+            typed_record(
+                "unrelated",
+                "user-steering",
+                4,
+                json!({"target":{"kind":"slots","ids":["intent-review"]},"instruction":"intent"}),
+            ),
+        ];
+        let packet = json!({"operation":"show","status":"completed","result":{"workflow_id":"software-change","artifact_root":root,"initial_input":initial,"context":records,"workflow_graph":graph,"work_slots":graph.work_slots}});
+        for gate in [
+            "design-review",
+            "plan-review",
+            "implementation-review",
+            "validation-review",
+        ] {
+            let output = inspect_with_stage(&packet, Some(gate), None, Some("aggregate")).unwrap();
+            let ids = output["context"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|record| record["id"].as_str().unwrap())
+                .collect::<BTreeSet<_>>();
+            assert!(ids.contains("all-current"));
+            assert!(!ids.contains("old"));
+            assert!(!ids.contains("unrelated"));
+            assert_eq!(ids.contains("design-only"), gate == "design-review");
+            assert!(output["review_record_sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|source| source["record_id"] == "all-current"));
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn narrative_commissions_expose_four_accessible_sources_and_composite_identity() {
+        for phase in ["design", "plan", "validation"] {
+            for nested in [false, true] {
+                let (input, root) = narrative_fixture(phase, nested);
+                for stage in ["individual", "aggregate"] {
+                    let gate = format!("{phase}-narrative-review");
+                    let before = input.clone();
+                    let output =
+                        inspect_with_stage(&input, Some(&gate), None, Some(stage)).unwrap();
+                    assert_eq!(input, before);
+                    assert_eq!(output["missing_inputs"], json!([]), "{output}");
+                    assert_eq!(output["commission"]["review_stage"], stage);
+                    assert_eq!(output["review_target"]["revision"], "3/1");
+                    assert_eq!(output["review_target"]["phase"], phase);
+                    assert_eq!(output["review_sources"].as_array().unwrap().len(), 4);
+                    for source in output["review_sources"].as_array().unwrap() {
+                        let bytes = std::fs::read(source["path"].as_str().unwrap()).unwrap();
+                        assert_eq!(
+                            source["sha256"],
+                            format!("sha256:{:x}", Sha256::digest(&bytes))
+                        );
+                    }
+                    assert_eq!(
+                        output["approved_artifact"]["record_id"],
+                        if nested { "admission" } else { "approval" }
+                    );
+                    assert_eq!(
+                        output["approved_artifact"]["record"]["kind"],
+                        if nested {
+                            "artifact-admitted"
+                        } else {
+                            "approved-artifact"
+                        }
+                    );
+                }
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn narrative_challenge_uses_only_current_parent_aggregate_grounds() {
+        let (mut input, root) = narrative_fixture("design", false);
+        let parent_gate = "design-narrative-review";
+        for (i, axis) in [
+            "narrative-faithful",
+            "narrative-intent-aligned",
+            "narrative-understandable",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let policy = input["result"]["initial_input"]["review_policies"][parent_gate]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|policy| policy["id"] == axis && policy["review_stage"] == "aggregate")
+                .unwrap();
+            let data = json!({"gate":parent_gate,"subject":"design-narrative.json","subject_revision":"3/1",
+                "config_version":input["result"]["initial_input"]["config_version"],"group":policy["group"],"assessment_id":"scripted-parent-assessment",
+                "review_stage":"aggregate","policy_id":axis,"author":{"name":"reviewer","kind":"agent"},
+                "result":"pass","findings":"","review_contract_version":3,
+                "grounds":{"reason":"inspected exact sources","evidence":[{"locator":"design-narrative.md#L1-L2"}]}});
+            input["result"]["context"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!(typed_record(
+                    &format!("parent-{i}"),
+                    "review-evidence",
+                    4 + i as u64,
+                    data
+                )));
+        }
+        let gate = "design-narrative-adversarial-review";
+        for stage in ["individual", "aggregate"] {
+            let output = inspect_with_stage(&input, Some(gate), None, Some(stage)).unwrap();
+            assert_eq!(output["missing_inputs"], json!([]));
+            assert_eq!(output["context"].as_array().unwrap().len(), 3);
+            assert_eq!(output["context"][0]["id"], "parent-0");
+        }
+        input["result"]["context"].as_array_mut().unwrap().pop();
+        let output = inspect_with_stage(&input, Some(gate), None, Some("aggregate")).unwrap();
+        assert!(output["missing_inputs"]
+            .to_string()
+            .contains("narrative-understandable"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_view_uses_admission_identity_not_mutated_binding_revision() {
+        let (input, root) = narrative_fixture("design", true);
+        let output = inspect(&input, Some("design-checkpoint"), None).unwrap();
+        let view = &output["owner_approval_view"];
+        assert_eq!(view["subject"], "design-narrative.json");
+        assert_eq!(view["subject_revision"], "3/1");
+        assert_eq!(view["subject_record_id"], "narrative");
+        assert_eq!(view["narrative_source"]["locator"], "design-narrative.md");
+        assert_eq!(view["owner_approval"]["status"], "not-performed");
+        assert!(view["decision_guidance"]
+            .as_str()
+            .unwrap()
+            .contains("verbatim"));
+        let mut binding: Value =
+            serde_json::from_slice(&std::fs::read(root.join("design-narrative.json")).unwrap())
+                .unwrap();
+        binding["revision"] = json!("3/2");
+        std::fs::write(
+            root.join("design-narrative.json"),
+            serde_json::to_vec(&binding).unwrap(),
+        )
+        .unwrap();
+        let output = inspect(&input, Some("design-checkpoint"), None).unwrap();
+        assert_eq!(output["owner_approval_view"]["subject_revision"], "3/1");
+        assert!(output["missing_inputs"]
+            .to_string()
+            .contains("latest admitted narrative revision"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_checkpoint_views_keep_actual_nested_reconciliation_identity() {
+        let (mut input, root) = narrative_fixture("design", false);
+        input["result"]["initial_input"]["extra"]["narratives"] = json!([]);
+        for phase in ["intent", "design", "plan", "implementation", "validation"] {
+            let options = checkpoint_options(&format!("{phase}-checkpoint")).unwrap();
+            let artifact = br#"{"revision":"4"}"#;
+            std::fs::write(root.join(options.phase.subject), artifact).unwrap();
+            let hash = format!("{:x}", Sha256::digest(artifact));
+            let admission =
+                json!({"phase":phase,"subject":options.phase.subject,"revision":"4","sha256":hash});
+            let approval = json!({"subject":options.phase.subject,"revision":"4","sha256":hash});
+            input["result"]["context"] = json!([typed_record(
+                "real-reconciliation",
+                "reconciliation-decision",
+                1,
+                json!({"revision":"reconciliation-r2","documents":{"intent":"1"},
+                    "artifact_admitted":admission,"approved_artifact":approval})
+            )]);
+            let output = inspect(&input, Some(options.checkpoint), None).unwrap();
+            assert_eq!(output["missing_inputs"], json!([]), "{output}");
+            let view = &output["owner_approval_view"];
+            assert_eq!(view["subject"], options.phase.subject);
+            assert_eq!(view["subject_revision"], "4");
+            assert_eq!(view["subject_record_id"], "real-reconciliation");
+            assert_eq!(
+                view["subject_identity"]["record"]["data"]["revision"],
+                "reconciliation-r2"
+            );
+            assert_eq!(
+                view["subject_identity"]["record"]["data"]["documents"]["intent"],
+                "1"
+            );
+            assert!(view["narrative_source"].is_null());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn narrative_missing_and_stale_inputs_are_visible_without_claiming_approval() {
+        for (file, replacement, expected) in [
+            ("design-narrative.md", None, "unavailable"),
+            ("design-narrative.json", None, "unavailable"),
+            ("intent.json", None, "unavailable"),
+            ("design.json", None, "unavailable"),
+            (
+                "design-narrative.md",
+                Some("changed prose"),
+                "markdown must match",
+            ),
+            (
+                "design.json",
+                Some(r#"{"revision":"3","changed":true}"#),
+                "current artifact must match",
+            ),
+            ("design-narrative.json", Some("{}"), "narrative binding"),
+        ] {
+            let (input, root) = narrative_fixture("design", false);
+            if let Some(bytes) = replacement {
+                std::fs::write(root.join(file), bytes).unwrap();
+            } else {
+                std::fs::remove_file(root.join(file)).unwrap();
+            }
+            for slot in [
+                "design-narrative-review",
+                "design-narrative-adversarial-review",
+                "design-checkpoint",
+            ] {
+                let output = inspect(&input, Some(slot), None).unwrap();
+                assert!(
+                    output["missing_inputs"].to_string().contains(expected),
+                    "{file}: {output}"
+                );
+                if slot.ends_with("checkpoint") {
+                    assert_eq!(
+                        output["owner_approval_view"]["owner_approval"]["status"],
+                        "not-performed"
+                    );
+                    assert_eq!(output["owner_approval_view"]["subject_revision"], "3/1");
+                }
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
+        let (mut input, root) = narrative_fixture("design", false);
+        input["result"]["context"] = json!([]);
+        let output = inspect(&input, Some("design-checkpoint"), None).unwrap();
+        assert!(output["owner_approval_view"]["subject_revision"].is_null());
+        assert!(output["missing_inputs"]
+            .to_string()
+            .contains("missing latest"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn options_off_and_extension_slots_preserve_existing_projection() {
+        let (mut input, root) = narrative_fixture("design", false);
+        input["result"]["work_slots"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(WorkSlot::new(
+                "extension-review",
+                "extension-review",
+                "approved"
+            )
+            .with_stdin_context_kinds(vec!["review-evidence".into()])));
+        for slot in [
+            "design-review",
+            "intent-review",
+            "design-draft",
+            "extension-review",
+        ] {
+            let current = inspect_with_stage(&input, Some(slot), None, Some("aggregate")).unwrap();
+            let prior =
+                inspect_review_with_stage(&input, Some(slot), None, Some("aggregate")).unwrap();
+            assert_eq!(current, prior);
+            assert!(current.get("phase").is_none());
+        }
+        let mut filter = input["result"].clone();
+        filter["slot_id"] = json!("design-narrative-review");
+        let output = inspect(&filter, None, None).unwrap();
+        assert_eq!(
+            output,
+            inspect_review_with_stage(&filter, None, None, None).unwrap()
+        );
+        assert!(output.get("record_ids").is_some());
+        assert!(output.get("review_sources").is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn recovery_challenge_packet_diagnoses_citation_drift_and_requires_replacement_floor() {
+        use crate::recovery::test_support::{review, Root};
+        let root = Root::new();
+        let mut source = review("parent-drifted", 1, "parent-reader", "pass");
+        source.data["gate"] = json!("design-review");
+        source.data["subject"] = json!("design.json");
+        source.data["policy_id"] = json!("axis");
+        let slot = WorkSlot::new(
+            "design-adversarial-review",
+            "design-adversarial-review",
+            "approved",
+        )
+        .with_stdin_context_kinds(vec![
+            "review-evidence".into(),
+            "finding-ledger".into(),
+            "evidence-applicability".into(),
+        ]);
+        let mut input = json!({"status":"completed","result":{"work_slots":[slot],"initial_input":root.input(1),"context":[source]}});
+        std::fs::write(root.path.join("source.txt"), "first\n").unwrap();
+        let output = inspect_with_stage(
+            &input,
+            Some("design-adversarial-review"),
+            None,
+            Some("aggregate"),
+        )
+        .unwrap();
+        assert_eq!(
+            output["record_diagnostics"][0]["record_id"],
+            "parent-drifted"
+        );
+        assert!(!output["record_diagnostics"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .is_empty());
+        assert!(!output["missing_inputs"].as_array().unwrap().is_empty());
+        let records: Vec<ContextRecord> =
+            serde_json::from_value(input["result"]["context"].clone()).unwrap();
+        let config = crate::config::validate_config(&root.input(1)).unwrap();
+        let evaluate = |records: &[ContextRecord]| {
+            crate::evidence::evaluate_staged_evidence_with_dispositions(
+                records,
+                "design-review",
+                "design.json",
+                "r1",
+                &crate::evidence::AuthorIdentity::new("drafter", "agent"),
+                "recovery-1",
+                config.staged_axes_for_gate("design-review").unwrap(),
+                config.axis_namespace(),
+                Some(&root.value()),
+                None,
+                false,
+            )
+        };
+        assert!(!evaluate(&records).is_satisfied());
+        let mut corrected = records[0].clone();
+        corrected.id = "parent-replacement".into();
+        corrected.sequence = 2_u64.into();
+        corrected.data["grounds"]["evidence"][0]["locator"] = json!("design.json#/revision");
+        input["result"]["context"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(corrected));
+        let records: Vec<ContextRecord> =
+            serde_json::from_value(input["result"]["context"].clone()).unwrap();
+        assert!(
+            evaluate(&records).is_satisfied(),
+            "later conforming evidence keeps existing correction behavior"
+        );
+        let corrected_packet = inspect_with_stage(
+            &input,
+            Some("design-adversarial-review"),
+            None,
+            Some("aggregate"),
+        )
+        .unwrap();
+        assert_eq!(corrected_packet["missing_inputs"], json!([]));
+        assert!(corrected_packet["context"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == "parent-replacement"));
+        assert!(corrected_packet["record_diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["record_id"] == "parent-drifted"));
+    }
+
+    #[test]
+    fn recovery_commission_excludes_retired_and_withdrawn_records_with_full_history_available() {
+        use crate::recovery::test_support::*;
+        let root = Root::new();
+        let source = review("old", 2, "reader", "pass");
+        let mut malformed = review("malformed", 5, "reader", "pass");
+        malformed.data["result"] = json!(9);
+        let records = vec![
+            roster("before", 1, &["reader"]),
+            source.clone(),
+            roster("after", 3, &["new"]),
+            ledger(&source, 4, "retired-author", "recorded"),
+            malformed,
+            carry("carry", "malformed", 6, "r1"),
+            review("replacement", 7, "new", "pass"),
+        ];
+        let filtered: Vec<_> = records
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row.kind.as_str(),
+                    "review-evidence" | "finding-ledger" | "evidence-applicability"
+                )
+            })
+            .cloned()
+            .collect();
+        let (projected, diagnostics) = project_review_context_with_diagnostics(
+            &filtered,
+            &records,
+            "intent-review",
+            "intent.json",
+            "r1",
+            Some("aggregate"),
+            &root.path,
+        )
+        .unwrap();
+        assert!(diagnostics.is_empty(), "{:?}", diagnostics);
+        assert_eq!(
+            projected
+                .iter()
+                .filter(|row| row.kind == "review-evidence")
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            ["replacement"]
+        );
+        let history = records.clone();
+        let mut withdrawn = vec![
+            review("withdrawn", 1, "reader", "pass"),
+            withdrawal("withdraw", "withdrawn", 2),
+            review("replacement", 3, "new", "pass"),
+        ];
+        let (projected, _) = project_review_context_with_diagnostics(
+            &withdrawn,
+            &withdrawn,
+            "intent-review",
+            "intent.json",
+            "r1",
+            Some("aggregate"),
+            &root.path,
+        )
+        .unwrap();
+        assert!(!projected.iter().any(|row| row.id.as_str() == "withdrawn"));
+        assert_eq!(records, history, "recovery never mutates original history");
+        withdrawn[0].data["result"] = json!("fail");
+        withdrawn[0].data["findings"] = json!("Finding");
+        let pending = ledger(&withdrawn[0], 2, "accepted", "unresolved");
+        withdrawn[1].sequence = 3_u64.into();
+        withdrawn[2].sequence = 4_u64.into();
+        withdrawn.insert(1, pending);
+        let (projected, _) = project_review_context_with_diagnostics(
+            &withdrawn,
+            &withdrawn,
+            "intent-review",
+            "intent.json",
+            "r1",
+            Some("aggregate"),
+            &root.path,
+        )
+        .unwrap();
+        assert!(
+            projected.iter().any(|row| row.kind == "finding-ledger"
+                && row.data["findings"][0]["source"]["id"] == "withdrawn"),
+            "unresolved accepted duty remains in packet independently of coverage exclusion"
+        );
+    }
+
+    #[test]
+    fn recovery_withdrawn_supplemental_command_does_not_remove_frozen_proof() {
+        use crate::recovery::test_support::{row, withdrawal};
+        let frozen = json!({"id":"frozen","command":"checker","args":[],"owner":"driver","obligation":"Frozen proof"});
+        let plan = json!({"revision":"1","tasks":[],"proof_commands":[frozen.clone()]});
+        let extra = row(
+            "extra-command",
+            "validation-command",
+            1,
+            json!({"spec":{"id":"extra","command":"other","args":[],"owner":"driver","obligation":"Supplemental proof"}}),
+        );
+        let slots = vec![WorkSlot::new(
+            "validation-draft",
+            "validation",
+            "validation-ready",
+        )];
+        let before = select(
+            std::slice::from_ref(&extra),
+            &slots,
+            "validation-draft",
+            Some(&plan),
+            None,
+        )
+        .unwrap();
+        assert_eq!(before.proof_commands.len(), 2);
+        let after = select(
+            &[extra, withdrawal("withdraw", "extra-command", 2)],
+            &slots,
+            "validation-draft",
+            Some(&plan),
+            None,
+        )
+        .unwrap();
+        assert_eq!(after.proof_commands, vec![frozen.clone()]);
+        let root = crate::recovery::test_support::Root::new();
+        std::fs::write(
+            root.path.join("plan.json"),
+            serde_json::to_vec(&plan).unwrap(),
+        )
+        .unwrap();
+        let slot = WorkSlot::new("validation-draft", "validation", "validation-ready")
+            .with_stdin_context_kinds(vec!["validation-command".into()]);
+        let show = json!({"status":"completed","result":{"work_slots":[slot],"initial_input":root.input(1),
+            "context":[row("extra-command","validation-command",1,json!({"spec":{"id":"extra","command":"other","args":[],"owner":"driver","obligation":"Supplemental proof"}})),withdrawal("withdraw","extra-command",2)]}});
+        let inspected = inspect(&show, Some("validation-draft"), None).unwrap();
+        assert_eq!(inspected["commission"]["proof_commands"], json!([frozen]));
+        assert!(
+            inspected["context"].as_array().unwrap().is_empty(),
+            "removed command stays excluded even though withdrawal is not in frozen stdin kinds"
+        );
+        assert!(crate::recovery::record_withdrawal_guardrails("bad",&json!({"record_ids":["frozen"],"reason":"No longer needed","attesting_driver":{"name":"driver","kind":"agent"}}),&[],None).is_err());
     }
 }

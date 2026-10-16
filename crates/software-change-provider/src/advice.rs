@@ -87,12 +87,21 @@ fn prepare(packet: PreparationPacket) -> Result<Value, String> {
         .get("initial_input")
         .and_then(Value::as_object)
         .ok_or("full show omitted frozen initial_input")?;
-    if initial
-        .get("extra")
-        .and_then(|v| v.pointer("/advice/enabled"))
-        .and_then(Value::as_bool)
-        != Some(true)
-    {
+    // Current engine show is authoritative after owner policy changes. Older
+    // full-show packets retain the start-time enablement fallback.
+    let enabled = if let Some(policy) = result.get("advice_policy") {
+        policy
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .ok_or("show effective advice policy is unavailable")?
+    } else {
+        initial
+            .get("extra")
+            .and_then(|v| v.pointer("/advice/enabled"))
+            .and_then(Value::as_bool)
+            == Some(true)
+    };
+    if !enabled {
         return Err("advice is disabled for this run".into());
     }
 
@@ -120,6 +129,19 @@ fn prepare(packet: PreparationPacket) -> Result<Value, String> {
     let parts: Vec<_> = packet.occasion_id.split(':').collect();
     if parts.len() != 3 || parts[1] != current_state || parts[2].is_empty() {
         return Err("occasion must name the current state and an event".into());
+    }
+    if let Some(policy) = result.get("advice_policy") {
+        let mapped = policy
+            .pointer("/effective/occasions")
+            .and_then(Value::as_array)
+            .ok_or("show omitted effective advice departure map")?;
+        if !mapped.iter().any(|row| {
+            row["occasion_id"] == packet.occasion_id
+                && row["state"] == current_state
+                && row["event"] == parts[2]
+        }) {
+            return Err("occasion is not in the effective advice departure map".into());
+        }
     }
     let state_visit = result
         .get("state_visit")
@@ -1741,6 +1763,58 @@ mod tests {
                 "{field}"
             );
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn advice_request_uses_effective_policy_for_off_start_enablement_and_removal() {
+        let (mut show, root) = fixture();
+        show["result"]["initial_input"]["extra"]["advice"]["enabled"] = json!(false);
+        show["result"]["initial_input"]
+            .as_object_mut()
+            .unwrap()
+            .remove("advice_departures");
+        let occasion = "execution-or-authority-issue:intent-review:approved";
+        show["result"]["advice_policy"] = json!({"frozen":null,"change_record_ids":["owner-on"],
+        "enabled":true,"effective":{"version":1,"occasions":[
+            {"state":"intent-review","event":"approved","occasion_id":occasion}
+        ]}});
+        let packet = |show: &Value| {
+            request_for(
+                show,
+                &root,
+                "execution-or-authority-issue",
+                &["execution-issue"],
+                &[],
+                &[],
+                false,
+            )
+        };
+        let request = prepare(packet(&show)).expect("owner enables advice on an off-start run");
+        assert_eq!(request["occasion"], occasion);
+        assert!(request["questions"].as_object().unwrap().len() == 1);
+        show["result"]["advice_policy"]["effective"]["occasions"] = json!([]);
+        assert!(prepare(packet(&show))
+            .unwrap_err()
+            .contains("not in the effective"));
+        show["result"]["advice_policy"]["enabled"] = json!(false);
+        show["result"]["initial_input"]["extra"]["advice"]["enabled"] = json!(true);
+        assert!(
+            prepare(packet(&show)).unwrap_err().contains("disabled"),
+            "effective off overrides frozen on"
+        );
+        show["result"]["advice_policy"] = json!({"state":"unavailable","reason":"deadline"});
+        assert!(
+            prepare(packet(&show)).unwrap_err().contains("unavailable"),
+            "no stale enabled fallback"
+        );
+        show["result"]["advice_policy"] = json!({"enabled":true,"effective":{"version":1,"occasions":[
+            {"state":"intent-review","event":"approved","occasion_id":occasion}
+        ]}});
+        show["result"]["initial_input"]["extra"]["advice"]["occasion_map"] =
+            json!(["final-completion"]);
+        assert!(prepare(packet(&show))
+            .unwrap_err()
+            .contains("not in the frozen profile map"));
         fs::remove_dir_all(root).unwrap();
     }
 }

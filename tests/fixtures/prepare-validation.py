@@ -30,10 +30,11 @@ def _run_json(command, *, input_value=None, cwd=None, label="command"):
         raise RuntimeError(f"{label} returned non-JSON: {result.stdout!r}") from error
 
 
-def _proof_commands(provider, show):
+def _proof_commands(provider, show, *, cwd):
     commission = _run_json(
         [provider, "commission", "--slot", "validation-draft"],
         input_value=show,
+        cwd=cwd,
         label="validation commission",
     )
     try:
@@ -48,7 +49,7 @@ def _proof_commands(provider, show):
 def _command_results(provider, cwd, commands):
     results = []
     for command in commands:
-        source = _run_json([provider, "source-identity", "--working-directory", cwd])
+        source = _run_json([provider, "source-identity", "--working-directory", cwd], cwd=cwd)
         completed = subprocess.run(
             [command["command"], *command["args"]], cwd=cwd,
             capture_output=True, text=True, check=False, timeout=CAPTURE_TIMEOUT_MS / 1000,
@@ -66,7 +67,10 @@ def _command_results(provider, cwd, commands):
 def prepare(provider, engine, cwd, show, revision):
     root = Path(show["result"]["initial_input"]["artifact_root"])
     cwd = Path(cwd).resolve()
-    commands = _proof_commands(provider, show)
+    # Provider admission resolves undeclared primary scope from process cwd,
+    # not the packet working_directory. Keep every provider call aligned with
+    # the actual proof/checkpoint repository; never broaden the source scope.
+    commands = _proof_commands(provider, show, cwd=cwd)
     (root / "validation-report.json").unlink(missing_ok=True)
     results = _command_results(provider, cwd, commands)
     packet = {
@@ -80,6 +84,7 @@ def prepare(provider, engine, cwd, show, revision):
     prepared = _run_json(
         [provider, "prepare-validation"],
         input_value=packet,
+        cwd=cwd,
         label="prepare-validation",
     )
     if prepared.get("status") != "draft-only" or not prepared.get("commands_complete"):
@@ -107,6 +112,7 @@ def prepare(provider, engine, cwd, show, revision):
             "--working-directory",
             str(cwd),
         ],
+        cwd=cwd,
         label="validation checkpoint",
     )
     # The checkpoint precedes the same deterministic independent-record
