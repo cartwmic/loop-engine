@@ -97,6 +97,8 @@ def scan_results(contents: Iterable[str], protected: Iterable[str]) -> None:
 
 def render_markdown(summary: dict) -> str:
     lines = [f"# Campaign {summary['campaign']}", "", f"Target: {summary['target']}", "",
+             *([f"Projection cohort: {summary['projection_cohort']} (not pooled with other cohorts)", ""]
+               if "projection_cohort" in summary else []),
              "Dollar figures are estimated from the campaign price table; null means unpriced.", "",
              "## Classification", summary["classification_rules"], ""]
     for key in ("settings", "pinned_models", "versions", "matched_assignment"):

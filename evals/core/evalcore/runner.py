@@ -16,6 +16,7 @@ from inspect_ai.scorer import Score, scorer
 from inspect_ai.solver import solver
 
 from .accounting import CLASSIFICATION_RULES, TrialRecord, classify_exception, core_metrics
+from .provenance import cohort
 from .report import UnsafeReportError, protected_values, utc_timestamp, write_report
 from .settings import CampaignSettings, OVERHEAD_ROLES, matched_assignment
 from .target import Target, TrialContext
@@ -91,6 +92,8 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
                              *getattr(target, "provider_config_paths", ()))
     # Validate readability before executing. Re-scan values at write time as well.
     protected_values(provider_config_paths=provider_config_paths)
+    # Strict label validation before any execution; unlabelled settings are the explicit baseline cohort.
+    projection_cohort = cohort(settings)
     cases, assignments = matched_assignment(settings, target.load_cases(settings.cases_path))
     if assignments_override is not None:
         assignments = assignments_override
@@ -199,6 +202,7 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
                             "target_metrics": target.report_metrics([r.target_metrics for r in trials if r.target_metrics])})
     summary = {
         "schema_version": 1, "campaign": settings.campaign, "target": target.name,
+        "projection_cohort": projection_cohort,
         "settings": settings.recorded(),
         "pinned_models": {"simulator": settings.simulator_model, "judge": settings.judge_model},
         "versions": {"harness": harness_versions(), "target": target.versions(settings),

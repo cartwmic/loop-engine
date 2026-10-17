@@ -7,6 +7,7 @@ import shutil
 from evalcore.cli import read_settings
 from evalcore.continuation import (load_run, settings_from_recorded, record_digest,
                                    validate_execution_exception)
+from evalcore.provenance import check_same_cohort
 from evalcore.report import utc_timestamp
 from evalcore.runner import run_campaign
 from evalcore.settings import Assignment, CampaignSettings, matched_assignment
@@ -105,6 +106,8 @@ def merge_captures(args):
     source_receipts = []
     for source in args.src_dirs:
         summary, root = load_run(source)
+        # Explicit before the existing settings-equality refusal: never merge across projection cohorts.
+        check_same_cohort(summary["settings"], settings, action="merge")
         original = settings_from_recorded(summary["settings"])
         if authorization:
             validate_execution_exception(authorization, original, settings)

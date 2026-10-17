@@ -21,6 +21,7 @@ from inspect_ai.util import sandbox, sandbox_service
 from evalcore.runner import harness_versions
 from evalcore.report import utc_timestamp
 from .capture import ReplayContainer, captured_lifecycle, read_capture, restore
+from .label_gate import check_projection_label_gate
 from evalcore.settings import Case
 from evalcore.target import InfrastructureError, ModelError, TrialExecution, TrialScore
 from .cases import RUNTIME, load_case
@@ -277,6 +278,7 @@ class SoftwareChangeTarget:
             raise ValueError("trial image must be native arm64 Linux")
         if identity["Config"].get("Volumes"):
             raise ValueError("trial image must not declare volumes")
+        check_projection_label_gate(context.settings, identity)
         if getattr(self, "operation", "campaign") == "rescore":
             return Sample(input=load_case(context.case.path).request.read_text())
         compose_dir = self.run_directory

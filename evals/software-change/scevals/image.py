@@ -1,6 +1,7 @@
 """Pinned source image build and mount-free trial container contract."""
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -37,9 +38,13 @@ def build_image(ref=DEFAULT_REF, tag=DEFAULT_IMAGE):
             shutil.copyfile(IMAGE_DIR / name, context / name)
         run(["git", "-C", str(REPOSITORY), "archive", "--format=tar",
              f"--output={context / 'source.tar'}", commit])
+        jobs = os.environ.get("SC_IMAGE_CARGO_JOBS", "")  # eval-only memory bound; unset = unchanged build
+        if jobs and not jobs.isdigit():
+            raise ValueError("SC_IMAGE_CARGO_JOBS must be a positive integer")
         run(["docker", "build", "--platform", "linux/arm64", "--tag", tag,
              "--build-arg", f"LOOP_ENGINE_REF={ref}",
-             "--build-arg", f"LOOP_ENGINE_COMMIT={commit}", str(context)])
+             "--build-arg", f"LOOP_ENGINE_COMMIT={commit}",
+             *(["--build-arg", f"SC_CARGO_JOBS={jobs}"] if jobs else []), str(context)])
     return {"ref": ref, "commit": commit, "version": version, "image": tag}
 
 

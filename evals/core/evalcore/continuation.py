@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from .accounting import TrialRecord
+from .provenance import check_same_cohort
 from .settings import CampaignSettings, matched_assignment
 
 
@@ -95,6 +96,8 @@ def resume_campaign(target, settings, source, *, resume_interrupted=False, provi
     from .runner import run_campaign
     summary, captures = load_run(source)
     original = settings_from_recorded(summary["settings"])
+    # Explicit before the general settings-equality refusal: never resume across projection cohorts.
+    check_same_cohort(summary["settings"], settings, action="resume")
     _, assignments = matched_assignment(settings, target.load_cases(settings.cases_path))
     current_values = settings.model_dump(mode="json", by_alias=True)
     current_values["cases_path"] = str(settings.cases_path.resolve())

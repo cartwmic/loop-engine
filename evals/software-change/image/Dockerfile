@@ -3,10 +3,12 @@ FROM rust:1.98.0-bookworm AS build
 ARG TARGETARCH
 ARG LOOP_ENGINE_REF=v0.24.0
 ARG LOOP_ENGINE_COMMIT
+# Optional eval-only memory bound (empty = cargo default parallelism, unchanged behaviour).
+ARG SC_CARGO_JOBS=
 WORKDIR /src
 COPY source.tar /tmp/source.tar
 RUN test "$TARGETARCH" = arm64 && tar -xf /tmp/source.tar -C /src \
-    && cargo build --locked --release -p loop-cli -p software-change-provider
+    && cargo build --locked --release ${SC_CARGO_JOBS:+-j $SC_CARGO_JOBS} -p loop-cli -p software-change-provider
 
 FROM node:24.18.1-bookworm
 ARG TARGETARCH
