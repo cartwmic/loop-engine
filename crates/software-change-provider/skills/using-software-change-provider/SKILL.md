@@ -330,6 +330,10 @@ in validation; repository-state mismatch uses shown revise-implementation.
    pointers/line ranges or allowed immutable `record:ACTUAL_CONTEXT_ID#JSON-Pointer`
    over the complete ContextRecord. The reviewer protocol gives the eight-kind allowlist,
    including intent-correction; use actual delivered `review_record_sources` IDs.
+   Commission's `locator_guidance` lists the accepted forms, the root each relative path
+   resolves against (declared `source_scopes`, else the artifact directory's git top level,
+   never the invoking directory) and each JSON source's real keys and array lengths. A refused
+   pointer names the closest existing one; correct it through the driver-attributed projection.
 5. Triage before append or mutation: accept only in-scope material failures or genuinely
    supported passes. Preserve grounds/evidence and self-review declarations. Disputed
    substantive candidates need focused independent reconsideration; reject provably
@@ -401,6 +405,13 @@ comprehensive-first and materiality burdens prohibit drip-feeding or unrelated r
 Reuse requires explicit evidence-applicability with original context-record origin,
 current target subject/revision/checkpoint, attesting_driver and reason. Preserve author,
 result and source; do not copy stale identities into new evidence or invent a pass.
+Carried and fresh judgments may cover one review group together: a group whose counted
+evidence includes a carried row is judged per axis (every axis covered, each axis at its
+configured floor, carried rows keep their original author and assessment, one author's fresh
+rows share one assessment); a group with no carried row is judged whole as before. A carry
+that cites a criterion stays current only while that criterion's text is unchanged. A
+challenge packet labels carried parts `original judgment` / `current applicability
+attestation` and names the unmet prerequisite when a carried aggregate cannot supply it.
 Respect declared source scopes. Inspect `software-change author-counts` with full show.
 Owner amendments use `software-change author-counts --propose JSON`, exact targets,
 after count, actor, authority reference and reason; inspect/append the candidate.

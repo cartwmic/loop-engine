@@ -739,18 +739,22 @@ fn source_mode(
                 "unsupported evidence reference `{id}`; name retained command evidence"
             ));
         }
+        if data["result"] == "pass"
+            && evidence
+                .data
+                .get("external_result")
+                .is_some_and(|r| r["exit_code"] != 0)
+        {
+            return Err("passing verdict references a failed command".into());
+        }
         if historical {
             command_shape(&evidence.data)?;
-            if data["result"] == "pass"
-                && evidence
-                    .data
-                    .get("external_result")
-                    .is_some_and(|r| r["exit_code"] != 0)
-            {
-                return Err("passing verdict references a failed command".into());
-            }
         } else if !verified_command_evidence_ids
             .is_some_and(|ids| ids.contains(evidence.id.as_str()))
+            // Admission's cache may contain failed legacy captures for negative
+            // judgments. Passing capture references still need full proof-success
+            // checks; this never forces unrelated indexed proofs to pass.
+            || (data["result"] == "pass" && evidence.data.get("external_result").is_none())
         {
             command_evidence(
                 &evidence.data,
@@ -893,6 +897,102 @@ pub(crate) fn verify_verdict_origin(data: &Value, kind: &str) -> Result<Option<S
     Ok(Some(text(matches[0], "record_id")?.into()))
 }
 
+/// Resolve and verify the current command index identically for new verdict
+/// admission and gates. Cache original command IDs, never applicability IDs.
+/// Admission may retain failed direct-current executions for negative judgments.
+/// Carries always require success; the gate requires every named proof to pass.
+#[allow(dead_code)] // Admission uses the library copy; gates also use the binary copy.
+pub(crate) fn verified_command_index(
+    context: &[ContextRecord],
+    root: &Path,
+    report: &Value,
+    specs: &[ProofCommand],
+    excluded: &BTreeSet<String>,
+    require_pass: bool,
+) -> Result<(BTreeSet<String>, BTreeSet<String>), String> {
+    let root_value = json!(root);
+    let mut recovery_excluded = software_change_provider::recovery::excluded_record_ids(
+        context,
+        "validation-review",
+        "validation-report.json",
+        Some(&root_value),
+    )?;
+    recovery_excluded.extend(software_change_provider::recovery::excluded_record_ids(
+        context,
+        "validation-adversarial-review",
+        "validation-report.json",
+        Some(&root_value),
+    )?);
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let repository = checkpoint::repository_identity(&cwd)?;
+    let mut executed = BTreeSet::new();
+    let mut verified_command_evidence_ids = BTreeSet::new();
+    let command_ids = ids(&report["command_evidence_ids"])?;
+    for id in &command_ids {
+        if recovery_excluded.contains(id) {
+            return Err(format!(
+                "command index references excluded record `{id}`; supply replacement coverage"
+            ));
+        }
+        if excluded.contains(id) {
+            continue;
+        }
+        let r = record(context, id)?;
+        let applicable = r.kind == "evidence-applicability";
+        let r = if applicable {
+            let declaration: loop_core::EvidenceApplicability =
+                serde_json::from_value(r.data.clone()).map_err(|e| e.to_string())?;
+            if declaration.origin.kind != "context-record"
+                || declaration.origin.assignment_id.is_some()
+                || declaration.reason.trim().is_empty()
+            {
+                return Err("invalid command applicability declaration".into());
+            }
+            author_identity(&declaration.attesting_driver)?;
+            let revision = text(report, "revision")?;
+            let target = crate::evidence::canonical_target(&declaration.target, false)?;
+            crate::evidence::validate_applicability_target(
+                &target,
+                "validation-report.json",
+                revision,
+                Some(&json!(root)),
+                false,
+            )?;
+            let original = record(context, &declaration.origin.id)?;
+            if original.sequence >= r.sequence || original.data.get("external_result").is_none() {
+                return Err(
+                    "command applicability requires earlier external command result".into(),
+                );
+            }
+            original
+        } else {
+            r
+        };
+        if r.kind != "command-evidence" {
+            return Err("command index references wrong record kind".into());
+        }
+        let proof_id = text(&r.data, "proof_id")?;
+        let spec = specs
+            .iter()
+            .find(|s| s.id == proof_id)
+            .ok_or("unknown command proof ID")?;
+        if !executed.insert(proof_id.to_owned()) {
+            return Err("duplicate command proof ID".into());
+        }
+        command_evidence(
+            &r.data,
+            root,
+            Some(spec),
+            Some(&repository),
+            require_pass,
+            applicable,
+        )?;
+        verified_command_evidence_ids.insert(r.id.as_str().to_owned());
+    }
+
+    Ok((executed, verified_command_evidence_ids))
+}
+
 pub(crate) fn evaluate(
     input: &Value,
     context: &[ContextRecord],
@@ -963,76 +1063,8 @@ pub(crate) fn evaluate(
     let selected =
         crate::commission::select(context, &slots, "validation-draft", Some(&plan), None)?;
     let specs = commands(&json!(selected.proof_commands))?;
-    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    let repository = checkpoint::repository_identity(&cwd)?;
-    let mut executed = BTreeSet::new();
-    // This cache is deliberately scoped to this evaluation request. The
-    // command index above has already performed the full current-tree capture
-    // verification; source validation still checks every verdict and falls
-    // back to a fresh verification for historical/non-indexed evidence.
-    let mut verified_command_evidence_ids = BTreeSet::new();
-    let command_ids = ids(&report["command_evidence_ids"])?;
-    for id in &command_ids {
-        if recovery_excluded.contains(id) {
-            return Err(format!(
-                "command index references excluded record `{id}`; supply replacement coverage"
-            ));
-        }
-        if excluded.contains(id) {
-            continue;
-        }
-        let r = record(context, id)?;
-        let applicable = r.kind == "evidence-applicability";
-        let r = if applicable {
-            let declaration: loop_core::EvidenceApplicability =
-                serde_json::from_value(r.data.clone()).map_err(|e| e.to_string())?;
-            if declaration.origin.kind != "context-record"
-                || declaration.origin.assignment_id.is_some()
-                || declaration.reason.trim().is_empty()
-            {
-                return Err("invalid command applicability declaration".into());
-            }
-            author_identity(&declaration.attesting_driver)?;
-            let revision = text(report, "revision")?;
-            let target = crate::evidence::canonical_target(&declaration.target, false)?;
-            crate::evidence::validate_applicability_target(
-                &target,
-                "validation-report.json",
-                revision,
-                Some(&json!(root)),
-                false,
-            )?;
-            let original = record(context, &declaration.origin.id)?;
-            if original.sequence >= r.sequence || original.data.get("external_result").is_none() {
-                return Err(
-                    "command applicability requires earlier external command result".into(),
-                );
-            }
-            original
-        } else {
-            r
-        };
-        if r.kind != "command-evidence" {
-            return Err("command index references wrong record kind".into());
-        }
-        let proof_id = text(&r.data, "proof_id")?;
-        let spec = specs
-            .iter()
-            .find(|s| s.id == proof_id)
-            .ok_or("unknown command proof ID")?;
-        if !executed.insert(proof_id.to_owned()) {
-            return Err("duplicate command proof ID".into());
-        }
-        command_evidence(
-            &r.data,
-            root,
-            Some(spec),
-            Some(&repository),
-            true,
-            applicable,
-        )?;
-        verified_command_evidence_ids.insert(r.id.as_str().to_owned());
-    }
+    let (executed, verified_command_evidence_ids) =
+        verified_command_index(context, root, report, &specs, excluded, true)?;
     if executed.len() != specs.len() {
         return Err("missing required named proof command".into());
     }
@@ -1225,7 +1257,7 @@ pub(crate) fn evaluate(
             if !carried
                 && ids(&d["evidence_context_ids"])?
                     .iter()
-                    .any(|id| !command_ids.contains(id))
+                    .any(|id| !verified_command_evidence_ids.contains(id))
             {
                 return Err("fresh verdict must reference current indexed command evidence".into());
             }
@@ -1265,8 +1297,16 @@ pub(crate) fn source_for_candidate(
     root: &Path,
     gate: &str,
     config_version: &str,
+    verified_command_evidence_ids: &BTreeSet<String>,
 ) -> Result<(), String> {
-    source_with_expected_target(data, kind, context, root, Some(gate), Some(config_version))
+    validate_source_target(data, Some(gate), Some(config_version))?;
+    source_with_verified_commands(
+        data,
+        kind,
+        context,
+        root,
+        Some(verified_command_evidence_ids),
+    )
 }
 
 #[cfg(test)]
@@ -1330,10 +1370,28 @@ mod tests {
     #[test]
     fn passing_criterion_verdict_checks_inspected_evidence_when_reason_is_present() {
         use loop_core::{ContextRecord, SemanticSequence, Timestamp};
+        let cwd = std::env::current_dir().unwrap();
+        let spec = json!({
+            "id":"proof","command":"unit-fixture-not-executed","args":[],
+            "owner":"unit-fixture","obligation":"Scripted verified-cache unit fixture; no native execution"
+        });
+        let command = json!({
+            "proof_id":"proof","spec":spec,
+            "external_result":{
+                "external":true,"id":"proof","command":"unit-fixture-not-executed","args":[],
+                "cwd":cwd,"exit_code":0,"stdout":"SCRIPTED UNIT FIXTURE, NOT AN EXECUTION","stderr":"",
+                "producer":{"name":"unit-fixture","kind":"script"},
+                "source":crate::source_identity::read(&cwd).unwrap()
+            }
+        });
+        // The supplied cache models prior index verification, but the retained
+        // record still has to represent real command evidence, not an empty
+        // stand-in accidentally interpreted as an unqualified legacy capture.
+        command_shape(&command).unwrap();
         let context = vec![ContextRecord::new(
             "cmd",
             "command-evidence",
-            json!({}),
+            command,
             SemanticSequence::new(1),
             Timestamp::from_unix_millis(0),
         )];
@@ -1352,6 +1410,19 @@ mod tests {
             Some(&retained)
         )
         .is_ok());
+        let mut malformed = context.clone();
+        malformed[0].data = json!({});
+        assert!(
+            source_with_verified_commands(
+                &data,
+                "criterion-verdict",
+                &malformed,
+                Path::new("/unused"),
+                Some(&retained)
+            )
+            .is_err(),
+            "cache membership cannot make an empty legacy record passing proof"
+        );
         let mut no_reason = data.clone();
         no_reason.as_object_mut().unwrap().remove("reason");
         assert!(
@@ -1405,6 +1476,7 @@ mod tests {
             Path::new("/unused"),
             "validation-review",
             "fixture-1",
+            &BTreeSet::new(),
         )
         .unwrap_err()
         .contains("wrong gate, stage, or config"));
@@ -1419,6 +1491,7 @@ mod tests {
             Path::new("/unused"),
             "validation-review",
             "fixture-1",
+            &BTreeSet::new(),
         )
         .unwrap_err()
         .contains("wrong gate, stage, or config"));

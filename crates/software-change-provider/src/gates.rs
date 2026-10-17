@@ -1715,16 +1715,7 @@ fn intake_data<'a>(
 }
 
 fn challenge_assessment_identity(data: &Value) -> Option<String> {
-    if let Some(id) = data.get("assessment_id").filter(|id| !id.is_null()) {
-        return Some(format!("assessment:{id}"));
-    }
-    let exchange = data.get("external_review")?;
-    let request = exchange.get("request")?;
-    let original = exchange.get("original")?;
-    Some(format!(
-        "exchange:{:x}",
-        Sha256::digest(serde_json::to_vec(&(request, original)).ok()?)
-    ))
+    crate::evidence::challenge_assessment_identity(data)
 }
 
 fn retain_challenges_after_clearance(

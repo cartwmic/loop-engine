@@ -8,6 +8,7 @@ mod capture;
 mod checkpoint;
 mod config;
 mod criterion;
+mod currency;
 mod evidence;
 // Retain task-routing ledger projections for external-driver policy consumers.
 #[allow(dead_code)]

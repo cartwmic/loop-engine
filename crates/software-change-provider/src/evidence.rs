@@ -98,6 +98,13 @@ pub(crate) enum EvidenceDiagnostic {
     Independence {
         required: u64,
         distinct_present: usize,
+        /// Passes that were present but excluded from the count, with the
+        /// rule and why. Empty unless a review group excluded something.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        excluded: Vec<ExcludedPass>,
+        /// Distinct authors whose pass did count, for group axes only.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        counted: Vec<AuthorIdentity>,
     },
     AssessmentMissing {
         group: String,
@@ -113,6 +120,17 @@ pub(crate) enum EvidenceDiagnostic {
         expected: Vec<AuthorIdentity>,
         actual: Vec<AuthorIdentity>,
     },
+}
+
+/// A present pass that did not count toward an axis, with the rule that
+/// excluded it. Reported instead of a bare "zero judgments present".
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct ExcludedPass {
+    pub(crate) rule: String,
+    pub(crate) author: AuthorIdentity,
+    pub(crate) assessment_id: Option<String>,
+    pub(crate) axis: String,
+    pub(crate) reason: String,
 }
 
 impl EvidenceDiagnostic {
@@ -178,6 +196,19 @@ pub(crate) struct EvidenceEvaluation {
     /// then guarantees any attributable malformed marks have been cleared.
     #[serde(skip)]
     pub(crate) classification_review_ids: BTreeSet<String>,
+    /// The rows that counted toward a configured stage/axis, each tagged
+    /// fresh or carried with its original author, group, assessment identity
+    /// and source record. Read-only provenance for packet construction.
+    #[serde(skip)]
+    pub(crate) rows: Vec<EffectiveRow>,
+}
+
+/// One counted judgment and where it came from.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EffectiveRow {
+    pub(crate) stage: String,
+    pub(crate) axis: String,
+    pub(crate) evidence: ConformingEvidence,
 }
 
 impl EvidenceEvaluation {
@@ -204,7 +235,7 @@ impl EvidenceEvaluation {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ConformingEvidence {
     pub(crate) source_id: String,
     pub(crate) gate: String,
@@ -219,6 +250,15 @@ pub(crate) struct ConformingEvidence {
     pub(crate) config_version: String,
     pub(crate) group: Option<String>,
     pub(crate) assessment_id: Option<String>,
+    /// True when this judgment reached the current revision through an
+    /// explicit evidence-applicability record; the original fields are kept.
+    pub(crate) carried: bool,
+    /// The evidence-applicability record that carried it, when carried.
+    pub(crate) applicability_id: Option<String>,
+    /// Set when a carried judgment cites a criterion but the earlier intent bytes
+    /// are not retained, so currency could not be verified. It stays
+    /// driver-attested; this note is visible but never refuses.
+    pub(crate) currency_note: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -546,6 +586,8 @@ pub(crate) fn evaluate_evidence_with_dispositions(
                 axis_diagnostics.push(EvidenceDiagnostic::Independence {
                     required: policy.required_authors(),
                     distinct_present: distinct_present.len(),
+                    excluded: Vec::new(),
+                    counted: Vec::new(),
                 });
             }
             diagnostics.push(AxisDiagnostic {
@@ -589,6 +631,7 @@ pub(crate) fn evaluate_evidence_with_dispositions(
         inert_records,
         satisfied_by_disposition,
         classification_review_ids: BTreeSet::new(),
+        rows: Vec::new(),
     }
 }
 
@@ -658,6 +701,7 @@ pub(crate) fn evaluate_staged_evidence_excluding(
     let mut latest: BTreeMap<(String, String, String, AuthorIdentity), ConformingEvidence> =
         BTreeMap::new();
     let mut classification_review_ids = BTreeSet::new();
+    let mut rows: Vec<EffectiveRow> = Vec::new();
     let mut inert_records = Vec::new();
     let mut global_malformed = Vec::new();
     let mut global_unverified = Vec::new();
@@ -885,6 +929,8 @@ pub(crate) fn evaluate_staged_evidence_excluding(
             }
             let raw_satisfied_count = satisfied_authors.len();
             let mut stage_authors = present_authors.clone();
+            let mut exclusions: Vec<ExcludedPass> = Vec::new();
+            let mut group_axis_with_peers = false;
             if let Some(group) = policy.group() {
                 if config_version
                     .rsplit_once('-')
@@ -910,58 +956,158 @@ pub(crate) fn evaluate_staged_evidence_excluding(
                     .filter(|axis| axis.group() == Some(group))
                     .collect();
                 if members.len() > 1 {
-                    for author in &present_authors {
-                        let peers = members
-                            .iter()
-                            .filter_map(|member| {
-                                latest
-                                    .get(&(
-                                        stage.clone(),
-                                        member.id().to_owned(),
-                                        current_revision.to_owned(),
-                                        author.clone(),
-                                    ))
-                                    .filter(|peer| {
-                                        peer.config_version == config_version
-                                            && peer.group.as_deref() == Some(group)
-                                    })
+                    group_axis_with_peers = true;
+                    let member_row = |member: &str, author: &AuthorIdentity| {
+                        latest
+                            .get(&(
+                                stage.clone(),
+                                member.to_owned(),
+                                current_revision.to_owned(),
+                                author.clone(),
+                            ))
+                            .filter(|peer| {
+                                peer.config_version == config_version
+                                    && peer.group.as_deref() == Some(group)
                             })
-                            .collect::<Vec<_>>();
-                        if peers.len() == members.len() {
-                            let ids = peers
+                    };
+                    // A group whose counted evidence includes a carried row is
+                    // judged per axis; a group with none is judged as before.
+                    let mixed = members.iter().any(|member| {
+                        latest
+                            .iter()
+                            .any(|((row_stage, row_axis, revision, _), row)| {
+                                row_stage == stage
+                                    && row_axis == member.id()
+                                    && revision == current_revision
+                                    && row.carried
+                                    && row.config_version == config_version
+                                    && row.group.as_deref() == Some(group)
+                            })
+                    });
+                    if mixed {
+                        // Carried rows keep their original author and
+                        // assessment. The fresh rows of any one author must
+                        // still share one assessment.
+                        for author in present_authors.clone() {
+                            let Some(own) = member_row(axis, &author) else {
+                                continue;
+                            };
+                            if own.carried {
+                                continue;
+                            }
+                            let fresh: Vec<_> = members
                                 .iter()
-                                .filter_map(|peer| peer.assessment_id.clone())
+                                .filter_map(|member| member_row(member.id(), &author))
+                                .filter(|row| !row.carried)
+                                .collect();
+                            let ids = fresh
+                                .iter()
+                                .filter_map(|row| row.assessment_id.clone())
                                 .collect::<BTreeSet<_>>();
-                            if peers.iter().any(|peer| peer.assessment_id.is_none()) {
-                                assessment_causes.push(EvidenceDiagnostic::AssessmentMissing {
-                                    group: group.to_owned(),
-                                    author: author.clone(),
-                                });
-                            } else if ids.len() > 1 {
-                                assessment_causes.push(
-                                    EvidenceDiagnostic::AssessmentInconsistent {
+                            let missing = fresh.iter().any(|row| row.assessment_id.is_none());
+                            if missing || ids.len() > 1 {
+                                if missing {
+                                    assessment_causes.push(EvidenceDiagnostic::AssessmentMissing {
                                         group: group.to_owned(),
                                         author: author.clone(),
-                                        assessment_ids: ids.into_iter().collect(),
-                                    },
-                                );
+                                    });
+                                } else {
+                                    assessment_causes.push(
+                                        EvidenceDiagnostic::AssessmentInconsistent {
+                                            group: group.to_owned(),
+                                            author: author.clone(),
+                                            assessment_ids: ids.iter().cloned().collect(),
+                                        },
+                                    );
+                                }
+                                satisfied_authors.remove(&author);
+                                present_authors.remove(&author);
                             }
                         }
+                    } else {
+                        for author in &present_authors {
+                            let peers = members
+                                .iter()
+                                .filter_map(|member| member_row(member.id(), author))
+                                .collect::<Vec<_>>();
+                            if peers.len() == members.len() {
+                                let ids = peers
+                                    .iter()
+                                    .filter_map(|peer| peer.assessment_id.clone())
+                                    .collect::<BTreeSet<_>>();
+                                if peers.iter().any(|peer| peer.assessment_id.is_none()) {
+                                    assessment_causes.push(EvidenceDiagnostic::AssessmentMissing {
+                                        group: group.to_owned(),
+                                        author: author.clone(),
+                                    });
+                                } else if ids.len() > 1 {
+                                    assessment_causes.push(
+                                        EvidenceDiagnostic::AssessmentInconsistent {
+                                            group: group.to_owned(),
+                                            author: author.clone(),
+                                            assessment_ids: ids.into_iter().collect(),
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                        let complete = |author: &AuthorIdentity| {
+                            group_assessment_matches(
+                                &latest,
+                                stage,
+                                axis,
+                                policy,
+                                axes,
+                                current_revision,
+                                config_version,
+                                author,
+                            )
+                        };
+                        for author in satisfied_authors.iter().filter(|author| !complete(author)) {
+                            let absent: Vec<_> = members
+                                .iter()
+                                .filter(|member| member_row(member.id(), author).is_none())
+                                .map(|member| member.id().to_owned())
+                                .collect();
+                            exclusions.push(ExcludedPass {
+                                rule: if absent.is_empty() {
+                                    "review-group-assessment".to_owned()
+                                } else {
+                                    "review-group-complete".to_owned()
+                                },
+                                author: author.clone(),
+                                assessment_id: member_row(axis, author)
+                                    .and_then(|row| row.assessment_id.clone()),
+                                axis: axis.clone(),
+                                reason: if absent.is_empty() {
+                                    format!(
+                                        "group `{group}` counts an author only when every axis of the group is judged under one assessment, and this author's assessments differ or are missing"
+                                    )
+                                } else {
+                                    format!(
+                                        "group `{group}` counts an author only when that author judged every axis of the group under one assessment; this author has no counted judgment for {}",
+                                        absent.join(", ")
+                                    )
+                                },
+                            });
+                        }
+                        satisfied_authors.retain(&complete);
+                        present_authors.retain(complete);
                     }
-                    let complete = |author: &AuthorIdentity| {
-                        group_assessment_matches(
-                            &latest,
-                            stage,
-                            axis,
-                            policy,
-                            axes,
-                            current_revision,
-                            config_version,
-                            author,
-                        )
-                    };
-                    satisfied_authors.retain(&complete);
-                    present_authors.retain(complete);
+                }
+            }
+            for author in &satisfied_authors {
+                if let Some(record) = latest.get(&(
+                    stage.clone(),
+                    axis.clone(),
+                    current_revision.to_owned(),
+                    author.clone(),
+                )) {
+                    rows.push(EffectiveRow {
+                        stage: stage.clone(),
+                        axis: axis.clone(),
+                        evidence: record.clone(),
+                    });
                 }
             }
             current_authors.insert(key.clone(), stage_authors);
@@ -1002,6 +1148,12 @@ pub(crate) fn evaluate_staged_evidence_excluding(
                     axis_diagnostics.push(EvidenceDiagnostic::Independence {
                         required: policy.required_authors(),
                         distinct_present: satisfied_authors.len(),
+                        excluded: exclusions,
+                        counted: if group_axis_with_peers {
+                            satisfied_authors.iter().cloned().collect()
+                        } else {
+                            Vec::new()
+                        },
                     });
                 }
                 diagnostics.push(AxisDiagnostic {
@@ -1096,6 +1248,7 @@ pub(crate) fn evaluate_staged_evidence_excluding(
         inert_records,
         satisfied_by_disposition,
         classification_review_ids,
+        rows,
     }
 }
 
@@ -1554,6 +1707,9 @@ pub(crate) fn parse_conforming_with_context(
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .map(str::to_owned),
+        carried: false,
+        applicability_id: None,
+        currency_note: None,
     })
 }
 
@@ -1684,6 +1840,25 @@ fn parse_applicable_evidence_at_with_stage(
     // this current target. It is not a semantic inference by the provider.
     evidence.source_id = source.id.as_str().to_owned();
     evidence.subject_revision = current_revision.to_owned();
+    evidence.carried = true;
+    evidence.applicability_id = Some(applicability_record.id.as_str().to_owned());
+    // Evidence about a criterion is current only while that criterion's text is.
+    match crate::currency::changed_cited_criteria(
+        evidence.grounds.as_ref(),
+        source,
+        context,
+        artifact_root,
+    ) {
+        Ok(changed) if changed.is_empty() => {}
+        Ok(changed) => {
+            return Err(EvidenceParseError::Unverified(vec![format!(
+                "stale carry: carried judgment `{}` cites criterion {} whose text changed since it was written; obtain a fresh judgment on the changed criteria",
+                source.id,
+                changed.join(", ")
+            )]))
+        }
+        Err(reason) => evidence.currency_note = Some(reason),
+    }
     Ok(evidence)
 }
 
@@ -3186,6 +3361,215 @@ fn parse_author(value: Option<&Value>, reasons: &mut Vec<String>) -> Option<Auth
     }
 }
 
+impl AuthorIdentity {
+    fn label(&self) -> String {
+        format!("{} ({})", self.name, self.kind)
+    }
+}
+
+impl EvidenceDiagnostic {
+    /// One plain sentence for this cause. Commission quotes it so a driver sees
+    /// the same cause the checked gate reports in its details.
+    pub(crate) fn describe(&self) -> String {
+        match self {
+            Self::Missing { required } => {
+                format!("no counted judgment is present (floor {required})")
+            }
+            Self::Failed {
+                findings,
+                source,
+                author,
+                ..
+            } => format!(
+                "unresolved failing judgment `{source}` by {}: {findings}",
+                author.label()
+            ),
+            Self::Malformed { reasons } => format!("malformed evidence: {}", reasons.join("; ")),
+            Self::Stale {
+                evidence_revision,
+                current_revision,
+            } => format!("evidence is for revision {evidence_revision}, not {current_revision}"),
+            Self::StaleConfig {
+                evidence_version,
+                run_version,
+            } => format!("evidence is for config {evidence_version}, not {run_version}"),
+            Self::Unverified { reason } => format!("unverified: {reason}"),
+            Self::Independence {
+                required,
+                distinct_present,
+                excluded,
+                ..
+            } => {
+                let mut text =
+                    format!("{distinct_present} of {required} required distinct authors count");
+                for pass in excluded {
+                    text.push_str(&format!(
+                        "; excluded (rule {}): {} on {}{}: {}",
+                        pass.rule,
+                        pass.author.label(),
+                        pass.axis,
+                        pass.assessment_id
+                            .as_deref()
+                            .map(|id| format!(" under assessment {id}"))
+                            .unwrap_or_default(),
+                        pass.reason
+                    ));
+                }
+                text
+            }
+            Self::AssessmentMissing { group, author } => format!(
+                "{} has a judgment in group `{group}` without an assessment identity",
+                author.label()
+            ),
+            Self::AssessmentInconsistent {
+                group,
+                author,
+                assessment_ids,
+            } => format!(
+                "{} judged group `{group}` under different assessments: {}",
+                author.label(),
+                assessment_ids.join(", ")
+            ),
+            Self::MixedAuthors {
+                expected_stage,
+                expected,
+                actual,
+            } => format!(
+                "the {expected_stage} stage names {} but this stage names {}",
+                expected
+                    .iter()
+                    .map(AuthorIdentity::label)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                actual
+                    .iter()
+                    .map(AuthorIdentity::label)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+}
+
+/// Stable identity of the assessment a challenge record came from: its explicit
+/// assessment ID, else a digest of the retained request/original exchange.
+/// A raw re-append of the same assessment keeps the identity it first had.
+#[allow(dead_code)]
+pub(crate) fn challenge_assessment_identity(data: &Value) -> Option<String> {
+    if let Some(id) = data.get("assessment_id").filter(|id| !id.is_null()) {
+        return Some(format!("assessment:{id}"));
+    }
+    let exchange = data.get("external_review")?;
+    let request = exchange.get("request")?;
+    let original = exchange.get("original")?;
+    Some(format!(
+        "exchange:{:x}",
+        Sha256::digest(serde_json::to_vec(&(request, original)).ok()?)
+    ))
+}
+
+/// A review gate's evidence and finding ledger, evaluated over a recorded
+/// history exactly as the checked event evaluates them. Read-only.
+#[allow(dead_code)] // Consumed by commission in the library, not by the binary copy.
+pub(crate) struct GateResolution {
+    pub(crate) evidence: EvidenceEvaluation,
+    pub(crate) ledger: crate::finding_ledger::FindingLedgerEvaluation,
+}
+
+#[allow(dead_code)]
+impl GateResolution {
+    /// True when the gate's own evidence and ledger checks would pass.
+    pub(crate) fn is_eligible(&self) -> bool {
+        self.evidence.is_satisfied() && self.ledger.is_satisfied() && self.unresolved().is_empty()
+    }
+
+    /// Accepted findings that still block, by finding ID.
+    pub(crate) fn unresolved(&self) -> Vec<String> {
+        self.ledger
+            .current_snapshot()
+            .map(|snapshot| {
+                snapshot
+                    .accepted_unresolved()
+                    .map(|finding| finding.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Specific causes in the gate's own vocabulary: the evidence categories,
+    /// plus the finding ledger. Empty when eligible.
+    pub(crate) fn causes(&self) -> Vec<(String, String)> {
+        let mut causes = Vec::new();
+        if !self.ledger.is_satisfied() {
+            causes.push((
+                "finding_ledger".to_owned(),
+                format!(
+                    "the finding ledger is not usable: {}",
+                    self.ledger.details_value()
+                ),
+            ));
+        }
+        for id in self.unresolved() {
+            causes.push((
+                "unresolved_finding".to_owned(),
+                format!("accepted finding `{id}` is not yet resolved"),
+            ));
+        }
+        for axis in self.evidence.diagnostics() {
+            for diagnostic in &axis.diagnostics {
+                causes.push((
+                    diagnostic.category().to_owned(),
+                    format!(
+                        "axis `{}` ({} stage): {}",
+                        axis.axis,
+                        axis.review_stage,
+                        diagnostic.describe()
+                    ),
+                ));
+            }
+        }
+        causes
+    }
+}
+
+/// Evaluate `gate` over `context` for the current `revision` of `subject`
+/// with the same effective policy, finding ledger and staged evidence reader
+/// the checked event uses.
+#[allow(dead_code)]
+pub(crate) fn resolve_gate(
+    initial_input: &Value,
+    context: &[ContextRecord],
+    gate: &str,
+    subject: &str,
+    revision: &str,
+    subject_author: &AuthorIdentity,
+) -> Result<GateResolution, String> {
+    let counts = software_change_provider::admission::effective_policy(initial_input, context);
+    let config =
+        crate::config::parse_initial_input(&counts.effective).map_err(|error| error.to_string())?;
+    let stages = config
+        .staged_axes_for_gate(gate)
+        .filter(|axes| !axes.is_empty())
+        .ok_or_else(|| format!("gate `{gate}` has no staged review axes"))?;
+    let ledger =
+        crate::finding_ledger::evaluate_finding_ledger(context, gate, subject, revision, &config);
+    let evidence = evaluate_staged_evidence_excluding(
+        context,
+        gate,
+        subject,
+        revision,
+        subject_author,
+        config.config_version(),
+        stages,
+        config.axis_namespace(),
+        config.artifact_root(),
+        ledger.current_snapshot(),
+        config.contract_version() >= 3,
+        &BTreeSet::new(),
+    );
+    Ok(GateResolution { evidence, ledger })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3570,6 +3954,8 @@ mod tests {
                 vec![EvidenceDiagnostic::Independence {
                     required: 1,
                     distinct_present: 0,
+                    excluded: Vec::new(),
+                    counted: Vec::new(),
                 }]
             );
         }
@@ -3579,6 +3965,523 @@ mod tests {
             evaluate_judgment(judgment).is_satisfied(),
             "{config_version}"
         );
+    }
+
+    // ---- AC-6 / AC-7: carried and fresh judgments combine within one group ----
+
+    const GROUP_AXES: [&str; 8] = [
+        "axis-1", "axis-2", "axis-3", "axis-4", "axis-5", "axis-6", "axis-7", "axis-8",
+    ];
+
+    fn group_config(floors: &[(&str, u64)]) -> crate::config::ValidatedConfig {
+        let entries: Vec<_> = GROUP_AXES
+            .iter()
+            .map(|axis| {
+                let floor = floors
+                    .iter()
+                    .find(|(id, _)| id == axis)
+                    .map_or(1, |(_, floor)| *floor);
+                json!({"id": axis, "description": axis, "review_stage": "aggregate",
+                       "required_authors": floor, "group": "group-g"})
+            })
+            .collect();
+        parse_initial_input(&json!({
+            "contract_version": 3,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+            "config_version": "group-test-16",
+            "review_policies": {GATE: entries},
+            "artifact_schemas": {SUBJECT: metadata_schema()}
+        }))
+        .expect("group config valid")
+    }
+
+    fn group_row(
+        index: u64,
+        axis: &str,
+        who: &str,
+        revision: &str,
+        assessment: &str,
+    ) -> ContextRecord {
+        let mut data = evidence(
+            GATE,
+            axis,
+            "pass",
+            "",
+            &author(who, "agent"),
+            SUBJECT,
+            revision,
+            "group-test-16",
+        );
+        data["review_stage"] = json!("aggregate");
+        data["group"] = json!("group-g");
+        data["assessment_id"] = json!(assessment);
+        context_record(index, data)
+    }
+
+    fn carry_of(index: u64, origin: &ContextRecord, revision: &str) -> ContextRecord {
+        ContextRecord::new(
+            format!("carry-{index}"),
+            EVIDENCE_APPLICABILITY_KIND,
+            json!({"origin":{"kind":"context-record","id":origin.id.as_str()},
+                   "target":{"subject":SUBJECT,"revision":revision},
+                   "attesting_driver":{"name":"driver","kind":"human"},
+                   "reason":"the unchanged part of the subject"}),
+            SemanticSequence::new(index),
+            Timestamp::from_unix_millis(index as i64),
+        )
+    }
+
+    /// Prior revision "1": `carried` axes judged by `old_author`. Then revision
+    /// "2": those axes carried, and `fresh` (axis, author, assessment) judged anew.
+    fn mixed_history(
+        carried: &[&str],
+        old_author: &str,
+        fresh: &[(&str, &str, &str)],
+    ) -> Vec<ContextRecord> {
+        let mut records = Vec::new();
+        let mut originals = Vec::new();
+        for axis in carried {
+            let row = group_row(
+                records.len() as u64 + 1,
+                axis,
+                old_author,
+                "1",
+                "old-return",
+            );
+            originals.push(row.clone());
+            records.push(row);
+        }
+        for original in &originals {
+            let index = records.len() as u64 + 1;
+            records.push(carry_of(index, original, "2"));
+        }
+        for (axis, who, assessment) in fresh {
+            let index = records.len() as u64 + 1;
+            records.push(group_row(index, axis, who, "2", assessment));
+        }
+        records
+    }
+
+    fn group_eval(
+        config: &crate::config::ValidatedConfig,
+        records: &[ContextRecord],
+    ) -> EvidenceEvaluation {
+        evaluate_staged_evidence_with_dispositions(
+            records,
+            GATE,
+            SUBJECT,
+            "2",
+            &author("writer", "human"),
+            "group-test-16",
+            config.staged_axes_for_gate(GATE).unwrap(),
+            config.axis_namespace(),
+            None,
+            None,
+            true,
+        )
+    }
+
+    #[test]
+    fn carried_and_fresh_judgments_cover_one_group_at_floor_one() {
+        let config = group_config(&[]);
+        // (a) six axes carried from one author, two freshly passed by another.
+        let records = mixed_history(
+            &GROUP_AXES[..6],
+            "old-reviewer",
+            &[
+                ("axis-7", "new-reviewer", "new-return"),
+                ("axis-8", "new-reviewer", "new-return"),
+            ],
+        );
+        let result = group_eval(&config, &records);
+        assert!(result.is_satisfied(), "{:?}", result.details_value());
+        assert_eq!(result.rows.len(), 8);
+        let carried: Vec<_> = result.rows.iter().filter(|r| r.evidence.carried).collect();
+        assert_eq!(carried.len(), 6);
+        assert!(carried
+            .iter()
+            .all(|row| row.evidence.author.name() == "old-reviewer"
+                && row.evidence.assessment_id.as_deref() == Some("old-return")
+                && row.evidence.applicability_id.is_some()
+                && row.evidence.source_id.starts_with("context-")));
+        assert!(result
+            .rows
+            .iter()
+            .filter(|r| !r.evidence.carried)
+            .all(|row| row.evidence.author.name() == "new-reviewer"
+                && row.evidence.assessment_id.as_deref() == Some("new-return")));
+
+        // (b) three carried, five fresh, all by the same reviewer name under a new assessment.
+        let fresh: Vec<_> = GROUP_AXES[3..]
+            .iter()
+            .map(|axis| (*axis, "same-reviewer", "second-return"))
+            .collect();
+        let result = group_eval(
+            &config,
+            &mixed_history(&GROUP_AXES[..3], "same-reviewer", &fresh),
+        );
+        assert!(result.is_satisfied(), "{:?}", result.details_value());
+
+        // Six carried plus two fresh axes from two different authors.
+        let records = mixed_history(
+            &GROUP_AXES[..6],
+            "old-reviewer",
+            &[
+                ("axis-7", "first-new", "r1"),
+                ("axis-8", "second-new", "r2"),
+            ],
+        );
+        assert!(group_eval(&config, &records).is_satisfied());
+    }
+
+    #[test]
+    fn mixed_group_still_enforces_floor_coverage_and_fresh_assessment() {
+        // (c) a floor-2 axis with one distinct author is refused, naming the axis and floor.
+        let config = group_config(&[("axis-7", 2)]);
+        let records = mixed_history(
+            &GROUP_AXES[..6],
+            "old-reviewer",
+            &[
+                ("axis-7", "new-reviewer", "new-return"),
+                ("axis-8", "new-reviewer", "new-return"),
+            ],
+        );
+        let result = group_eval(&config, &records);
+        assert!(!result.is_satisfied());
+        let diagnostic = result
+            .diagnostics()
+            .iter()
+            .find(|entry| entry.axis == "axis-7")
+            .expect("axis-7 refused");
+        assert!(matches!(
+            diagnostic.diagnostics.last(),
+            Some(EvidenceDiagnostic::Independence {
+                required: 2,
+                distinct_present: 1,
+                ..
+            })
+        ));
+        // A second distinct author on that axis clears it.
+        let mut cleared = records.clone();
+        let index = cleared.len() as u64 + 1;
+        cleared.push(group_row(
+            index,
+            "axis-7",
+            "second-new",
+            "2",
+            "other-return",
+        ));
+        assert!(group_eval(&config, &cleared).is_satisfied());
+
+        // (d) an axis with no carried or fresh pass is refused.
+        let config = group_config(&[]);
+        let records = mixed_history(
+            &GROUP_AXES[..6],
+            "old-reviewer",
+            &[("axis-7", "new-reviewer", "new-return")],
+        );
+        let result = group_eval(&config, &records);
+        assert!(!result.is_satisfied());
+        let diagnostic = result
+            .diagnostics()
+            .iter()
+            .find(|entry| entry.axis == "axis-8")
+            .expect("axis-8 refused");
+        assert!(diagnostic.has_category("missing"));
+
+        // Fresh judgments of one author must share one assessment, even in a mixed group.
+        let records = mixed_history(
+            &GROUP_AXES[..6],
+            "old-reviewer",
+            &[
+                ("axis-7", "new-reviewer", "r1"),
+                ("axis-8", "new-reviewer", "r2"),
+            ],
+        );
+        let result = group_eval(&config, &records);
+        assert!(!result.is_satisfied());
+        assert!(has_category(&result, "assessment_inconsistent"));
+        // The cause names the group, the author and both assessments; it is not
+        // reported as a shortage of judgments.
+        assert!(!has_category(&result, "independence"));
+        assert!(result
+            .diagnostics()
+            .iter()
+            .any(|entry| entry.axis == "axis-8"
+                && entry.diagnostics.iter().any(|d| matches!(d,
+                EvidenceDiagnostic::AssessmentInconsistent { group, author, assessment_ids }
+                    if group == "group-g" && author.name() == "new-reviewer"
+                        && assessment_ids == &vec!["r1".to_owned(), "r2".to_owned()]))));
+    }
+
+    #[test]
+    fn fresh_only_split_across_authors_is_refused_with_the_excluding_rule() {
+        let config = group_config(&[]);
+        let fresh: Vec<_> = GROUP_AXES
+            .iter()
+            .enumerate()
+            .map(|(i, axis)| {
+                (
+                    *axis,
+                    if i < 4 { "first" } else { "second" },
+                    if i < 4 { "r1" } else { "r2" },
+                )
+            })
+            .collect();
+        let result = group_eval(&config, &mixed_history(&[], "unused", &fresh));
+        assert!(!result.is_satisfied());
+        let excluded: Vec<_> = result
+            .diagnostics()
+            .iter()
+            .flat_map(|entry| &entry.diagnostics)
+            .filter_map(|d| match d {
+                EvidenceDiagnostic::Independence { excluded, .. } => Some(excluded),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        // Every present pass says why it did not count, with rule, author, assessment and axis.
+        assert_eq!(excluded.len(), 8);
+        assert!(excluded
+            .iter()
+            .all(|pass| pass.rule == "review-group-complete"
+                && pass.assessment_id.is_some()
+                && pass.reason.contains("judged every axis")));
+        assert!(excluded
+            .iter()
+            .any(|pass| pass.author.name() == "first" && pass.axis == "axis-1"));
+        assert!(excluded
+            .iter()
+            .any(|pass| pass.author.name() == "second" && pass.axis == "axis-8"));
+
+        // One author covering every axis under one assessment still clears, as before.
+        let all: Vec<_> = GROUP_AXES
+            .iter()
+            .map(|axis| (*axis, "solo", "one"))
+            .collect();
+        assert!(group_eval(&config, &mixed_history(&[], "unused", &all)).is_satisfied());
+    }
+
+    // ---- AC-12: carried evidence about a criterion is current only while its text is ----
+
+    #[test]
+    fn carry_survives_revision_only_edit_and_is_stale_when_a_cited_criterion_changes() {
+        let config = parse_initial_input(&json!({
+            "contract_version": 3,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+            "config_version": "currency-test-16",
+            "review_policies": {GATE: [{"id": "axis", "description": "axis", "review_stage": "aggregate"}]},
+            "artifact_schemas": {SUBJECT: metadata_schema()}
+        }))
+        .unwrap();
+        let intent = |revision: &str, second: &str| {
+            serde_json::to_string_pretty(&json!({
+                "revision": revision,
+                "acceptance": [
+                    {"id": "AC-1", "statement": "first"},
+                    {"id": "AC-2", "statement": second}
+                ]
+            }))
+            .unwrap()
+        };
+        let dir = std::env::temp_dir().join(format!(
+            "software-change-carry-currency-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let mut original = evidence(
+            GATE,
+            "axis",
+            "pass",
+            "",
+            &author("reviewer", "agent"),
+            SUBJECT,
+            "1",
+            "currency-test-16",
+        );
+        original["review_stage"] = json!("aggregate");
+        original["review_contract_version"] = json!(3);
+        original["grounds"] = json!({"reason": "checked the second criterion",
+            "evidence": [{"locator": "intent.json#/acceptance/1"}]});
+        let correction = ContextRecord::new(
+            "correction",
+            "intent-correction",
+            json!({"prior_intent": {"revision": "1", "json_bytes": intent("1", "second")}}),
+            SemanticSequence::new(2),
+            Timestamp::from_unix_millis(2),
+        );
+        let records = vec![
+            context_record(1, original),
+            correction,
+            carry_of(3, &context_record(1, json!({})), "2"),
+        ];
+        let evaluate_at = |text: String| {
+            fs::write(dir.join("intent.json"), text).unwrap();
+            evaluate_staged_evidence_with_dispositions(
+                &records,
+                GATE,
+                SUBJECT,
+                "2",
+                &author("writer", "human"),
+                "currency-test-16",
+                config.staged_axes_for_gate(GATE).unwrap(),
+                config.axis_namespace(),
+                Some(&json!(dir)),
+                None,
+                true,
+            )
+        };
+        // Only the revision field changed: the carry still counts, and says it is carried.
+        let kept = evaluate_at(intent("2", "second"));
+        assert!(kept.is_satisfied(), "{:?}", kept.details_value());
+        assert!(kept.rows.iter().all(|row| row.evidence.carried));
+        // The cited criterion's text changed: refused as stale, naming the criterion.
+        let stale = evaluate_at(intent("2", "second, stricter"));
+        assert!(!stale.is_satisfied());
+        let text = stale.details_value().to_string();
+        assert!(
+            text.contains("stale carry") && text.contains("AC-2"),
+            "{text}"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn resolve_gate_answers_like_the_gate_and_names_the_cause() {
+        let entries: Vec<_> = GROUP_AXES
+            .iter()
+            .map(|axis| {
+                json!({"id": axis, "description": axis, "review_stage": "aggregate",
+                               "group": "group-g"})
+            })
+            .collect();
+        let input = json!({
+            "contract_version": 3,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+            "config_version": "group-test-16",
+            "review_policies": {GATE: entries},
+            "artifact_schemas": {SUBJECT: metadata_schema()}
+        });
+        let ledger = ContextRecord::new(
+            "ledger",
+            "finding-ledger",
+            json!({"schema_version":"1","gate":GATE,"subject":SUBJECT,"subject_revision":"2",
+                   "author":{"name":"driver","kind":"agent"},"findings":[]}),
+            SemanticSequence::new(100),
+            Timestamp::from_unix_millis(100),
+        );
+        let owner = author("writer", "human");
+        // Eligible: six carried axes plus two fresh axes from another author.
+        let mut records = mixed_history(
+            &GROUP_AXES[..6],
+            "old-reviewer",
+            &[
+                ("axis-7", "new-reviewer", "new-return"),
+                ("axis-8", "new-reviewer", "new-return"),
+            ],
+        );
+        records.push(ledger.clone());
+        let resolved = resolve_gate(&input, &records, GATE, SUBJECT, "2", &owner).unwrap();
+        assert!(resolved.is_eligible(), "{:?}", resolved.causes());
+        assert!(resolved.causes().is_empty());
+        assert_eq!(
+            resolved
+                .evidence
+                .rows
+                .iter()
+                .filter(|r| r.evidence.carried)
+                .count(),
+            6
+        );
+
+        // Refused: one axis has nothing. The cause is named, not a generic shortage.
+        let mut records = mixed_history(
+            &GROUP_AXES[..6],
+            "old-reviewer",
+            &[("axis-7", "new-reviewer", "new-return")],
+        );
+        records.push(ledger);
+        let resolved = resolve_gate(&input, &records, GATE, SUBJECT, "2", &owner).unwrap();
+        assert!(!resolved.is_eligible());
+        let causes = resolved.causes();
+        assert!(
+            causes
+                .iter()
+                .any(|(category, text)| category == "missing" && text.contains("axis-8")),
+            "{causes:?}"
+        );
+
+        // No ledger at all is its own named cause.
+        let records = mixed_history(&GROUP_AXES[..6], "old-reviewer", &[]);
+        let resolved = resolve_gate(&input, &records, GATE, SUBJECT, "2", &owner).unwrap();
+        assert!(resolved
+            .causes()
+            .iter()
+            .any(|(category, _)| category == "finding_ledger"));
+    }
+
+    #[test]
+    fn carry_without_retained_prior_bytes_still_counts_and_says_currency_is_unverified() {
+        let config = parse_initial_input(&json!({
+            "contract_version": 3,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+            "config_version": "currency-test-16",
+            "review_policies": {GATE: [{"id": "axis", "description": "axis", "review_stage": "aggregate"}]},
+            "artifact_schemas": {SUBJECT: metadata_schema()}
+        }))
+        .unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "software-change-carry-nobytes-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("intent.json"),
+            r#"{"revision":"2","acceptance":[{"id":"AC-1","statement":"x"}]}"#,
+        )
+        .unwrap();
+        let mut original = evidence(
+            GATE,
+            "axis",
+            "pass",
+            "",
+            &author("reviewer", "agent"),
+            SUBJECT,
+            "1",
+            "currency-test-16",
+        );
+        original["review_stage"] = json!("aggregate");
+        original["review_contract_version"] = json!(3);
+        original["grounds"] =
+            json!({"reason": "checked", "evidence": [{"locator": "intent.json#/acceptance"}]});
+        let records = vec![
+            context_record(1, original),
+            carry_of(2, &context_record(1, json!({})), "2"),
+        ];
+        let result = evaluate_staged_evidence_with_dispositions(
+            &records,
+            GATE,
+            SUBJECT,
+            "2",
+            &author("writer", "human"),
+            "currency-test-16",
+            config.staged_axes_for_gate(GATE).unwrap(),
+            config.axis_namespace(),
+            Some(&json!(dir)),
+            None,
+            true,
+        );
+        assert!(result.is_satisfied(), "{:?}", result.details_value());
+        let note = result.rows[0].evidence.currency_note.as_deref().unwrap();
+        assert!(
+            note.contains("unable to verify") && note.contains("revision \x601\x60"),
+            "{note}"
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -4052,7 +4955,8 @@ mod tests {
                     diagnostic,
                     EvidenceDiagnostic::Independence {
                         required: 2,
-                        distinct_present: 1
+                        distinct_present: 1,
+                        ..
                     }
                 )
             })
