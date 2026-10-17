@@ -333,9 +333,9 @@ fn resolve(args: &[String]) -> Result<(Value, PathBuf, Value), String> {
     if base["config_version"].as_str().is_some_and(|id| {
         ["minimal", "standard", "high-rigor"]
             .iter()
-            .any(|name| (1..=15).any(|version| id == format!("{name}-{version}")) || id == *name)
+            .any(|name| (1..=16).any(|version| id == format!("{name}-{version}")) || id == *name)
     }) {
-        return Err("historical shipped profile IDs cannot be used for new setup; supported shipped IDs: minimal-16, standard-16, high-rigor-16".into());
+        return Err("historical shipped profile IDs cannot be used for new setup; supported shipped IDs: minimal-17, standard-17, high-rigor-17".into());
     }
     if base["contract_version"] != 4 {
         return Err("profile must use contract_version 4".into());
@@ -459,7 +459,7 @@ mod tests {
         assert!(profile.get("work_slot_bindings").is_none());
         assert!(profile.get("advice_command").is_none());
         assert_eq!(profile["contract_version"], 4);
-        assert_eq!(explain["base"]["id"], "standard-16");
+        assert_eq!(explain["base"]["id"], "standard-17");
     }
     #[test]
     fn refuses_standard_14_for_new_setup() {
@@ -488,7 +488,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         assert_eq!(
             error,
-            "historical shipped profile IDs cannot be used for new setup; supported shipped IDs: minimal-16, standard-16, high-rigor-16"
+            "historical shipped profile IDs cannot be used for new setup; supported shipped IDs: minimal-17, standard-17, high-rigor-17"
         );
     }
     #[test]
@@ -516,7 +516,7 @@ mod tests {
                 .unwrap()
                 .bytes;
             let mut value: Value = serde_json::from_slice(bytes).unwrap();
-            assert_eq!(value["config_version"], format!("{name}-16"));
+            assert_eq!(value["config_version"], format!("{name}-17"));
             value["config_version"] = json!(format!("{name}-15"));
             assert_eq!(
                 format!("{:x}", Sha256::digest(serde_json::to_vec(&value).unwrap())),

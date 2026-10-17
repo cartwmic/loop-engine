@@ -1,0 +1,124 @@
+{
+  "revision": "r15",
+  "author": {
+    "name": "a11-targeted-preparation",
+    "kind": "agent"
+  },
+  "plan_revision": "r15",
+  "coverage": {
+    "commit": "b39ad2594aad48ba0698f22848f2fb64631c9ea9",
+    "documents": [
+      {
+        "path": "fictional-repo/README.md",
+        "revision": "NEW-successor-bytes:c2fb03864106eb2bab324d3dad8a18fd330d0fb56ac633d664dffa344217a082"
+      },
+      {
+        "path": "fictional-repo/provider/README.md",
+        "revision": "NEW-successor-bytes:212766effb1154684b1165429938419ec3410eb6d49e83dd94da01d8e8334a6d"
+      },
+      {
+        "path": "fictional-repo/docs/PRD.md",
+        "revision": "NEW-successor-bytes:8940cfd435726cbe1d5abc9fc66a701ba2d9e1d9af8815de238edd7034e0f3dc"
+      },
+      {
+        "path": "fictional-repo/implementation-evidence/requirement-to-proof.md",
+        "revision": "NEW-successor-bytes:cd1e45de4397913c1a62a0d5addba49c9b41fbfcbb89bbb2ee341422a54dc351"
+      },
+      {
+        "path": "fictional-repo/loop-engine-software-change-provider-prd.md",
+        "revision": "NEW-successor-bytes:c0103e8328c2766cc13046f4b31d2d743f1082fd22a06b3b7807ff7784cee8ae"
+      },
+      {
+        "path": "fictional-repo/loop-engine-software-change-provider-technical-design.md",
+        "revision": "NEW-successor-bytes:3515f1c35bfda30955abc141acb884cec3b7fd8872ea6f222189fa304da57a9c"
+      },
+      {
+        "path": "fictional-repo/loop-engine-software-change-provider-task-packets.md",
+        "revision": "NEW-successor-bytes:6a7ab7a88ed3bdbd3f3e7b50b975d2dcb4741295f05448a9237ff5ee59314473"
+      },
+      {
+        "path": "fictional-repo/scripts/assert-doc-authority.py",
+        "revision": "NEW-successor-bytes:e7fb99420d799329142ed4ba5200ef4eb2c264df2aff71670648a9f12682c997"
+      },
+      {
+        "path": "fictional-repo/scripts/assert-requirement-proof.py",
+        "revision": "NEW-successor-bytes:35ebc42990ff99b1ba0a7c8c9e7dc1cb98df2eb6b79d45cd692aca4efcfb37d5"
+      },
+      {
+        "path": "fictional-repo/scripts/assert_new_current_proof.py",
+        "revision": "NEW-successor-bytes:2e87eab3b2532152444a584cf04918023438b5dbbfd6476cb98167f0f1342688"
+      }
+    ]
+  },
+  "summary": "NEW independent synthetic fixture commit with exact declared baseline and covered source snapshots. Covered bytes/modes equal proved current source checkpoint c03475ab46ba22867852ae1fc5ccd8716dcd48e5870cca3b711395ff7204d808. Genuine NEW CURRENT mechanical proof is supplied separately; capture preceded this commit and is not relabelled as execution at a historical/product commit. Historical proof records retain their original scopes. No semantic judgment or complete workspace test claim.",
+  "changed_surface": [
+    "fictional-repo/Cargo.lock",
+    "fictional-repo/README.md",
+    "fictional-repo/docs/PRD.md",
+    "fictional-repo/implementation-evidence/four-acceptance-proof-map.json",
+    "fictional-repo/implementation-evidence/journey-setup-binding.json",
+    "fictional-repo/implementation-evidence/requirement-to-proof.md",
+    "fictional-repo/implementation-evidence/source-inventory.json",
+    "fictional-repo/implementation-evidence/v6-coverage.json",
+    "fictional-repo/loop-engine-software-change-provider-prd.md",
+    "fictional-repo/loop-engine-software-change-provider-task-packets.md",
+    "fictional-repo/loop-engine-software-change-provider-technical-design.md",
+    "fictional-repo/provider/Cargo.toml",
+    "fictional-repo/provider/README.md",
+    "fictional-repo/provider/src/artifacts.rs",
+    "fictional-repo/provider/src/config.rs",
+    "fictional-repo/provider/src/embedded_data.rs",
+    "fictional-repo/provider/src/evidence.rs",
+    "fictional-repo/provider/src/gates.rs",
+    "fictional-repo/provider/src/lib.rs",
+    "fictional-repo/provider/src/main.rs",
+    "fictional-repo/provider/src/protocol.rs",
+    "fictional-repo/provider/src/schema.rs",
+    "fictional-repo/provider/src/workflow.rs",
+    "fictional-repo/provider/tests/a1.rs",
+    "fictional-repo/provider/tests/a11.rs",
+    "fictional-repo/provider/tests/a12.rs",
+    "fictional-repo/provider/tests/a13.rs",
+    "fictional-repo/provider/tests/a14.rs",
+    "fictional-repo/provider/tests/a15.rs",
+    "fictional-repo/provider/tests/a2.rs",
+    "fictional-repo/provider/tests/a3.rs",
+    "fictional-repo/provider/tests/a5.rs",
+    "fictional-repo/provider/tests/a7.rs",
+    "fictional-repo/provider/tests/a8.rs",
+    "fictional-repo/provider/tests/a9.rs",
+    "fictional-repo/provider/tests/boundary_v6.rs",
+    "fictional-repo/provider/tests/common/mod.rs",
+    "fictional-repo/provider/tests/describe_protocol.rs",
+    "fictional-repo/provider/tests/embedded_data.rs",
+    "fictional-repo/provider/tests/evaluate.rs",
+    "fictional-repo/provider/tests/linked_parent_escape.rs",
+    "fictional-repo/provider/tests/opaque_describe.rs",
+    "fictional-repo/provider/tests/r25.rs",
+    "fictional-repo/provider/tests/shipped_data.rs",
+    "fictional-repo/scripts/assert-doc-authority.py",
+    "fictional-repo/scripts/assert-requirement-proof.py",
+    "fictional-repo/scripts/assert_new_current_proof.py",
+    "fictional-repo/scripts/production-journey.py"
+  ],
+  "validation": [
+    {
+      "proof": "v8 Original548commandjourney, unaffected contained/valid-metadata operator domains; not missing-field correction; actualRootreceipt /tmp/loop-engine-four-runs-20261011/integration/c-fictional-v8-proof-01/receipt.json SHA256 ef598461663c64375a6649f49ba4d3a1fdf3f7dd2f92a67977e2c8a25769fd65"
+    },
+    {
+      "proof": "v9 Original evidence/reference supplements, not current source-byte equality; actualRootreceipt /tmp/loop-engine-four-runs-20261011/integration/c-fictional-v9-proof-01/receipt.json SHA256 0f3e2f63a31752b4eb9b6b219b7bd301a0764ba8610a03f097c5d3733a7201f7"
+    },
+    {
+      "proof": "v10 Original linked-parent repair, current artifact/error code unchanged; actualRootreceipt /tmp/loop-engine-four-runs-20261011/integration/c-fictional-v10-proof-01/receipt.json SHA256 fc0e335d47b5a2175038bb34aaf8f359aae9c9dce514d723711a56fedad63772"
+    },
+    {
+      "proof": "v13 Actualcurrent10reducer controls, fmt/providerClippy/build and6publiccases104commands: missingcfgrefusal/laterrepair, staleeligibility/latest/floors; actualRootreceipt /tmp/loop-engine-four-runs-20261011/integration/c-fictional-v13-proof-01/receipt.json SHA256 612db4ffd7bd85d5fdbaa2b97132bdd446fcf395a1b40ec2cffb9863fa84b328"
+    },
+    {
+      "proof": "v15 Actualcurrentexactmatrix/map/inventory/binding2checks and3negatives; provider unchangedv13; actualRootreceipt /tmp/loop-engine-four-runs-20261011/integration/c-fictional-v15-doc-proof-01/receipt.json SHA256 79280a1a14734069e4c736775dc74ecdaaf2f3fcf1ae6c2331b8f1ee88943281"
+    },
+    {
+      "proof": "NEW CURRENT genuine mechanical proof, actual1022commands/threeprofiles/identity/linked-parent/currentadapter and explicit Parent release; source checkpoint c03475ab46ba22867852ae1fc5ccd8716dcd48e5870cca3b711395ff7204d808; supplied projection header/raw hashes; semantic_review:false; no native rerun at this synthetic commit"
+    }
+  ]
+}

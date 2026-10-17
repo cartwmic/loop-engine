@@ -1,12 +1,10 @@
-NEW CURRENT FICTIONAL SOURCE/PROOF VERSIONv15. Not recovered historicalGit/source/tracking/execution.
-HEAD: repo-state-2026-08-12
-HEAD/coverage isONLY unchanged procedures fixedfictional selector. Actualsourceidentity:08543363740aae2ba7fee053a6f8ff7a7fb113fa8ed09772d4ae520801dc9850
-Originalfailures/judgments immutable; newv13runtime andv15document proofs retain exactexecutionidentity.
+CURRENT SOURCE/EVIDENCE SUPPLEMENT. Retained validation predecessor and original judgments are unchanged in identity.
 {
-  "source_version": "NEWv15",
-  "source_manifest_sha256": "f58ce4df4e8ddd1cd0539ccd641f97551e1a2f149d7abf41fc34a555e41aa852",
-  "source_sha256": "08543363740aae2ba7fee053a6f8ff7a7fb113fa8ed09772d4ae520801dc9850",
-  "actual_source_files": {
+  "kind": "SUPPLIED_CURRENT_SOURCE_CONTEXT_FOR_RETAINED_VALIDATION_PREDICATES",
+  "predecessor_subject": "original implementation-report-good remains selected; not replacement subject",
+  "synthetic_source_commit": "b39ad2594aad48ba0698f22848f2fb64631c9ea9",
+  "source_checkpoint": "c03475ab46ba22867852ae1fc5ccd8716dcd48e5870cca3b711395ff7204d808",
+  "current_companion_files": {
     "Cargo.lock": "50a65df1c7fc27d49f88ebe5d06b09f853c14d4355b48908ce892673edba888d",
     "Cargo.toml": "5bb9121735587f01ae67d050760c8cf8fd7f5ea95ea072057cfe1c353653d1ad",
     "README.md": "c2fb03864106eb2bab324d3dad8a18fd330d0fb56ac633d664dffa344217a082",
@@ -14,10 +12,10 @@ Originalfailures/judgments immutable; newv13runtime andv15document proofs retain
     "implementation-evidence/four-acceptance-proof-map.json": "8b1ff55ae53650e8be98693166f3ea686ff3dbca72d3abe946327e45e8564e50",
     "implementation-evidence/journey-setup-binding.json": "4fba032008c01e9c2c88e36fa17df901e6163f1c0b23add6fc0b3f4a703a88ac",
     "implementation-evidence/requirement-to-proof.md": "cd1e45de4397913c1a62a0d5addba49c9b41fbfcbb89bbb2ee341422a54dc351",
-    "implementation-evidence/source-inventory.json": "705bebe33dabec9a59f24294a9e0d76517f98731ccbe8b6a5d93ebf9ca26178e",
+    "implementation-evidence/source-inventory.json": "6d1ebc0f6f8f86fd82f38a35b8a6f390465ad2301e9d5ce1d2e18245cdd7dd0e",
     "implementation-evidence/v6-coverage.json": "fa4140db15a5de572a8193e2d09ff7495a8a81a8b9b89f79f37478a33837667e",
     "loop-engine-software-change-provider-prd.md": "c0103e8328c2766cc13046f4b31d2d743f1082fd22a06b3b7807ff7784cee8ae",
-    "loop-engine-software-change-provider-task-packets.md": "2f66bddd739bceafe29e82b96ed8f845cfc90e6c483ce4ad3c71f028238613a6",
+    "loop-engine-software-change-provider-task-packets.md": "6a7ab7a88ed3bdbd3f3e7b50b975d2dcb4741295f05448a9237ff5ee59314473",
     "loop-engine-software-change-provider-technical-design.md": "3515f1c35bfda30955abc141acb884cec3b7fd8872ea6f222189fa304da57a9c",
     "provider/Cargo.toml": "579d040bed8fbb4d73f0cf25fc68abc60c681edb562b7989ea00c7caa57ba890",
     "provider/README.md": "212766effb1154684b1165429938419ec3410eb6d49e83dd94da01d8e8334a6d",
@@ -63,140 +61,759 @@ Originalfailures/judgments immutable; newv13runtime andv15document proofs retain
     "provider/tests/shipped_data.rs": "579975d08da961d1916bcc093de32b9d3858e4ae598246462b8d2457d09b741f",
     "provider/tests/snapshots/describe.json": "2361843677d68b90775db42939f6333f16760138bfd36c96a71d5f01a65498e2",
     "scripts/assert-doc-authority.py": "e7fb99420d799329142ed4ba5200ef4eb2c264df2aff71670648a9f12682c997",
-    "scripts/assert-requirement-proof.py": "6c8c7a54618f5bee6be37de30053881acf0df38f0eb49f0525bda727ba09b384",
+    "scripts/assert-requirement-proof.py": "35ebc42990ff99b1ba0a7c8c9e7dc1cb98df2eb6b79d45cd692aca4efcfb37d5",
+    "scripts/assert_new_current_proof.py": "2e87eab3b2532152444a584cf04918023438b5dbbfd6476cb98167f0f1342688",
     "scripts/production-journey.py": "884c33012841eecfe84c5778e02bf9843272df7bf74f273bbceb953ac84e4b15"
   },
-  "proofs": [
-    {
-      "version": "v8",
-      "receipt": "/tmp/loop-engine-four-runs-20261011/integration/c-fictional-v8-proof-01/receipt.json",
-      "receipt_sha256": "ef598461663c64375a6649f49ba4d3a1fdf3f7dd2f92a67977e2c8a25769fd65",
-      "scope": "Original548commandjourney, unaffected contained/valid-metadata operator domains; not missing-field correction",
-      "actual_status": "passed"
+  "new_current_mechanical_proof_projection": {
+    "kind": "GENUINE_CURRENT_MECHANICAL_PROOF_COMPACT_PROJECTION_NOT_SEMANTIC_JUDGMENT",
+    "generation": "new-current-01",
+    "source_checkpoint": "c03475ab46ba22867852ae1fc5ccd8716dcd48e5870cca3b711395ff7204d808",
+    "source_file_hashes": {
+      "Cargo.lock": "50a65df1c7fc27d49f88ebe5d06b09f853c14d4355b48908ce892673edba888d",
+      "Cargo.toml": "5bb9121735587f01ae67d050760c8cf8fd7f5ea95ea072057cfe1c353653d1ad",
+      "README.md": "c2fb03864106eb2bab324d3dad8a18fd330d0fb56ac633d664dffa344217a082",
+      "docs/PRD.md": "8940cfd435726cbe1d5abc9fc66a701ba2d9e1d9af8815de238edd7034e0f3dc",
+      "implementation-evidence/four-acceptance-proof-map.json": "8b1ff55ae53650e8be98693166f3ea686ff3dbca72d3abe946327e45e8564e50",
+      "implementation-evidence/journey-setup-binding.json": "4fba032008c01e9c2c88e36fa17df901e6163f1c0b23add6fc0b3f4a703a88ac",
+      "implementation-evidence/requirement-to-proof.md": "cd1e45de4397913c1a62a0d5addba49c9b41fbfcbb89bbb2ee341422a54dc351",
+      "implementation-evidence/source-inventory.json": "6d1ebc0f6f8f86fd82f38a35b8a6f390465ad2301e9d5ce1d2e18245cdd7dd0e",
+      "implementation-evidence/v6-coverage.json": "fa4140db15a5de572a8193e2d09ff7495a8a81a8b9b89f79f37478a33837667e",
+      "loop-engine-software-change-provider-prd.md": "c0103e8328c2766cc13046f4b31d2d743f1082fd22a06b3b7807ff7784cee8ae",
+      "loop-engine-software-change-provider-task-packets.md": "6a7ab7a88ed3bdbd3f3e7b50b975d2dcb4741295f05448a9237ff5ee59314473",
+      "loop-engine-software-change-provider-technical-design.md": "3515f1c35bfda30955abc141acb884cec3b7fd8872ea6f222189fa304da57a9c",
+      "provider/Cargo.toml": "579d040bed8fbb4d73f0cf25fc68abc60c681edb562b7989ea00c7caa57ba890",
+      "provider/README.md": "212766effb1154684b1165429938419ec3410eb6d49e83dd94da01d8e8334a6d",
+      "provider/data/configs/high-rigor.json": "0d354e3943dd093f84ef086d5b3bc71b97c621c417e54866b9bb9c39aa79b613",
+      "provider/data/configs/minimal.json": "af61a5a1352f2dbab6ac70f0a006a7c8472dabd4c620796848d23ac6614a02b3",
+      "provider/data/configs/standard.json": "0cf065aa9d9ed1e303258e6483b4165148e4eb180ba3d4559a44c88c27349f59",
+      "provider/data/reviewer-protocol.md": "6b17c47b362e69fbefb2eb2311fc5052eeca6de7ccba43163289df0d1e77032c",
+      "provider/data/templates/design.md": "36e89698b8c2618618da09381a6c9dbd016860eb9cf3ea5b3efb9348573319fa",
+      "provider/data/templates/implementation-report.md": "1416f6c071e17dd5db0aca0304d940c733cefafb506c3ce25b39b3e64d4f2b11",
+      "provider/data/templates/intent.md": "ce8be63a5bc609756802fcffdb7b4d92c3f42bd77b577c4d831c09115eb89eb0",
+      "provider/data/templates/task-packet.md": "3060352000d6466de4f0d8116e966f78cca8b22a041a36e3c67a999ab56a6563",
+      "provider/data/templates/validation-report.md": "32b99fdc820665099b2b4d5206f1d09f84d61d7c20346f81946c1e0fc3e29ae5",
+      "provider/src/artifacts.rs": "71dc9569cb273a7195e5492862a182c200210d1a190a122682936872a7faf426",
+      "provider/src/config.rs": "463bcaab3e3895268d7c1796ed0fe5686bd666b2304fb1a487cd512fe0299571",
+      "provider/src/embedded_data.rs": "8056bfee16938a24b51a4a98558bd1c01e73146b187fe028249f94308a96d145",
+      "provider/src/evidence.rs": "9d5c4f5e08403986b910de2e6a12fa3e4f61db94dfed7e7243c3aafbb74be6e9",
+      "provider/src/gates.rs": "debd9f188b10779d552aa1271dd8b49447a40d731cb033e3b9a5fa0b8060c122",
+      "provider/src/lib.rs": "c8dc141c8220cc5219fc19ad0b3a70cd231a9882627394619d6bca6dae54dcc9",
+      "provider/src/main.rs": "e3a7a8b96419bdbc33d3a098d2ddb593207792d8cee30168d2d0b1e974645ff8",
+      "provider/src/protocol.rs": "57932ccd8e69ff4b96fa9937081b520015b872819d0e89cda4b7b454db73ff91",
+      "provider/src/schema.rs": "6f1afd558ddf058b2cb234ccd1e7068964d93dec5df26391ed82e1ffdac40a73",
+      "provider/src/workflow.rs": "a8e03b46422229f8e4107eb58345cd1d3991ccc085e1dbd4cc97a77805e5c513",
+      "provider/tests/a1.rs": "d8a3ebe6abb48c6148f2d0cdc3ec49a4b3e9ca71da8296b67d0d25978388eb7a",
+      "provider/tests/a11.rs": "c5a19a00f68f6ff1b81792f7b4d8f801d09f6f3830473d93fe8dece7119b564f",
+      "provider/tests/a12.rs": "91d085991203d90d2686bf529f01e9e45f7aab1c64f9a1a2d4155795973f80f6",
+      "provider/tests/a13.rs": "35641c111f78fae5337f8be14ffd2d1652c82d71dc2dcd7d551f575cf9597f4a",
+      "provider/tests/a14.rs": "2b99f22c9b578b605f088cb1b4aae7531af357b2a4369e45dfb404878454ead2",
+      "provider/tests/a15.rs": "595fdc4b8a3feef0e9f091d1be921c490b745280aae9865a818c3a5cdeaa742e",
+      "provider/tests/a2.rs": "f3749aeed678b347e745447a3a536f4a7d66e2f0b6ba75e9258f6bb1313c6974",
+      "provider/tests/a3.rs": "e53357501e5839b0e1a34eef82d9d72e42869e7d4cf3d2890f067202d780482a",
+      "provider/tests/a5.rs": "b88c6da1ff7002c4de7ceb1b75f9a79280cdeba5a28f651bb472c0ddcbfb4c2a",
+      "provider/tests/a7.rs": "b0a79e7d5bbffe4801688636d96676df64f502b7dc643cd875732fe6acd00d5a",
+      "provider/tests/a8.rs": "1edc88d17bd4b68f64afb0522736b2737c20c8cb2300407024d349ddd9dabef6",
+      "provider/tests/a9.rs": "9f58a1f571bf1ff66977af3b9f33b3e05fef268565b08452800c602b055b85eb",
+      "provider/tests/boundary_v6.rs": "ce46952e488456854218b7b094edd6424e52ff7471d35a24a3275bc07fa55d76",
+      "provider/tests/common/mod.rs": "61007052c9c606befa371797783819f3be52368a924ad064a02b1af7fd425e1a",
+      "provider/tests/describe_protocol.rs": "15c14e375e6314c1469a3c25ea277e013a79f9a676fddafc25a7430b5fad5866",
+      "provider/tests/embedded_data.rs": "e8ff1b413cff1c210e44cfad5c3115c7218385b1ce323834961309f27e5d6f57",
+      "provider/tests/evaluate.rs": "6c4fa11649344f4a797f900a28fefb54059c4c2541f948df614472427fc8fc4f",
+      "provider/tests/linked_parent_escape.rs": "8ecf70e1def6eace97028ba3c0d7009a6d0140d7a40f098aca382e64bebba4bc",
+      "provider/tests/opaque_describe.rs": "6608df346704874b7b5aa63eb4da35443426cf2cb88aed6014245dd8b4ac763a",
+      "provider/tests/r25.rs": "a39cbfad7e0af549cf90542587749c50a386f25ef5762a02fc427a2b412d213f",
+      "provider/tests/shipped_data.rs": "579975d08da961d1916bcc093de32b9d3858e4ae598246462b8d2457d09b741f",
+      "provider/tests/snapshots/describe.json": "2361843677d68b90775db42939f6333f16760138bfd36c96a71d5f01a65498e2",
+      "scripts/assert-doc-authority.py": "e7fb99420d799329142ed4ba5200ef4eb2c264df2aff71670648a9f12682c997",
+      "scripts/assert-requirement-proof.py": "35ebc42990ff99b1ba0a7c8c9e7dc1cb98df2eb6b79d45cd692aca4efcfb37d5",
+      "scripts/assert_new_current_proof.py": "2e87eab3b2532152444a584cf04918023438b5dbbfd6476cb98167f0f1342688",
+      "scripts/production-journey.py": "884c33012841eecfe84c5778e02bf9843272df7bf74f273bbceb953ac84e4b15"
     },
-    {
-      "version": "v9",
-      "receipt": "/tmp/loop-engine-four-runs-20261011/integration/c-fictional-v9-proof-01/receipt.json",
-      "receipt_sha256": "0f3e2f63a31752b4eb9b6b219b7bd301a0764ba8610a03f097c5d3733a7201f7",
-      "scope": "Original evidence/reference supplements, not current source-byte equality",
-      "actual_status": "passed"
+    "engine_sha256": "e1599f645f93d0b3a8d64403253f74e0d3e956145b80aa791f57cc3f752723bc",
+    "provider_sha256": "82ff9e98f9d2c26b0700950770c899163d37a003c6a318f0698c03b5b9290377",
+    "proof_capture_status": "passed",
+    "semantic_review": false,
+    "synthetic_fixture_identity": {
+      "commit": "b39ad2594aad48ba0698f22848f2fb64631c9ea9",
+      "tree": "c5b82e87d34345eeccb91d08f94d043335987074",
+      "meaning": "New independent fictional fixture commit of exact proved source bytes/modes; not historical/product identity; capture preceded this commit, no claim of reexecution at commit"
     },
-    {
-      "version": "v10",
-      "receipt": "/tmp/loop-engine-four-runs-20261011/integration/c-fictional-v10-proof-01/receipt.json",
-      "receipt_sha256": "fc0e335d47b5a2175038bb34aaf8f359aae9c9dce514d723711a56fedad63772",
-      "scope": "Original linked-parent repair, current artifact/error code unchanged",
-      "actual_status": "passed"
+    "raw_evidence": {
+      "runtime-current.json": {
+        "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/native-current-proof-final-packet-01/runtime-current.json",
+        "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/runtime-current.json",
+        "sha256": "481704de3d78d02216f40d24adbe7c4f4bef7982dfa18ba6f2a281c779a8ba56",
+        "bytes": 917340
+      },
+      "identity-current.json": {
+        "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/native-current-proof-final-packet-01/identity-current.json",
+        "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/identity-current.json",
+        "sha256": "160982c0680fa51577c51b3684bc2d31d56debdeaa8ddd666d556b3dabcba560",
+        "bytes": 4832873
+      },
+      "linked-parent-current.json": {
+        "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/native-current-proof-final-packet-01/linked-parent-current.json",
+        "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/linked-parent-current.json",
+        "sha256": "c54c8e1ac11b9a58c8ecc4c397ddcdf3afd939e30f05197a8578a44dfe75569b",
+        "bytes": 339
+      },
+      "current-binding.json": {
+        "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/native-current-proof-final-packet-01/current-binding.json",
+        "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/current-binding.json",
+        "sha256": "514daff64187f7e9f12b15a7a97854419bcdd8d275dce6fba04b4d13e093d14d",
+        "bytes": 678
+      },
+      "final-accounting.json": {
+        "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/native-current-proof-final-packet-01/final-accounting.json",
+        "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/final-accounting.json",
+        "sha256": "1a0e6883da9ca409f71bc69b35ad24c1b9e620100a252df7e695cedb8f017207",
+        "bytes": 6899436
+      },
+      "explicit-parent-release.json": {
+        "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/final-source-packet-01/parent-outer-capture-02/explicit-parent-release.json",
+        "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/explicit-parent-release.json",
+        "sha256": "8a2b3d839f22a4513e4c9f7e37b306f54edaa9c02338a7612a8fe76f2d1fc04f",
+        "bytes": 3741
+      },
+      "adapter-result.json": {
+        "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/final-source-packet-01/parent-outer-capture-02/adapter-result.json",
+        "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/adapter-result.json",
+        "sha256": "7f115c23d0784ec528485c2ef2971c4ad39fd3e2b20c8dccce1ea6ea08c43885",
+        "bytes": 123
+      },
+      "independent-terminal-verification-and-slot-unassigned.json": {
+        "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/final-source-packet-01/parent-outer-capture-02/independent-terminal-verification-and-slot-unassigned.json",
+        "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/independent-terminal-verification-and-slot-unassigned.json",
+        "sha256": "776c9398a340aaa2e0b11d0f4ef34c8aeb759a670397d45a0a23bc973bf90dcc",
+        "bytes": 1652
+      }
     },
-    {
-      "version": "v13",
-      "receipt": "/tmp/loop-engine-four-runs-20261011/integration/c-fictional-v13-proof-01/receipt.json",
-      "receipt_sha256": "612db4ffd7bd85d5fdbaa2b97132bdd446fcf395a1b40ec2cffb9863fa84b328",
-      "scope": "Actualcurrent10reducer controls, fmt/providerClippy/build and6publiccases104commands: missingcfgrefusal/laterrepair, staleeligibility/latest/floors",
-      "actual_status": "passed"
+    "outer_original_waits": [
+      {
+        "step": "driver",
+        "pid": 57705,
+        "wait": 0,
+        "files_closed": true
+      },
+      {
+        "step": "final_current_adapter",
+        "pid": 59275,
+        "wait": 0,
+        "files_closed": true
+      }
+    ],
+    "actual_inner_commands": 1022,
+    "all_expected_outcomes_and_waits": true,
+    "residual_groups": [],
+    "adapter": {
+      "status": "GENUINE_CURRENT_MECHANICAL_PROOF",
+      "native_proof": true,
+      "semantic_review": false,
+      "commands": 1022
     },
-    {
-      "version": "v15",
-      "receipt": "/tmp/loop-engine-four-runs-20261011/integration/c-fictional-v15-doc-proof-01/receipt.json",
-      "receipt_sha256": "79280a1a14734069e4c736775dc74ecdaaf2f3fcf1ae6c2331b8f1ee88943281",
-      "scope": "Actualcurrentexactmatrix/map/inventory/binding2checks and3negatives; provider unchangedv13",
-      "actual_status": "passed"
-    }
-  ],
-  "actual_public_evidence_cases": [
-    {
-      "case": "valid-control",
-      "mode": "valid",
-      "event_status": "completed",
-      "state_before": "intent-review",
-      "state_after": "intent-adversarial-review",
-      "context_unchanged": true,
-      "same_author_restoration": false,
-      "commands": 14,
-      "evidence": "/private/tmp/loop-engine-four-runs-20261011/integration/c-fictional-v13-proof-01/public/valid-control/observations.json"
+    "explicit_release": "released",
+    "protocol_controls": [
+      "describe-exact",
+      "opaque-describe-exact",
+      "unexpected-envelope-refused",
+      "unknown-operation-refused",
+      "data-dump-exact"
+    ],
+    "journeys": [
+      {
+        "profile": "minimal",
+        "state": "end",
+        "lifecycle": "final",
+        "completion_mode": "completed",
+        "override_count": 0,
+        "config_version": "minimal-6",
+        "transitions": 15,
+        "negative_cases": [
+          {
+            "gate": "validation-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "validation-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "validation-review",
+            "case": "subject-author"
+          }
+        ],
+        "final_show_command": 106,
+        "history_command": 107,
+        "initial_input_sha256": "e4e336704433a9b3ed6178f1f8e23009323769ef50b46e3316ad380642ed041d"
+      },
+      {
+        "profile": "standard",
+        "state": "end",
+        "lifecycle": "final",
+        "completion_mode": "completed",
+        "override_count": 0,
+        "config_version": "standard-7",
+        "transitions": 15,
+        "negative_cases": [
+          {
+            "gate": "intent-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "intent-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "intent-review",
+            "case": "subject-author"
+          },
+          {
+            "gate": "intent-review",
+            "case": "standing-fail-not-outvoted"
+          },
+          {
+            "gate": "intent-adversarial-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "intent-adversarial-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "intent-adversarial-review",
+            "case": "subject-author"
+          },
+          {
+            "gate": "design-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "design-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "design-review",
+            "case": "subject-author"
+          },
+          {
+            "gate": "design-adversarial-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "design-adversarial-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "design-adversarial-review",
+            "case": "subject-author"
+          },
+          {
+            "gate": "validation-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "validation-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "validation-review",
+            "case": "subject-author"
+          },
+          {
+            "gate": "validation-adversarial-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "validation-adversarial-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "validation-adversarial-review",
+            "case": "subject-author"
+          }
+        ],
+        "final_show_command": 371,
+        "history_command": 372,
+        "initial_input_sha256": "7e566a0fe429a3c003b5f44473de9bb5b8887a84cfde49823970ecc7684de9d7"
+      },
+      {
+        "profile": "high-rigor",
+        "state": "end",
+        "lifecycle": "final",
+        "completion_mode": "completed",
+        "override_count": 0,
+        "config_version": "high-rigor-7",
+        "transitions": 15,
+        "negative_cases": [
+          {
+            "gate": "intent-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "intent-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "intent-review",
+            "case": "subject-author"
+          },
+          {
+            "gate": "intent-review",
+            "case": "standing-fail-not-outvoted"
+          },
+          {
+            "gate": "intent-adversarial-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "intent-adversarial-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "intent-adversarial-review",
+            "case": "subject-author"
+          },
+          {
+            "gate": "design-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "design-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "design-review",
+            "case": "subject-author"
+          },
+          {
+            "gate": "design-review",
+            "case": "duplicate-author"
+          },
+          {
+            "gate": "design-adversarial-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "design-adversarial-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "design-adversarial-review",
+            "case": "subject-author"
+          },
+          {
+            "gate": "plan-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "plan-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "plan-review",
+            "case": "subject-author"
+          },
+          {
+            "gate": "plan-adversarial-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "plan-adversarial-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "plan-adversarial-review",
+            "case": "subject-author"
+          },
+          {
+            "gate": "implementation-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "implementation-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "implementation-review",
+            "case": "subject-author"
+          },
+          {
+            "gate": "implementation-adversarial-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "implementation-adversarial-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "implementation-adversarial-review",
+            "case": "subject-author"
+          },
+          {
+            "gate": "validation-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "validation-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "validation-review",
+            "case": "subject-author"
+          },
+          {
+            "gate": "validation-review",
+            "case": "duplicate-author"
+          },
+          {
+            "gate": "validation-adversarial-review",
+            "case": "stale-revision"
+          },
+          {
+            "gate": "validation-adversarial-review",
+            "case": "stale-config"
+          },
+          {
+            "gate": "validation-adversarial-review",
+            "case": "subject-author"
+          }
+        ],
+        "final_show_command": 806,
+        "history_command": 807,
+        "initial_input_sha256": "7891422406ab5f29da8eb9c577c3282b2a8a7ed64255c6c40c132962cd10dde4"
+      }
+    ],
+    "identity_controls": [
+      {
+        "case": "valid-control",
+        "expected": "completed",
+        "event": {
+          "status": "completed",
+          "_command_index": 821
+        },
+        "before_state": "intent-review",
+        "after_state": "intent-adversarial-review",
+        "before_context_sha256": "49bf5c4ee971b45b98edea5205ccd8d43d26bd96df5bfc2fd582647fc7cdc95c",
+        "after_context_sha256": "49bf5c4ee971b45b98edea5205ccd8d43d26bd96df5bfc2fd582647fc7cdc95c",
+        "restoration": null
+      },
+      {
+        "case": "stale-with-sufficient",
+        "expected": "completed",
+        "event": {
+          "status": "completed",
+          "_command_index": 838
+        },
+        "before_state": "intent-review",
+        "after_state": "intent-adversarial-review",
+        "before_context_sha256": "70a826139fcdd5398f81da1bb62eea63db50e24bf3d1ca9216977d4fa94d6a0c",
+        "after_context_sha256": "70a826139fcdd5398f81da1bb62eea63db50e24bf3d1ca9216977d4fa94d6a0c",
+        "restoration": null
+      },
+      {
+        "case": "stale-noncounting",
+        "expected": "rejected",
+        "event": {
+          "status": "rejected",
+          "details": [
+            {
+              "actual": "STALE-profile",
+              "axis": "problem-grounded",
+              "expected": "high-rigor-7",
+              "rule": "stale-config"
+            },
+            {
+              "axis": "problem-grounded",
+              "distinct_authors": 0,
+              "malformed": false,
+              "required_authors": 1,
+              "rule": "axis-incomplete-or-failing",
+              "standing_fails": 0
+            }
+          ],
+          "_command_index": 854
+        },
+        "before_state": "intent-review",
+        "after_state": "intent-review",
+        "before_context_sha256": "f2929202a47b9625cb90c6a8ab04b08a9d000badaea4d5de02d4c96b80a9a43b",
+        "after_context_sha256": "f2929202a47b9625cb90c6a8ab04b08a9d000badaea4d5de02d4c96b80a9a43b",
+        "restoration": {
+          "status": "completed",
+          "_command_index": 859
+        }
+      },
+      {
+        "case": "stale-malformed-order-unchanged",
+        "expected": "completed",
+        "event": {
+          "status": "completed",
+          "_command_index": 875
+        },
+        "before_state": "intent-review",
+        "after_state": "intent-adversarial-review",
+        "before_context_sha256": "6e7220b3539a94e3e99a80abe5c36f426c93e04bed8ee8a11c1c526c622807cf",
+        "after_context_sha256": "6e7220b3539a94e3e99a80abe5c36f426c93e04bed8ee8a11c1c526c622807cf",
+        "restoration": null
+      },
+      {
+        "case": "standing-fail-and-own-restoration",
+        "expected": "rejected",
+        "event": {
+          "status": "rejected",
+          "details": [
+            {
+              "axis": "problem-grounded",
+              "distinct_authors": 2,
+              "malformed": false,
+              "required_authors": 1,
+              "rule": "axis-incomplete-or-failing",
+              "standing_fails": 1
+            }
+          ],
+          "_command_index": 892
+        },
+        "before_state": "intent-review",
+        "after_state": "intent-review",
+        "before_context_sha256": "4eeb47fe40393beb407873670230b8a8da70d937f5a8da7dbcef65936ad61849",
+        "after_context_sha256": "4eeb47fe40393beb407873670230b8a8da70d937f5a8da7dbcef65936ad61849",
+        "restoration": {
+          "status": "completed",
+          "_command_index": 897
+        }
+      },
+      {
+        "case": "identity-subject_revision-missing",
+        "expected": "rejected",
+        "event": {
+          "status": "rejected",
+          "details": [
+            {
+              "axis": "problem-grounded",
+              "record": "identity-35",
+              "rule": "malformed-current-evidence"
+            },
+            {
+              "axis": "problem-grounded",
+              "distinct_authors": 0,
+              "malformed": true,
+              "required_authors": 1,
+              "rule": "axis-incomplete-or-failing",
+              "standing_fails": 0
+            }
+          ],
+          "_command_index": 912
+        },
+        "before_state": "intent-review",
+        "after_state": "intent-review",
+        "before_context_sha256": "0b64d7aa121994da22ff078bb6ae6b2e429b07871d4d13fa564fc0ed3aa073d5",
+        "after_context_sha256": "0b64d7aa121994da22ff078bb6ae6b2e429b07871d4d13fa564fc0ed3aa073d5",
+        "restoration": {
+          "status": "completed",
+          "_command_index": 917
+        }
+      },
+      {
+        "case": "identity-subject_revision-non-string",
+        "expected": "rejected",
+        "event": {
+          "status": "rejected",
+          "details": [
+            {
+              "axis": "problem-grounded",
+              "record": "identity-41",
+              "rule": "malformed-current-evidence"
+            },
+            {
+              "axis": "problem-grounded",
+              "distinct_authors": 0,
+              "malformed": true,
+              "required_authors": 1,
+              "rule": "axis-incomplete-or-failing",
+              "standing_fails": 0
+            }
+          ],
+          "_command_index": 932
+        },
+        "before_state": "intent-review",
+        "after_state": "intent-review",
+        "before_context_sha256": "faafbec2901fe70ccbfbadf4571bc6bfc6b4627112994e81b80dcd5332d5392a",
+        "after_context_sha256": "faafbec2901fe70ccbfbadf4571bc6bfc6b4627112994e81b80dcd5332d5392a",
+        "restoration": {
+          "status": "completed",
+          "_command_index": 937
+        }
+      },
+      {
+        "case": "identity-subject_revision-blank",
+        "expected": "rejected",
+        "event": {
+          "status": "rejected",
+          "details": [
+            {
+              "axis": "problem-grounded",
+              "record": "identity-47",
+              "rule": "malformed-current-evidence"
+            },
+            {
+              "axis": "problem-grounded",
+              "distinct_authors": 0,
+              "malformed": true,
+              "required_authors": 1,
+              "rule": "axis-incomplete-or-failing",
+              "standing_fails": 0
+            }
+          ],
+          "_command_index": 952
+        },
+        "before_state": "intent-review",
+        "after_state": "intent-review",
+        "before_context_sha256": "fa1a86ba392bfe884336204bbc029dc68e3c95b2ebaf10346ddc7ec69ccef983",
+        "after_context_sha256": "fa1a86ba392bfe884336204bbc029dc68e3c95b2ebaf10346ddc7ec69ccef983",
+        "restoration": {
+          "status": "completed",
+          "_command_index": 957
+        }
+      },
+      {
+        "case": "identity-config_version-missing",
+        "expected": "rejected",
+        "event": {
+          "status": "rejected",
+          "details": [
+            {
+              "axis": "problem-grounded",
+              "record": "identity-53",
+              "rule": "malformed-current-evidence"
+            },
+            {
+              "axis": "problem-grounded",
+              "distinct_authors": 0,
+              "malformed": true,
+              "required_authors": 1,
+              "rule": "axis-incomplete-or-failing",
+              "standing_fails": 0
+            }
+          ],
+          "_command_index": 972
+        },
+        "before_state": "intent-review",
+        "after_state": "intent-review",
+        "before_context_sha256": "4c43196be03d03de836a0bad38543775f79b0b3b42aaca3bccd5ff46cd25c6b0",
+        "after_context_sha256": "4c43196be03d03de836a0bad38543775f79b0b3b42aaca3bccd5ff46cd25c6b0",
+        "restoration": {
+          "status": "completed",
+          "_command_index": 977
+        }
+      },
+      {
+        "case": "identity-config_version-non-string",
+        "expected": "rejected",
+        "event": {
+          "status": "rejected",
+          "details": [
+            {
+              "axis": "problem-grounded",
+              "record": "identity-59",
+              "rule": "malformed-current-evidence"
+            },
+            {
+              "axis": "problem-grounded",
+              "distinct_authors": 0,
+              "malformed": true,
+              "required_authors": 1,
+              "rule": "axis-incomplete-or-failing",
+              "standing_fails": 0
+            }
+          ],
+          "_command_index": 992
+        },
+        "before_state": "intent-review",
+        "after_state": "intent-review",
+        "before_context_sha256": "0ca7f78afeb9746a360ea30fcacf179b9ab9988d847c1bab0b9de04721cfe2b5",
+        "after_context_sha256": "0ca7f78afeb9746a360ea30fcacf179b9ab9988d847c1bab0b9de04721cfe2b5",
+        "restoration": {
+          "status": "completed",
+          "_command_index": 997
+        }
+      },
+      {
+        "case": "identity-config_version-blank",
+        "expected": "rejected",
+        "event": {
+          "status": "rejected",
+          "details": [
+            {
+              "axis": "problem-grounded",
+              "record": "identity-65",
+              "rule": "malformed-current-evidence"
+            },
+            {
+              "axis": "problem-grounded",
+              "distinct_authors": 0,
+              "malformed": true,
+              "required_authors": 1,
+              "rule": "axis-incomplete-or-failing",
+              "standing_fails": 0
+            }
+          ],
+          "_command_index": 1012
+        },
+        "before_state": "intent-review",
+        "after_state": "intent-review",
+        "before_context_sha256": "d61dd1bb71ad4c517ca83d2ded046074fb02704e299a5a1569999ccae222b0e2",
+        "after_context_sha256": "d61dd1bb71ad4c517ca83d2ded046074fb02704e299a5a1569999ccae222b0e2",
+        "restoration": {
+          "status": "completed",
+          "_command_index": 1017
+        }
+      }
+    ],
+    "linked_parent_controls": [
+      {
+        "case": "missing",
+        "command_index": 1019
+      },
+      {
+        "case": "mismatch",
+        "command_index": 1020
+      },
+      {
+        "case": "escape",
+        "command_index": 1021
+      },
+      {
+        "case": "valid",
+        "command_index": 1022
+      }
+    ],
+    "scope_limits": [
+      "Actual offline fixture-provider build, protocol/data-dump, three workflow profiles, identity/linked-parent and final adapter only.",
+      "No full workspace test/Clippy/fmt execution or semantic review inferred.",
+      "Healthy-source proof does not establish the defective implementation's behavior or repair seeded defective validation/narrative claims.",
+      "Historical v8/v9/v10/v13/v15 executions retain their original identities/scope; not relabelled.",
+      "Projection is supplied evidence and raw-byte binding, not an independent semantic verdict.",
+      "Use actual raw receipts as ROOT_* checker arguments, not this projection; raw copies are byte-identical and retain original absolute capture locators.",
+      "The selected supplied source snapshot excludes Git metadata and raw proof files; both are external evidence, not extra files in the sealed source inventory."
+    ],
+    "actual_executed_harness": {
+      "fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py": {
+        "sha256": "07be2039c1a1329e45b0155b254cc54f76061c7b68a5cd2344964722f0e7e82c",
+        "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/new-current-proof.py",
+        "role": "Actual native execution harness, external to59-file proved fixture source, not production-journey.py reexecution"
+      },
+      "fictional-repo/implementation-evidence/current-proof-harness/proof_support.py": {
+        "sha256": "6e3772dfa5209ec56262685d7216bc78e2c4e54a5c10274989f18a681e177298",
+        "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/proof_support.py",
+        "role": "Actual native execution harness, external to59-file proved fixture source, not production-journey.py reexecution"
+      }
     },
-    {
-      "case": "missing-config-restoration",
-      "mode": "missing",
-      "event_status": "rejected",
-      "state_before": "intent-review",
-      "state_after": "intent-review",
-      "context_unchanged": true,
-      "same_author_restoration": true,
-      "commands": 22,
-      "evidence": "/private/tmp/loop-engine-four-runs-20261011/integration/c-fictional-v13-proof-01/public/missing-config-restoration/observations.json"
-    },
-    {
-      "case": "stale-with-sufficient",
-      "mode": "stale-sufficient",
-      "event_status": "completed",
-      "state_before": "intent-review",
-      "state_after": "intent-adversarial-review",
-      "context_unchanged": true,
-      "same_author_restoration": false,
-      "commands": 16,
-      "evidence": "/private/tmp/loop-engine-four-runs-20261011/integration/c-fictional-v13-proof-01/public/stale-with-sufficient/observations.json"
-    },
-    {
-      "case": "stale-noncounting",
-      "mode": "stale-only",
-      "event_status": "rejected",
-      "state_before": "intent-review",
-      "state_after": "intent-review",
-      "context_unchanged": true,
-      "same_author_restoration": false,
-      "commands": 14,
-      "evidence": "/private/tmp/loop-engine-four-runs-20261011/integration/c-fictional-v13-proof-01/public/stale-noncounting/observations.json"
-    },
-    {
-      "case": "stale-malformed-order-unchanged",
-      "mode": "stale-malformed",
-      "event_status": "completed",
-      "state_before": "intent-review",
-      "state_after": "intent-adversarial-review",
-      "context_unchanged": true,
-      "same_author_restoration": false,
-      "commands": 16,
-      "evidence": "/private/tmp/loop-engine-four-runs-20261011/integration/c-fictional-v13-proof-01/public/stale-malformed-order-unchanged/observations.json"
-    },
-    {
-      "case": "standing-fail-and-own-restoration",
-      "mode": "standing",
-      "event_status": "rejected",
-      "state_before": "intent-review",
-      "state_after": "intent-review",
-      "context_unchanged": true,
-      "same_author_restoration": true,
-      "commands": 22,
-      "evidence": "/private/tmp/loop-engine-four-runs-20261011/integration/c-fictional-v13-proof-01/public/standing-fail-and-own-restoration/observations.json"
-    }
-  ],
-  "whole_current_workspace_execution": false
+    "historical_production_journey_body_scope": "Supplied production-journey.py remains original source/assertion reference. Actual new current proof executed new-current-proof.py, not the historical reuse/bootstrap runner. No claim that old missing reuse files were restored."
+  },
+  "historical_selected_repository_state_sha256": "7aa9ab3e462b94008e225ed81ccf9bb042d230f5a0a037134cf1036293df29c8",
+  "historical_selected_repository_state_preserved": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/append-only-identity-reporting-correction-01/candidate-source-v17/crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/repo-state-2026-08-12.txt",
+  "limits": "Current source/evidence is separate supplement. No restoration of lost original source/ancestry; no repaired defective subject or relabelled historical execution."
 }
-
-proof: provider/src/evidence.rs::latest_same_author_verdict_supersession
-proof: provider/src/evidence.rs::n_two_requires_distinct_non_subject_authors_and_rejects_standing_fail
-proof: provider/src/evidence.rs::stale_config_does_not_satisfy_and_names_both_versions
-proof: provider/src/evidence.rs::stale_revision_does_not_satisfy_and_names_both_revisions
-proof: provider/src/evidence.rs::subject_author_identity_requires_exact_name_and_kind_pair
-proof: provider/src/schema.rs::instance_collects_object_rules_and_nested_properties
-proof: provider/tests/a15.rs::terminal_complete_current_obligations_allow
-proof: provider/tests/a2.rs::absent_artifact_is_schema_deny
-proof: provider/tests/a2.rs::unparseable_artifact_is_schema_deny
-proof: provider/tests/a9.rs::terminal_deficit_refused
-proof: provider/tests/boundary_v6.rs::artifact_escape_is_provider_error_not_allow_or_generic_deny
-proof: provider/tests/boundary_v6.rs::every_reference_tuple_is_routed_without_inventing_an_allowlist
-proof: provider/tests/boundary_v6.rs::revision_link_mismatch_names_both_actual_artifacts
-proof: provider/tests/describe_protocol.rs::describe_matches_existing_component_byte_for_byte
-proof: provider/tests/evaluate.rs::schema_denial_projects_all_applicable_rules_before_evidence
-proof: provider/tests/opaque_describe.rs::optional_opaque_initial_input_is_ignored_without_allowing_other_fields
-proof: provider/tests/shipped_data.rs::all_profiles_pass_production_config_validation_and_have_exact_subjects
-proof: scripts/production-journey.py::main
-proof: provider/src/evidence.rs::missing_config_after_sufficient_coverage_blocks_until_conforming_repair
-proof: provider/src/evidence.rs::missing_or_malformed_required_identity_cannot_masquerade_as_stale
-proof: provider/src/evidence.rs::conforming_wrong_string_version_keeps_coverage_and_never_counts
-proof: provider/src/evidence.rs::stale_string_keeps_original_author_verdict_filter_order
-
 === NEW COVERED FILE: fictional-repo/Cargo.lock; sha256:50a65df1c7fc27d49f88ebe5d06b09f853c14d4355b48908ce892673edba888d ===
 # This file is automatically @generated by Cargo.
 # It is not intended for manual editing.
@@ -543,9 +1160,9 @@ are not relabeled as executions. Documentation semantic adequacy is a separate
 driver/reviewer judgment; authority/link mechanics alone do not establish it.
 
 
-=== NEW COVERED FILE: fictional-repo/implementation-evidence/source-inventory.json; sha256:705bebe33dabec9a59f24294a9e0d76517f98731ccbe8b6a5d93ebf9ca26178e ===
+=== NEW COVERED FILE: fictional-repo/implementation-evidence/source-inventory.json; sha256:6d1ebc0f6f8f86fd82f38a35b8a6f390465ad2301e9d5ce1d2e18245cdd7dd0e ===
 {
-  "kind": "NEWv14 exact current proof/source inventory, doc-only successor of genuinely provedv13",
+  "kind": "NEW targeted preparation inventory; original runtime proof identities unchanged; task-packet document synchronization",
   "proof_inventory": [
     "provider/src/evidence.rs::latest_same_author_verdict_supersession",
     "provider/src/evidence.rs::n_two_requires_distinct_non_subject_authors_and_rejects_standing_fail",
@@ -580,7 +1197,7 @@ driver/reviewer judgment; authority/link mechanics alone do not establish it.
     "implementation-evidence/requirement-to-proof.md": "cd1e45de4397913c1a62a0d5addba49c9b41fbfcbb89bbb2ee341422a54dc351",
     "implementation-evidence/v6-coverage.json": "fa4140db15a5de572a8193e2d09ff7495a8a81a8b9b89f79f37478a33837667e",
     "loop-engine-software-change-provider-prd.md": "c0103e8328c2766cc13046f4b31d2d743f1082fd22a06b3b7807ff7784cee8ae",
-    "loop-engine-software-change-provider-task-packets.md": "2f66bddd739bceafe29e82b96ed8f845cfc90e6c483ce4ad3c71f028238613a6",
+    "loop-engine-software-change-provider-task-packets.md": "6a7ab7a88ed3bdbd3f3e7b50b975d2dcb4741295f05448a9237ff5ee59314473",
     "loop-engine-software-change-provider-technical-design.md": "3515f1c35bfda30955abc141acb884cec3b7fd8872ea6f222189fa304da57a9c",
     "provider/Cargo.toml": "579d040bed8fbb4d73f0cf25fc68abc60c681edb562b7989ea00c7caa57ba890",
     "provider/README.md": "212766effb1154684b1165429938419ec3410eb6d49e83dd94da01d8e8334a6d",
@@ -626,7 +1243,8 @@ driver/reviewer judgment; authority/link mechanics alone do not establish it.
     "provider/tests/shipped_data.rs": "579975d08da961d1916bcc093de32b9d3858e4ae598246462b8d2457d09b741f",
     "provider/tests/snapshots/describe.json": "2361843677d68b90775db42939f6333f16760138bfd36c96a71d5f01a65498e2",
     "scripts/assert-doc-authority.py": "e7fb99420d799329142ed4ba5200ef4eb2c264df2aff71670648a9f12682c997",
-    "scripts/assert-requirement-proof.py": "6c8c7a54618f5bee6be37de30053881acf0df38f0eb49f0525bda727ba09b384",
+    "scripts/assert-requirement-proof.py": "35ebc42990ff99b1ba0a7c8c9e7dc1cb98df2eb6b79d45cd692aca4efcfb37d5",
+    "scripts/assert_new_current_proof.py": "2e87eab3b2532152444a584cf04918023438b5dbbfd6476cb98167f0f1342688",
     "scripts/production-journey.py": "884c33012841eecfe84c5778e02bf9843272df7bf74f273bbceb953ac84e4b15"
   },
   "self_excluded": "source-inventory.json; sealed version manifest binds it"
@@ -789,7 +1407,7 @@ The provider runs one fresh local process per request and returns allow, deny, o
 The seven implementation packets, executable tests, and [requirement-to-proof matrix](implementation-evidence/requirement-to-proof.md) document how this bounded change is proved without presenting synthetic evidence as semantic review quality.
 
 
-=== NEW COVERED FILE: fictional-repo/loop-engine-software-change-provider-task-packets.md; sha256:2f66bddd739bceafe29e82b96ed8f845cfc90e6c483ce4ad3c71f028238613a6 ===
+=== NEW COVERED FILE: fictional-repo/loop-engine-software-change-provider-task-packets.md; sha256:6a7ab7a88ed3bdbd3f3e7b50b975d2dcb4741295f05448a9237ff5ee59314473 ===
 # Fictional software-change provider task packets (supplemental)
 
 These packets support authoritative [authoritative product PRD](docs/PRD.md). They define seven worker-sized tasks with explicit dependencies, noncolliding deliverables, validation, and handoffs. [supplemental change PRD](loop-engine-software-change-provider-prd.md) is supplemental and non-authoritative.
@@ -821,7 +1439,7 @@ The shared schema language permits only object, array, and string types; object 
 
 ## Packets
 
-The exact owner-approved plan remains retained unchanged. Its illustrative proof names, argumentless checker command, and imaginary driver setup are historical labels, not claims of current executions. Actual functions and four acceptance mappings are in [requirement-to-proof.md](implementation-evidence/requirement-to-proof.md); actual installed-engine/provider/catalog/fixture substitution is in [journey-setup-binding.json](implementation-evidence/journey-setup-binding.json). Current proof checking requires `python3 scripts/assert-requirement-proof.py --receipt ROOT_RUNTIME_RECEIPT --binding ROOT_PROOF_BINDING --repair-proof ROOT_REPAIR_RECEIPT`. The public phases execute in `scripts/production-journey.py::main`; do not invoke nonexistent scenario helpers or treat a zero-test name filter as proof.
+The exact owner-approved plan remains retained unchanged. Its illustrative proof names, argumentless checker command, and imaginary driver setup are historical labels, not claims of current executions. Actual functions and four acceptance mappings are in [requirement-to-proof.md](implementation-evidence/requirement-to-proof.md); actual installed-engine/provider/catalog/fixture substitution is in [journey-setup-binding.json](implementation-evidence/journey-setup-binding.json). Current proof checking requires `python3 scripts/assert-requirement-proof.py --receipt ROOT_RUNTIME_RECEIPT --binding ROOT_PROOF_BINDING --repair-proof ROOT_REPAIR_RECEIPT --evidence-proof ROOT_EVIDENCE_RECEIPT`. The public phases execute in `scripts/production-journey.py::main`; do not invoke nonexistent scenario helpers or treat a zero-test name filter as proof.
 
 1. **protocol-and-config-contract** — Own `fictional-repo/provider/Cargo.toml`, `fictional-repo/provider/src/main.rs`, `fictional-repo/provider/src/protocol.rs`, `fictional-repo/provider/src/config.rs`, `fictional-repo/provider/tests/describe_protocol.rs`, and `fictional-repo/provider/tests/snapshots/describe.json`. The existing committed pre-change snapshot is a source of truth, not a new worker-authored topology. Define strict one-request/one-result dispatch. Describe returns exactly top-level `id`, `initial_state`, `states`, `transitions`, and `work_slots`; states contain exactly `id`, `title`, `instructions`, and `final`; transitions contain exactly `source`, `event`, `target`, and `kind`; work slots contain `id`, `state`, and `event`, plus only the optional unchanged `stdin_context_kinds` field already present in the independently pre-existing snapshot. Validate malformed requests, unknown operations and fields, and preserve snapshot bytes. Handoff: downstream tasks consume observable request/response and profile-selection behavior without depending on private type organization.
 2. **schema-and-artifact-validation** — Own existing task-boundary files `fictional-repo/provider/src/schema.rs`, `fictional-repo/provider/src/artifacts.rs`, `fictional-repo/provider/tests/evaluate.rs`, and `fictional-repo/provider/tests/a3.rs`. Consume shared schema decision `design.json#/decisions/1`; emit deterministic exhaustive structural violations and revision-link diagnostics. Validate absent, unparseable, mismatched, and escaping artifacts, using the actual `evaluate.rs::schema_denial_projects_all_applicable_rules_before_evidence` for checker-to-denial projection; the approved plan\'s earlier illustrative selector is retained only as a historical label. Handoff: versioned-reference-data validates canonical data after this checker; checked-transition-evaluator consumes observable structural results before evidence satisfaction without depending on private type names.
@@ -829,7 +1447,7 @@ The exact owner-approved plan remains retained unchanged. Its illustrative proof
 4. **versioned-reference-data** — Depends on `protocol-and-config-contract` and `schema-and-artifact-validation`. Own integration of existing canonical files `fictional-repo/provider/data/configs/minimal.json`, `fictional-repo/provider/data/configs/standard.json`, `fictional-repo/provider/data/configs/high-rigor.json`, `fictional-repo/provider/data/templates/intent.md`, `fictional-repo/provider/data/templates/design.md`, `fictional-repo/provider/data/templates/task-packet.md`, `fictional-repo/provider/data/templates/implementation-report.md`, `fictional-repo/provider/data/templates/validation-report.md`, and `fictional-repo/provider/data/reviewer-protocol.md`, plus exact-byte parity tests `fictional-repo/provider/tests/embedded_data.rs` and `fictional-repo/provider/tests/shipped_data.rs`. Preserve exact bytes and semantics except integration needed to expose them; private lookup-module organization remains replaceable and no prompt, axis, or schema authoring is allowed. Consume `design.json#/elements/3` and `design.json#/decisions/1`. Validate `embedded_data::embedded_manifest_exactly_matches_on_disk_data_tree`, `shipped_data::all_profiles_pass_production_config_validation_and_have_exact_subjects`, `shipped_data::profiles_carry_exact_shipped_profile_mapping_and_author_counts`, `shipped_data::every_axis_prompt_references_subject_template_schema_and_all_antipedantry_guards`, and `schema::tests::allowlist_pin_matches_normative_subset` after schema checker handoff. Handoff: checked-transition-evaluator and acceptance-proof consume validated profile projections.
 5. **checked-transition-evaluator** — Own `fictional-repo/provider/src/gates.rs`, `fictional-repo/provider/src/workflow.rs`, `fictional-repo/provider/tests/a1.rs`, `fictional-repo/provider/tests/a9.rs`, and `fictional-repo/provider/tests/a15.rs`. Consume the protocol, schema, evidence, and versioned-data handoffs plus the existing committed pre-change `fictional-repo/provider/tests/snapshots/describe.json`; preserve structural-denial precedence, project outcome taxonomy, every state/transition in that exact snapshot, and terminal obligations. Nearest `revise` returns each parent/adversarial review to its draft. Owning routes preserve `revise-intent` from later phases, `revise-design` from plan and later, `revise-plan` from implementation and validation, and `revise-implementation` from validation; no partial tuple allowlist replaces the snapshot. Handoff: acceptance-proof consumes response and workflow behavior.
 6. **acceptance-proof** — Own `fictional-repo/provider/tests/a2.rs`, `fictional-repo/provider/tests/a7.rs`, `fictional-repo/provider/tests/a8.rs`, `fictional-repo/provider/tests/a11.rs`, `fictional-repo/provider/tests/a12.rs`, `fictional-repo/provider/tests/a13.rs`, `fictional-repo/provider/tests/a14.rs`, `fictional-repo/provider/tests/r25.rs`, `scripts/production-journey.py`, `fictional-repo/implementation-evidence/requirement-to-proof.md`, and `fictional-repo/scripts/assert-requirement-proof.py`. Map each exact acceptance requirement to actual named executable proof. The four approved scenario labels denote the frozen-input, structural-denial, deficient-evidence/repair and terminal phases now executed in `scripts/production-journey.py::main`; they are not standalone helper names. Current process controls include `evaluate.rs::schema_denial_projects_all_applicable_rules_before_evidence`, evidence reducer unit tests, and actual terminal tests listed in the matrix. The current Root setup drives all three unchanged canonical profiles from start to final using the pinned installed engine, retained NEW provider, explicit owned catalog/config and engine-allocated artifact roots. The old preadvanced terminal fixture and imaginary paths remain historical setup labels; the actual mapping is documented separately. Each evidence-denial case starts with an explicit otherwise-valid coverage deficit, rejects deficient evidence without a transition, and repairs only the missing contribution. The checker validates exact mapping and this public-journey contract against supplied repository-state proof inventory; keep supplied review records bounded to mechanics and semantic review external.
-7. **authoritative-doc-integration** — Own `fictional-repo/README.md`, `fictional-repo/provider/README.md`, `fictional-repo/docs/PRD.md`, `fictional-repo/loop-engine-software-change-provider-prd.md`, `fictional-repo/loop-engine-software-change-provider-technical-design.md`, `fictional-repo/loop-engine-software-change-provider-task-packets.md`, and `fictional-repo/scripts/assert-doc-authority.py`. Link root/provider/docs/proof surfaces, make `fictional-repo/docs/PRD.md` authoritative, mark the change PRD supplemental/non-authoritative, and run `python3 scripts/assert-requirement-proof.py --receipt ROOT_RUNTIME_RECEIPT --binding ROOT_PROOF_BINDING --repair-proof ROOT_REPAIR_RECEIPT` plus `python3 scripts/assert-doc-authority.py` to check proof mapping, authority, exact acceptance coverage, and relative Markdown links. Validation report / docs-integrated review consumes final document, checker, and proof paths.
+7. **authoritative-doc-integration** — Own `fictional-repo/README.md`, `fictional-repo/provider/README.md`, `fictional-repo/docs/PRD.md`, `fictional-repo/loop-engine-software-change-provider-prd.md`, `fictional-repo/loop-engine-software-change-provider-technical-design.md`, `fictional-repo/loop-engine-software-change-provider-task-packets.md`, and `fictional-repo/scripts/assert-doc-authority.py`. Link root/provider/docs/proof surfaces, make `fictional-repo/docs/PRD.md` authoritative, mark the change PRD supplemental/non-authoritative, and run `python3 scripts/assert-requirement-proof.py --receipt ROOT_RUNTIME_RECEIPT --binding ROOT_PROOF_BINDING --repair-proof ROOT_REPAIR_RECEIPT --evidence-proof ROOT_EVIDENCE_RECEIPT` plus `python3 scripts/assert-doc-authority.py` to check proof mapping, authority, exact acceptance coverage, and relative Markdown links. Validation report / docs-integrated review consumes final document, checker, and proof paths.
 
 Acceptance-proof depends on checked-transition-evaluator and versioned-reference-data. Versioned-reference-data is downstream of schema-and-artifact-validation, while evidence-evaluator remains parallel with schema-and-artifact-validation. No task owns another task's mutable file; broad workspace validation may execute downstream tests after handoff.
 
@@ -6205,7 +6823,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-=== NEW COVERED FILE: fictional-repo/scripts/assert-requirement-proof.py; sha256:6c8c7a54618f5bee6be37de30053881acf0df38f0eb49f0525bda727ba09b384 ===
+=== NEW COVERED FILE: fictional-repo/scripts/assert-requirement-proof.py; sha256:35ebc42990ff99b1ba0a7c8c9e7dc1cb98df2eb6b79d45cd692aca4efcfb37d5 ===
 #!/usr/bin/env python3
 """NEW four-acceptance exact map/inventory + hash-bound genuine proof checker."""
 import argparse
@@ -6301,6 +6919,19 @@ def check(root, receipt_path, binding_path, repair_path, evidence_path):
     assert [(case["case"], case["event_status"], case["same_author_restoration"])
             for case in evidence["cases"]] == expected_cases, "evidence scenario outcomes differ"
     assert all(case["context_unchanged"] is True for case in evidence["cases"])
+    # Only this documented successor is additional to the original four paths.
+    # Bind its actual bytes at both genuine proof sources and the current source;
+    # do not edit either historical receipt or infer its absent source fields.
+    current_documents = binding.get("current_document_bindings", {})
+    assert isinstance(current_documents, dict), "current document bindings must be an object"
+    assert set(current_documents) <= {"loop-engine-software-change-provider-task-packets.md"}, "unsupported current document path"
+    for filename, entry in current_documents.items():
+        assert entry == {
+            "repair_source_sha256": repair["current_source_sha256"][filename],
+            "evidence_source_sha256": evidence["source_before"][filename],
+            "current_source_sha256": current_source[filename],
+        }, "current document binding differs from genuine proof or current source"
+        allowed_docs.add(filename)
     changed_since_evidence = {name for name in set(current_source) | set(evidence["source_before"])
                              if current_source.get(name) != evidence["source_before"].get(name)}
     assert changed_since_evidence <= allowed_docs, "runtime/test/data changed after evidence proof"
@@ -6324,11 +6955,123 @@ def main():
     parser.add_argument("--repair-proof", type=Path, required=True)
     parser.add_argument("--evidence-proof", type=Path, required=True)
     args = parser.parse_args()
-    check(Path(__file__).resolve().parents[1], args.receipt, args.binding, args.repair_proof, args.evidence_proof)
+    root = Path(__file__).resolve().parents[1]
+    if json.loads(args.binding.read_bytes()).get("generation") == "new-current-01":
+        from assert_new_current_proof import validate
+        print(json.dumps(validate(root, args.receipt, args.binding, args.repair_proof, args.evidence_proof)))
+    else:
+        check(root, args.receipt, args.binding, args.repair_proof, args.evidence_proof)
 
 
 if __name__ == "__main__":
     main()
+
+
+=== NEW COVERED FILE: fictional-repo/scripts/assert_new_current_proof.py; sha256:2e87eab3b2532152444a584cf04918023438b5dbbfd6476cb98167f0f1342688 ===
+#!/usr/bin/env python3
+"""Explicit current-generation adapter. No historical fields synthesized."""
+import argparse,ast,hashlib,json,re
+from pathlib import Path
+ENGINE_SHA="e1599f645f93d0b3a8d64403253f74e0d3e956145b80aa791f57cc3f752723bc"
+def need(v,m):
+    if not v: raise RuntimeError(m)
+def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def load(p): return json.loads(Path(p).read_bytes())
+def inventory(root): return {str(p.relative_to(root)):sha(p) for p in sorted(root.rglob("*")) if p.is_file()}
+def digest(v): return hashlib.sha256(json.dumps(v,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+def validate(root,receipt_path,binding_path,repair_path,evidence_path,scripted=False):
+    root=Path(root).resolve(strict=True); receipt_path=Path(receipt_path).resolve(strict=True); out=receipt_path.parent
+    b=load(binding_path); r=load(receipt_path); linked=load(repair_path); identity=load(evidence_path)
+    mode="scripted" if scripted else "native"
+    for obj in [b,r,linked,identity]:
+        need(obj["generation"]=="new-current-01" and obj["backend"]==mode,"generation/backend mismatch")
+    need(r["status"]==("scripted-complete" if scripted else "passed"),"current proof incomplete")
+    need(r["mechanical_only"] is True and r["semantic_review"] is False,"semantic judgment claim")
+    need(b["runtime_sha256"]==sha(receipt_path) and b["identity_sha256"]==sha(evidence_path) and b["linked_sha256"]==sha(repair_path),"receipt identity mismatch")
+    src=inventory(root)
+    need(r["source_before"]==r["source_after"]==src and b["source_sha256"]==digest(src),"current source mismatch")
+    need(b["engine_sha256"]==r["engine_sha256"]==ENGINE_SHA,"frozen engine mismatch")
+    provider=Path(r["provider_path"]).resolve(strict=True)
+    need(provider.is_relative_to(out/"build") and sha(provider)==b["provider_sha256"]==r["provider_sha256"],"provider identity mismatch")
+    index=load(root/"implementation-evidence/source-inventory.json")
+    need(index["files_sha256"]=={k:v for k,v in src.items() if Path(k).name!="source-inventory.json"},"source inventory mismatch")
+    mapping=load(root/"implementation-evidence/four-acceptance-proof-map.json")
+    need([v["requirement"] for v in mapping]==[
+        "A caller can inspect the frozen policies and artifact schemas before evaluating a transition.",
+        "A malformed subject artifact is denied with each violated structural rule named.",
+        "A checked transition refuses stale, self-authored, duplicate-author, or configured-obligation-incomplete evidence.",
+        "The reference workflow reaches its terminal state only after its configured validation obligations are satisfied."], "four exact rows")
+    matrix=(root/"implementation-evidence/requirement-to-proof.md").read_text(); refs=set()
+    for row in mapping:
+        lines=[l.split("|") for l in matrix.splitlines() if l.startswith("| "+row["requirement"]+" |")]
+        need(len(lines)==1 and re.findall(chr(96)+"([^"+chr(96)+"]+)"+chr(96),lines[0][2])==row["proofs"],"matrix proof mismatch")
+        refs.update(row["proofs"])
+    need(refs==set(index["proof_inventory"]),"proof names mismatch")
+    for ref in refs:
+        fn,name=ref.split("::",1); p=root/fn; text=p.read_text()
+        if p.suffix==".rs": need(re.search(r"fn\s+"+re.escape(name)+r"\s*\(",text),"Rust proof absent")
+        else: need(any(isinstance(n,ast.FunctionDef) and n.name==name for n in ast.walk(ast.parse(text))),"Python proof absent")
+    need(r["protocol"]==["describe-exact","opaque-describe-exact","unexpected-envelope-refused","unknown-operation-refused","data-dump-exact"],"protocol controls incomplete")
+    need([j["profile"] for j in r["journeys"]]==["minimal","standard","high-rigor"],"profiles incomplete/duplicate")
+    for j in r["journeys"]:
+        f=j["final_show"]; submitted=load(root/("provider/data/configs/"+j["profile"]+".json"))
+        need({k:v for k,v in f["initial_input"].items() if k!="artifact_root"}==submitted and set(f["initial_input"])==set(submitted)|{"artifact_root"},"frozen input mismatch")
+        need(Path(f["initial_input"]["artifact_root"]).resolve().is_relative_to(out),"artifact root escaped")
+        need(f["current_state"]=="end" and f["lifecycle"]=="final" and f["completion_mode"]=="completed" and
+             f["has_overrides"] is False and f["override_count"]==0 and f["requestable_events"]==[],"terminal/override mismatch")
+        history=j["history"]; seq=[x["sequence"] for x in history]
+        need(history and seq==sorted(set(seq)) and any(x["action"]["kind"]=="transition" and x["action"]["transition"]["target"]=="end"
+             and x["action"]["outcome"]["outcome"]=="committed" for x in history),"terminal history incomplete")
+        required={"stale-revision","stale-config","subject-author"}
+        if submitted["review_policies"].get("intent-review"): required.add("standing-fail-not-outvoted")
+        if any(a.get("required_authors",1)>1 for axes in submitted["review_policies"].values() for a in axes): required.add("duplicate-author")
+        need(required<={x["case"] for x in j["negative_cases"]},"negative outcome controls incomplete")
+    names=["valid-control","stale-with-sufficient","stale-noncounting","stale-malformed-order-unchanged","standing-fail-and-own-restoration"]
+    names += ["identity-"+f+"-"+s for f in ["subject_revision","config_version"] for s in ["missing","non-string","blank"]]
+    need([c["case"] for c in identity["cases"]]==names,"identity case set differs")
+    for c in identity["cases"]:
+        expected="completed" if c["case"] in ["valid-control","stale-with-sufficient","stale-malformed-order-unchanged"] else "rejected"
+        need(c["expected"]==c["event"]["status"]==expected,"identity outcome differs")
+        if expected=="rejected":
+            need(c["before"]["context"]==c["after"]["context"] and c["before"]["current_state"]==c["after"]["current_state"],"refusal mutated state/context")
+            need(c["restoration"]["status"]=="completed","conforming restoration absent")
+    a=load(out/"final-accounting.json")
+    need(b["accounting_sha256"]==r["accounting_sha256"]==sha(out/"final-accounting.json"),"accounting identity mismatch")
+    need(a["backend"]==mode and a["success"] is True and a["all_children_waited"] is True and a["residual_groups"]==[],"unreconciled process outcome")
+    commands=a["commands"]; need(commands and len(commands)<=1200 and a["elapsed_seconds"]<=3600,"process/wall limits")
+    for i,row in enumerate(commands,1):
+        need(row["index"]==i and row["backend"]==mode and row["status"]=="completed" and row["waited"] is True and
+             row["residual_group"] is False and type(row["exit_code"]) is int and row["exit_code"]==row["expected_exit"],"command failed/incomplete")
+        d=out/"commands"/("%04d"%i); need(load(d/"receipt.json")==row,"command record differs")
+        for name in ["stdin","stdout","stderr"]: need(row[name+"_sha256"]==sha(d/(name+".txt")),"stream tampered")
+        need(row["environment_limits"]=={"CARGO_BUILD_JOBS":"2","RUST_TEST_THREADS":"2","RAYON_NUM_THREADS":"2","OMP_NUM_THREADS":"2"},"thread limits differ")
+    def observed(index):
+        need(type(index) is int and 1<=index<=len(commands),"invalid observation index")
+        return load(out/"commands"/("%04d"%index)/"stdout.txt")
+    for j in r["journeys"]:
+        need(observed(j["final_show_index"])["result"]==j["final_show"] and observed(j["history_index"])["result"]==j["history"],"terminal summary not actual captured output")
+    for c in identity["cases"]:
+        for field in ["event","restoration"]:
+            v=c[field]
+            if v is not None:
+                need(observed(v["_command_index"])=={k:x for k,x in v.items() if k!="_command_index"},"identity summary not actual captured output")
+    need([c["case"] for c in linked["cases"]]==["missing","mismatch","escape","valid"],"linked case set differs")
+    for c in linked["cases"]:
+        i=c["command_index"]; row=commands[i-1]; d=out/"commands"/("%04d"%i)
+        need(row["argv"]==[str(provider)],"linked proof wrong invocation")
+        if c["case"]=="escape":
+            need(row["exit_code"]==1 and (d/"stdout.txt").read_bytes()==b"" and "artifact intent.json escapes configured root" in (d/"stderr.txt").read_text(),"containment taxonomy")
+        else:
+            v=load(d/"stdout.txt"); need(row["exit_code"]==0,"linked command failed")
+            if c["case"]=="valid": need(v=={"result":"allow"},"valid parent denied")
+            else: need(v["result"]=="deny" and any(x["rule"]=="revision-link" and x["subject"]=="design.json" and x["target"]=="intent.json" for x in v["feedback"]["details"]),"missing/mismatch taxonomy")
+    return {"status":"SCRIPTED_ADAPTER_PATH_ONLY" if scripted else "GENUINE_CURRENT_MECHANICAL_PROOF","native_proof":not scripted,"semantic_review":False,"commands":len(commands)}
+def main():
+    p=argparse.ArgumentParser(); p.add_argument("--source",type=Path,required=True)
+    for name in ["receipt","binding","repair-proof","evidence-proof"]: p.add_argument("--"+name,type=Path,required=True)
+    p.add_argument("--scripted-test-only",action="store_true"); a=p.parse_args()
+    print(json.dumps(validate(a.source,a.receipt,a.binding,a.repair_proof,a.evidence_proof,a.scripted_test_only)))
+if __name__=="__main__": main()
 
 
 === NEW COVERED FILE: fictional-repo/scripts/production-journey.py; sha256:884c33012841eecfe84c5778e02bf9843272df7bf74f273bbceb953ac84e4b15 ===
@@ -6632,4 +7375,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

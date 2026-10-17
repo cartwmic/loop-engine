@@ -10,39 +10,59 @@
     "documents": [
       {
         "path": "fictional-repo/README.md",
-        "revision": "NEW-v15-bytes:c2fb03864106eb2bab324d3dad8a18fd330d0fb56ac633d664dffa344217a082"
+        "revision": "NEW-successor-bytes:c2fb03864106eb2bab324d3dad8a18fd330d0fb56ac633d664dffa344217a082"
       },
       {
         "path": "fictional-repo/provider/README.md",
-        "revision": "NEW-v15-bytes:212766effb1154684b1165429938419ec3410eb6d49e83dd94da01d8e8334a6d"
+        "revision": "NEW-successor-bytes:212766effb1154684b1165429938419ec3410eb6d49e83dd94da01d8e8334a6d"
       },
       {
         "path": "fictional-repo/docs/PRD.md",
-        "revision": "NEW-v15-bytes:8940cfd435726cbe1d5abc9fc66a701ba2d9e1d9af8815de238edd7034e0f3dc"
+        "revision": "NEW-successor-bytes:8940cfd435726cbe1d5abc9fc66a701ba2d9e1d9af8815de238edd7034e0f3dc"
       },
       {
         "path": "fictional-repo/implementation-evidence/requirement-to-proof.md",
-        "revision": "NEW-v15-bytes:cd1e45de4397913c1a62a0d5addba49c9b41fbfcbb89bbb2ee341422a54dc351"
+        "revision": "NEW-successor-bytes:cd1e45de4397913c1a62a0d5addba49c9b41fbfcbb89bbb2ee341422a54dc351"
       },
       {
         "path": "fictional-repo/loop-engine-software-change-provider-prd.md",
-        "revision": "NEW-v15-bytes:c0103e8328c2766cc13046f4b31d2d743f1082fd22a06b3b7807ff7784cee8ae"
+        "revision": "NEW-successor-bytes:c0103e8328c2766cc13046f4b31d2d743f1082fd22a06b3b7807ff7784cee8ae"
       },
       {
         "path": "fictional-repo/loop-engine-software-change-provider-technical-design.md",
-        "revision": "NEW-v15-bytes:3515f1c35bfda30955abc141acb884cec3b7fd8872ea6f222189fa304da57a9c"
+        "revision": "NEW-successor-bytes:3515f1c35bfda30955abc141acb884cec3b7fd8872ea6f222189fa304da57a9c"
       },
       {
         "path": "fictional-repo/loop-engine-software-change-provider-task-packets.md",
-        "revision": "NEW-v15-bytes:2f66bddd739bceafe29e82b96ed8f845cfc90e6c483ce4ad3c71f028238613a6"
+        "revision": "NEW-successor-bytes:6a7ab7a88ed3bdbd3f3e7b50b975d2dcb4741295f05448a9237ff5ee59314473"
       },
       {
         "path": "fictional-repo/scripts/assert-doc-authority.py",
-        "revision": "NEW-v15-bytes:e7fb99420d799329142ed4ba5200ef4eb2c264df2aff71670648a9f12682c997"
+        "revision": "NEW-successor-bytes:e7fb99420d799329142ed4ba5200ef4eb2c264df2aff71670648a9f12682c997"
       },
       {
         "path": "fictional-repo/scripts/assert-requirement-proof.py",
-        "revision": "NEW-v15-bytes:6c8c7a54618f5bee6be37de30053881acf0df38f0eb49f0525bda727ba09b384"
+        "revision": "NEW-successor-bytes:35ebc42990ff99b1ba0a7c8c9e7dc1cb98df2eb6b79d45cd692aca4efcfb37d5"
+      },
+      {
+        "path": "fictional-repo/scripts/production-journey.py",
+        "revision": "NEW-successor-bytes:884c33012841eecfe84c5778e02bf9843272df7bf74f273bbceb953ac84e4b15"
+      },
+      {
+        "path": "fictional-repo/scripts/assert_new_current_proof.py",
+        "revision": "NEW-successor-bytes:2e87eab3b2532152444a584cf04918023438b5dbbfd6476cb98167f0f1342688"
+      },
+      {
+        "path": "fictional-repo/implementation-evidence/current-mechanical-proof.json",
+        "revision": "NEW-current-native-projection-bytes:a63c1495c830994bbebf312fd66b304629d9aab24e8b6863564f85b3ae0a26a3"
+      },
+      {
+        "path": "fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py",
+        "revision": "ACTUAL-executed-harness-bytes:07be2039c1a1329e45b0155b254cc54f76061c7b68a5cd2344964722f0e7e82c"
+      },
+      {
+        "path": "fictional-repo/implementation-evidence/current-proof-harness/proof_support.py",
+        "revision": "ACTUAL-executed-harness-bytes:6e3772dfa5209ec56262685d7216bc78e2c4e54a5c10274989f18a681e177298"
       }
     ]
   },
@@ -71,7 +91,8 @@
     "v10 Original linked-parent repair, current artifact/error code unchanged; actualRootreceipt /tmp/loop-engine-four-runs-20261011/integration/c-fictional-v10-proof-01/receipt.json SHA256 fc0e335d47b5a2175038bb34aaf8f359aae9c9dce514d723711a56fedad63772",
     "v13 Actualcurrent10reducer controls, fmt/providerClippy/build and6publiccases104commands: missingcfgrefusal/laterrepair, staleeligibility/latest/floors; actualRootreceipt /tmp/loop-engine-four-runs-20261011/integration/c-fictional-v13-proof-01/receipt.json SHA256 612db4ffd7bd85d5fdbaa2b97132bdd446fcf395a1b40ec2cffb9863fa84b328",
     "v15 Actualcurrentexactmatrix/map/inventory/binding2checks and3negatives; provider unchangedv13; actualRootreceipt /tmp/loop-engine-four-runs-20261011/integration/c-fictional-v15-doc-proof-01/receipt.json SHA256 79280a1a14734069e4c736775dc74ecdaaf2f3fcf1ae6c2331b8f1ee88943281",
-    "Historicalv6 workspace execution exited0 but overallreceipt FAILED, not whole-currentworkspace proof. Currentv13 fmt/providerClippy and10reducer tests actually ran on Cargo/provider bytes identical tov15. V15document checks run noCargo."
+    "Historicalv6 workspace execution exited0 but overallreceipt FAILED, not whole-currentworkspace proof. Currentv13 fmt/providerClippy and10reducer tests actually ran on Cargo/provider bytes identical tov15. V15document checks run noCargo.",
+    "NEW CURRENT source checkpoint c03475ab46ba22867852ae1fc5ccd8716dcd48e5870cca3b711395ff7204d808 genuine mechanical capture/adapter/release; supplied projection current-mechanical-proof.json; semantic_review:false; no old execution relabelled"
   ],
   "command_results": {
     "scope": "Original command/source identities preserved; newactualv13 Cargo commands explicitly supplied. No whole-currentworkspace execution.",
@@ -319,6 +340,23 @@
       "provider/tests/r25.rs": "a39cbfad7e0af549cf90542587749c50a386f25ef5762a02fc427a2b412d213f",
       "provider/tests/shipped_data.rs": "579975d08da961d1916bcc093de32b9d3858e4ae598246462b8d2457d09b741f",
       "provider/tests/snapshots/describe.json": "2361843677d68b90775db42939f6333f16760138bfd36c96a71d5f01a65498e2"
+    },
+    "new_current_mechanical_proof": {
+      "source_checkpoint": "c03475ab46ba22867852ae1fc5ccd8716dcd48e5870cca3b711395ff7204d808",
+      "raw_receipt_bindings": {
+        "generation": "new-current-01",
+        "backend": "native",
+        "source_sha256": "c03475ab46ba22867852ae1fc5ccd8716dcd48e5870cca3b711395ff7204d808",
+        "runtime_sha256": "481704de3d78d02216f40d24adbe7c4f4bef7982dfa18ba6f2a281c779a8ba56",
+        "identity_sha256": "160982c0680fa51577c51b3684bc2d31d56debdeaa8ddd666d556b3dabcba560",
+        "linked_sha256": "c54c8e1ac11b9a58c8ecc4c397ddcdf3afd939e30f05197a8578a44dfe75569b",
+        "accounting_sha256": "1a0e6883da9ca409f71bc69b35ad24c1b9e620100a252df7e695cedb8f017207",
+        "engine_sha256": "e1599f645f93d0b3a8d64403253f74e0d3e956145b80aa791f57cc3f752723bc",
+        "provider_sha256": "82ff9e98f9d2c26b0700950770c899163d37a003c6a318f0698c03b5b9290377"
+      },
+      "projection_sha256": "a63c1495c830994bbebf312fd66b304629d9aab24e8b6863564f85b3ae0a26a3",
+      "projection_path": "fictional-repo/implementation-evidence/current-mechanical-proof.json",
+      "captured_source_identity_not_historical_commit": true
     }
   }
 }

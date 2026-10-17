@@ -55,7 +55,7 @@ loop-engine --json --config /absolute/providers.toml start software-change @/abs
 ```
 
 `setup` edits policy only. Tools prepare or evaluate data, not external execution.
-Setup starts no run or worker. Current shipped source IDs are `minimal-16`, `standard-16` and `high-rigor-16`; setup refuses historical shipped IDs through -15 and reports these supported IDs. An identity bump is not semantic calibration or applicability. Preserve frozen older runtime/profile bytes. Inspect output/explanation and effective policy;
+Setup starts no run or worker. Current shipped source IDs are `minimal-17`, `standard-17` and `high-rigor-17`; setup refuses historical shipped IDs through -16 and reports these supported IDs. An identity bump is not semantic calibration or applicability. Preserve frozen older runtime/profile bytes. Inspect output/explanation and effective policy;
 --set, --add-axis and --remove-axis are explicit policy edits, not executor controls.
 Confirm every changed obligation, author floor and advice/Bookends state before start.
 Use --bookends only for an explicit opt-in. Read the resulting exact config/contract
@@ -64,8 +64,8 @@ Register the absolute provider command under exact alias software-change.
 
 ## Optional narratives and owner checkpoints
 
-Use the current source provider for this procedure. Its `minimal-16`, `standard-16`
-and `high-rigor-16` profiles default `extra.narratives` and `extra.checkpoints` to
+Use the current source provider for this procedure. Its `minimal-17`, `standard-17`
+and `high-rigor-17` profiles default `extra.narratives` and `extra.checkpoints` to
 empty lists. Installed 0.24.1 and existing `-14` runs retain their earlier capabilities
 and obligations; do not change their runtime or infer these options from this skill.
 

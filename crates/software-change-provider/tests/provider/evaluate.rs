@@ -1495,7 +1495,7 @@ fn software_change_groups_and_self_review_are_explicit() {
 }
 
 #[test]
-fn setup_refuses_historical_14_and_15_profiles_and_accepts_shipped_successors() {
+fn setup_refuses_historical_14_and_16_profiles_and_accepts_shipped_successors() {
     let root = TestDir::new();
     for name in ["minimal", "standard", "high-rigor"] {
         let source = workspace_integration::package_root("software-change-provider")
@@ -1517,9 +1517,9 @@ fn setup_refuses_historical_14_and_15_profiles_and_accepts_shipped_successors() 
                 .bounded_output("setup shipped profile identity")
                 .unwrap()
         };
-        let previous = root.path.join(format!("{name}-15.json"));
+        let previous = root.path.join(format!("{name}-16.json"));
         let mut previous_profile = profile.clone();
-        previous_profile["config_version"] = json!(format!("{name}-15"));
+        previous_profile["config_version"] = json!(format!("{name}-16"));
         fs::write(&previous, serde_json::to_vec(&previous_profile).unwrap()).unwrap();
         let refused_previous = run_setup(&previous);
         assert_exit(&refused_previous, 2);
@@ -1542,7 +1542,7 @@ fn setup_refuses_historical_14_and_15_profiles_and_accepts_shipped_successors() 
         let accepted = run_setup(&source);
         assert_exit(&accepted, 0);
         let profile: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
-        assert_eq!(profile["config_version"], format!("{name}-16"));
+        assert_eq!(profile["config_version"], format!("{name}-17"));
     }
 }
 
@@ -1562,7 +1562,7 @@ fn software_change_setup_knobs_explain_drift_and_author_counts_cli() {
     assert_exit(&run_setup(&[]), 0);
     let explain_path = root.path.join("profile.json.explain.json");
     let mut explain: Value = serde_json::from_slice(&fs::read(&explain_path).unwrap()).unwrap();
-    assert_eq!(explain["base"]["id"], "minimal-16");
+    assert_eq!(explain["base"]["id"], "minimal-17");
     explain["overrides"][1]["base_value"] = json!(7);
     fs::write(&explain_path, serde_json::to_vec(&explain).unwrap()).unwrap();
     assert_exit(

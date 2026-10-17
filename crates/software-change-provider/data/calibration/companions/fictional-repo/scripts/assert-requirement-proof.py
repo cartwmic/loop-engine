@@ -93,6 +93,19 @@ def check(root, receipt_path, binding_path, repair_path, evidence_path):
     assert [(case["case"], case["event_status"], case["same_author_restoration"])
             for case in evidence["cases"]] == expected_cases, "evidence scenario outcomes differ"
     assert all(case["context_unchanged"] is True for case in evidence["cases"])
+    # Only this documented successor is additional to the original four paths.
+    # Bind its actual bytes at both genuine proof sources and the current source;
+    # do not edit either historical receipt or infer its absent source fields.
+    current_documents = binding.get("current_document_bindings", {})
+    assert isinstance(current_documents, dict), "current document bindings must be an object"
+    assert set(current_documents) <= {"loop-engine-software-change-provider-task-packets.md"}, "unsupported current document path"
+    for filename, entry in current_documents.items():
+        assert entry == {
+            "repair_source_sha256": repair["current_source_sha256"][filename],
+            "evidence_source_sha256": evidence["source_before"][filename],
+            "current_source_sha256": current_source[filename],
+        }, "current document binding differs from genuine proof or current source"
+        allowed_docs.add(filename)
     changed_since_evidence = {name for name in set(current_source) | set(evidence["source_before"])
                              if current_source.get(name) != evidence["source_before"].get(name)}
     assert changed_since_evidence <= allowed_docs, "runtime/test/data changed after evidence proof"
@@ -116,7 +129,12 @@ def main():
     parser.add_argument("--repair-proof", type=Path, required=True)
     parser.add_argument("--evidence-proof", type=Path, required=True)
     args = parser.parse_args()
-    check(Path(__file__).resolve().parents[1], args.receipt, args.binding, args.repair_proof, args.evidence_proof)
+    root = Path(__file__).resolve().parents[1]
+    if json.loads(args.binding.read_bytes()).get("generation") == "new-current-01":
+        from assert_new_current_proof import validate
+        print(json.dumps(validate(root, args.receipt, args.binding, args.repair_proof, args.evidence_proof)))
+    else:
+        check(root, args.receipt, args.binding, args.repair_proof, args.evidence_proof)
 
 
 if __name__ == "__main__":

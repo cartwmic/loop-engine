@@ -1,0 +1,745 @@
+{
+  "kind": "GENUINE_CURRENT_MECHANICAL_PROOF_COMPACT_PROJECTION_NOT_SEMANTIC_JUDGMENT",
+  "generation": "new-current-01",
+  "source_checkpoint": "c03475ab46ba22867852ae1fc5ccd8716dcd48e5870cca3b711395ff7204d808",
+  "source_file_hashes": {
+    "Cargo.lock": "50a65df1c7fc27d49f88ebe5d06b09f853c14d4355b48908ce892673edba888d",
+    "Cargo.toml": "5bb9121735587f01ae67d050760c8cf8fd7f5ea95ea072057cfe1c353653d1ad",
+    "README.md": "c2fb03864106eb2bab324d3dad8a18fd330d0fb56ac633d664dffa344217a082",
+    "docs/PRD.md": "8940cfd435726cbe1d5abc9fc66a701ba2d9e1d9af8815de238edd7034e0f3dc",
+    "implementation-evidence/four-acceptance-proof-map.json": "8b1ff55ae53650e8be98693166f3ea686ff3dbca72d3abe946327e45e8564e50",
+    "implementation-evidence/journey-setup-binding.json": "4fba032008c01e9c2c88e36fa17df901e6163f1c0b23add6fc0b3f4a703a88ac",
+    "implementation-evidence/requirement-to-proof.md": "cd1e45de4397913c1a62a0d5addba49c9b41fbfcbb89bbb2ee341422a54dc351",
+    "implementation-evidence/source-inventory.json": "6d1ebc0f6f8f86fd82f38a35b8a6f390465ad2301e9d5ce1d2e18245cdd7dd0e",
+    "implementation-evidence/v6-coverage.json": "fa4140db15a5de572a8193e2d09ff7495a8a81a8b9b89f79f37478a33837667e",
+    "loop-engine-software-change-provider-prd.md": "c0103e8328c2766cc13046f4b31d2d743f1082fd22a06b3b7807ff7784cee8ae",
+    "loop-engine-software-change-provider-task-packets.md": "6a7ab7a88ed3bdbd3f3e7b50b975d2dcb4741295f05448a9237ff5ee59314473",
+    "loop-engine-software-change-provider-technical-design.md": "3515f1c35bfda30955abc141acb884cec3b7fd8872ea6f222189fa304da57a9c",
+    "provider/Cargo.toml": "579d040bed8fbb4d73f0cf25fc68abc60c681edb562b7989ea00c7caa57ba890",
+    "provider/README.md": "212766effb1154684b1165429938419ec3410eb6d49e83dd94da01d8e8334a6d",
+    "provider/data/configs/high-rigor.json": "0d354e3943dd093f84ef086d5b3bc71b97c621c417e54866b9bb9c39aa79b613",
+    "provider/data/configs/minimal.json": "af61a5a1352f2dbab6ac70f0a006a7c8472dabd4c620796848d23ac6614a02b3",
+    "provider/data/configs/standard.json": "0cf065aa9d9ed1e303258e6483b4165148e4eb180ba3d4559a44c88c27349f59",
+    "provider/data/reviewer-protocol.md": "6b17c47b362e69fbefb2eb2311fc5052eeca6de7ccba43163289df0d1e77032c",
+    "provider/data/templates/design.md": "36e89698b8c2618618da09381a6c9dbd016860eb9cf3ea5b3efb9348573319fa",
+    "provider/data/templates/implementation-report.md": "1416f6c071e17dd5db0aca0304d940c733cefafb506c3ce25b39b3e64d4f2b11",
+    "provider/data/templates/intent.md": "ce8be63a5bc609756802fcffdb7b4d92c3f42bd77b577c4d831c09115eb89eb0",
+    "provider/data/templates/task-packet.md": "3060352000d6466de4f0d8116e966f78cca8b22a041a36e3c67a999ab56a6563",
+    "provider/data/templates/validation-report.md": "32b99fdc820665099b2b4d5206f1d09f84d61d7c20346f81946c1e0fc3e29ae5",
+    "provider/src/artifacts.rs": "71dc9569cb273a7195e5492862a182c200210d1a190a122682936872a7faf426",
+    "provider/src/config.rs": "463bcaab3e3895268d7c1796ed0fe5686bd666b2304fb1a487cd512fe0299571",
+    "provider/src/embedded_data.rs": "8056bfee16938a24b51a4a98558bd1c01e73146b187fe028249f94308a96d145",
+    "provider/src/evidence.rs": "9d5c4f5e08403986b910de2e6a12fa3e4f61db94dfed7e7243c3aafbb74be6e9",
+    "provider/src/gates.rs": "debd9f188b10779d552aa1271dd8b49447a40d731cb033e3b9a5fa0b8060c122",
+    "provider/src/lib.rs": "c8dc141c8220cc5219fc19ad0b3a70cd231a9882627394619d6bca6dae54dcc9",
+    "provider/src/main.rs": "e3a7a8b96419bdbc33d3a098d2ddb593207792d8cee30168d2d0b1e974645ff8",
+    "provider/src/protocol.rs": "57932ccd8e69ff4b96fa9937081b520015b872819d0e89cda4b7b454db73ff91",
+    "provider/src/schema.rs": "6f1afd558ddf058b2cb234ccd1e7068964d93dec5df26391ed82e1ffdac40a73",
+    "provider/src/workflow.rs": "a8e03b46422229f8e4107eb58345cd1d3991ccc085e1dbd4cc97a77805e5c513",
+    "provider/tests/a1.rs": "d8a3ebe6abb48c6148f2d0cdc3ec49a4b3e9ca71da8296b67d0d25978388eb7a",
+    "provider/tests/a11.rs": "c5a19a00f68f6ff1b81792f7b4d8f801d09f6f3830473d93fe8dece7119b564f",
+    "provider/tests/a12.rs": "91d085991203d90d2686bf529f01e9e45f7aab1c64f9a1a2d4155795973f80f6",
+    "provider/tests/a13.rs": "35641c111f78fae5337f8be14ffd2d1652c82d71dc2dcd7d551f575cf9597f4a",
+    "provider/tests/a14.rs": "2b99f22c9b578b605f088cb1b4aae7531af357b2a4369e45dfb404878454ead2",
+    "provider/tests/a15.rs": "595fdc4b8a3feef0e9f091d1be921c490b745280aae9865a818c3a5cdeaa742e",
+    "provider/tests/a2.rs": "f3749aeed678b347e745447a3a536f4a7d66e2f0b6ba75e9258f6bb1313c6974",
+    "provider/tests/a3.rs": "e53357501e5839b0e1a34eef82d9d72e42869e7d4cf3d2890f067202d780482a",
+    "provider/tests/a5.rs": "b88c6da1ff7002c4de7ceb1b75f9a79280cdeba5a28f651bb472c0ddcbfb4c2a",
+    "provider/tests/a7.rs": "b0a79e7d5bbffe4801688636d96676df64f502b7dc643cd875732fe6acd00d5a",
+    "provider/tests/a8.rs": "1edc88d17bd4b68f64afb0522736b2737c20c8cb2300407024d349ddd9dabef6",
+    "provider/tests/a9.rs": "9f58a1f571bf1ff66977af3b9f33b3e05fef268565b08452800c602b055b85eb",
+    "provider/tests/boundary_v6.rs": "ce46952e488456854218b7b094edd6424e52ff7471d35a24a3275bc07fa55d76",
+    "provider/tests/common/mod.rs": "61007052c9c606befa371797783819f3be52368a924ad064a02b1af7fd425e1a",
+    "provider/tests/describe_protocol.rs": "15c14e375e6314c1469a3c25ea277e013a79f9a676fddafc25a7430b5fad5866",
+    "provider/tests/embedded_data.rs": "e8ff1b413cff1c210e44cfad5c3115c7218385b1ce323834961309f27e5d6f57",
+    "provider/tests/evaluate.rs": "6c4fa11649344f4a797f900a28fefb54059c4c2541f948df614472427fc8fc4f",
+    "provider/tests/linked_parent_escape.rs": "8ecf70e1def6eace97028ba3c0d7009a6d0140d7a40f098aca382e64bebba4bc",
+    "provider/tests/opaque_describe.rs": "6608df346704874b7b5aa63eb4da35443426cf2cb88aed6014245dd8b4ac763a",
+    "provider/tests/r25.rs": "a39cbfad7e0af549cf90542587749c50a386f25ef5762a02fc427a2b412d213f",
+    "provider/tests/shipped_data.rs": "579975d08da961d1916bcc093de32b9d3858e4ae598246462b8d2457d09b741f",
+    "provider/tests/snapshots/describe.json": "2361843677d68b90775db42939f6333f16760138bfd36c96a71d5f01a65498e2",
+    "scripts/assert-doc-authority.py": "e7fb99420d799329142ed4ba5200ef4eb2c264df2aff71670648a9f12682c997",
+    "scripts/assert-requirement-proof.py": "35ebc42990ff99b1ba0a7c8c9e7dc1cb98df2eb6b79d45cd692aca4efcfb37d5",
+    "scripts/assert_new_current_proof.py": "2e87eab3b2532152444a584cf04918023438b5dbbfd6476cb98167f0f1342688",
+    "scripts/production-journey.py": "884c33012841eecfe84c5778e02bf9843272df7bf74f273bbceb953ac84e4b15"
+  },
+  "engine_sha256": "e1599f645f93d0b3a8d64403253f74e0d3e956145b80aa791f57cc3f752723bc",
+  "provider_sha256": "82ff9e98f9d2c26b0700950770c899163d37a003c6a318f0698c03b5b9290377",
+  "proof_capture_status": "passed",
+  "semantic_review": false,
+  "synthetic_fixture_identity": {
+    "commit": "b39ad2594aad48ba0698f22848f2fb64631c9ea9",
+    "tree": "c5b82e87d34345eeccb91d08f94d043335987074",
+    "meaning": "New independent fictional fixture commit of exact proved source bytes/modes; not historical/product identity; capture preceded this commit, no claim of reexecution at commit"
+  },
+  "raw_evidence": {
+    "runtime-current.json": {
+      "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/native-current-proof-final-packet-01/runtime-current.json",
+      "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/runtime-current.json",
+      "sha256": "481704de3d78d02216f40d24adbe7c4f4bef7982dfa18ba6f2a281c779a8ba56",
+      "bytes": 917340
+    },
+    "identity-current.json": {
+      "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/native-current-proof-final-packet-01/identity-current.json",
+      "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/identity-current.json",
+      "sha256": "160982c0680fa51577c51b3684bc2d31d56debdeaa8ddd666d556b3dabcba560",
+      "bytes": 4832873
+    },
+    "linked-parent-current.json": {
+      "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/native-current-proof-final-packet-01/linked-parent-current.json",
+      "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/linked-parent-current.json",
+      "sha256": "c54c8e1ac11b9a58c8ecc4c397ddcdf3afd939e30f05197a8578a44dfe75569b",
+      "bytes": 339
+    },
+    "current-binding.json": {
+      "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/native-current-proof-final-packet-01/current-binding.json",
+      "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/current-binding.json",
+      "sha256": "514daff64187f7e9f12b15a7a97854419bcdd8d275dce6fba04b4d13e093d14d",
+      "bytes": 678
+    },
+    "final-accounting.json": {
+      "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/native-current-proof-final-packet-01/final-accounting.json",
+      "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/final-accounting.json",
+      "sha256": "1a0e6883da9ca409f71bc69b35ad24c1b9e620100a252df7e695cedb8f017207",
+      "bytes": 6899436
+    },
+    "explicit-parent-release.json": {
+      "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/final-source-packet-01/parent-outer-capture-02/explicit-parent-release.json",
+      "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/explicit-parent-release.json",
+      "sha256": "8a2b3d839f22a4513e4c9f7e37b306f54edaa9c02338a7612a8fe76f2d1fc04f",
+      "bytes": 3741
+    },
+    "adapter-result.json": {
+      "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/final-source-packet-01/parent-outer-capture-02/adapter-result.json",
+      "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/adapter-result.json",
+      "sha256": "7f115c23d0784ec528485c2ef2971c4ad39fd3e2b20c8dccce1ea6ea08c43885",
+      "bytes": 123
+    },
+    "independent-terminal-verification-and-slot-unassigned.json": {
+      "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/final-source-packet-01/parent-outer-capture-02/independent-terminal-verification-and-slot-unassigned.json",
+      "supplied": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/proved-successor-fixture-input-preparation-01/sealed-native-proof-material/independent-terminal-verification-and-slot-unassigned.json",
+      "sha256": "776c9398a340aaa2e0b11d0f4ef34c8aeb759a670397d45a0a23bc973bf90dcc",
+      "bytes": 1652
+    }
+  },
+  "outer_original_waits": [
+    {
+      "step": "driver",
+      "pid": 57705,
+      "wait": 0,
+      "files_closed": true
+    },
+    {
+      "step": "final_current_adapter",
+      "pid": 59275,
+      "wait": 0,
+      "files_closed": true
+    }
+  ],
+  "actual_inner_commands": 1022,
+  "all_expected_outcomes_and_waits": true,
+  "residual_groups": [],
+  "adapter": {
+    "status": "GENUINE_CURRENT_MECHANICAL_PROOF",
+    "native_proof": true,
+    "semantic_review": false,
+    "commands": 1022
+  },
+  "explicit_release": "released",
+  "protocol_controls": [
+    "describe-exact",
+    "opaque-describe-exact",
+    "unexpected-envelope-refused",
+    "unknown-operation-refused",
+    "data-dump-exact"
+  ],
+  "journeys": [
+    {
+      "profile": "minimal",
+      "state": "end",
+      "lifecycle": "final",
+      "completion_mode": "completed",
+      "override_count": 0,
+      "config_version": "minimal-6",
+      "transitions": 15,
+      "negative_cases": [
+        {
+          "gate": "validation-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "validation-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "validation-review",
+          "case": "subject-author"
+        }
+      ],
+      "final_show_command": 106,
+      "history_command": 107,
+      "initial_input_sha256": "e4e336704433a9b3ed6178f1f8e23009323769ef50b46e3316ad380642ed041d"
+    },
+    {
+      "profile": "standard",
+      "state": "end",
+      "lifecycle": "final",
+      "completion_mode": "completed",
+      "override_count": 0,
+      "config_version": "standard-7",
+      "transitions": 15,
+      "negative_cases": [
+        {
+          "gate": "intent-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "intent-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "intent-review",
+          "case": "subject-author"
+        },
+        {
+          "gate": "intent-review",
+          "case": "standing-fail-not-outvoted"
+        },
+        {
+          "gate": "intent-adversarial-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "intent-adversarial-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "intent-adversarial-review",
+          "case": "subject-author"
+        },
+        {
+          "gate": "design-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "design-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "design-review",
+          "case": "subject-author"
+        },
+        {
+          "gate": "design-adversarial-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "design-adversarial-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "design-adversarial-review",
+          "case": "subject-author"
+        },
+        {
+          "gate": "validation-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "validation-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "validation-review",
+          "case": "subject-author"
+        },
+        {
+          "gate": "validation-adversarial-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "validation-adversarial-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "validation-adversarial-review",
+          "case": "subject-author"
+        }
+      ],
+      "final_show_command": 371,
+      "history_command": 372,
+      "initial_input_sha256": "7e566a0fe429a3c003b5f44473de9bb5b8887a84cfde49823970ecc7684de9d7"
+    },
+    {
+      "profile": "high-rigor",
+      "state": "end",
+      "lifecycle": "final",
+      "completion_mode": "completed",
+      "override_count": 0,
+      "config_version": "high-rigor-7",
+      "transitions": 15,
+      "negative_cases": [
+        {
+          "gate": "intent-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "intent-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "intent-review",
+          "case": "subject-author"
+        },
+        {
+          "gate": "intent-review",
+          "case": "standing-fail-not-outvoted"
+        },
+        {
+          "gate": "intent-adversarial-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "intent-adversarial-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "intent-adversarial-review",
+          "case": "subject-author"
+        },
+        {
+          "gate": "design-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "design-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "design-review",
+          "case": "subject-author"
+        },
+        {
+          "gate": "design-review",
+          "case": "duplicate-author"
+        },
+        {
+          "gate": "design-adversarial-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "design-adversarial-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "design-adversarial-review",
+          "case": "subject-author"
+        },
+        {
+          "gate": "plan-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "plan-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "plan-review",
+          "case": "subject-author"
+        },
+        {
+          "gate": "plan-adversarial-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "plan-adversarial-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "plan-adversarial-review",
+          "case": "subject-author"
+        },
+        {
+          "gate": "implementation-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "implementation-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "implementation-review",
+          "case": "subject-author"
+        },
+        {
+          "gate": "implementation-adversarial-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "implementation-adversarial-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "implementation-adversarial-review",
+          "case": "subject-author"
+        },
+        {
+          "gate": "validation-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "validation-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "validation-review",
+          "case": "subject-author"
+        },
+        {
+          "gate": "validation-review",
+          "case": "duplicate-author"
+        },
+        {
+          "gate": "validation-adversarial-review",
+          "case": "stale-revision"
+        },
+        {
+          "gate": "validation-adversarial-review",
+          "case": "stale-config"
+        },
+        {
+          "gate": "validation-adversarial-review",
+          "case": "subject-author"
+        }
+      ],
+      "final_show_command": 806,
+      "history_command": 807,
+      "initial_input_sha256": "7891422406ab5f29da8eb9c577c3282b2a8a7ed64255c6c40c132962cd10dde4"
+    }
+  ],
+  "identity_controls": [
+    {
+      "case": "valid-control",
+      "expected": "completed",
+      "event": {
+        "status": "completed",
+        "_command_index": 821
+      },
+      "before_state": "intent-review",
+      "after_state": "intent-adversarial-review",
+      "before_context_sha256": "49bf5c4ee971b45b98edea5205ccd8d43d26bd96df5bfc2fd582647fc7cdc95c",
+      "after_context_sha256": "49bf5c4ee971b45b98edea5205ccd8d43d26bd96df5bfc2fd582647fc7cdc95c",
+      "restoration": null
+    },
+    {
+      "case": "stale-with-sufficient",
+      "expected": "completed",
+      "event": {
+        "status": "completed",
+        "_command_index": 838
+      },
+      "before_state": "intent-review",
+      "after_state": "intent-adversarial-review",
+      "before_context_sha256": "70a826139fcdd5398f81da1bb62eea63db50e24bf3d1ca9216977d4fa94d6a0c",
+      "after_context_sha256": "70a826139fcdd5398f81da1bb62eea63db50e24bf3d1ca9216977d4fa94d6a0c",
+      "restoration": null
+    },
+    {
+      "case": "stale-noncounting",
+      "expected": "rejected",
+      "event": {
+        "status": "rejected",
+        "details": [
+          {
+            "actual": "STALE-profile",
+            "axis": "problem-grounded",
+            "expected": "high-rigor-7",
+            "rule": "stale-config"
+          },
+          {
+            "axis": "problem-grounded",
+            "distinct_authors": 0,
+            "malformed": false,
+            "required_authors": 1,
+            "rule": "axis-incomplete-or-failing",
+            "standing_fails": 0
+          }
+        ],
+        "_command_index": 854
+      },
+      "before_state": "intent-review",
+      "after_state": "intent-review",
+      "before_context_sha256": "f2929202a47b9625cb90c6a8ab04b08a9d000badaea4d5de02d4c96b80a9a43b",
+      "after_context_sha256": "f2929202a47b9625cb90c6a8ab04b08a9d000badaea4d5de02d4c96b80a9a43b",
+      "restoration": {
+        "status": "completed",
+        "_command_index": 859
+      }
+    },
+    {
+      "case": "stale-malformed-order-unchanged",
+      "expected": "completed",
+      "event": {
+        "status": "completed",
+        "_command_index": 875
+      },
+      "before_state": "intent-review",
+      "after_state": "intent-adversarial-review",
+      "before_context_sha256": "6e7220b3539a94e3e99a80abe5c36f426c93e04bed8ee8a11c1c526c622807cf",
+      "after_context_sha256": "6e7220b3539a94e3e99a80abe5c36f426c93e04bed8ee8a11c1c526c622807cf",
+      "restoration": null
+    },
+    {
+      "case": "standing-fail-and-own-restoration",
+      "expected": "rejected",
+      "event": {
+        "status": "rejected",
+        "details": [
+          {
+            "axis": "problem-grounded",
+            "distinct_authors": 2,
+            "malformed": false,
+            "required_authors": 1,
+            "rule": "axis-incomplete-or-failing",
+            "standing_fails": 1
+          }
+        ],
+        "_command_index": 892
+      },
+      "before_state": "intent-review",
+      "after_state": "intent-review",
+      "before_context_sha256": "4eeb47fe40393beb407873670230b8a8da70d937f5a8da7dbcef65936ad61849",
+      "after_context_sha256": "4eeb47fe40393beb407873670230b8a8da70d937f5a8da7dbcef65936ad61849",
+      "restoration": {
+        "status": "completed",
+        "_command_index": 897
+      }
+    },
+    {
+      "case": "identity-subject_revision-missing",
+      "expected": "rejected",
+      "event": {
+        "status": "rejected",
+        "details": [
+          {
+            "axis": "problem-grounded",
+            "record": "identity-35",
+            "rule": "malformed-current-evidence"
+          },
+          {
+            "axis": "problem-grounded",
+            "distinct_authors": 0,
+            "malformed": true,
+            "required_authors": 1,
+            "rule": "axis-incomplete-or-failing",
+            "standing_fails": 0
+          }
+        ],
+        "_command_index": 912
+      },
+      "before_state": "intent-review",
+      "after_state": "intent-review",
+      "before_context_sha256": "0b64d7aa121994da22ff078bb6ae6b2e429b07871d4d13fa564fc0ed3aa073d5",
+      "after_context_sha256": "0b64d7aa121994da22ff078bb6ae6b2e429b07871d4d13fa564fc0ed3aa073d5",
+      "restoration": {
+        "status": "completed",
+        "_command_index": 917
+      }
+    },
+    {
+      "case": "identity-subject_revision-non-string",
+      "expected": "rejected",
+      "event": {
+        "status": "rejected",
+        "details": [
+          {
+            "axis": "problem-grounded",
+            "record": "identity-41",
+            "rule": "malformed-current-evidence"
+          },
+          {
+            "axis": "problem-grounded",
+            "distinct_authors": 0,
+            "malformed": true,
+            "required_authors": 1,
+            "rule": "axis-incomplete-or-failing",
+            "standing_fails": 0
+          }
+        ],
+        "_command_index": 932
+      },
+      "before_state": "intent-review",
+      "after_state": "intent-review",
+      "before_context_sha256": "faafbec2901fe70ccbfbadf4571bc6bfc6b4627112994e81b80dcd5332d5392a",
+      "after_context_sha256": "faafbec2901fe70ccbfbadf4571bc6bfc6b4627112994e81b80dcd5332d5392a",
+      "restoration": {
+        "status": "completed",
+        "_command_index": 937
+      }
+    },
+    {
+      "case": "identity-subject_revision-blank",
+      "expected": "rejected",
+      "event": {
+        "status": "rejected",
+        "details": [
+          {
+            "axis": "problem-grounded",
+            "record": "identity-47",
+            "rule": "malformed-current-evidence"
+          },
+          {
+            "axis": "problem-grounded",
+            "distinct_authors": 0,
+            "malformed": true,
+            "required_authors": 1,
+            "rule": "axis-incomplete-or-failing",
+            "standing_fails": 0
+          }
+        ],
+        "_command_index": 952
+      },
+      "before_state": "intent-review",
+      "after_state": "intent-review",
+      "before_context_sha256": "fa1a86ba392bfe884336204bbc029dc68e3c95b2ebaf10346ddc7ec69ccef983",
+      "after_context_sha256": "fa1a86ba392bfe884336204bbc029dc68e3c95b2ebaf10346ddc7ec69ccef983",
+      "restoration": {
+        "status": "completed",
+        "_command_index": 957
+      }
+    },
+    {
+      "case": "identity-config_version-missing",
+      "expected": "rejected",
+      "event": {
+        "status": "rejected",
+        "details": [
+          {
+            "axis": "problem-grounded",
+            "record": "identity-53",
+            "rule": "malformed-current-evidence"
+          },
+          {
+            "axis": "problem-grounded",
+            "distinct_authors": 0,
+            "malformed": true,
+            "required_authors": 1,
+            "rule": "axis-incomplete-or-failing",
+            "standing_fails": 0
+          }
+        ],
+        "_command_index": 972
+      },
+      "before_state": "intent-review",
+      "after_state": "intent-review",
+      "before_context_sha256": "4c43196be03d03de836a0bad38543775f79b0b3b42aaca3bccd5ff46cd25c6b0",
+      "after_context_sha256": "4c43196be03d03de836a0bad38543775f79b0b3b42aaca3bccd5ff46cd25c6b0",
+      "restoration": {
+        "status": "completed",
+        "_command_index": 977
+      }
+    },
+    {
+      "case": "identity-config_version-non-string",
+      "expected": "rejected",
+      "event": {
+        "status": "rejected",
+        "details": [
+          {
+            "axis": "problem-grounded",
+            "record": "identity-59",
+            "rule": "malformed-current-evidence"
+          },
+          {
+            "axis": "problem-grounded",
+            "distinct_authors": 0,
+            "malformed": true,
+            "required_authors": 1,
+            "rule": "axis-incomplete-or-failing",
+            "standing_fails": 0
+          }
+        ],
+        "_command_index": 992
+      },
+      "before_state": "intent-review",
+      "after_state": "intent-review",
+      "before_context_sha256": "0ca7f78afeb9746a360ea30fcacf179b9ab9988d847c1bab0b9de04721cfe2b5",
+      "after_context_sha256": "0ca7f78afeb9746a360ea30fcacf179b9ab9988d847c1bab0b9de04721cfe2b5",
+      "restoration": {
+        "status": "completed",
+        "_command_index": 997
+      }
+    },
+    {
+      "case": "identity-config_version-blank",
+      "expected": "rejected",
+      "event": {
+        "status": "rejected",
+        "details": [
+          {
+            "axis": "problem-grounded",
+            "record": "identity-65",
+            "rule": "malformed-current-evidence"
+          },
+          {
+            "axis": "problem-grounded",
+            "distinct_authors": 0,
+            "malformed": true,
+            "required_authors": 1,
+            "rule": "axis-incomplete-or-failing",
+            "standing_fails": 0
+          }
+        ],
+        "_command_index": 1012
+      },
+      "before_state": "intent-review",
+      "after_state": "intent-review",
+      "before_context_sha256": "d61dd1bb71ad4c517ca83d2ded046074fb02704e299a5a1569999ccae222b0e2",
+      "after_context_sha256": "d61dd1bb71ad4c517ca83d2ded046074fb02704e299a5a1569999ccae222b0e2",
+      "restoration": {
+        "status": "completed",
+        "_command_index": 1017
+      }
+    }
+  ],
+  "linked_parent_controls": [
+    {
+      "case": "missing",
+      "command_index": 1019
+    },
+    {
+      "case": "mismatch",
+      "command_index": 1020
+    },
+    {
+      "case": "escape",
+      "command_index": 1021
+    },
+    {
+      "case": "valid",
+      "command_index": 1022
+    }
+  ],
+  "scope_limits": [
+    "Actual offline fixture-provider build, protocol/data-dump, three workflow profiles, identity/linked-parent and final adapter only.",
+    "No full workspace test/Clippy/fmt execution or semantic review inferred.",
+    "Healthy-source proof does not establish the defective implementation's behavior or repair seeded defective validation/narrative claims.",
+    "Historical v8/v9/v10/v13/v15 executions retain their original identities/scope; not relabelled.",
+    "Projection is supplied evidence and raw-byte binding, not an independent semantic verdict.",
+    "Use actual raw receipts as ROOT_* checker arguments, not this projection; raw copies are byte-identical and retain original absolute capture locators.",
+    "The selected supplied source snapshot excludes Git metadata and raw proof files; both are external evidence, not extra files in the sealed source inventory."
+  ],
+  "actual_executed_harness": {
+    "fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py": {
+      "sha256": "07be2039c1a1329e45b0155b254cc54f76061c7b68a5cd2344964722f0e7e82c",
+      "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/new-current-proof.py",
+      "role": "Actual native execution harness, external to59-file proved fixture source, not production-journey.py reexecution"
+    },
+    "fictional-repo/implementation-evidence/current-proof-harness/proof_support.py": {
+      "sha256": "6e3772dfa5209ec56262685d7216bc78e2c4e54a5c10274989f18a681e177298",
+      "original": "/Volumes/Workshop/macbook/loop-engine/recovery-20261013/c/a11-targeted-preparation-01/genuine-current-binding-support-01/harness-preparation-01/proof_support.py",
+      "role": "Actual native execution harness, external to59-file proved fixture source, not production-journey.py reexecution"
+    }
+  },
+  "historical_production_journey_body_scope": "Supplied production-journey.py remains original source/assertion reference. Actual new current proof executed new-current-proof.py, not the historical reuse/bootstrap runner. No claim that old missing reuse files were restored."
+}

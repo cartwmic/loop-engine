@@ -90,6 +90,8 @@ def reviewer_display_label(
         "example_prompt": "selected review prompt",
         "reviewer-protocol:data/reviewer-protocol.md": "review protocol",
         "request-json": "canonical request JSON",
+        "framing:locator-line-counts/v1": "locator line-count note",
+        "framing:locator-syntax/v1.1": "locator syntax requirement",
         "review-worker-preamble:data/review-worker-preamble.txt": "shipped review-worker preamble",
         "assignment-json": "frozen narrative assignment",
         "schema:data/narrative-schema.json": "narrative binding schema",
@@ -225,14 +227,14 @@ def required_predecessors(gate: str, fixture_id: str) -> tuple[str, ...]:
     return predecessors[family]
 
 
-def verify_preparation(root: Path, case_dir: Path, metadata: dict[str, Any], spec: dict[str, str]) -> dict[str, Any]:
+def verify_preparation(root: Path, case_dir: Path, metadata: dict[str, Any], spec: dict[str, str], preparation_manifest: Path | None = None) -> dict[str, Any]:
     reject_oracle_keys(metadata, str(case_dir / "preparation.json"))
     allowed_metadata = {
         "schema_version", "kind", "row_key", "config_version", "gate", "policy_id",
         "review_stage", "subject", "subject_revision", "fixture_id", "profile", "template",
         "source_records", "request_path", "instructions_path", "input_sha256", "prompt_sha256",
         "instructions_sha256", "coverage_case", "coverage_gate", "output_format",
-        "challenge_context_provenance",
+        "challenge_context_provenance", "input_framing",
     }
     if set(metadata) - allowed_metadata:
         fail(f"unsupported preparation metadata fields: {case_dir}")
@@ -302,6 +304,34 @@ def verify_preparation(root: Path, case_dir: Path, metadata: dict[str, Any], spe
         fail(f"reviewer instruction is not first source record: {case_dir}")
     if records[-1][0] != "request-json":
         fail(f"request-json is not final source record: {case_dir}")
+    framing = metadata.get("input_framing")
+    framing_positions = [i for i, (label, _) in enumerate(records) if label.startswith("framing:")]
+    if framing is None:
+        if framing_positions:
+            fail(f"unmarked framing record: {case_dir}")
+    else:
+        producer = producer_module()
+        if framing == producer.FRAMING_V1:
+            tail = 2
+            labels_ok = framing_positions == [len(records) - 2] and records[-2][0] == producer.FRAMING_V1_LABEL
+        elif framing == producer.FRAMING_V11:
+            tail = 3
+            labels_ok = (framing_positions == [len(records) - 3, len(records) - 2] and records[-3][0] == producer.FRAMING_V1_LABEL
+                         and records[-2][0] == producer.FRAMING_V11_LABEL)
+        else:
+            tail, labels_ok = 2, False
+        if not labels_ok:
+            fail(f"input framing marker/record mismatch: {case_dir}")
+        if spec.get("coverage_case") or "-narrative-" in spec["gate"]:
+            fail(f"input framing v1 is not defined for this packet kind: {case_dir}")
+        try:
+            expected_note = producer.locator_line_count_note(records[:-tail], str(metadata["subject"]), str(metadata["template"]))
+        except (SystemExit, ValueError) as error:
+            fail(f"framing record not derivable: {error}")
+        if records[-tail][1] != expected_note:
+            fail(f"framing record is not the deterministic derivation of its source records: {case_dir}")
+        if framing == producer.FRAMING_V11 and records[-2][1] != producer.FRAMING_V11_RECORD:
+            fail(f"v1.1 framing record is not the sealed record text: {case_dir}")
     input_hash = framed_digest(records)
     if input_hash != metadata["input_sha256"]:
         fail(f"mechanical input_sha256 mismatch: {case_dir}")
@@ -342,7 +372,7 @@ def verify_preparation(root: Path, case_dir: Path, metadata: dict[str, Any], spe
         if sum(label == "example_prompt" for label, _ in records) != 1:
             fail(f"coverage packet must contain exactly one rubric: {case_dir}")
     if "-narrative-" in spec["gate"]:
-        verify_current_narrative(metadata, spec)
+        verify_current_narrative(metadata, spec, preparation_manifest)
     return {"records": records, "instructions": instructions}
 
 
@@ -355,13 +385,13 @@ def producer_module():
     return module
 
 
-def verify_current_narrative(metadata: dict, spec: dict) -> None:
+def verify_current_narrative(metadata: dict, spec: dict, preparation_manifest: Path | None = None) -> None:
     producer = producer_module()
     repository = Path(__file__).resolve().parent.parent
     data = repository / "crates/software-change-provider/data"
     profile_path = data / f"configs/{metadata['profile']}.json"
     identity = producer.parse_row_key(spec["row_key"])
-    manifest = read_json(data / "calibration/manifest.json", "manifest")
+    manifest = read_json(preparation_manifest or data / "calibration/manifest.json", "manifest")
     row = producer.manifest_row(manifest, identity)
     current_hash = producer.make_case(repository=repository,
         procedure=(data / "calibration/PROCEDURE.md").read_bytes(),
@@ -514,6 +544,7 @@ def verify_receipt(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, help="Preparation-only external pending manifest; never changes shipped records")
     parser.add_argument("--preparation-only", action="store_true", help="Verify supplied packets without requiring or inventing reviewer returns")
     parser.add_argument("--row-key", action="append", default=[])
     parser.add_argument("--coverage-case", action="append", choices=COVERAGE_CASES, default=[])
@@ -525,11 +556,17 @@ def main() -> int:
     args = parser.parse_args()
     try:
         root = args.root.resolve(strict=True)
+        if args.manifest is not None:
+            if not args.preparation_only:
+                fail("external manifest is permitted only for preparation-only verification")
+            rows = read_json(args.manifest, "preparation manifest")
+            if not isinstance(rows, list) or not rows or any(row.get("observed") != "pending" or row.get("attested_by") or row.get("model") or row.get("applicability") or row.get("result_ref") for row in rows):
+                fail("external preparation manifest must contain only unattested pending rows")
         specs = expected_specs(args)
         preparations = []
         for spec in specs:
             case_dir, metadata = preparation_for(root, spec)
-            verify_preparation(root, case_dir, metadata, spec)
+            verify_preparation(root, case_dir, metadata, spec, args.manifest)
             preparations.append((spec, case_dir, metadata))
         if args.preparation_only:
             print(json.dumps({"status": "prepared-only-observations-pending", "cases": [

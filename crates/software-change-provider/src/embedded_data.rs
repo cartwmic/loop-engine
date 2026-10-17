@@ -22,6 +22,15 @@ pub struct EmbeddedFile {
 /// omissions or stale bytes.
 pub static FILES: &[EmbeddedFile] = &[
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/returned-v16.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/returned-v16.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/returned-v17.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/returned-v17.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/current-mechanical-proof.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/companions/fictional-repo/implementation-evidence/current-mechanical-proof.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/companions/fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/current-proof-harness/proof_support.py", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/companions/fictional-repo/implementation-evidence/current-proof-harness/proof_support.py")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/repository-state-replacement-case-01.txt", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/companions/fictional-repo/implementation-evidence/repository-state-replacement-case-01.txt")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/repository-state-replacement-case-02.txt", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/companions/fictional-repo/implementation-evidence/repository-state-replacement-case-02.txt")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/companions/fictional-repo/scripts/assert_new_current_proof.py", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/companions/fictional-repo/scripts/assert_new_current_proof.py")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/implementation-report-replacement-case-01.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/implementation-report-replacement-case-01.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/implementation-report-replacement-case-02.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/implementation-report-replacement-case-02.json")) },
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-133.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-133.json")) },
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-133.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-133.md")) },
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/narrative-134.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/narrative-134.json")) },
@@ -697,7 +706,7 @@ mod tests {
                 .expect("profile is in FILES");
             let profile: serde_json::Value = serde_json::from_slice(file.bytes).unwrap();
             assert_eq!(profile["contract_version"], 4);
-            assert_eq!(profile["config_version"], format!("{name}-16"));
+            assert_eq!(profile["config_version"], format!("{name}-17"));
             assert_eq!(profile["extra"]["narratives"], serde_json::json!([]));
             assert_eq!(profile["extra"]["checkpoints"], serde_json::json!([]));
             for entries in profile["review_policies"].as_object().unwrap().values() {

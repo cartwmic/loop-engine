@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -126,7 +127,14 @@ IMPLEMENTATION_COMPANIONS = {
     "repo-state-2026-08-12": "calibration/companions/fictional-repo/implementation-evidence/repo-state-2026-08-12.txt",
     "repo-state-2026-08-13": "calibration/companions/fictional-repo/implementation-evidence/repo-state-2026-08-13.txt",
 }
+# Owner-approved preparation-only replacement case selectors; not shipped calibration.
+IMPLEMENTATION_COMPANIONS.update({'9bc785ea61812bd63c8641698ffba8162c1a3883': 'calibration/companions/fictional-repo/implementation-evidence/repository-state-replacement-case-01.txt', '1a24892b24a425ff470a6063839e41d4ac68f229': 'calibration/companions/fictional-repo/implementation-evidence/repository-state-replacement-case-02.txt'})
+IMPLEMENTATION_COMPANIONS['b39ad2594aad48ba0698f22848f2fb64631c9ea9'] = 'calibration/companions/fictional-repo/implementation-evidence/repository-state-replacement-case-01.txt'
 DOC_COMPANIONS = {
+    'fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py',
+    'fictional-repo/implementation-evidence/current-proof-harness/proof_support.py',
+    'fictional-repo/scripts/assert_new_current_proof.py',
+    'fictional-repo/implementation-evidence/current-mechanical-proof.json',
     "fictional-repo/README.md",
     "fictional-repo/provider/README.md",
     "fictional-repo/docs/PRD.md",
@@ -140,6 +148,10 @@ DOC_COMPANIONS = {
     "fictional-repo/scripts/production-journey.py",
 }
 REQUIREMENT_PROOF_COMPANIONS = (
+    'fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py',
+    'fictional-repo/implementation-evidence/current-proof-harness/proof_support.py',
+    'fictional-repo/scripts/assert_new_current_proof.py',
+    'fictional-repo/implementation-evidence/current-mechanical-proof.json',
     "fictional-repo/docs/PRD.md",
     "fictional-repo/implementation-evidence/requirement-to-proof.md",
     "fictional-repo/scripts/assert-requirement-proof.py",
@@ -232,6 +244,91 @@ def canonical_request(
     ).encode("utf-8")
 
 
+# ---- Versioned reviewer framing record "locator-line-counts/v1" (non-evidential, derived, deterministic) ----
+FRAMING_V1 = "locator-line-counts/v1"
+FRAMING_V1_LABEL = "framing:" + FRAMING_V1
+FRAMING_V1_DISPLAY = "locator line-count note"
+# v1.1 adds ONE fixed, non-derived record after the v1 note (prompt-format clarification of the FILE#Lstart-Lend locator syntax). It is the same bytes in every row.
+FRAMING_V11 = FRAMING_V1 + "+locator-syntax/v1.1"
+FRAMING_V11_LABEL = "framing:locator-syntax/v1.1"
+FRAMING_V11_DISPLAY = "locator syntax requirement"
+FRAMING_V11_RECORD = "This framing record is added by the calibration driver (locator-syntax/v1.1), after the locator line-count note. It is not evidence and says nothing about verdicts, criteria or what to cite.\n\nA line-range locator must be written exactly as FILE#Lstart-Lend: the letter L comes before the first number and again before the second number.\nValid:   FILE#L3-L7\nInvalid: FILE#L3-7  (no L before the second number)\nJSON-pointer locators (FILE#/path) are unchanged. The line counts in the previous note are unchanged.\n\nBefore you return your record, check each evidence locator against this syntax and against the line counts, and correct any that do not conform. This check changes nothing else about what you inspect or conclude.\n".encode("utf-8")
+FRAMINGS = (FRAMING_V1, FRAMING_V11)
+CLASS_CODED_TOKENS = ("good", "defective", "overbuilt", "bad")
+EMBEDDED_MARKER = re.compile(
+    r"^=== (?:COVERED FILE|ACTUAL EXECUTED EXTERNAL PROOF HARNESS|BASELINE AND COVERED UNCHANGED FILE|COVERED ADDITION; BASELINE ABSENT FILE): ([^;\n]+); sha256:([a-f0-9]{64}) ===\n",
+    re.M,
+)
+NEUTRAL_PREDECESSOR_NAMES = {
+    "intent-good": "intent.json", "design-good": "design.json", "plan-good": "plan.json",
+    "implementation-report-good": "implementation report.json",
+}
+
+
+def line_count(text: str) -> int:
+    """Number of lines exactly as Rust str::lines().count() (the engine's validate_line_selector rule) for any text."""
+    return text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+
+
+def framing_citation_name(label: str, subject: str, template: str) -> str | None:
+    """Neutral locator name for a citable source record, or None when the record is not line-citable framing-wise.
+    Class-coded canonical fixture labels are never used (see reviewer_display_label)."""
+    if label in ("example_prompt", "request-json", FRAMING_V1_LABEL, FRAMING_V11_LABEL) or label.startswith("system-developer-instruction:"):
+        return None
+    if label.startswith(("reviewer-protocol:", "template:", "schema:data/configs/")):
+        # Full data path (never the bare basename: embedded copies of the same basenames make a bare name ambiguous).
+        return label.split(":", 1)[1].split("#", 1)[0]
+    if label.startswith("subject:"):
+        return subject
+    if label.startswith("required predecessor:data/calibration/fixtures/"):
+        fixture = label.rsplit("/", 1)[-1].removesuffix(".json")
+        if fixture not in NEUTRAL_PREDECESSOR_NAMES:
+            die(f"locator framing v1 does not define a neutral name for {label}")
+        return NEUTRAL_PREDECESSOR_NAMES[fixture]
+    if label.startswith("companion:"):
+        return label.split(":", 1)[1]
+    die(f"locator framing v1 does not define source record label {label}")
+
+
+def locator_line_count_note(records: list[tuple[str, bytes]], subject: str, template: str) -> bytes:
+    """Pure function of the ordered source records that precede the framing record. Same bytes in producer, asserter and consumer."""
+    rows: list[tuple[str, str, int]] = []
+    seen: set[str] = set()
+    for index, (label, content) in enumerate(records):
+        name = framing_citation_name(label, subject, template)
+        if name is None:
+            continue
+        text = content.decode("utf-8")
+        header = reviewer_display_label(records, index, subject, template)
+        rows.append((header, name, line_count(text)))
+        for marker in EMBEDDED_MARKER.finditer(text):
+            after = text[marker.end():]
+            following = re.search(r"^=== ", after, re.M)
+            part = after[: following.start()] if following else after
+            body = next((part[:-n] if n else part for n in range(5)
+                         if hashlib.sha256((part[:-n] if n else part).encode("utf-8")).hexdigest() == marker.group(2)), None)
+            if body is None:
+                die(f"embedded body hash mismatch in {name}: {marker.group(1)}")
+            rows.append(("embedded in " + header, marker.group(1), line_count(body)))
+    for header, name, _ in rows:
+        for token in CLASS_CODED_TOKENS:
+            if token in name.lower() or token in header.lower():
+                die(f"class-coded token {token!r} in locator framing name {name!r}")
+    names = [name for _, name, _ in rows]
+    if len(set(names)) != len(names):
+        die("locator framing names are not unique")
+    lines = [
+        "This framing record is added by the calibration driver (" + FRAMING_V1 + "). It is not evidence and says nothing about verdicts, criteria or what to cite.",
+        "",
+        "A line-range locator FILE#Lstart-Lend counts the physical lines of the exact body of FILE: 1-based and inclusive; a line ends at a line feed and a final line without one still counts; start must be at least 1 and no greater than end, and end must not exceed the line count listed below. This is the engine's own rule: the number of lines in the source text. JSON-pointer locators are unchanged.",
+        "Never counted: the '=== supplied material: ... ===' header line, the blank line after each supplied material and, for a file embedded in a record, the blank lines that follow the embedded body.",
+        "",
+        "Line counts (supplied material as shown : name used in a locator : lines):",
+    ]
+    lines += [f"- {header} : {name} : {count} line" + ("" if count == 1 else "s") for header, name, count in rows]
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
 def framed_digest(records: Iterable[tuple[str, bytes]]) -> str:
     records = list(records)
     stream = bytearray()
@@ -255,6 +352,8 @@ def reviewer_display_label(
         "example_prompt": "selected review prompt",
         "reviewer-protocol:data/reviewer-protocol.md": "review protocol",
         "request-json": "canonical request JSON",
+        FRAMING_V1_LABEL: FRAMING_V1_DISPLAY,
+        FRAMING_V11_LABEL: FRAMING_V11_DISPLAY,
         "review-worker-preamble:data/review-worker-preamble.txt": "shipped review-worker preamble",
         "assignment-json": "frozen narrative assignment",
         "schema:data/narrative-schema.json": "narrative binding schema",
@@ -473,6 +572,7 @@ def make_case(
     coverage_case: str | None = None,
     coverage_gate: str | None = None,
     hash_only: bool = False,
+    input_framing: str | None = None,
 ) -> Path | str:
     profile_basename = profile_name(profile_path)
     config_version = identity["config_version"]
@@ -482,7 +582,12 @@ def make_case(
     fixture_id = identity["fixture_id"]
 
     if coverage_case is None:
-        manifest_row(manifest, identity)
+        selected_row = manifest_row(manifest, identity)
+        if selected_row.get("input_framing") != input_framing:
+            die(
+                f"input framing {input_framing!r} disagrees with the manifest row marker {selected_row.get('input_framing')!r}: "
+                + identity["row_key"]
+            )
         if profile.get("config_version") != config_version:
             die(
                 f"profile config_version {profile.get('config_version')!r} does not match row {config_version!r}"
@@ -592,6 +697,14 @@ def make_case(
         companion_bytes = read_bytes(companion_path, "companion")
         records.append(("companion:fictional-repo/docs/requirement-coverage.md", companion_bytes))
 
+    if input_framing is not None:
+        if input_framing not in FRAMINGS:
+            die(f"unsupported input framing {input_framing!r}")
+        if coverage_case is not None or narrative_gate(gate):
+            die("input framing v1 is defined only for ordinary non-narrative review packets")
+        records.append((FRAMING_V1_LABEL, locator_line_count_note(records, subject, template)))
+        if input_framing == FRAMING_V11:
+            records.append((FRAMING_V11_LABEL, FRAMING_V11_RECORD))
     request_bytes = canonical_request(
         gate, axis, stage, subject, subject_revision, config_version
     )
@@ -660,6 +773,8 @@ def make_case(
         "prompt_sha256": hashlib.sha256(prompt_bytes).hexdigest(),
         "instructions_sha256": hashlib.sha256(instructions_bytes).hexdigest(),
     }
+    if input_framing is not None:
+        preparation["input_framing"] = input_framing
     if narrative_gate(gate):
         preparation["output_format"] = "review-worker-batch-v3"
         preparation["challenge_context_provenance"] = "synthetic-corpus-stimulus-not-genuine-review" if gate.endswith("adversarial-review") else "not-supplied"
@@ -782,6 +897,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--coverage-axis", default="ids-grounded")
     parser.add_argument("--coverage-stage", default="aggregate")
     parser.add_argument("--fixture", type=Path)
+    parser.add_argument("--input-framing", choices=FRAMINGS, default=None)
     parser.add_argument("--companion", type=Path)
     return parser
 
@@ -835,6 +951,7 @@ def main() -> int:
                         profile=profile,
                         output_root=output_root,
                         identity=identity,
+                        input_framing=args.input_framing,
                     )
                 )
         else:

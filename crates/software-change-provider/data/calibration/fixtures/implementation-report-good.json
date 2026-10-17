@@ -10,39 +10,43 @@
     "documents": [
       {
         "path": "fictional-repo/README.md",
-        "revision": "NEW-v15-bytes:c2fb03864106eb2bab324d3dad8a18fd330d0fb56ac633d664dffa344217a082"
+        "revision": "NEW-successor-bytes:c2fb03864106eb2bab324d3dad8a18fd330d0fb56ac633d664dffa344217a082"
       },
       {
         "path": "fictional-repo/provider/README.md",
-        "revision": "NEW-v15-bytes:212766effb1154684b1165429938419ec3410eb6d49e83dd94da01d8e8334a6d"
+        "revision": "NEW-successor-bytes:212766effb1154684b1165429938419ec3410eb6d49e83dd94da01d8e8334a6d"
       },
       {
         "path": "fictional-repo/docs/PRD.md",
-        "revision": "NEW-v15-bytes:8940cfd435726cbe1d5abc9fc66a701ba2d9e1d9af8815de238edd7034e0f3dc"
+        "revision": "NEW-successor-bytes:8940cfd435726cbe1d5abc9fc66a701ba2d9e1d9af8815de238edd7034e0f3dc"
       },
       {
         "path": "fictional-repo/implementation-evidence/requirement-to-proof.md",
-        "revision": "NEW-v15-bytes:cd1e45de4397913c1a62a0d5addba49c9b41fbfcbb89bbb2ee341422a54dc351"
+        "revision": "NEW-successor-bytes:cd1e45de4397913c1a62a0d5addba49c9b41fbfcbb89bbb2ee341422a54dc351"
       },
       {
         "path": "fictional-repo/loop-engine-software-change-provider-prd.md",
-        "revision": "NEW-v15-bytes:c0103e8328c2766cc13046f4b31d2d743f1082fd22a06b3b7807ff7784cee8ae"
+        "revision": "NEW-successor-bytes:c0103e8328c2766cc13046f4b31d2d743f1082fd22a06b3b7807ff7784cee8ae"
       },
       {
         "path": "fictional-repo/loop-engine-software-change-provider-technical-design.md",
-        "revision": "NEW-v15-bytes:3515f1c35bfda30955abc141acb884cec3b7fd8872ea6f222189fa304da57a9c"
+        "revision": "NEW-successor-bytes:3515f1c35bfda30955abc141acb884cec3b7fd8872ea6f222189fa304da57a9c"
       },
       {
         "path": "fictional-repo/loop-engine-software-change-provider-task-packets.md",
-        "revision": "NEW-v15-bytes:2f66bddd739bceafe29e82b96ed8f845cfc90e6c483ce4ad3c71f028238613a6"
+        "revision": "NEW-successor-bytes:6a7ab7a88ed3bdbd3f3e7b50b975d2dcb4741295f05448a9237ff5ee59314473"
       },
       {
         "path": "fictional-repo/scripts/assert-doc-authority.py",
-        "revision": "NEW-v15-bytes:e7fb99420d799329142ed4ba5200ef4eb2c264df2aff71670648a9f12682c997"
+        "revision": "NEW-successor-bytes:e7fb99420d799329142ed4ba5200ef4eb2c264df2aff71670648a9f12682c997"
       },
       {
         "path": "fictional-repo/scripts/assert-requirement-proof.py",
-        "revision": "NEW-v15-bytes:6c8c7a54618f5bee6be37de30053881acf0df38f0eb49f0525bda727ba09b384"
+        "revision": "NEW-successor-bytes:35ebc42990ff99b1ba0a7c8c9e7dc1cb98df2eb6b79d45cd692aca4efcfb37d5"
+      },
+      {
+        "path": "fictional-repo/scripts/assert_new_current_proof.py",
+        "revision": "NEW-successor-bytes:2e87eab3b2532152444a584cf04918023438b5dbbfd6476cb98167f0f1342688"
       }
     ]
   },
