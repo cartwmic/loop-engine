@@ -71,6 +71,24 @@ def test_small_matched_campaign(campaign_root):
     assert list((campaign_root / "logs").glob("*.eval"))
 
 
+def test_no_options_campaign_uses_defaults_and_one_model_in_every_role(campaign_root):
+    """AC-3 defaults. Only the required pinned simulator/judge identities and one model are named;
+    no preset, profile, counts or per-role options are given."""
+    summary = run(campaign_root, models=["fake/a"])
+    recorded = summary["settings"]
+    assert (recorded["preset"], recorded["effective_case_count"], recorded["effective_trials_per_case"]) == ("small", 3, 3)
+    assert recorded["profile"] == "standard-14"
+    for name in ("preset", "profile", "case_count", "trials_per_case", "combinations"):
+        assert recorded["setting_sources"][name] == "default", name
+    assert recorded["setting_sources"]["models"] == "explicit"
+    assert recorded["resolved_combinations"] == [{"id": "fake/a", "driver": "fake/a", "implementer": "fake/a", "reviewer": "fake/a"}]
+    assert len(summary["trials"]) == 9
+    assert {a["combination_id"] for a in summary["matched_assignment"]} == {"fake/a"}
+    roles = summary["comparisons"][0]["role_models"]
+    workflow_models = {model for role, model in roles.items() if role not in ("simulator", "judge")}
+    assert len(roles) - 2 == 3 and workflow_models == {"fake/a"}
+
+
 @pytest.mark.parametrize("override,count,k", [({"preset": "medium"}, 36, 3), ({"case_count": 2, "trials_per_case": 2}, 8, 2)])
 def test_preset_and_explicit_counts(campaign_root, override, count, k):
     summary = run(campaign_root, **override)

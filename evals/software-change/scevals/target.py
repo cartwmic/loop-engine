@@ -644,7 +644,9 @@ class SoftwareChangeTarget:
                   "run_health": health, "discipline": discipline(trial.case, delivered, push_events, len(trial.owner.answers)),
                   "honesty": honesty(snapshot, artifacts, delivered, tests, trial.case.requirement_ids, hidden_success=success),
                   "needed_role_aliases": needed,
-                  "intent_judge": judge_metrics}
+                  "intent_judge": judge_metrics,
+                  # What actually ran: the profile config_version frozen in the run's own start input.
+                  "profile_config_version": (snapshot.get("initial_input") or {}).get("config_version")}
         if not trial.evidence.get("owner_history_available", True):
             metrics["elicitation_recall"] = None
             metrics["discipline"]["owner_question_count"] = None
@@ -658,7 +660,7 @@ class SoftwareChangeTarget:
         # Timeouts/infrastructure can prevent sandbox scoring. Retain every
         # dimension explicitly as unavailable, rather than silently dropping it.
         for key in ("hidden_test_outcome", "delivery_recall", "delivery_by_requirement", "elicitation_recall",
-                    "review_escapes", "discipline", "honesty", "intent_judge"):
+                    "review_escapes", "discipline", "honesty", "intent_judge", "profile_config_version"):
             metrics.setdefault(key, None)
         metrics["usage_by_role_alias"] = {role: usage_by_role.get(role, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
                                            for role in ("role-driver", "role-implementer", "role-reviewer")}
@@ -690,7 +692,7 @@ class SoftwareChangeTarget:
                 "role_observations": [s.get("role_observations", {}) for s in scores],
                 "software_change_metrics": [{k: s[k] for k in ("hidden_test_outcome", "delivery_recall", "delivery_by_requirement",
                     "elicitation_recall", "review_escapes", "run_health", "discipline", "honesty", "usage_by_role_alias",
-                    "unused_needed_role", "intent_judge") if k in s} for s in scores],
+                    "unused_needed_role", "intent_judge", "profile_config_version") if k in s} for s in scores],
                 "judge_calibration": getattr(self, "calibration", {"status": "calibration pending"}),
                 "metric_basis": "per-trial counts/recall; unavailable external observations are null, not zero"}
 

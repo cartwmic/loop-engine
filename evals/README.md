@@ -1,4 +1,6 @@
-# Whole-workflow evaluations (draft)
+# Whole-workflow evaluations
+
+## Overview
 
 This local, uv-managed Python harness uses Inspect AI to compare whole unattended
 software-change runs, not isolated chat answers. Each trial starts with a vague
@@ -7,6 +9,21 @@ owner answers questions; hidden tests score the delivered code after the run
 reaches a terminal state. The owner chooses models, approves private cases and
 paid calls, and decides which reports to publish. Small samples are a gut check,
 not a statistically rigorous ranking.
+
+Use it when one owner wants comparable signal about how models handle the whole
+software-change workflow on their own private cases. Do not use it when you need:
+
+- A public benchmark, leaderboard or statistically significant ranking. Defaults
+  are 3 cases x 3 trials, and the first pilot ran 3 cases x 1 trial.
+- Cheap or fast runs. One real trial can take one to three hours and millions of
+  workflow tokens.
+- Another host setup. It needs native arm64 Docker, uv, host Pi/Node for `pi/`
+  models, and an image built from a pinned local Loop Engine ref (default `v0.24.0`).
+- A trustworthy intent-quality verdict. The first owner-labelled calibration of the
+  intent judge agreed with the owner on 4 of 10 labelled intents (0 of 2 deficient
+  intents passed). Treat intent-judge scores as low-confidence signal.
+- Isolation against a hostile model. The threat boundary is a single trusted owner.
+- A reusable library. The core/target split is internal to this harness.
 
 ## General core and software-change target
 
@@ -31,7 +48,7 @@ Simulator/judge usage is evaluation overhead, separate from workflow cost; unpri
 dollar estimates are null, not zero. Judge agreement/false-pass counts accompany
 intent scores when owner-confirmed calibration is available, otherwise pending.
 
-## Setup and focused commands
+## Setup
 
 Run from the checkout root with uv, Python 3.12+ and native arm64 Docker available.
 Only the project-local Python environment is needed:
@@ -51,33 +68,29 @@ If the image is missing/mismatched, run `image-check` first (only when image cha
 are authorized). Every reference test must pass and at least one no-op test must
 fail; an invalid case exits nonzero. Private cases stay in a separate repository, never under this checkout.
 
-These public real-Pi/Docker proofs use scripted Inspect backends, with no live or
-paid model calls (build the image first):
+## Usage
 
-```sh
-uv run --project evals evalctl campaign --settings evals/software-change/campaigns/scripted-example.toml
-uv run --project evals evalctl campaign --settings evals/software-change/campaigns/role-routing.toml
-uv run --project evals evalctl ac5-demo
-uv run --project evals pytest -q evals
-```
-
-The scripts prove lifecycle, role routing and metrics, not real-model semantic
-quality. `ac5-demo` distinguishes never asking, asking/building, and asking without
-building: elicitation and delivery recall change separately.
-
-## Real campaigns (owner-gated)
+### Real campaigns (owner-gated)
 
 Copy `software-change/campaigns/real-example.toml` to a local ignored capture
 location and obtain owner approval before launching. The shipped example uses
 `codex/gpt-6.1-sol` for workflow roles and `openrouter/openai/gpt-6-luna` for
-simulator/judge; the latter still requires separate paid-call approval:
+simulator/judge; the latter still requires separate paid-call approval and an
+`OPENROUTER_API_KEY` in the host environment (create a key at
+<https://openrouter.ai/keys>; model IDs are listed at <https://openrouter.ai/models>):
 
 ```sh
 uv run --project evals evalctl campaign --settings LOCAL_SETTINGS.toml
 ```
 
-Read model credentials on the host at runtime; never put keys or resolved
-provider configuration into campaign settings, prompts or reports. The registered
+Any Inspect model ID can fill any role (bring your own provider). The
+[Inspect model providers guide](https://inspect.aisi.org.uk/providers.html) lists
+each provider's `provider/model` ID form and the host environment variable it
+reads for credentials. Set that variable on the host and pin the exact model ID
+in settings. Models used here must support tool calling (workflow roles) and plain
+text completion (simulator/judge). Read model credentials on the
+host at runtime; never put keys or resolved provider configuration into campaign
+settings, prompts or reports. The registered
 Inspect `codex` provider reads `~/.pi/agent/auth.json` (`openai-codex`) at model
 creation and uses the owner's ChatGPT/Codex subscription, never container auth.
 Expired/missing/invalid credentials fail with instructions to run Pi once; there
@@ -160,7 +173,7 @@ setting is replaced (update local TOMLs).
 All settings and versions are recorded. Paths resolve relative to invocation cwd.
 See the core README for price tables and the target README for target options.
 
-## Calibration
+### Calibration
 
 ```sh
 uv run --project evals evalctl calibrate extract --database "$HOME/.local/share/loop-engine/loop.db" --sessions "$HOME/.pi/agent/sessions"
@@ -174,7 +187,7 @@ labels file and receipts are ignored. Pin the same judge model in calibration an
 campaigns. See [calibration](software-change/calibration/README.md) for the gate,
 counts and receipt integration.
 
-## Results, captures and secrecy
+### Results, captures and secrecy
 
 A normal campaign writes exactly `report.md` and `summary.json` under
 `software-change/results/<campaign>/<UTC timestamp>/`, for example
@@ -243,7 +256,7 @@ For an external bare tar of `/workspace` (members relative to `/workspace`,
 including `trial/`, `public/repo/.git` and the local remote), the exact command is:
 
 ```sh
-uv run --project /Volumes/Workshop/macbook/git/loop-engine-preserve/evals evalctl rescore /ABSOLUTE/workspace.tar --settings /ABSOLUTE/SETTINGS.toml --sample external-trial --case /ABSOLUTE/CASE --model sc-scripted/driver
+uv run --project evals evalctl rescore /ABSOLUTE/workspace.tar --settings /ABSOLUTE/SETTINGS.toml --sample external-trial --case /ABSOLUTE/CASE --model sc-scripted/driver
 ```
 
 `--case` is a case directory or a case ID from settings. `--model` identifies the
@@ -304,8 +317,8 @@ uv run --project evals evalctl check-results evals/software-change/results --cas
 
 `--cases` accepts one case or a repository with immediate case subdirectories.
 The audit reads every result file recursively, including binary files, and searches
-whole hidden files and every nonblank hidden-text line containing a letter/digit;
-blank/punctuation-only lines are not evidence. It scans raw/JSON-escaped strings
+whole hidden files and every hidden-text line of at least 24 characters that
+contains a letter/digit. Shorter standalone fragments are not detected. It scans raw/JSON-escaped strings
 and decoded JSON layers, runtime credential values and provider configuration
 markers. A match exits 1 without printing matching content; missing/empty/invalid
 inputs exit 2, never a vacuous pass. Conservative common-line matches are possible.
@@ -315,8 +328,10 @@ Codex and Pi campaign settings automatically add their host Pi auth file to prov
 configuration protection when **any** workflow/simulator/judge role uses `codex/`
 or `pi/` respectively (Pi honors its normal agent-directory override).
 Standalone `check-results` also protects these files whenever present, without
-printing their values. Whole configs, meaningful (non-punctuation-only) lines and
-parsed string values are protected; formatting braces alone are not secrets.
+printing their values. Environment credential values are protected at any length.
+From provider configs, the whole file plus non-comment lines and parsed string
+values of at least 16 characters are protected. Shorter config-only values and
+comment lines are not; do not rely on this guard to catch short secrets.
 
 Supply every other resolved host provider config via repeated `--provider-config FILE`
 (to `campaign` and `check-results`), `provider_config_paths` campaign settings, or
@@ -327,5 +342,42 @@ also refuses credential/config matches before writing output. No host credential
 enter trial containers; a dummy bridge key is not a model credential. Hidden
 briefs remain host-side; tests/reference enter only after terminal observation.
 
-The owner's final repository proof route and README policy-document drafting/audit
-are separate driver-owned gates; focused Python proofs do not replace them.
+## Validation
+
+These public real-Pi/Docker proofs use scripted Inspect backends, with no live or
+paid model calls (run `image-check` first):
+
+```sh
+uv run --project evals pytest -q evals
+uv run --project evals evalctl campaign --settings evals/software-change/campaigns/scripted-example.toml
+uv run --project evals evalctl campaign --settings evals/software-change/campaigns/role-routing.toml
+uv run --project evals evalctl ac5-demo
+```
+
+The scripts prove lifecycle, role routing and metrics, not real-model semantic
+quality. `ac5-demo` distinguishes never asking, asking/building, and asking without
+building: elicitation and delivery recall change separately. The repository's
+own Rust proof route is in checkout-root `AGENTS.md`; these Python proofs do not
+replace it.
+
+## Troubleshooting
+
+- **`case-check` says the image is missing or mismatched.** It never builds. Run
+  `uv run --project evals evalctl image-check` (needs build-network access).
+- **A `codex/` model fails with missing or expired credentials.** The harness does
+  not refresh OAuth. Run Pi once on the host to refresh `~/.pi/agent/auth.json`.
+- **A `pi/` model fails repeatedly.** Read the redacted host log
+  `software-change/logs/pi-helper-errors.log`. Provider policy blocks and rejected
+  bridged requests are classified as infrastructure, not model failures.
+- **The report is refused and no report is written.** The pre-write scan found a
+  credential or provider-config match. The private capture is kept and the command
+  prints a `rescore` command; rescore with safe `--settings`.
+- **A campaign fails with only `Command failed (SomeError)`.** The CLI hides
+  exception text because it can contain keys or private case text. A common first-run
+  cause is a missing provider credential, such as `OPENROUTER_API_KEY` for the
+  real example's simulator/judge. Set it on the host and rerun.
+- **`check-results` exits 1 or 2.** Exit 1 means protected content matched (content
+  is not printed). Exit 2 means missing, empty or invalid inputs.
+- **A trial stops as idle or hard timeout.** Adjust `idle_limit_seconds` or
+  `hard_limit_seconds` in settings; recover with `rescore` or `resume-trial`
+  (resumed trials are reported separately).

@@ -1,4 +1,6 @@
-# Evaluation core (draft)
+# Evaluation core
+
+## Overview
 
 This is the general part of the local Inspect AI harness, not a separate library.
 It owns settings, matched assignment, Inspect sample execution, outcome accounting,
@@ -7,6 +9,19 @@ simulated-owner behaviour, hidden-test scoring and intent calibration belong to 
 software-change target, not to this directory. The fake target is test-only and
 uses no containers, Pi, credentials or network model calls; it does not prove the
 software-change adapter or trial isolation.
+
+Use this directory when adding or changing a target inside this harness. It is
+not a published or versioned library: the interface may change with the harness,
+and software-change is the only real target. Campaign operation, real-model setup
+and result publication are in checkout-root `evals/README.md`.
+
+## Setup
+
+From the checkout root, install the project-local environment (Python 3.12+, uv):
+
+```sh
+uv sync --project evals --locked
+```
 
 ## Target contract
 
@@ -112,29 +127,23 @@ or the target's optional `provider_config_paths` attribute. Environment variable
 whose names identify provider config may contain a path or inline text. Configs
 are read only on the host, never exported. Any `codex/` or `pi/` role automatically adds
 its host Pi auth file to settings protection (`pi/` honors `PI_CODING_AGENT_DIR`). Standalone software-change audits
-also protect it whenever present. Punctuation-only formatting lines are ignored;
-whole configs, meaningful lines and parsed string values remain protected. The scan is deliberately fail-closed:
-short credentials/common config values may also refuse an otherwise safe report.
+also protect it whenever present. Environment credential values are protected at
+any length. From provider configs, the whole file plus non-comment lines and parsed
+string values of at least 16 characters (`MIN_SECRET_LENGTH`) are protected.
+Shorter config-only values and comment lines are not, so a short secret that exists
+only in a config file can reach a report. Operators and targets must not rely on
+this guard for such values. The scan is otherwise fail-closed: credential values
+can also refuse an otherwise safe report.
 Targets must separately prevent private case text in exports and protect raw logs;
 this core credential guard does not establish AC-7 or container isolation.
 
-## Commands and registration
+## Usage
 
 From the checkout root:
 
 ```sh
 uv run --project evals evalctl campaign --settings PATH.toml
-uv run --project evals pytest -q evals
-uv run --project evals pytest -q evals/core/tests/test_fake_campaign.py
 ```
-
-The black-box tests invoke the actual `evalctl` process and Inspect `ModelAPI`
-backend, retain reports and command output under gitignored test `captures/`, and
-exercise small/medium/explicit counts, actual role routing, injected infrastructure,
-model failure, actual timeout, and pre-write credential refusal. For a manual fake
-campaign, put `evals/core/tests` on `PYTHONPATH`, set `EVAL_FAKE_ROOT` to a local
-capture directory, use target `fake_target:create_target`, models `fake/a` and
-`fake/b`, and pin simulator/judge to either fake model.
 
 Targets register commands by exporting `register_subcommands(subparsers)` and
 setting each parser's `handler` to a callable taking its argparse namespace (zero
@@ -146,3 +155,31 @@ This is the contract for target-owned `case-check`, `image-check`, `ac5-demo`,
 `calibrate`, and `check-results`; core does not implement those commands. Targets
 will need to add their package to the uv project's wheel package list and register
 an entry point for discovery without `--plugin`. Plugin modules are trusted code.
+
+## Validation
+
+```sh
+uv run --project evals pytest -q evals/core/tests
+uv run --project evals pytest -q evals/core/tests/test_fake_campaign.py
+```
+
+The black-box tests invoke the actual `evalctl` process and Inspect `ModelAPI`
+backend, retain reports and command output under gitignored test `captures/`, and
+exercise small/medium/explicit counts, actual role routing, injected infrastructure,
+model failure, actual timeout, and pre-write credential refusal. For a manual fake
+campaign, put `evals/core/tests` on `PYTHONPATH`, set `EVAL_FAKE_ROOT` to a local
+capture directory, use target `fake_target:create_target`, models `fake/a` and
+`fake/b`, and pin simulator/judge to either fake model.
+
+## Troubleshooting
+
+- **Settings are rejected.** Unknown keys, unused `model_config` IDs, the removed
+  `time_limit_seconds`, or both `models` and `combinations` fail validation. Fix the
+  TOML; nothing is guessed.
+- **A campaign refuses a shortage.** Fewer cases than `case_count`, or duplicate IDs,
+  are rejected rather than silently reducing the matched assignment.
+- **`--resume` refuses.** Effective settings or matched assignment differ from the
+  source run. Use the original settings file.
+- **No report is written.** The pre-write credential/config scan matched. Remove the
+  matching value from settings, or supply the right `--provider-config` files, and
+  rerun or rescore. Short common credential values can cause false refusals.

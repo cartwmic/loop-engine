@@ -1,16 +1,56 @@
-# Intent judge calibration (draft)
+# Intent judge calibration
+
+## Overview
 
 Calibration is software-change-specific and host-side. It compares the same
 `intent-judge-v1` prompt used in trial scoring against owner-confirmed labels from
 past Loop Engine runs. No engine/provider changes or paid model defaults are used.
 
-From the checkout root:
+The first real pass (2026-10-11) scored ten owner-confirmed pairs (8 good,
+2 deficient) with `codex/gpt-6.1-sol` at high reasoning: agreement 4/10 and
+false-pass rate 0/2. The judge failed 6 of the 8 good intents. That is a strict,
+weakly calibrated judge; two deficient labels are too few to trust the false-pass
+figure. The pilot report's `judge-calibration.md` supplement shows the figures.
+
+Limits: `calibrate score` does not apply campaign `model_config`, so it uses the
+provider's default reasoning effort. That first pass bound high effort with a
+driver-side wrapper to match the pilot judge. Reasoning models also ignore the
+requested `temperature=0`.
+
+`judge_intent` and `calibration_for_report` are internal harness hooks with no
+versioning or API-stability promise. The internal target contract is in
+checkout-root `evals/core/README.md`; campaign operation and model authentication
+are in checkout-root `evals/README.md`; contributor procedure is in checkout-root
+`AGENTS.md`.
+
+## Setup
+
+Prerequisites: Python 3.12+ and uv, run from the checkout root, plus a judge
+model you can authenticate on the host (bring your own Inspect model ID; for
+`codex/...` run Pi once so `~/.pi/agent/auth.json` is valid, as described in
+checkout-root `evals/README.md`). Extract candidate pairs read-only:
 
 ```sh
 uv run --project evals evalctl calibrate extract --database "$HOME/.local/share/loop-engine/loop.db" --sessions "$HOME/.pi/agent/sessions"
-uv run --project evals pytest -q evals/software-change/tests/test_calibration.py
+```
+
+## Usage
+
+After the owner gate below, score the labels (makes one judge call per label):
+
+```sh
 uv run --project evals evalctl calibrate score --labels evals/software-change/calibration/labels.json
 ```
+
+## Validation
+
+Fixture proofs with a scripted judge backend (no network or paid calls):
+
+```sh
+uv run --project evals pytest -q evals/software-change/tests/test_calibration.py
+```
+
+## How extraction works
 
 Extraction opens SQLite with URI `mode=ro` and `query_only=ON`, queries only recent
 software-change run IDs/artifact roots with **both** `lifecycle = 'final'` and
@@ -67,8 +107,8 @@ or supply `--judge-model PROVIDER/MODEL`. No model is chosen on the owner's beha
 Scoring validates the whole set before any model call and refuses missing labels,
 unconfirmed/invalid labels, duplicate IDs, or a missing pin. The exact owner
 command above exits 2 while pending; that is not completed AC-6 proof. It makes
-no judge calls until the owner gate is satisfied. Real owner scoring is deferred
-to the owner-gated pilot. Pin the same judge model for the campaign and labels.
+no judge calls until the owner gate is satisfied. Pin the same judge model for the
+campaign and labels.
 
 The safe metric receipt defaults to `captures/calibration.json` beside the labels;
 `--output PATH` overrides it. It contains:
@@ -106,11 +146,31 @@ only report-safe figures, checks the same model/prompt pin and recomputes the
 figures against stored verdicts. Attach that result beside intent scores in the
 target's `report_metrics`. If no receipt exists, explicitly report calibration
 pending, not zero agreement. Calibration usage is historical overhead, separate
-from current campaign judge usage. The target adapter/report integration is owned
-by the later adapter/scorer/report tasks; this module supplies their interface.
+from current campaign judge usage. The software-change target loads the default
+receipt `captures/calibration.json` beside the labels, or
+`target_options.calibration_receipt`.
 
 The existing `scevals.cases` evalctl command plugin registers `calibrate` alongside
 `case-check`. The fixture proof invokes the actual CLI with a trusted scripted
 Inspect ModelAPI backend and separately verifies bound judge-role usage in a real
 Inspect Task; no network, paid calls or whole software-change/Pi trial is needed
 for these host-side mechanics.
+
+## Troubleshooting
+
+- **`calibrate score` exits 2.** Labels are missing, unconfirmed, invalid, or no
+  judge model is pinned. Confirm labels and set `judge_model` or `--judge-model`.
+- **`calibrate score` refuses because the receipt exists.** Receipts are never
+  overwritten. Pass `--output NEW_PATH` for a new receipt.
+- **Reports still say calibration pending.** No receipt is at the default path
+  `captures/calibration.json` and no `target_options.calibration_receipt` is set.
+- **A campaign fails before any trial (`ValueError`).** A receipt exists but its
+  judge model or prompt does not match the campaign's `judge_model`. Point
+  `target_options.calibration_receipt` at a receipt scored with that judge, or move
+  the mismatched receipt away from the default path.
+- **`calibrate score` fails with only `Command failed (SomeError)`.** The CLI hides
+  exception text. Check judge authentication first (see checkout-root
+  `evals/README.md` troubleshooting).
+- **Many completed runs are skipped.** Their artifact folders are gone. Pass
+  `--sessions` to reconstruct intents from Pi transcripts; ambiguous
+  reconstructions are flagged for the owner, not resolved automatically.

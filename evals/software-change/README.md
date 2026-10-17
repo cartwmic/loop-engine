@@ -1,4 +1,6 @@
-# Software-change evaluation target (draft)
+# Software-change evaluation target
+
+## Overview
 
 This directory supplies the software-change-dependent parts of the Inspect
 harness. Checkout-root `evals/README.md` describes general campaign commands,
@@ -6,7 +8,25 @@ accounting, result locations and secrecy checks; checkout-root
 `evals/core/README.md` defines the internal target interface. This is not a new
 engine provider, shared library or change to provider calibration.
 
-## Eval-case format
+It measures whole Loop Engine software-change runs: elicitation, delivery against
+hidden tests, intent quality, review escapes, run health, discipline and honesty.
+It does not resist a hostile model, judge prose claims or replace owner judgment.
+Its intent judge is weakly calibrated (4 of 10 agreement on owner labels), and
+small samples, simulator bias and judge error are accepted risks.
+
+## Setup
+
+From the checkout root, with native arm64 Docker, build the pinned trial image
+once (build-network access, no model credentials):
+
+```sh
+uv sync --project evals --locked
+uv run --project evals evalctl image-check
+```
+
+## Usage
+
+### Eval-case format
 
 A case is one problem given to a run, not one of the implementation tasks that
 the model creates within that run:
@@ -36,8 +56,10 @@ interface_allowlist = []  # optional harness-only hidden-test identifiers
 - `hidden/brief.md` is the private owner specification, with unique `## REQ-*`
   headings. It stays host-side. The pinned simulator answers only what is asked,
   recording revealed requirement IDs rather than exporting brief/answer text.
-- Hidden tests are synchronous Python `test_*` functions/methods, each tagged
-  once with `@requirement("REQ-ID")` imported from `case_runtime`. Every brief
+- Hidden tests are synchronous `test_*` methods of stdlib `unittest.TestCase`
+  classes in `test_*.py` files, each tagged once with `@requirement("REQ-ID")`
+  imported from `case_runtime`. Module-level test functions are not collected
+  (unittest discovery). See [CASE-FORMAT.md](CASE-FORMAT.md) for layout details. Every brief
   requirement must have a test; unittest assertions are supported by the runner.
   IDs and statuses, not test source/failure messages, enter public results.
 - `hidden/reference/` is a repository-relative overlay within allowed scope. It
@@ -50,7 +72,7 @@ Agents may draft cases; the owner approves them before use. The
 [public example](example-case/case.toml) covers label keys with three requirements
 and six tests; it is intentionally public, not a private pilot substitute.
 
-From the checkout root:
+Check a case from the checkout root:
 
 ```sh
 uv run --project evals evalctl case-check evals/software-change/example-case
@@ -73,7 +95,7 @@ Reference/no-op attempts use separate mount-free containers. Invalid references,
 collection mismatches and skips reject the case. `--expect-invalid` succeeds only
 for an invalid case, not an infrastructure error.
 
-## Image and unattended execution
+### Image and unattended execution
 
 The [image](image/README.md) contains native arm64 Linux binaries built from the
 campaign's pinned local Git ref, Dagu, Pi, the two shipped skills, and role/owner
@@ -119,12 +141,11 @@ receive delivery metrics but cannot succeed. `evalctl rescore` uses this exact
 scorer. `campaign --resume` carries clean trials; `--resume-interrupted` or
 `resume-trial` restores an active trial and owner answers for a new driver segment.
 Resumed trials appear separately and do not enter headline success rate/pass^k.
-See the [harness README](../README.md#rescore-and-continue-scripted-proof-examples)
-for exact commands, metadata/accounting and external snapshot recovery.
+See "Rescore and continue" in checkout-root `evals/README.md` for exact commands, metadata/accounting and external snapshot recovery.
 Private artifacts and raw Inspect logs must never be selected for publication.
 The reports contain only metrics/IDs and safe evidence, not source or brief prose.
 
-## Target-specific scores and limits
+### Target-specific scores and limits
 
 Defaults are idle 1800 seconds and hard 28800 seconds, set by
 `idle_limit_seconds` / `hard_limit_seconds`. While the driver runs, the host polls
@@ -141,7 +162,7 @@ can still prevent a complete capture; partial chunks remain private and unknown
 dimensions stay null. `case-check` now verifies/reuses the pinned arm64 image and
 never implicitly rebuilds it; building is explicit `image-check` only.
 
-See [scoring](scoring.md) for exact definitions:
+Metric definitions (computed in `scevals/target.py`):
 
 - Hidden-test outcome and tagged delivery recall, independently from elicitation
   recall (requirements revealed by owner answers / hidden requirements).
@@ -172,3 +193,33 @@ Results are report/summary pairs in timestamped directories documented in the
 harness README. Run `evalctl check-results DIR --cases PATH` against all private
 cases and the runtime credential/config environment before selecting reports for
 Git. Only the owner authorizes staging, commits or pushes.
+
+## Validation
+
+Offline proofs with real Pi, Docker and engine but scripted, no-network models:
+
+```sh
+uv run --project evals pytest -q evals/software-change/tests
+uv run --project evals evalctl ac5-demo
+uv run --project evals evalctl case-check --expect-invalid evals/software-change/tests/fixtures/broken-case
+```
+
+They prove lifecycle, scoring and metric mechanics, not real-model quality.
+
+## Troubleshooting
+
+- **`case-check` rejects names in hidden tests.** The hidden tests rely on an
+  interface the public repo, request and brief never state. Name it in the brief
+  (as an owner answer), or use `interface_allowlist` only for harness-only names.
+- **`case-check` reports the case invalid.** The reference fails a tagged test, the
+  no-op passes every test, tests are untagged or skipped, or the case escapes its
+  directory. A collection mismatch usually means module-level test functions or a
+  test subdirectory without `__init__.py`; use tagged `unittest.TestCase` methods
+  (see [CASE-FORMAT.md](CASE-FORMAT.md)). Fix the case; `--expect-invalid` is only for the broken fixture.
+- **Hidden tests time out in a Rust case.** Raise `test_timeout_seconds` in
+  `case.toml`; building first can exceed the 60-second default.
+- **The image does not match the configured refs.** Rebuild with `image-check
+  --ref REF --tag TAG` and select it with `target_options.image`.
+- **A trial ends as infrastructure after a provider block.** It is excluded from
+  success rate. Recover with `resume-trial` only with owner approval; the resumed
+  result is reported separately.
