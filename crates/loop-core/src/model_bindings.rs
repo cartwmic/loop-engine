@@ -527,7 +527,11 @@ pub fn validate_amendment(
         let old_matches = match (old, current) {
             (Value::Null, None) => true,
             (Value::Null, Some(_)) => false,
-            (stated, current) => Binding::from_value(stated).ok().as_ref() == current,
+            // Only a literal null means unbound. A malformed stated old binding can never be
+            // the binding in force, so it must not compare equal to an absent one.
+            (stated, current) => Binding::from_value(stated)
+                .ok()
+                .is_some_and(|stated| Some(&stated) == current),
         };
         if !old_matches {
             return Err(refuse(
@@ -1118,6 +1122,15 @@ mod tests {
                 &amendment(
                     json!([{"role": "reviewer", "old": null, "new": binding("p/m", "high")}]),
                 ),
+            ),
+        ));
+
+        // A malformed non-null old binding on an unbound role is not "no binding".
+        refusals.push((
+            AmendmentCause::OldBindingNotInForce,
+            validate_amendment(
+                &none,
+                &amendment(json!([{"role": "ordinary-reviewer", "old": {"model": "p/prior", "thinking_level": "high"}, "new": binding("p/next", "high"), "mark_stale": true}])),
             ),
         ));
 

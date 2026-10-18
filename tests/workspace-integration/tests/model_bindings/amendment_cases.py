@@ -51,6 +51,10 @@ def refusals_on_unbound(h):
         ('unknown-role', amendment('w', [change('reviewer', None, REVIEWER_ONE)])),
         # changing an unbound role: its `old` binding is not the one in force (none)
         ('old-binding-not-in-force', amendment('w', [change('ordinary-reviewer', REVIEWER_ONE, REVIEWER_TWO)])),
+        # a malformed non-null old binding on an unbound role is not 'no binding' (with a stale mark)
+        ('old-binding-not-in-force', amendment('w', [change('ordinary-reviewer',
+                                                             {'model': 'p/prior', 'thinking_level': 'high'},
+                                                             REVIEWER_TWO, mark_stale=True)])),
         # removing an unbound role
         ('old-binding-not-in-force', amendment('w', [change('cold-reader', REVIEWER_ONE, None)])),
         ('new-binding-malformed', amendment('w', [change('ordinary-reviewer', None,
