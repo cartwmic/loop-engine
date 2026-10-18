@@ -245,7 +245,21 @@ pub(crate) fn unresolvable_locators(
                 return Err(format!("evidence line selector in `{locator}` is malformed"));
             }
         }
+        // A JSON Pointer with a malformed `~` escape is a syntax defect too.
+        if let Some((_, selector)) = locator.split_once('#') {
+            if selector.starts_with('/') && !pointer_escapes_are_valid(selector) {
+                return Err(format!(
+                    "evidence JSON Pointer escape in `{locator}` is malformed"
+                ));
+            }
+        }
         if let Err(error) = resolve_locator(locator, digest, artifact_root, version, context) {
+            // Only a citation that points at nothing is a resolution defect. Every other
+            // resolver refusal (forbidden record kind, unknown source scope, unreadable
+            // source, contract version, digest) is a different defect and stays a hard error.
+            if !is_resolution_failure(&error) {
+                return Err(error);
+            }
             failures.push((index, locator.to_owned(), error));
         }
     }
@@ -501,6 +515,28 @@ fn nearest_pointer_note(document: &Value, pointer: &str, file: &str) -> String {
         Some(near) => format!("closest existing pointer: `{file}#{near}`"),
         None => "no close existing pointer was found".to_owned(),
     }
+}
+
+/// True when the resolver refused a well-formed, permitted citation only because its target
+/// does not exist (pointer, record, file or line range). Matches the resolver's own messages.
+fn is_resolution_failure(error: &str) -> bool {
+    error.contains("does not resolve")
+        || error.contains("is missing or ambiguous")
+        || error.contains("was not found beneath the artifact directory")
+        || error.contains("is outside the source")
+}
+
+/// Syntax only: every `~` in a JSON Pointer is followed by `0` or `1`.
+fn pointer_escapes_are_valid(pointer: &str) -> bool {
+    pointer.split('/').skip(1).all(|token| {
+        let mut bytes = token.bytes();
+        while let Some(byte) = bytes.next() {
+            if byte == b'~' && !matches!(bytes.next(), Some(b'0' | b'1')) {
+                return false;
+            }
+        }
+        true
+    })
 }
 
 /// Syntax only (no source read): `Lstart` or `Lstart-Lend` with positive integers.
@@ -1138,6 +1174,11 @@ mod tests {
                 json!({"reason":"x","evidence":[{"locator":"intent.json#/revision"}],"more":1}),
                 "exactly reason and evidence",
             ),
+            // Malformed JSON Pointer escape is never a resolution defect.
+            (
+                json!({"reason":"x","evidence":[{"locator":"intent.json#/revision~2"}]}),
+                "escape",
+            ),
             // Malformed line-selector syntax is never a resolution defect.
             (
                 json!({"reason":"x","evidence":[{"locator":"intent.json#L3-7"}]}),
@@ -1151,6 +1192,29 @@ mod tests {
             let error = unresolvable_locators(&bad, &root, Some(3), &[]).unwrap_err();
             assert!(error.contains(why), "{why}: {error}");
         }
+        // An existing record of a forbidden kind is a policy refusal, not a missing target.
+        let forbidden = loop_core::ContextRecord::new(
+            "forbidden-kind",
+            "command-evidence",
+            json!({"x": 1}),
+            loop_core::SemanticSequence::new(1),
+            loop_core::Timestamp::from_unix_millis(0),
+        );
+        let error = unresolvable_locators(
+            &grounds(&["intent.json#/revision", "record:forbidden-kind#/data"]),
+            &root,
+            Some(3),
+            std::slice::from_ref(&forbidden),
+        )
+        .unwrap_err();
+        assert!(error.contains("disallowed kind"), "{error}");
+        // A record that does not exist at all is still an ordinary resolution defect.
+        assert_eq!(
+            unresolvable_locators(&grounds(&["record:nope#/data"]), &root, Some(3), &[])
+                .unwrap()
+                .len(),
+            1
+        );
         // Ordinary validation keeps its behavior and message for the same input.
         let ordinary = validate_grounding_with_context(
             &grounds(&["intent.json#/acceptance/12"]),
