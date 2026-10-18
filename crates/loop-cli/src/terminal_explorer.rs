@@ -41,8 +41,6 @@ fn worker_definition(binding: &loop_core::WorkSlotBinding, _id: &str) -> serde_j
 enum ListItem {
     State(loop_core::State),
     Assignment(ExplorerAssignment),
-    /// The `model_bindings` projection shared with `show`.
-    ModelBindings(serde_json::Value),
 }
 
 #[cfg(unix)]
@@ -54,7 +52,6 @@ impl ListItem {
                 "assignment:{}:{}",
                 assignment.slot_id, assignment.label.assignment_id
             ),
-            Self::ModelBindings(_) => "model-bindings".to_owned(),
         }
     }
 
@@ -82,14 +79,6 @@ impl ListItem {
                 "assignment:{} {} [{}]",
                 assignment.label.assignment_id, assignment.label.title, assignment.execution
             ),
-            Self::ModelBindings(view) => match view["state"].as_str() {
-                Some("never-bound") => "model-bindings: never bound".to_owned(),
-                Some("bound") => format!(
-                    "model-bindings: bound; {} amendments",
-                    view["history"].as_array().map_or(0, Vec::len)
-                ),
-                _ => "model-bindings: unavailable".to_owned(),
-            },
         }
     }
 }
@@ -253,7 +242,7 @@ impl ExplorerModel {
                     assignment.slot_id.clone(),
                     assignment.label.assignment_id.clone(),
                 )),
-                ListItem::State(_) | ListItem::ModelBindings(_) => None,
+                ListItem::State(_) => None,
             })
             .collect::<BTreeSet<_>>();
         for assignment in &assignments {
@@ -264,11 +253,6 @@ impl ExplorerModel {
                 items.push(ListItem::Assignment(assignment.clone()));
             }
         }
-
-        items.push(ListItem::ModelBindings(loop_core::model_bindings_view(
-            &projection.initial_input,
-            &projection.context,
-        )));
 
         Self {
             run_id: projection.run_id.to_string(),
@@ -302,7 +286,6 @@ impl ExplorerModel {
         match item {
             ListItem::State(state) => self.state_detail(state),
             ListItem::Assignment(assignment) => self.assignment_detail(assignment),
-            ListItem::ModelBindings(view) => crate::model_binding_lines(view),
         }
     }
 
@@ -391,7 +374,6 @@ impl ExplorerModel {
                 "action_guidance": state.action_guidance
             }),
             Some(ListItem::Assignment(assignment)) => assignment.stored_data.clone(),
-            Some(ListItem::ModelBindings(view)) => view.clone(),
             None => serde_json::Value::Null,
         }
     }
@@ -731,7 +713,6 @@ fn render_view(
             "selected_assignment_id={} slot={}",
             a.label.assignment_id, a.slot_id
         ),
-        Some(ListItem::ModelBindings(_)) => "selected=model-bindings".to_owned(),
         None => "selected=work-list".to_owned(),
     };
     // Colors use the terminal palette and default background, never RGB literals.
@@ -1192,71 +1173,5 @@ mod tests {
         assert!(joined.contains("checked-not-allowed"));
         assert!(joined.contains("visited: false"));
         assert!(joined.contains("visited does not mean passed"));
-    }
-
-    fn bindings_item(model: &ExplorerModel) -> &ListItem {
-        model
-            .items
-            .iter()
-            .find(|item| item.key() == "model-bindings")
-            .expect("the explorer lists the model bindings")
-    }
-
-    #[test]
-    fn explorer_states_a_run_never_bound_explicitly() {
-        let model = ExplorerModel::from_projection(&empty_projection(None), &[]);
-        let item = bindings_item(&model);
-        assert_eq!(item.short_label(&model), "model-bindings: never bound");
-        let detail = model.detail(Some(item)).join("\n");
-        assert!(
-            detail.contains(loop_core::NEVER_BOUND_STATEMENT),
-            "{detail}"
-        );
-        assert_eq!(
-            model.stored_data(Some(item)),
-            loop_core::model_bindings_view(&json!({}), &[])
-        );
-    }
-
-    #[test]
-    fn explorer_shows_original_in_force_and_amendment_history_like_show() {
-        let mut projection = empty_projection(None);
-        projection.initial_input = json!({"model_bindings": {"roles": {"cold-reader": {"model": "p/m1", "thinking": "high"}}}});
-        projection.context = vec![loop_core::ContextRecord::new(
-            "amend-1",
-            loop_core::MODEL_BINDING_AMENDMENT_RECORD_KIND,
-            json!({
-                "actor": {"name": "owner", "kind": "human"},
-                "authority": {"kind": "owner"},
-                "words": "Use the cheaper reader.",
-                "changes": [{
-                    "role": "cold-reader",
-                    "old": {"model": "p/m1", "thinking": "high"},
-                    "new": {"model": "p/m2", "thinking": "low"},
-                    "mark_stale": true
-                }]
-            }),
-            loop_core::SemanticSequence::new(3),
-            loop_core::Timestamp::from_unix_millis(3),
-        )];
-        let model = ExplorerModel::from_projection(&projection, &[]);
-        let item = bindings_item(&model);
-        assert_eq!(
-            item.short_label(&model),
-            "model-bindings: bound; 1 amendments"
-        );
-        let detail = model.detail(Some(item)).join("\n");
-        assert!(
-            detail.contains(
-                "role cold-reader: original p/m1 at thinking high; in force p/m2 at thinking low"
-            ),
-            "{detail}"
-        );
-        assert!(detail.contains("Use the cheaper reader."), "{detail}");
-        assert!(detail.contains("evidence marked stale: true"), "{detail}");
-        assert_eq!(
-            model.stored_data(Some(item)),
-            loop_core::model_bindings_view(&projection.initial_input, &projection.context)
-        );
     }
 }
