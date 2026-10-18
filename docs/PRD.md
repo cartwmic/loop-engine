@@ -2533,7 +2533,7 @@ For every role with a binding in force, the session producing the work MUST decl
 - Status: live
 - Coverage: e2e/journey
 
-A declaration that is missing, or whose provider/model or thinking level differs from the binding in force for its role, MUST be refused at the point the run would first store or accept the work (append for returns, the checked step for drafts and reports, run start or amendment for the driver). The diagnostic MUST name the role, the expected and actual values (or that the statement is missing) and which part differs. Refused work leaves context, history and state unchanged and is never counted toward a gate, author floor or checkpoint. Records stored earlier are never re-judged; each remains judged against the binding in force when it was stored.
+A declaration that is missing, or whose provider/model or thinking level differs from the binding in force for its role, MUST be refused at the point the run would first store or accept the work (append for returns, the checked step for drafts and reports, run start or amendment for the driver). The diagnostic MUST name the role, the expected and actual values (or that the statement is missing) and which part differs. Refused work is never stored or counted toward a gate, author floor or checkpoint, and context and state are unchanged. Where the refusal is a checked-event denial (author drafts, implementer reports), the engine's ordinary denied-transition record is the only history entry and no accepted record or transition is added; a refused append adds no history. Records stored earlier are never re-judged; each remains judged against the binding in force when it was stored.
 
 ### LE-198: Owner binding amendment
 - Status: live

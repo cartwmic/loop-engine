@@ -320,8 +320,10 @@ Append it with `loop-engine append --record-id RECORD RUN session-declaration @/
 Use role `implementer` and subject `implementation-report.json` for a report. A missing
 or unequal session is refused at the append (returns) or at the checked event (drafts
 and reports), naming the role, expected value and actual value (or that the statement
-is missing) and whether model, thinking or both differ; the run is left unchanged and
-nothing is counted. The refusal reads like: model binding for role `cold-reader` is not
+is missing) and whether model, thinking or both differ. Refused work is never stored or
+counted, and context and state are unchanged. A refused append adds no history; a
+checked-event denial (drafts and reports) adds only the engine's ordinary denied-transition
+record and no accepted record or transition. The refusal reads like: model binding for role `cold-reader` is not
 met: expected model `p/m1` at thinking `high`; actual model `p/m2` at thinking `high`;
 differs in model only.
 
