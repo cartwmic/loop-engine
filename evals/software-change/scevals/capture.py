@@ -69,8 +69,10 @@ class ReplayContainer:
         self.container = result.stdout.decode().strip()
         return self
 
+    CLEANUP_SECONDS = 60  # a stuck removal must not hold the campaign past its cap
+
     async def __aexit__(self, *args):
-        with anyio.CancelScope(shield=True):
+        with anyio.CancelScope(shield=True, deadline=anyio.current_time() + self.CLEANUP_SECONDS):
             await anyio.run_process(["docker", "rm", "-f", self.container], check=False)
 
     async def exec(self, command, *, cwd=None, timeout=120, env=None):

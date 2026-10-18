@@ -97,14 +97,17 @@ Trials run one at a time, so the guard sees one trial's live spend.
   published for Sol above 272k input tokens). Live and final dollars are summed over individual model calls, each priced by
   its own size; where per-call data is missing the whole aggregate is priced at the highest tier, an upper bound.
 - The first stop that fires wins. Reasons: `trial_time` (per-trial `hard_limit_seconds`), `campaign_wall_time`,
-  `campaign_dollars`, `campaign_tokens`. After a campaign stop no further trial starts (recorded `limit`, step
-  `not_started`) and no new model call is admitted, so the judge is skipped. A target that ignores a stop is cancelled
+  `campaign_dollars`, `campaign_tokens`. After any of these stops, including a per-trial time stop, no further trial starts (recorded `limit`, step
+  `not_started`) and no new model call is admitted, so the judge is skipped. The guard looks once more when a trial's
+  work returns, so spend or time reached in its last seconds still stops the judge and later trials. A target that ignores a stop is cancelled
   after `stop_grace_seconds` (default 30). Nothing is retried.
-- Synchronous setup and version probes have explicit timeouts bounded by the remaining time. If one runs out, the
+- Synchronous setup and version probes have explicit timeouts bounded by the remaining time (summary preparation shares the
+  time left before D minus a few seconds; the replay container's shielded removal is abandoned after 60 s). If one runs out, the
   campaign ends as `limit` with that step named and publishes only the limit-only record.
 - Publication: a small limit-only record (outcomes, reasons, caps, no private text) is written first. A separate
   child process then renders, scans and stages the full report and is killed at D. The staged report replaces the
-  record only if it finished in time; otherwise the record is the result. `campaign_wall_seconds` is the command-start
+  record only if it finished in time; otherwise the record is the result, and it names the cut-off (`publication_cut_off`, a `publication` step in
+  `cut_off_steps` and a `campaign_wall_time` stop event). `campaign_wall_seconds` is the command-start
   to report-written time, written just before the move, and `publication.json` records the interval.
 - `tier` and `report_note` appear in the report's Budget section with the caps, actual spend and time, per-stop
   events, cut-off steps and the cost verdict (`pass`, `fail_over_cap`, `fail_unpriced`, `fail_unknown_usage`, or
@@ -120,7 +123,7 @@ paid-model defaults. `models` compares each model in all three workflow roles;
 `combinations` instead accepts `{id, driver, implementer, reviewer}` objects.
 Use exactly one. Defaults are `preset = "small"` (3 cases x 3 trials),
 `profile = "standard-16"`, engine/provider ref `v0.26.0`, and limits `idle_limit_seconds = 1800`, `hard_limit_seconds = 28800`.
-Inspect and core execution/scoring use the hard limit; idle detection belongs to
+Core execution/scoring use the hard limit, enforced by the trial solver (Inspect's own sample limit is a 10-second backstop behind it); idle detection belongs to
 the target. CLI overrides are `--idle-limit-seconds` and `--hard-limit-seconds`.
 The old `time_limit_seconds` setting is no longer accepted. `medium` is 6 x 3; `case_count` and `trials_per_case` override either count.
 Targets may supply settings TOML files; paths resolve relative to the invocation

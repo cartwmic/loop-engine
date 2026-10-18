@@ -163,8 +163,7 @@ target writes `isolation.json` (container id, image id, mounts, binds, platform)
 capture cut off at the deadline still carries its isolation evidence. Docker image inspection and ref lookups have
 timeouts. Scripted proof hooks: `target_options.scripted_capture_delay_seconds` and
 `scripted_scoring_delay_seconds` make those steps deliberately slow (see `tests/test_limit_proofs.py`).
-The Tier 0 campaign is `campaigns/tier0.toml`; see [TIERS.md](TIERS.md). Inspect's sample limit is the hard
-limit. The driver-finally hook captures even bridge/owner/driver exceptions before
+The Tier 0 campaign is `campaigns/tier0.toml`; see [TIERS.md](TIERS.md). The trial solver enforces the hard limit; Inspect's sample limit is a 10-second backstop. The driver-finally hook captures even bridge/owner/driver exceptions before
 scoring. Docker loss, host disk failure or abrupt host process death during a copy
 can still prevent a complete capture; partial chunks remain private and unknown
 dimensions stay null. `case-check` now verifies/reuses the pinned arm64 image and

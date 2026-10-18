@@ -4,6 +4,7 @@ from contextlib import nullcontext
 import importlib.metadata
 import platform
 import subprocess
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -26,14 +27,24 @@ from .settings import CampaignSettings, OVERHEAD_ROLES, matched_assignment
 from .target import LimitReached, Target, TrialContext
 
 
+CAMPAIGN_STOP_REASONS = ("trial_time", "campaign_wall_time", "campaign_dollars", "campaign_tokens")
 PROBE_TIMEOUT_SECONDS = 10  # version probes must never hold the command past the cap
 
 
-def harness_versions() -> dict:
+INSPECT_BACKSTOP_SECONDS = 10
+SUMMARY_SAFETY_SECONDS = 5  # kept free after summary preparation so the limit-only record can still be written
+
+
+def harness_versions(budget: float | None = None) -> dict:
+    """Version facts. With a budget (seconds) the git probes share it and give up when it is spent."""
     repo = Path(__file__).resolve().parents[3]
+    end = None if budget is None else time.monotonic() + budget
     def git(*args):
+        timeout = PROBE_TIMEOUT_SECONDS if end is None else min(PROBE_TIMEOUT_SECONDS, end - time.monotonic())
+        if timeout <= 0:
+            return "unknown"
         try:
-            result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS)
+            result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             return "unknown"
         return result.stdout.strip() if result.returncode == 0 else "unknown"
@@ -41,6 +52,28 @@ def harness_versions() -> dict:
             "evalcore": importlib.metadata.version("loop-engine-evals"),
             "python": platform.python_version(), "checkout_commit": git("rev-parse", "HEAD"),
             "checkout_dirty": bool(git("status", "--porcelain"))}
+
+
+def prepare_versions(target, settings: CampaignSettings, guard: CampaignGuard) -> tuple[dict, dict]:
+    """(harness versions, target versions) inside the time left before the cap, never holding the command past it.
+    A step that runs out is named in the report as cut off."""
+    remaining = guard.remaining_to_deadline()
+    budget = None if remaining is None else max(0.0, remaining - SUMMARY_SAFETY_SECONDS)
+    harness = harness_versions(budget)
+    box: dict = {}
+    def work():
+        try:
+            box["value"] = target.versions(settings)
+        except BaseException as error:  # reported as unavailable, never raised into the summary
+            box["error"] = type(error).__name__
+    worker = threading.Thread(target=work, daemon=True)
+    worker.start()
+    left = guard.remaining_to_deadline()
+    worker.join(timeout=None if left is None else max(0.0, left - SUMMARY_SAFETY_SECONDS))
+    if "value" in box:
+        return harness, box["value"]
+    guard.note_cut_off("version_probe", guard.step_stop_reason())
+    return harness, {"unavailable": "version probe " + ("failed (" + box["error"] + ")" if "error" in box else "ran out of time")}
 
 
 def live_spend_usd(settings: CampaignSettings, role_models: dict) -> float | None:
@@ -104,6 +137,12 @@ def trial_solver(target: Target, contexts: dict[str, TrialContext], records: dic
             # Include scoring in the same limit. Target subprocesses must also honour it.
             async with deadline or nullcontext():
                 execution = await run_trial_stoppable(target, state, context, guard, role_models)
+                # The watcher ended with the trial; look once more now, so spend or time reached in its last seconds stops
+                # every later model call (the judge) and trial.
+                reason = guard.check(role_models, {role: usage.model_dump() for role, usage in sample_role_usage().items()},
+                                     live_spend_usd(context.settings, role_models))
+                if reason:
+                    guard.fire(reason)
                 record.terminal = execution.terminal
                 scored = await target.score(state, execution, context)
                 record.terminal = execution.terminal
@@ -133,6 +172,8 @@ def trial_solver(target: Target, contexts: dict[str, TrialContext], records: dic
                 "".join(traceback.format_exception(error)))
         finally:
             record.wall_seconds = time.monotonic() - started
+            if record.outcome == "limit" and record.reason in CAMPAIGN_STOP_REASONS:
+                guard.fire(record.reason)  # a per-trial time stop also stops later trials and model calls
             from inspect_ai.log import transcript
             record.priced_usd_by_role = events_spend(transcript().events, role_models, context.settings.prices)
             guard.add_finished(role_models, {role: usage.model_dump() for role, usage in sample_role_usage().items()},
@@ -203,7 +244,9 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
                 name=f"{target.name}-{len(tasks)}", dataset=samples,
                 solver=trial_solver(target, contexts, records, guard), scorer=trial_scorer(records),
                 model=role_models["role-driver"], model_roles=role_models,
-                fail_on_error=False, time_limit=settings.hard_limit_seconds,
+                fail_on_error=False,
+            # The solver enforces the hard limit itself (so it can stop later trials); Inspect's own limit is only the backstop.
+            time_limit=None if settings.hard_limit_seconds is None else settings.hard_limit_seconds + INSPECT_BACKSTOP_SECONDS,
             ))
     except LimitReached as error:
         # A synchronous setup step ran out of time: no trial starts and the campaign ends as a limit, step named.
@@ -283,19 +326,14 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
         roles = {**combo.role_models(), "simulator": settings.simulator_model, "judge": settings.judge_model}
         comparisons.append({"id": combo.id, "role_models": roles, "core": core_metrics(trials, settings, roles),
                             "target_metrics": target.report_metrics([r.target_metrics for r in trials if r.target_metrics])})
-    try:
-        target_versions = target.versions(settings)
-    except (subprocess.TimeoutExpired, LimitReached):
-        # A version probe that blocks must not hold the command past the cap.
-        target_versions = {"unavailable": "version probe timed out"}
-        guard.note_cut_off("version_probe", guard.step_stop_reason())
+    harness_info, target_versions = prepare_versions(target, settings, guard)
     models_in_use = sorted({m for c in comparisons for m in c["role_models"].values()})
     summary = {
         "schema_version": 1, "campaign": settings.campaign, "target": target.name,
         "projection_cohort": projection_cohort,
         "settings": settings.recorded(),
         "pinned_models": {"simulator": settings.simulator_model, "judge": settings.judge_model},
-        "versions": {"harness": harness_versions(), "target": target_versions,
+        "versions": {"harness": harness_info, "target": target_versions,
                      "eval_cases": {c.id: c.version for c in cases}},
         "matched_assignment": [a.model_dump() for a in assignments],
         "classification_rules": CLASSIFICATION_RULES,

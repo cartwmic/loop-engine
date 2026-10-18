@@ -121,7 +121,7 @@ DRIVERS = {"never-asks", "asks-and-builds", "asks-but-does-not-build"}
 
 
 def resolve_ref(ref):
-    return output(["git", "-C", str(REPOSITORY), "rev-parse", "--verify", f"{ref}^{{commit}}"])
+    return output(["git", "-C", str(REPOSITORY), "rev-parse", "--verify", f"{ref}^{{commit}}"], timeout=10)
 
 PREAMBLE = """Run this software-change request unattended to a terminal engine state.
 Profile: {profile}

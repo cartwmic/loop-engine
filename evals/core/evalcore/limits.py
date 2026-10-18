@@ -54,6 +54,10 @@ class CampaignGuard:
     def remaining_to_hard_end(self) -> float | None:
         return None if self.hard_end is None else max(0.0, self.hard_end - time.monotonic())
 
+    def remaining_to_deadline(self) -> float | None:
+        """Time left before the cap D (publication and summary preparation live between H and D)."""
+        return None if self.deadline is None else max(0.0, self.deadline - time.monotonic())
+
     def allowance(self, own_limit: float | None) -> float | None:
         """A post-trial step's time: its own limit, bounded by what is left before H."""
         remaining = self.remaining_to_hard_end()

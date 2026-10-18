@@ -52,6 +52,8 @@ class FakeTarget:
         if options.get("sleep"):
             await asyncio.sleep(2)
         # Proof hooks: extra driver calls over time (for dollar stops) and a long wait (for time stops).
+        for _ in range(options.get("late_costly_calls", 0)):
+            await get_model(role="role-driver").generate("late costly call")  # lands in the trial's last moments
         for _ in range(options.get("extra_driver_calls", 0)):
             await get_model(role="role-driver").generate("extra call")
             await asyncio.sleep(options.get("call_gap_seconds", 0.5))
@@ -73,7 +75,8 @@ class FakeTarget:
         return TrialExecution(terminal=not context.settings.target_options.get("nonterminal", False), data=roles)
 
     async def score(self, state, execution, context):
-        metrics = {"seen_roles": execution.data, "profile_used": context.settings.profile,
+        metrics = {"judge_model_calls_allowed": context.guard.model_calls_allowed() if context.guard else None,
+                   "seen_roles": execution.data, "profile_used": context.settings.profile,
                    "case_version_used": context.case.version}
         if "score_text" in context.settings.target_options:
             metrics["scored_field"] = context.settings.target_options["score_text"]
@@ -82,6 +85,9 @@ class FakeTarget:
         return TrialScore(success=context.case.id != "case-2", metrics=metrics)
 
     def versions(self, settings):
+        if settings.target_options.get("block_versions"):
+            import time as _t
+            _t.sleep(600)  # a version probe that never returns
         return {"loop_engine": settings.loop_engine_version, "provider": settings.provider_version, "fake_target": "1"}
 
     def report_metrics(self, scores):

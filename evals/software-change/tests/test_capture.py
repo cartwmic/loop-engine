@@ -2,10 +2,12 @@
 import asyncio
 import io
 import json
+import os
 from pathlib import Path
 import tarfile
 import uuid
 
+import anyio
 import pytest
 
 from scevals.capture import ReplayContainer, restore, validate_archive
@@ -94,3 +96,19 @@ def test_capture_keeps_vendored_target_dirs_and_skips_build_caches():
     assert "./public/repo/vendor/cc/src/target/parser.rs" in listed
     assert not any(name.startswith("./public/repo/target") for name in listed)
     assert not any(".cache" in name for name in listed)
+
+
+def test_replay_container_cleanup_is_bounded(monkeypatch, tmp_path):
+    """A removal that never returns is abandoned at its limit instead of holding the campaign."""
+    import stat
+    import time
+    shim = tmp_path / "docker"
+    shim.write_text("#!/bin/sh\nsleep 600\n")
+    shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    monkeypatch.setattr(ReplayContainer, "CLEANUP_SECONDS", 1)
+    container = ReplayContainer("image")
+    container.container = "c"
+    begun = time.monotonic()
+    anyio.run(container.__aexit__, None, None, None)
+    assert time.monotonic() - begun < 10

@@ -140,6 +140,7 @@ def test_blocking_render_leaves_the_limit_only_record_and_the_command_still_ends
                     extra_env={"EVALCORE_PROOF_RENDER_DELAY_SECONDS": "3600"})
     assert outcome.elapsed < 240 + 30
     assert outcome.summary["record"] == "limit-only" and outcome.summary["trials"][0]["outcome"] == "success"
+    assert outcome.summary["publication_cut_off"] is True and outcome.summary["cut_off_steps"][-1]["step"] == "publication"
     assert subprocess.run(["pgrep", "-f", "evalcore.publish"], capture_output=True, text=True).stdout.strip() == ""
 
 

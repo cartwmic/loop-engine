@@ -45,6 +45,16 @@ def minimal_markdown(record: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def record_publication_cut_off(destination: Path, record: dict) -> None:
+    """Name the cut-off in the limit-only record the owner will read: campaign wall time ran out at publication."""
+    cut = {"step": "publication", "reason": "campaign_wall_time", "sample_id": None}
+    record["cut_off_steps"] = [*record.get("cut_off_steps", []), cut]
+    record["stop_events"] = [*record.get("stop_events", []), {"reason": "campaign_wall_time", "step": "publication"}]
+    record["publication_cut_off"] = True
+    (destination / "summary.json").write_text(json.dumps(record, indent=2) + "\n")
+    (destination / "report.md").write_text(minimal_markdown(record) + "\nCut off: publication (campaign_wall_time).\n")
+
+
 def reserve_destination(results_dir: Path, campaign: str, report_directory: Path | None) -> Path:
     parent = report_directory.parent if report_directory is not None else results_dir / campaign
     parent.mkdir(parents=True, exist_ok=True)
@@ -99,6 +109,7 @@ def publish(results_dir: Path, summary: dict, *, provider_config_paths=(), repor
         except subprocess.TimeoutExpired:
             os.killpg(child.pid, signal.SIGKILL)
             child.wait()
+            record_publication_cut_off(destination, record)
             print("Full report not finished by the cap; child killed, limit-only record kept.", flush=True)
             return destination
         if code == UNSAFE_EXIT:

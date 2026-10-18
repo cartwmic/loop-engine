@@ -252,6 +252,40 @@ def test_tiered_price_charges_each_request_by_its_size_not_the_aggregate_bound(c
     assert summary["budget"]["cost_verdict"] == "pass"
 
 
+def test_a_per_trial_time_stop_also_stops_the_later_trials(campaign_root):
+    summary = run(campaign_root, models=["fake/a"], case_count=2, trials_per_case=1, hard_limit_seconds=1,
+                  target_options={"inject_errors": False, "sleep": True})
+    first, second = summary["trials"]
+    assert (first["outcome"], first["reason"]) == ("limit", "trial_time")
+    assert (second["outcome"], second["reason"], second["limit_step"]) == ("limit", "trial_time", "not_started")
+    assert [e["reason"] for e in summary["budget"]["stop_events"]] == ["trial_time"]
+
+
+def test_spend_reached_in_the_trials_last_moments_stops_later_model_calls(campaign_root):
+    """The watcher never polls (60 s); the cost lands just before run_trial returns. The look right after it must catch it."""
+    summary = run(campaign_root, models=[], combinations=[
+        {"id": "pricey", "driver": "fake/costly", "implementer": "fake/a", "reviewer": "fake/a"}],
+        prices={"fake/costly": {"input_per_million": 2, "output_per_million": 0}, "fake/a": {"input_per_million": 0, "output_per_million": 0}},
+        case_count=2, trials_per_case=1, guard_poll_seconds=60, campaign_budget_usd=5, dollar_margin_usd=0.5,
+        target_options={"inject_errors": False, "late_costly_calls": 3})
+    first, second = summary["trials"]
+    assert first["target_metrics"]["judge_model_calls_allowed"] is False    # score() sees the stop, so a judge call would be skipped
+    assert [e["reason"] for e in summary["budget"]["stop_events"]] == ["campaign_dollars"]
+    assert (second["outcome"], second["limit_step"]) == ("limit", "not_started")
+
+
+def test_a_blocked_version_probe_is_cut_off_and_the_command_still_ends_by_the_cap(campaign_root):
+    path = settings(campaign_root, models=["fake/a"], case_count=1, trials_per_case=1, campaign_wall_limit_seconds=30,
+                    post_trial_reserve_seconds=14, publication_reserve_seconds=10, target_options={"inject_errors": False, "block_versions": True})
+    begun = time.monotonic()
+    result = invoke(campaign_root, "campaign", "--settings", str(path))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert time.monotonic() - begun < 30 + 6
+    summary = json.loads((only_report(campaign_root) / "summary.json").read_text())
+    assert summary["versions"]["target"] == {"unavailable": "version probe ran out of time"}
+    assert {"step": "version_probe", "reason": "campaign_wall_time", "sample_id": None} in summary["budget"]["cut_off_steps"]
+
+
 def test_unpriced_model_with_a_dollar_budget_is_refused_before_any_call(campaign_root):
     path = settings(campaign_root, campaign_budget_usd=5, prices={"fake/a": {"input_per_million": 1, "output_per_million": 1}})
     result = invoke(campaign_root, "campaign", "--settings", str(path))
@@ -292,6 +326,9 @@ def test_blocked_rendering_cannot_hold_the_command_past_the_cap(campaign_root):
     record = json.loads((only_report(campaign_root) / "summary.json").read_text())
     assert record["record"] == "limit-only" and record["complete"] is False
     assert [t["outcome"] for t in record["trials"]] == ["success"]
+    assert record["publication_cut_off"] is True
+    assert {"step": "publication", "reason": "campaign_wall_time", "sample_id": None} in record["cut_off_steps"]
+    assert "Cut off: publication" in (only_report(campaign_root) / "report.md").read_text()
     leftover = subprocess.run(["pgrep", "-f", "evalcore.publish"], capture_output=True, text=True)
     assert leftover.stdout.strip() == ""
 
