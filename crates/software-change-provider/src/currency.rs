@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 enum Cited {
     All,
+    Id(String),
     Index(usize),
     Lines(usize, usize),
 }
@@ -173,7 +174,31 @@ pub(crate) fn changed_cited_criteria(
     let Some(grounds) = grounds else {
         return Ok(Vec::new());
     };
-    let cites = cited(grounds);
+    changed_for_cites(cited(grounds), source, context, artifact_root)
+}
+
+/// A carried criterion verdict depends on its own criterion's text. Same contract
+/// as [`changed_cited_criteria`]: `Ok(empty)` keeps the carry.
+pub(crate) fn changed_criterion_for_verdict(
+    criterion_id: &str,
+    source: &ContextRecord,
+    context: &[ContextRecord],
+    artifact_root: Option<&Value>,
+) -> Result<Vec<String>, String> {
+    changed_for_cites(
+        vec![Cited::Id(criterion_id.to_owned())],
+        source,
+        context,
+        artifact_root,
+    )
+}
+
+fn changed_for_cites(
+    cites: Vec<Cited>,
+    source: &ContextRecord,
+    context: &[ContextRecord],
+    artifact_root: Option<&Value>,
+) -> Result<Vec<String>, String> {
     let Some(root) = artifact_root.and_then(Value::as_str) else {
         return Ok(Vec::new());
     };
@@ -227,6 +252,9 @@ pub(crate) fn changed_cited_criteria(
     for cite in cites {
         match cite {
             Cited::All => ids.extend(before.keys().chain(after.keys()).cloned()),
+            Cited::Id(id) => {
+                ids.insert(id);
+            }
             Cited::Index(index) => ids.extend(origin_ids.get(index).cloned()),
             Cited::Lines(start, end) => {
                 for (index, (first, last)) in spans.iter().enumerate() {
@@ -352,6 +380,39 @@ mod tests {
         assert!(
             error.contains("unable to verify") && error.contains("revision `1`"),
             "{error}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn carried_verdict_goes_stale_when_its_own_criterion_text_changes() {
+        let (dir, root, _context, _source) = fixture(&intent("2", "second"));
+        // An earlier retained copy of intent revision 1, then a validation verdict for AC-2.
+        let retained = row(
+            "retained",
+            "retained-artifacts",
+            1,
+            json!({"artifacts": [{"name": "intent.json", "content": intent("1", "second")}]}),
+        );
+        let verdict = row(
+            "verdict",
+            "criterion-verdict",
+            2,
+            json!({"subject": "validation-report.json", "criterion_id": "AC-2"}),
+        );
+        let context = vec![retained, verdict.clone()];
+        let check = |id: &str| changed_criterion_for_verdict(id, &verdict, &context, Some(&root));
+        // Revision-only change: every verdict stays current.
+        assert_eq!(check("AC-2"), Ok(Vec::new()));
+        std::fs::write(dir.join("intent.json"), intent("2", "second, now stricter")).unwrap();
+        assert_eq!(check("AC-2"), Ok(vec!["AC-2".to_owned()]));
+        // A verdict about an unchanged criterion stays current.
+        assert_eq!(check("AC-1"), Ok(Vec::new()));
+        // No retained earlier bytes: cannot verify, never refuses.
+        let bare = vec![verdict.clone()];
+        assert_eq!(
+            changed_criterion_for_verdict("AC-2", &verdict, &bare, Some(&root)),
+            Ok(Vec::new())
         );
         let _ = std::fs::remove_dir_all(dir);
     }

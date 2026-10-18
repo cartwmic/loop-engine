@@ -28,7 +28,7 @@ PROFILES = ROOT / 'crates/software-change-provider/data/configs'
 # AC -> scenario names that prove it. --self-test checks every AC has at least one.
 COVERAGE = {
     'AC-1': ['review-cases'], 'AC-2': ['review-cases'], 'AC-3': ['review-cases'],
-    'AC-4': ['command-carry'], 'AC-5': ['command-carry'],
+    'AC-4': ['command-carry'], 'AC-5': ['command-carry', 'failed-command'],
     'AC-6': ['review-cases', 'intent-cases'], 'AC-7': ['review-cases'],
     'AC-8': ['locator-cases'], 'AC-9': ['locator-cases'], 'AC-10': ['locator-cases'],
     'AC-11': ['command-carry', 'review-cases', 'intent-cases', 'locator-cases'],
@@ -94,6 +94,16 @@ def verdict(report, command, criterion=None):
     return data
 
 
+def try_verdict(ctx, kind, data, rid):
+    """Append attempt; a refusal must leave state, context and history exactly as they were."""
+    before = snapshot(ctx)
+    response = ctx['call']('append', '--record-id', rid, ctx['run_id'], kind, json.dumps(data))
+    if response['status'] == 'rejected':
+        unchanged(before, snapshot(ctx), rid)
+    return {'status': response['status'], 'rule': response.get('details', {}).get('rule'),
+            'message': response.get('details', {}).get('message')}
+
+
 def command_carry(args, root, engine, provider, control):
     """Issue #31 sequence. Built programs accept; the v0.26.0 control reproduces two refusals."""
     root.mkdir(parents=True, exist_ok=True)
@@ -154,6 +164,15 @@ def command_carry(args, root, engine, provider, control):
               'goal_verdict_ids': ['fresh-goal']}
     (ctx['artifacts'] / 'validation-report.json').write_text(json.dumps(report))
     ctx['checkpoint']('validation')
+    # AC-5: a directly indexed command written at source A is stale at source B.
+    criterion0 = report['criteria'][0]['criterion_id']
+    direct = dict(report, command_evidence_ids=[command['record_id']])
+    (ctx['artifacts'] / 'validation-report.json').write_text(json.dumps(direct))
+    ctx['checkpoint']('validation')
+    matrix = {'stale-direct-write': try_verdict(ctx, 'criterion-verdict',
+              verdict(report, command['record_id'], criterion0), 'refused-stale-direct')}
+    (ctx['artifacts'] / 'validation-report.json').write_text(json.dumps(report))
+    ctx['checkpoint']('validation')
     declaration = {'origin': {'kind': 'context-record', 'id': command['record_id']},
                    'target': {'subject': 'validation-report.json', 'revision': 'validation-B',
                               'checkpoint': {'phase': 'validation', 'report_revision': 'validation-B'}},
@@ -172,6 +191,30 @@ def command_carry(args, root, engine, provider, control):
            'criterion-verdict-shape-source', 'unsupported evidence reference')
     refuse(ctx, 'criterion-verdict', verdict(report, 'missing', criterion), 'negative-missing',
            'criterion-verdict-shape-source', 'missing or duplicate context ID')
+    own = verdict(report, command['record_id'], criterion)
+    own['author'] = copy.deepcopy(report['author'])
+    matrix['non-independent-author'] = try_verdict(ctx, 'criterion-verdict', own, 'refused-self-author')
+    forged = verdict(report, command['record_id'], criterion)
+    forged['origin'] = {'kind': 'context-record', 'id': command['record_id']}
+    matrix['wrong-origin'] = try_verdict(ctx, 'criterion-verdict', forged, 'refused-origin')
+    plan_path = ctx['artifacts'] / 'plan.json'
+    plan_bytes = plan_path.read_bytes()
+    changed = json.loads(plan_bytes)
+    changed['proof_commands'][0]['obligation'] += ' (changed after the command ran)'
+    plan_path.write_text(json.dumps(changed))
+    try:
+        matrix['changed-spec'] = try_verdict(ctx, 'criterion-verdict',
+                                             verdict(report, command['record_id'], criterion), 'refused-spec')
+    finally:
+        plan_path.write_bytes(plan_bytes)
+    for name, row in matrix.items():
+        require(row['status'] == 'rejected', (name, row))
+    if not control:
+        reasons = {'stale-direct-write': 'stale-source', 'non-independent-author': 'self-authorship cannot satisfy criterion policy',
+                   'wrong-origin': 'EngineOrigin', 'changed-spec': 'differs from effective proof obligation'}
+        for name, text in reasons.items():
+            require(text in matrix[name]['message'], (name, matrix[name]))
+    outcome['refusal_matrix'] = matrix
     attempts = {}
     for kind, crit, rid in [('criterion-verdict', criterion, report['criteria'][0]['verdict_ids'][0]),
                             ('goal-verdict', None, report['goal_verdict_ids'][0])]:
@@ -203,6 +246,68 @@ def command_carry(args, root, engine, provider, control):
     log.finalize()
     return outcome
 
+
+
+def failed_command(args, root, engine, provider):
+    """AC-5: a real failed execution is evidence to admit, never passing proof."""
+    import time
+    root.mkdir(parents=True, exist_ok=True)
+    log = SW.CommandLog(root / 'commands')
+    state = {}
+
+    class Done(Exception):
+        pass
+
+    def configure(profile, repository, artifacts):
+        profile['review_policies'] = {'validation-review': [{
+            'id': 'delivery', 'description': 'Scripted mechanical delivery check',
+            'example_prompt': 'Inspect the fixture output.', 'required_authors': 1,
+            'review_stage': 'aggregate', 'group': 'validation-review.aggregate', 'self_review': False}]}
+        profile['criterion_policy'] = {'required_authors': 1, 'goal_required_authors': 1}
+        profile['config_version'] = 'evidence-carry-journey'
+        profile['extra'].pop('checkpoints', None)
+        profile['extra'].pop('narratives', None)
+        declare_scope(profile, repository, artifacts)
+
+    def exercise(phase, ctx):
+        if phase != 'validation-judgments':
+            return False
+        spec = {'id': 'failed-helper', 'command': sys.executable, 'args': ['-B', '-c', 'raise SystemExit(1)'],
+                'owner': 'driver', 'obligation': 'Scripted fixture deliberately fails; retain its negative judgment.'}
+        append(ctx, 'validation-command', {'spec': spec}, 'failed-helper-spec')
+        source = ctx['invoke']([ctx['provider'], 'source-identity', '--working-directory', ctx['repository']])
+        outcome = log.execute([spec['command'], *spec['args']], cwd=ctx['repository'], raw=True)
+        require(outcome.returncode == 1, outcome)
+        append(ctx, 'command-evidence', {'proof_id': spec['id'], 'spec': spec, 'external_result': {
+            'external': True, 'id': spec['id'], 'command': spec['command'], 'args': spec['args'],
+            'cwd': str(ctx['repository']), 'exit_code': 1, 'stdout': outcome.stdout, 'stderr': outcome.stderr,
+            'producer': {'name': 'scripted-proof-driver', 'kind': 'script'}, 'source': source}}, 'failed-helper-command')
+        report = copy.deepcopy(ctx['report'])
+        report['command_evidence_ids'].append('failed-helper-command')
+        (ctx['artifacts'] / 'validation-report.json').write_text(json.dumps(report))
+        ctx['checkpoint']('validation')
+        criterion = report['criteria'][0]['criterion_id']
+        good = ctx['prepared']['command_candidates'][0]['record_id']
+        state['refused'] = try_verdict(ctx, 'criterion-verdict', verdict(report, 'failed-helper-command', criterion),
+                                       'refused-passing-on-failed')
+        negative = verdict(report, 'failed-helper-command', criterion)
+        negative.update(result='fail', findings=['The deliberate fixture execution exited 1.'])
+        state['negative'] = try_verdict(ctx, 'criterion-verdict', negative, 'accepted-negative')
+        state['unrelated_failure_does_not_block_passing'] = try_verdict(
+            ctx, 'criterion-verdict', verdict(report, good, criterion), 'accepted-subset-pass')
+        raise Done()
+
+    try:
+        SW.run(make_args(args, engine, provider), PROFILES / 'minimal.json', root, configure=configure,
+               exercise=exercise, command_log=log)
+    except Done:
+        pass
+    refused = state['refused']
+    require(refused['status'] == 'rejected' and 'passing verdict references a failed command' in refused['message'], refused)
+    require(state['negative']['status'] == 'completed', state['negative'])
+    require(state['unrelated_failure_does_not_block_passing']['status'] == 'completed', state)
+    dump(root / 'outcome.json', state)
+    return state
 
 
 # ---- review-evidence scenarios (AC-1/2/3/6/7/12): one private run per history ----
@@ -575,8 +680,13 @@ def intent_cases(args, root):
     judge(ctx, INTENT_GATE, INTENT, stale, 'reviewer-b', 'B1', locators=intent_locators(stale))
     row = finish(ctx, 'AC-6(a) six carried from one author, two fresh from another, criterion text changed')
     parts = row['parent_review']['parts']
-    require(len([p for p in parts if p['label'] == 'original judgment']) == 6 and
-            len([p for p in parts if p['label'] == 'fresh review' and p['gate'] == INTENT_GATE]) >= 2, parts)
+    require(len([p for p in parts if p['label'] == 'original judgment']) == 6, parts)
+    labels_by_axis = {p['axis']: p['label'] for p in parts if p['label'] in ('fresh review', 'original judgment')
+                      or p['label'].startswith('re-appended')}
+    # Every freshly judged axis is labeled fresh (not a re-append of an earlier assessment),
+    # even when several axes share one fresh assessment.
+    require(all(labels_by_axis[axis] == 'fresh review' for axis in stale), (stale, labels_by_axis))
+    require(not any(p['label'].startswith('re-appended') for p in parts), parts)
     rows.append(trim(row))
     # (b) floor 1: three carried, five fresh from the same reviewer name under a new assessment.
     ctx, aggregate, first, kept, stale, revision = prepared('three-carried-five-fresh', True)
@@ -726,6 +836,7 @@ SCENARIOS = {
         'built': command_carry(a, r / 'built', a.engine, a.provider, False),
         'control': (command_carry(a, r / 'control', a.control_engine, a.control_provider, True)
                     if a.control_engine and a.control_provider else 'not run: no v0.26.0 control programs supplied')},
+    'failed-command': lambda a, r: failed_command(a, r, a.engine, a.provider),
     'review-cases': review_cases,
     'intent-cases': intent_cases,
     'locator-cases': locator_cases,

@@ -13,6 +13,7 @@ use crate::checkpoint;
 use crate::config::parse_initial_input;
 use crate::criterion::{self, CriterionViolation};
 use crate::evidence::AuthorIdentity as EvidenceAuthorIdentity;
+use crate::evidence::{corresponding_parent_axes, retain_challenges_after_clearance};
 use crate::finding_ledger::evaluate_finding_ledger;
 use crate::overlay;
 use crate::protocol::{allow_response, deny_response, unsupported_response, EvaluateRequest};
@@ -707,24 +708,16 @@ fn evaluate_base(
                 );
                 for axes in challenge_axes.values() {
                     for policy in axes.values() {
-                        let matching_groups: std::collections::BTreeSet<_> = parent_axes
-                            .values()
-                            .filter_map(|axes| axes.get(policy.id()).and_then(|p| p.group()))
-                            .collect();
                         let corresponding: std::collections::BTreeMap<_, _> = parent_axes
                             .iter()
                             .map(|(stage, axes)| {
+                                let wanted = corresponding_parent_axes(parent_axes, policy);
                                 (
                                     stage.clone(),
                                     axes.iter()
-                                        .filter(|(_, p)| {
-                                            p.id() == policy.id()
-                                                || p.group().is_some_and(|group| {
-                                                    matching_groups.contains(group)
-                                                })
-                                        })
+                                        .filter(|(id, _)| wanted.contains(*id))
                                         .map(|(id, p)| (id.clone(), p.clone()))
-                                        .collect(),
+                                        .collect::<std::collections::BTreeMap<_, _>>(),
                                 )
                             })
                             .collect();
@@ -1698,123 +1691,10 @@ impl fmt::Display for EvaluationOutcome {
     }
 }
 
-// Applicability is a new attestation to the cleared conclusion, not a new verdict.
-fn intake_data<'a>(
-    context: &'a [loop_core::ContextRecord],
-    record: &'a loop_core::ContextRecord,
-) -> &'a Value {
-    if record.kind == "evidence-applicability" {
-        context
-            .iter()
-            .find(|r| r.id.as_str() == record.data["origin"]["id"].as_str().unwrap_or(""))
-            .map(|r| &r.data)
-            .unwrap_or(&record.data)
-    } else {
-        &record.data
-    }
-}
-
-fn challenge_assessment_identity(data: &Value) -> Option<String> {
-    crate::evidence::challenge_assessment_identity(data)
-}
-
-fn retain_challenges_after_clearance(
-    context: &[loop_core::ContextRecord],
-    retained: &mut Vec<loop_core::ContextRecord>,
-    parent: &str,
-    gate: &str,
-    subject: &str,
-    axis: &str,
-    parent_axes: &std::collections::BTreeSet<String>,
-) -> Vec<Value> {
-    let mut excluded = Vec::new();
-    let clearance = context
-        .iter()
-        .filter(|record| {
-            let data = intake_data(context, record);
-            if record.kind == "author-count-amendment"
-                && data["targets"].as_array().is_some_and(|targets| {
-                    targets.iter().any(|target| {
-                        target["gate"] == parent
-                            && parent_axes.contains(target["axis"].as_str().unwrap_or(""))
-                    })
-                })
-            {
-                return true;
-            }
-            if record.kind == "intent-comparison"
-                && subject == "intent.json"
-                && parent_axes.contains("intent-sufficient")
-            {
-                return true;
-            }
-            if data["gate"] != parent || data["subject"] != subject {
-                return false;
-            }
-            if matches!(
-                record.kind.as_str(),
-                "review-evidence" | "evidence-applicability"
-            ) {
-                return parent_axes.contains(loop_integrations::review_intake::evidence_axis(data));
-            }
-            record.kind == "finding-ledger"
-                && data["findings"].as_array().is_some_and(|findings| {
-                    findings.iter().any(|finding| {
-                        parent_axes.contains(finding["policy_id"].as_str().unwrap_or(""))
-                            || finding["review_axes"].as_array().is_some_and(|ids| {
-                                ids.iter()
-                                    .any(|id| parent_axes.contains(id.as_str().unwrap_or("")))
-                            })
-                    })
-                })
-        })
-        .max_by_key(|r| r.sequence);
-    if let Some(cutoff) = clearance {
-        let clearance = cutoff.sequence;
-        retained.retain(|record| {
-            let data = intake_data(context, record);
-            let early = data["gate"] == gate
-                && loop_integrations::review_intake::evidence_axis(data) == axis
-                && matches!(
-                    record.kind.as_str(),
-                    "review-evidence" | "evidence-applicability"
-                )
-                && (if record.kind == "review-evidence" {
-                    challenge_assessment_identity(data)
-                        .and_then(|identity| {
-                            context
-                                .iter()
-                                .filter(|prior| {
-                                    prior.kind == "review-evidence"
-                                        && challenge_assessment_identity(&prior.data)
-                                            == Some(identity.clone())
-                                })
-                                .map(|prior| prior.sequence)
-                                .min()
-                        })
-                        .unwrap_or(record.sequence)
-                } else {
-                    record.sequence
-                }) <= clearance;
-            if early {
-                excluded.push(json!({
-                    "record_id": record.id.as_str(),
-                    "assessment_identity": challenge_assessment_identity(data)
-                        .unwrap_or_else(|| format!("record:{}", record.id)),
-                    "ordinary_record_id": cutoff.id.as_str(),
-                    "axis": axis,
-                    "parent": parent,
-                }));
-            }
-            !early
-        });
-    }
-    excluded
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evidence::challenge_assessment_identity;
     use loop_core::{EventId, StateId, Transition, Workflow};
     use serde_json::json;
 

@@ -993,6 +993,29 @@ pub(crate) fn verified_command_index(
     Ok((executed, verified_command_evidence_ids))
 }
 
+/// A carried criterion verdict stays current only while its criterion's text is
+/// unchanged since the verdict was written. Unverifiable currency never refuses.
+pub(crate) fn carried_criterion_is_current(
+    original: &ContextRecord,
+    criterion: Option<&str>,
+    context: &[ContextRecord],
+    root: &Path,
+) -> Result<(), String> {
+    let Some(id) = criterion else {
+        return Ok(());
+    };
+    let root_value = json!(root);
+    match crate::currency::changed_criterion_for_verdict(id, original, context, Some(&root_value)) {
+        Ok(changed) if changed.is_empty() => Ok(()),
+        Ok(changed) => Err(format!(
+            "stale carry: carried verdict `{}` is for criterion {} whose text changed since it was written; obtain a fresh verdict",
+            original.id,
+            changed.join(", ")
+        )),
+        Err(_) => Ok(()),
+    }
+}
+
 pub(crate) fn evaluate(
     input: &Value,
     context: &[ContextRecord],
@@ -1195,6 +1218,7 @@ pub(crate) fn evaluate(
                             .into(),
                     );
                 }
+                carried_criterion_is_current(original, criterion, context, root)?;
             }
             if original.kind != kind
                 || original.data.get("criterion_id").and_then(Value::as_str) != criterion

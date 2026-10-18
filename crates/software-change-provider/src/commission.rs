@@ -1175,93 +1175,61 @@ fn missing_parent_claims(
     Ok(lines)
 }
 
-/// Whether each existing challenge row counts under the gate's own rule: an
-/// assessment first recorded at or before the latest relevant ordinary-review
-/// record is early, and a raw re-append keeps the assessment's first position.
-/// Only an applicability appended after that cutoff, or a fresh assessment, counts.
-/// Absent when the challenge gate has no rows yet.
+/// Whether each existing challenge row counts, using the checked gate's own
+/// chronology function (the same cutoff, record kinds and group-local parent
+/// axes): an assessment first recorded at or before the latest relevant
+/// ordinary-review record is early, and a raw re-append keeps the assessment's
+/// first position. Absent when the challenge gate has no rows yet or the
+/// policy cannot be read.
 fn challenge_standing(
+    input: &Value,
     records: &[ContextRecord],
     gate: &str,
     parent: &str,
     subject: &str,
 ) -> Option<Value> {
-    let origin_data = |record: &ContextRecord| -> Value {
-        if record.kind == "evidence-applicability" {
-            record
-                .data
-                .pointer("/origin/id")
-                .and_then(Value::as_str)
-                .and_then(|id| records.iter().find(|row| row.id.as_str() == id))
-                .map_or(Value::Null, |row| row.data.clone())
-        } else {
-            record.data.clone()
-        }
-    };
-    let of_gate = |record: &ContextRecord, wanted: &str| {
-        matches!(
-            record.kind.as_str(),
-            "review-evidence" | "evidence-applicability"
-        ) && {
-            let data = origin_data(record);
-            data["gate"] == wanted && data["subject"] == subject
-        }
-    };
-    let cutoff = records
+    let config = crate::config::parse_initial_input(
+        &crate::admission::effective_policy(input, records).effective,
+    )
+    .ok()?;
+    let challenge_axes = config.staged_axes_for_gate(gate)?;
+    let parent_axes = config.staged_axes_for_gate(parent)?;
+    let early: Vec<Value> = crate::evidence::early_challenge_rows(
+        records,
+        gate,
+        parent,
+        subject,
+        challenge_axes,
+        parent_axes,
+    );
+    let early_ids: BTreeSet<&str> = early
         .iter()
-        .filter(|record| of_gate(record, parent))
-        .chain(records.iter().filter(|record| {
-            record.kind == "finding-ledger"
-                && record.data["gate"] == parent
-                && record.data["subject"] == subject
-        }))
-        .map(|record| record.sequence)
-        .max();
-    let rows: Vec<_> = records
-        .iter()
-        .filter(|record| of_gate(record, gate))
+        .filter_map(|row| row["record_id"].as_str())
         .collect();
-    if rows.is_empty() {
-        return None;
-    }
-    let standing: Vec<Value> = rows
+    let rows: Vec<Value> = records
         .iter()
+        .filter(|record| {
+            matches!(record.kind.as_str(), "review-evidence" | "evidence-applicability") && {
+                let data = crate::evidence::intake_data(records, record);
+                data["gate"] == gate && data["subject"] == subject
+            }
+        })
         .map(|record| {
-            let data = origin_data(record);
-            let identity = crate::evidence::challenge_assessment_identity(&data);
-            let effective = if record.kind == "review-evidence" {
-                identity
-                    .as_ref()
-                    .and_then(|identity| {
-                        records
-                            .iter()
-                            .filter(|prior| {
-                                prior.kind == "review-evidence"
-                                    && crate::evidence::challenge_assessment_identity(&prior.data)
-                                        .as_ref()
-                                        == Some(identity)
-                            })
-                            .map(|prior| prior.sequence)
-                            .min()
-                    })
-                    .unwrap_or(record.sequence)
-            } else {
-                record.sequence
-            };
-            let early = cutoff.is_some_and(|cutoff| effective <= cutoff);
+            let data = crate::evidence::intake_data(records, record);
+            let is_early = early_ids.contains(record.id.as_str());
             json!({
                 "record_id": record.id,
                 "kind": record.kind,
                 "axis": data.get("policy_id"),
-                "assessment_identity": identity,
-                "standing": if early { "early" } else { "counts" },
-                "reason": if early {
+                "assessment_identity": crate::evidence::challenge_assessment_identity(data),
+                "standing": if is_early { "early" } else { "counts" },
+                "reason": if is_early {
                     json!("challenge-before-ordinary-clearance: the assessment was first recorded at or before the latest relevant ordinary-review record; obtain a fresh assessment or append evidence-applicability after that record")
                 } else { Value::Null },
             })
         })
         .collect();
-    Some(json!(standing))
+    (!rows.is_empty()).then(|| json!(rows))
 }
 
 /// Any applicability aimed at this subject for a parent review record, whatever
@@ -1340,6 +1308,11 @@ fn parent_review_block(
                         && other.id.as_str() != ev.source_id
                         && other.sequence < stored.map_or(other.sequence, |s| s.sequence)
                         && other.data.get("assessment_id").and_then(Value::as_str) == Some(id)
+                        && other.data.get("policy_id").and_then(Value::as_str)
+                            == Some(ev.policy_id.as_str())
+                        && other.data.get("review_stage")
+                            == stored.and_then(|s| s.data.get("review_stage"))
+                        && other.data.get("author") == stored.and_then(|s| s.data.get("author"))
                 })
             });
         parts.push(json!({
@@ -2586,9 +2559,13 @@ fn inspect_with_budgets(
         }) {
             output["parent_review"] = block;
         }
-        if let Some(standing) =
-            challenge_standing(&full_context_records, slot_id, parent, subject.unwrap())
-        {
+        if let Some(standing) = challenge_standing(
+            &packet["initial_input"],
+            &full_context_records,
+            slot_id,
+            parent,
+            subject.unwrap(),
+        ) {
             output["challenge_standing"] = standing;
         }
     }
