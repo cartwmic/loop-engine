@@ -103,6 +103,56 @@ fn require_artifact(
     Ok(())
 }
 
+/// Deny a checked author-draft or implementer-report boundary when that role
+/// is bound and the latest `session-declaration` for the current subject
+/// revision is missing or differs from the binding in force now. An unbound
+/// role, or an artifact the ordinary checks will report as unreadable, adds
+/// nothing here.
+pub(crate) fn session_declaration_denial(
+    request: &EvaluateRequest,
+    duties: TransitionDuties,
+) -> Option<EvaluationOutcome> {
+    let (role, subject) = workflow::declaration_boundary(
+        request.transition.source.as_str(),
+        request.transition.event.as_str(),
+        duties,
+    )?;
+    let bindings = match loop_core::fold_model_bindings(&request.initial_input, &request.context) {
+        Ok(bindings) => bindings,
+        Err(error) => return Some(deny(ARTIFACT_ADMISSION, error)),
+    };
+    let binding = bindings.in_force().remove(&role)?;
+    let document =
+        match artifacts::read_artifact(request.initial_input.get("artifact_root"), subject) {
+            ArtifactReadOutcome::Present(document) => document,
+            _ => return None,
+        };
+    let revision = document.value()["revision"]
+        .as_str()
+        .filter(|revision| !revision.trim().is_empty())?;
+    let declared = request
+        .context
+        .iter()
+        .filter(|record| {
+            record.kind == loop_core::SESSION_DECLARATION_RECORD_KIND
+                && record.data["role"] == role.as_str()
+                && record.data["subject"] == subject
+                && record.data["subject_revision"] == revision
+        })
+        .max_by_key(|record| record.sequence)
+        .and_then(|record| loop_core::Session::from_value(&record.data["session"]).ok());
+    loop_core::check_declared_session(role, Some(&binding), declared.as_ref())
+        .err()
+        .map(|mismatch| {
+            deny(
+                ARTIFACT_ADMISSION,
+                format!(
+                    "{subject} revision `{revision}` needs a matching session-declaration: {mismatch}"
+                ),
+            )
+        })
+}
+
 /// Only applicability is cut off. The immutable original reviewer record,
 /// never the declaration append time, determines eligibility. Direct failures
 /// and exact-source ledger dispositions remain in the full context.
@@ -463,13 +513,15 @@ mod tests {
     }
     impl Fixture {
         fn new(narrative: bool, checkpoint: bool, reviews: bool) -> Self {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let root = std::env::temp_dir().join(format!(
-                "software-change-options-{}-{}",
+                "software-change-options-{}-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
-                    .as_nanos()
+                    .as_nanos(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             ));
             std::fs::create_dir(&root).unwrap();
             let mut input = json!({"contract_version":4,"criterion_policy":{"required_authors":1,"goal_required_authors":1},"config_version":"option-test", "artifact_root":root,"review_policies":{},
@@ -1382,5 +1434,255 @@ mod tests {
             "implementation",
             "implementation-report.json"
         ));
+    }
+    fn bind(f: &mut Fixture, role: &str, model: &str, thinking: &str) {
+        f.input["model_bindings"] =
+            json!({"roles": {role: {"model": model, "thinking": thinking}}});
+    }
+
+    fn declare(f: &mut Fixture, role: &str, subject: &str, revision: &str, model: &str) {
+        f.append(
+            loop_core::SESSION_DECLARATION_RECORD_KIND,
+            json!({"subject":subject,"subject_revision":revision,"role":role,
+                "session":{"model":model,"thinking":"high"}}),
+        );
+    }
+
+    fn deny_message(f: &Fixture, source: &str, event: &str) -> String {
+        let v = f.evaluate(source, event);
+        assert_eq!(v["result"], "deny", "{v}");
+        assert_eq!(v["feedback"]["code"], ARTIFACT_ADMISSION, "{v}");
+        v["feedback"]["message"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{v}"))
+            .to_owned()
+    }
+
+    #[test]
+    fn bound_author_draft_needs_a_matching_declaration_for_the_current_revision() {
+        let mut f = Fixture::new(false, false, false);
+        bind(&mut f, "author", "p/author", "high");
+        let before = f.context.clone();
+        let missing = deny_message(&f, "design", "design-ready");
+        assert!(
+            missing.contains("`author`") && missing.contains("statement missing"),
+            "{missing}"
+        );
+        assert!(missing.contains("design.json revision `1`"), "{missing}");
+        declare(&mut f, "author", "design.json", "1", "p/other");
+        let unequal = deny_message(&f, "design", "design-ready");
+        assert!(
+            unequal.contains("expected model `p/author`")
+                && unequal.contains("differs in model only"),
+            "{unequal}"
+        );
+        declare(&mut f, "author", "plan.json", "1", "p/author");
+        declare(&mut f, "author", "design.json", "0", "p/author");
+        deny_message(&f, "design", "design-ready"); // another subject or an older revision
+        declare(&mut f, "implementer", "design.json", "1", "p/author");
+        deny_message(&f, "design", "design-ready"); // another role
+        assert_eq!(f.context[..before.len()], before[..]);
+        declare(&mut f, "author", "design.json", "1", "p/author");
+        f.allow("design", "design-ready");
+        // A new artifact revision needs its own declaration.
+        f.artifact("2");
+        assert!(deny_message(&f, "design", "design-ready").contains("revision `2`"));
+    }
+
+    #[test]
+    fn the_latest_declaration_for_the_revision_decides_after_an_amendment() {
+        let mut f = Fixture::new(false, false, false);
+        bind(&mut f, "author", "p/author", "high");
+        declare(&mut f, "author", "design.json", "1", "p/author");
+        f.append(
+            loop_core::MODEL_BINDING_AMENDMENT_RECORD_KIND,
+            json!({"actor":{"name":"owner","kind":"human"},"authority":{"kind":"owner"},"words":"switch",
+                "changes":[{"role":"author","old":{"model":"p/author","thinking":"high"},
+                    "new":{"model":"p/next","thinking":"high"}}]}),
+        );
+        assert!(deny_message(&f, "design", "design-ready").contains("expected model `p/next`"));
+        declare(&mut f, "author", "design.json", "1", "p/next");
+        f.allow("design", "design-ready");
+    }
+
+    #[test]
+    fn unbound_author_and_other_roles_leave_drafts_unrequired() {
+        let mut f = Fixture::new(false, false, false);
+        f.allow("design", "design-ready");
+        let mut g = Fixture::new(false, false, false);
+        bind(&mut g, "implementer", "p/impl", "high");
+        g.allow("design", "design-ready");
+    }
+
+    #[test]
+    fn intent_and_plan_drafts_need_the_author_declaration_too() {
+        for (state, event, subject) in [
+            ("explore", "intent-ready", "intent.json"),
+            ("plan", "plan-ready", "plan.json"),
+        ] {
+            let mut f = Fixture::new(false, false, false);
+            f.write(
+                subject,
+                &json!({"revision":"7","author":{"name":"writer","kind":"agent"}}),
+            );
+            bind(&mut f, "author", "p/author", "high");
+            assert!(deny_message(&f, state, event).contains(&format!("{subject} revision `7`")));
+            declare(&mut f, "author", subject, "7", "p/author");
+            assert_ne!(
+                f.evaluate(state, event)["feedback"]["code"],
+                ARTIFACT_ADMISSION
+            );
+        }
+    }
+
+    #[test]
+    fn validation_draft_is_declared_at_ready_event_and_at_passed() {
+        for (event, narrative) in [("validation-ready", true), ("passed", false)] {
+            let mut f = Fixture::new(false, false, false);
+            if narrative {
+                f.input["extra"]["narratives"] = json!(["validation"]);
+            }
+            checkpoint_documents(&f);
+            let cwd = std::env::current_dir().unwrap();
+            for phase in [
+                crate::checkpoint::CheckpointPhase::Implementation,
+                crate::checkpoint::CheckpointPhase::Validation,
+            ] {
+                crate::checkpoint::create(phase, &f.root, &cwd).unwrap();
+                if phase == crate::checkpoint::CheckpointPhase::Implementation {
+                    crate::checkpoint::record_accepted_implementation_from_cwd(&f.root).unwrap();
+                }
+            }
+            bind(&mut f, "author", "p/author", "high");
+            let missing = deny_message(&f, "validation", event);
+            assert!(
+                missing.contains("validation-report.json revision `1`"),
+                "{event}: {missing}"
+            );
+            declare(&mut f, "author", "validation-report.json", "1", "p/other");
+            deny_message(&f, "validation", event);
+            declare(&mut f, "author", "validation-report.json", "1", "p/author");
+            // Past the declaration the ordinary validation checks decide, so
+            // the answer equals the same evaluation with the role unbound.
+            let accepted = f.evaluate("validation", event);
+            f.input.as_object_mut().unwrap().remove("model_bindings");
+            assert_eq!(accepted, f.evaluate("validation", event), "{event}");
+            assert_ne!(accepted["feedback"]["code"], ARTIFACT_ADMISSION);
+        }
+    }
+
+    #[test]
+    fn bound_implementer_report_is_declared_at_reconciliation_ready_not_at_the_handoff() {
+        let mut f = Fixture::new(false, false, false);
+        bind(&mut f, "implementer", "p/impl", "high");
+        // The report-free handoff needs no declaration and no report.
+        f.allow("implement", "implementation-ready");
+        checkpoint_documents(&f);
+        f.write("reconciliation.json", &reconciliation());
+        crate::checkpoint::create(
+            crate::checkpoint::CheckpointPhase::Implementation,
+            &f.root,
+            &std::env::current_dir().unwrap(),
+        )
+        .unwrap();
+        let before = f.context.clone();
+        let missing = deny_message(&f, "reconciliation", "reconciliation-ready");
+        assert!(
+            missing.contains("`implementer`")
+                && missing.contains("implementation-report.json revision `1`"),
+            "{missing}"
+        );
+        declare(
+            &mut f,
+            "implementer",
+            "implementation-report.json",
+            "1",
+            "p/other",
+        );
+        deny_message(&f, "reconciliation", "reconciliation-ready");
+        declare(
+            &mut f,
+            "author",
+            "implementation-report.json",
+            "1",
+            "p/impl",
+        );
+        deny_message(&f, "reconciliation", "reconciliation-ready"); // author declaration is not the implementer's
+        assert_eq!(f.context[..before.len()], before[..]);
+        declare(
+            &mut f,
+            "implementer",
+            "implementation-report.json",
+            "1",
+            "p/impl",
+        );
+        f.allow("reconciliation", "reconciliation-ready");
+    }
+
+    #[test]
+    fn declaration_boundary_names_exactly_the_artifact_bearing_edges() {
+        use loop_core::ModelRole::{Author, Implementer};
+        let checked = |subject| TransitionDuties::Checked {
+            subject,
+            gate: None,
+        };
+        for (source, event, subject, expected) in [
+            (
+                "explore",
+                "intent-ready",
+                "intent.json",
+                Some((Author, "intent.json")),
+            ),
+            (
+                "design",
+                "design-ready",
+                "design.json",
+                Some((Author, "design.json")),
+            ),
+            (
+                "plan",
+                "plan-ready",
+                "plan.json",
+                Some((Author, "plan.json")),
+            ),
+            (
+                "validation",
+                "validation-ready",
+                "validation-report.json",
+                Some((Author, "validation-report.json")),
+            ),
+            (
+                "validation",
+                "passed",
+                "validation-report.json",
+                Some((Author, "validation-report.json")),
+            ),
+            (
+                "reconciliation",
+                "reconciliation-ready",
+                "reconciliation.json",
+                Some((Implementer, "implementation-report.json")),
+            ),
+            ("design-review", "approved", "design.json", None),
+            ("explore", "passed", "intent.json", None),
+        ] {
+            assert_eq!(
+                workflow::declaration_boundary(source, event, checked(subject)),
+                expected,
+                "{source} {event}"
+            );
+        }
+        assert_eq!(
+            workflow::declaration_boundary(
+                "implement",
+                "implementation-ready",
+                TransitionDuties::CheckedNoArtifact
+            ),
+            None
+        );
+        assert_eq!(
+            workflow::declaration_boundary("design", "design-ready", TransitionDuties::CheckFree),
+            None
+        );
     }
 }

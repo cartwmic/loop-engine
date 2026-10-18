@@ -51,10 +51,18 @@ self-review policy, advice and Bookends state, operating boundaries and work pol
 Copying a shipped profile is not confirmation. Rehash immediately before start;
 any byte change requires renewed confirmation. Never substitute a default afterward.
 
+A software-change profile may carry an optional `model_bindings` key (per-role model and
+thinking level, set through `software-change setup --set binding.<role>=provider/model@thinking`).
+It is part of the confirmed bytes and hash, frozen at start, and absent from shipped
+profiles; without it the run is unchanged. The owner may later add, change or remove
+bindings only through a recorded `model-binding-amendment` (see checkout-root
+`docs/agent-usage.md`, Software-change model bindings). The engine compares declared
+model text only and cannot verify the real session.
+
 Confirm a separate external role-to-model manifest, commands, write ownership,
 owner-set spend/resource limits (none by default), proof owner and escalation owner. Verify the exact model with the
 chosen harness and pass it explicitly; stop rather than silently substituting.
-The profile hash does not cover this external fleet. No executor is frozen in engine
+Apart from `model_bindings`, the profile hash does not cover this external fleet. No executor is frozen in engine
 state. Later profile edits do not change a started run's frozen obligations. Supported
 owner advice-policy-change records change the effective advice map, not the frozen input.
 

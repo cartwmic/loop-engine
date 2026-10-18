@@ -426,10 +426,27 @@ fn describe(request: Value) -> i32 {
             return protocol_error(message);
         }
     }
+    if let Some(message) = request
+        .initial_input
+        .as_ref()
+        .and_then(model_bindings_refusal)
+    {
+        return protocol_error(message);
+    }
     match workflow::describe_workflow(request.initial_input.as_ref()) {
         Ok(workflow) => write_json(&workflow.with_capture(true).with_admit(true)),
         Err(message) => protocol_error(message),
     }
+}
+
+/// Refuses a frozen `model_bindings` value at run start with the same
+/// diagnostic `config::parse_initial_input` gives. Inputs without the key
+/// are not checked.
+fn model_bindings_refusal(initial_input: &Value) -> Option<String> {
+    let bindings = initial_input.get(loop_core::MODEL_BINDINGS_INPUT_KEY)?;
+    loop_core::parse_frozen_model_bindings(bindings)
+        .err()
+        .map(|message| format!("model-bindings-invalid: {message}"))
 }
 
 fn admit_operation(request: Value) -> i32 {
@@ -526,4 +543,37 @@ fn protocol_error(message: String) -> i32 {
 fn evaluation_error(message: &str) -> i32 {
     eprintln!("{message}");
     1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::model_bindings_refusal;
+    use serde_json::json;
+
+    #[test]
+    fn describe_refuses_malformed_model_bindings_and_ignores_runs_without_the_key() {
+        let driver = json!({"model": "p/d", "thinking": "low"});
+        assert_eq!(
+            model_bindings_refusal(&json!({"config_version": "v"})),
+            None
+        );
+        assert_eq!(
+            model_bindings_refusal(&json!({"model_bindings": {
+                "roles": {"driver": driver.clone()}, "driver_session": driver.clone()
+            }})),
+            None
+        );
+        let missing_session = model_bindings_refusal(
+            &json!({"model_bindings": {"roles": {"driver": driver.clone()}}}),
+        )
+        .expect("driver without driver_session is refused");
+        assert!(missing_session.starts_with("model-bindings-invalid: "));
+        assert!(missing_session.contains("driver_session is required"));
+        let unknown_role = model_bindings_refusal(
+            &json!({"model_bindings": {"roles": {"nobody": driver.clone()}}}),
+        )
+        .expect("unknown role is refused");
+        assert!(unknown_role.contains("unknown role `nobody`"));
+        assert!(model_bindings_refusal(&json!({"model_bindings": "text"})).is_some());
+    }
 }

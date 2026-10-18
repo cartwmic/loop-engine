@@ -679,6 +679,7 @@ fn source_mode(
         "gate",
         "config_version",
         "review_stage",
+        "session",
     ];
     if object.keys().any(|k| !fields.contains(&k.as_str()))
         || (kind == "goal-verdict" && object.contains_key("criterion_id"))
@@ -885,11 +886,20 @@ pub(crate) fn verify_verdict_origin(data: &Value, kind: &str) -> Result<Option<S
         .as_object_mut()
         .unwrap()
         .remove(loop_core::ENGINE_ORIGIN_KEY);
+    // The declared session is attached by the driver; the raw judgment may or
+    // may not carry one, and the model-binding-session rule checks it.
+    claimed.as_object_mut().unwrap().remove("session");
     let matches: Vec<_> = raw["validation_verdicts"]
         .as_array()
         .ok_or("capture has no validation verdicts")?
         .iter()
-        .filter(|r| r["kind"] == kind && r["data"] == claimed && raw["author"] == claimed["author"])
+        .filter(|r| {
+            let mut raw_data = r["data"].clone();
+            if let Some(object) = raw_data.as_object_mut() {
+                object.remove("session");
+            }
+            r["kind"] == kind && raw_data == claimed && raw["author"] == claimed["author"]
+        })
         .collect();
     if matches.len() != 1 {
         return Err("verdict disagrees with uniquely selected raw judgment".into());
@@ -1038,6 +1048,7 @@ pub(crate) fn evaluate(
         "validation-report.json",
         Some(&root_value),
     )?);
+    let stale_causes = software_change_provider::recovery::stale_exclusions(context);
     let mut all_excluded = excluded.clone();
     all_excluded.extend(recovery_excluded.iter().cloned());
     let excluded = &all_excluded;
@@ -1158,9 +1169,15 @@ pub(crate) fn evaluate(
                 if !complete {
                     continue;
                 }
-                return Err(format!(
-                    "verdict index references excluded record `{id}`; supply replacement coverage"
-                ));
+                return Err(match stale_causes.get(&id) {
+                    Some(cause) => format!(
+                        "verdict index references excluded record `{id}`; supply replacement coverage: {}",
+                        cause.message()
+                    ),
+                    None => format!(
+                        "verdict index references excluded record `{id}`; supply replacement coverage"
+                    ),
+                });
             }
             if excluded.contains(&id) {
                 continue;
@@ -1304,8 +1321,21 @@ pub(crate) fn evaluate(
             projection.push(json!({"selected_id":id,"source_id":original.id,"mode":if carried{"carried"}else{"fresh"},"verdict":d}));
         }
         if complete && authors.len().saturating_sub(self_authors.saturating_sub(1)) < floor {
+            let causes: Vec<String> = stale_causes
+                .values()
+                .filter(|cause| cause.criterion.as_deref() == Some(criterion.unwrap_or("goal")))
+                .map(software_change_provider::recovery::StaleExclusion::message)
+                .collect();
+            let suffix = if causes.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; stale-marked verdicts were excluded: {}",
+                    causes.join("; ")
+                )
+            };
             return Err(format!(
-                "insufficient independent authors for {}",
+                "insufficient independent authors for {}{suffix}",
                 criterion.unwrap_or("whole-intent goal")
             ));
         }
@@ -1519,6 +1549,111 @@ mod tests {
         )
         .unwrap_err()
         .contains("wrong gate, stage, or config"));
+    }
+
+    #[test]
+    fn verdict_session_is_allowed_by_the_shape_rule_and_is_optional() {
+        use loop_core::{ContextRecord, SemanticSequence, Timestamp};
+        let context = vec![ContextRecord::new(
+            "cmd",
+            "command-evidence",
+            json!({}),
+            SemanticSequence::new(1),
+            Timestamp::from_unix_millis(0),
+        )];
+        let retained = BTreeSet::from(["cmd".to_owned()]);
+        let base = json!({
+            "subject":"validation-report.json","subject_revision":"r1",
+            "checkpoint":"validation-checkpoint.json","author":{"name":"reviewer","kind":"agent"},
+            "result":"fail","findings":["finding"],"evidence_context_ids":["cmd"]
+        });
+        for kind in ["criterion-verdict", "goal-verdict"] {
+            let mut data = base.clone();
+            if kind == "criterion-verdict" {
+                data["criterion_id"] = json!("AC-1");
+            }
+            let without = source_with_verified_commands(
+                &data,
+                kind,
+                &context,
+                Path::new("/unused"),
+                Some(&retained),
+            );
+            assert!(without.is_ok(), "{kind} without session: {without:?}");
+            data["session"] = json!({"model":"p/criterion","thinking":"medium"});
+            let with = source_with_verified_commands(
+                &data,
+                kind,
+                &context,
+                Path::new("/unused"),
+                Some(&retained),
+            );
+            assert!(with.is_ok(), "{kind} with session: {with:?}");
+            data["unlisted"] = json!(true);
+            assert!(
+                source_with_verified_commands(
+                    &data,
+                    kind,
+                    &context,
+                    Path::new("/unused"),
+                    Some(&retained)
+                )
+                .unwrap_err()
+                .contains("unknown verdict fields"),
+                "{kind} still refuses unknown fields"
+            );
+        }
+    }
+
+    #[test]
+    fn verdict_session_does_not_break_the_selected_raw_judgment_match() {
+        use sha2::{Digest, Sha256};
+        let dir = std::env::temp_dir().join(format!("verdict-session-raw-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let judged = json!({
+            "criterion_id":"AC-1","subject":"validation-report.json","subject_revision":"r1",
+            "checkpoint":"validation-checkpoint.json","author":{"name":"reviewer","kind":"agent"},
+            "result":"fail","findings":["finding"],"evidence_context_ids":[]
+        });
+        let session = json!({"model":"p/criterion","thinking":"medium"});
+        let mut raw_with_session = judged.clone();
+        raw_with_session["session"] = session.clone();
+        for (name, raw_data) in [("plain", judged.clone()), ("session", raw_with_session)] {
+            let raw = json!({
+                "author":{"name":"reviewer","kind":"agent"},"review_stage":"aggregate",
+                "validation_verdicts":[{"kind":"criterion-verdict","record_id":"rid","data":raw_data}]
+            });
+            let bytes = serde_json::to_vec(&raw).unwrap();
+            fs::write(dir.join("out.json"), &bytes).unwrap();
+            let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+            let origin = |extra: Option<&Value>| {
+                let mut data = judged.clone();
+                data["gate"] = json!("validation-review");
+                data["config_version"] = json!("fixture-1");
+                data["review_stage"] = json!("aggregate");
+                data["origin"] = json!({"kind":"selected-assignment-output","id":"inv-1","assignment_id":"worker-0"});
+                data[loop_core::ENGINE_ORIGIN_KEY] = json!({
+                    "invocation_id":"inv-1","assignment_id":"worker-0","selected_attempt":1,
+                    "selected_output_sha256":digest,"selected_output_path":"out.json",
+                    "capture_dir":dir,"command":"fixture","args":[],
+                    "binding":{"command":"fixture","args":[]},"slot_id":"validation-review"
+                });
+                if let Some(session) = extra {
+                    data["session"] = session.clone();
+                }
+                data
+            };
+            for stored in [origin(None), origin(Some(&session))] {
+                assert_eq!(
+                    verify_verdict_origin(&stored, "criterion-verdict"),
+                    Ok(Some("rid".to_owned())),
+                    "{name} raw judgment, stored session {:?}",
+                    stored.get("session")
+                );
+            }
+        }
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

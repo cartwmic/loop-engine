@@ -9,6 +9,7 @@ mod advice_transition;
 mod execution_contract;
 mod invocation;
 mod model;
+mod model_bindings;
 pub mod operations;
 mod outcome;
 mod ports;
@@ -44,6 +45,13 @@ pub use model::{
     SkippedBoundCheck, SkippedProviderEvaluation, State, StateId, Timestamp, Transition,
     TransitionHistoryOutcome, TransitionKind, TransitionOverride, WaiterWrittenStatus, WorkSlot,
     WorkSlotBinding, WorkSlotId, WorkSlotInvocation, WorkerAttempt, Workflow, WorkflowId,
+};
+pub use model_bindings::{
+    check_declared_session, fold_model_bindings, model_bindings_view, parse_frozen_model_bindings,
+    validate_amendment, AmendmentActor, AmendmentCause, AmendmentEntry, AmendmentRefusal, Binding,
+    FrozenModelBindings, ModelBindings, ModelRole, RoleBindings, RoleChange, Session,
+    SessionDifference, SessionMismatch, StaleMark, ValidAmendment, MODEL_BINDINGS_INPUT_KEY,
+    MODEL_BINDING_AMENDMENT_RECORD_KIND, NEVER_BOUND_STATEMENT, SESSION_DECLARATION_RECORD_KIND,
 };
 pub use operations::{
     execute_append, execute_append_with_gateway, execute_event, execute_history, execute_list,

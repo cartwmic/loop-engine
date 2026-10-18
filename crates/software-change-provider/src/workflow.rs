@@ -477,6 +477,43 @@ pub(crate) fn duties_for(source: &str, event: &str) -> Option<TransitionDuties> 
     None
 }
 
+/// The model role that must have a matching session declaration on this
+/// checked edge, with the artifact subject the declaration names.
+///
+/// Author drafts are declared at the draft state's ready event (and at
+/// `passed` when the phase has no next draft, which is the validation draft).
+/// The implementation report is declared at `reconciliation-ready`, its first
+/// artifact-bearing admission. The report-free `implementation-ready`
+/// handoff into reconciliation requires no declaration.
+pub(crate) fn declaration_boundary(
+    source: &str,
+    event: &str,
+    duties: TransitionDuties,
+) -> Option<(loop_core::ModelRole, &'static str)> {
+    let TransitionDuties::Checked {
+        subject,
+        gate: None,
+    } = duties
+    else {
+        return None;
+    };
+    let report = PHASES.iter().find(|phase| phase.name == "implementation")?;
+    if source == RECONCILIATION_STATE && event == RECONCILIATION_READY_EVENT {
+        return Some((loop_core::ModelRole::Implementer, report.subject));
+    }
+    let phase = PHASES.iter().find(|phase| {
+        phase.draft_state == source
+            && phase.subject == subject
+            && (event == phase.ready_event || (phase.next_draft.is_none() && event == "passed"))
+    })?;
+    let role = if phase.name == "implementation" {
+        loop_core::ModelRole::Implementer
+    } else {
+        loop_core::ModelRole::Author
+    };
+    Some((role, phase.subject))
+}
+
 /// Look up duties for an exact snapshotted edge. The target matters for the
 /// contract-v3 implementation handoff: entering reconciliation is checked by
 /// the engine but has no report or checkpoint prerequisite. Historical edges

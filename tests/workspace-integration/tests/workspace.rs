@@ -53,3 +53,4 @@ mod c_packets_admission;
 
 #[cfg(unix)]
 mod evidence_carry;
+mod model_bindings;

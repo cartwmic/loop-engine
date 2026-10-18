@@ -2,10 +2,13 @@
 //! These pure rules never store context, choose finding dispositions or waive floors.
 
 use crate::finding_ledger::{self, FindingDisposition};
-use loop_core::ContextRecord;
+use loop_core::{
+    validate_amendment, Binding, ContextRecord, ModelRole, RoleBindings, ValidAmendment,
+    MODEL_BINDING_AMENDMENT_RECORD_KIND,
+};
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const RECORD_WITHDRAWAL_KIND: &str = "record-withdrawal";
 pub const WITHDRAWAL_RULE: &str = "a-withdrawal-guardrails";
@@ -145,8 +148,164 @@ pub fn withdrawn_record_ids(
     Ok(withdrawn)
 }
 
+/// Why a record is excluded because an owner amendment marked its role stale.
+/// A carried copy shares its origin's cause and names the carry in `record_id`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StaleExclusion {
+    pub record_id: String,
+    /// Context kind of `record_id`.
+    pub kind: String,
+    pub origin_id: String,
+    pub amendment_id: String,
+    pub role: ModelRole,
+    pub author: String,
+    /// `assessment_id` of a review-evidence record.
+    pub assessment: Option<String>,
+    /// `policy_id` of a review-evidence record.
+    pub axis: Option<String>,
+    /// Criterion id of a criterion verdict, or `goal` for a goal verdict.
+    pub criterion: Option<String>,
+    pub gate: Option<String>,
+    pub stage: Option<String>,
+}
+
+impl StaleExclusion {
+    /// The cause text naming amendment, role, author, assessment and axis (or
+    /// criterion/goal for a verdict).
+    pub fn message(&self) -> String {
+        let subject = match (&self.axis, &self.criterion) {
+            (_, Some(criterion)) => format!("criterion `{criterion}`"),
+            (Some(axis), None) => format!(
+                "assessment {}, axis `{axis}`",
+                self.assessment
+                    .as_ref()
+                    .map_or("none".to_owned(), |id| format!("`{id}`"))
+            ),
+            (None, None) => "no axis".to_owned(),
+        };
+        let cause = format!(
+            "model binding amendment `{}` marked role `{}` stale; author {}, {subject}",
+            self.amendment_id, self.role, self.author
+        );
+        if self.record_id == self.origin_id {
+            format!("record `{}` is excluded: {cause}", self.record_id)
+        } else {
+            format!(
+                "carried copy `{}` of `{}` is excluded with its origin: {cause}",
+                self.record_id, self.origin_id
+            )
+        }
+    }
+}
+
+/// An amendment record that satisfies every amendment rule except the match of
+/// its stated old bindings with history, which admission already enforced when
+/// it was stored (the frozen original is not available to this function).
+fn amendment_if_valid(data: &Value) -> Option<ValidAmendment> {
+    let mut stated_old = RoleBindings::new();
+    for change in data.get("changes")?.as_array()? {
+        let role = ModelRole::parse(change.get("role")?.as_str()?)?;
+        if let Ok(binding) = Binding::from_value(change.get("old")?) {
+            stated_old.insert(role, binding);
+        }
+    }
+    validate_amendment(&stated_old, data).ok()
+}
+
+fn stale_exclusion_of(
+    record: &ContextRecord,
+    amendment_id: &str,
+    role: ModelRole,
+) -> StaleExclusion {
+    let text = |pointer: &str| record.data.pointer(pointer).and_then(Value::as_str);
+    let is_verdict = record.kind != "review-evidence";
+    StaleExclusion {
+        record_id: record.id.to_string(),
+        kind: record.kind.clone(),
+        origin_id: record.id.to_string(),
+        amendment_id: amendment_id.to_owned(),
+        role,
+        author: format!(
+            "{} ({})",
+            text("/author/name").unwrap_or("unknown"),
+            text("/author/kind").unwrap_or("unknown")
+        ),
+        assessment: text("/assessment_id").map(str::to_owned),
+        axis: text("/policy_id").map(str::to_owned),
+        criterion: is_verdict.then(|| text("/criterion_id").unwrap_or("goal").to_owned()),
+        gate: text("/gate").map(str::to_owned),
+        stage: text("/review_stage").map(str::to_owned),
+    }
+}
+
+/// Records excluded by stale-marking amendments, keyed by record id, with the
+/// cause of each. A valid amendment change with `mark_stale` excludes the
+/// review-evidence, criterion-verdict and goal-verdict records of that role
+/// stored before the amendment; an amendment without the mark excludes
+/// nothing, and records stored after it count. Carries of an excluded record
+/// are excluded with it, transitively. The set does not depend on gate or
+/// subject, so every consumer of [`excluded_record_ids`] sees the same one.
+pub fn stale_exclusions(context: &[ContextRecord]) -> BTreeMap<String, StaleExclusion> {
+    let mut amendments: Vec<_> = context
+        .iter()
+        .filter(|row| row.kind == MODEL_BINDING_AMENDMENT_RECORD_KIND)
+        .collect();
+    amendments.sort_by_key(|row| row.sequence);
+    let mut excluded: BTreeMap<String, StaleExclusion> = BTreeMap::new();
+    for amendment in amendments {
+        let Some(valid) = amendment_if_valid(&amendment.data) else {
+            continue;
+        };
+        for role in valid.stale_roles() {
+            for record in context.iter().filter(|row| {
+                row.sequence < amendment.sequence
+                    && crate::model_roles::role_of_record(&row.kind, &row.data) == Some(role)
+            }) {
+                excluded
+                    .entry(record.id.to_string())
+                    .or_insert_with(|| stale_exclusion_of(record, amendment.id.as_str(), role));
+            }
+        }
+    }
+    loop {
+        let previous = excluded.len();
+        for carry in context
+            .iter()
+            .filter(|row| row.kind == "evidence-applicability")
+        {
+            if excluded.contains_key(carry.id.as_str())
+                || carry.data.pointer("/origin/kind").and_then(Value::as_str)
+                    != Some("context-record")
+            {
+                continue;
+            }
+            let Some(origin) = carry
+                .data
+                .pointer("/origin/id")
+                .and_then(Value::as_str)
+                .and_then(|id| excluded.get(id))
+            else {
+                continue;
+            };
+            let carried = StaleExclusion {
+                record_id: carry.id.to_string(),
+                kind: carry.kind.clone(),
+                origin_id: origin.origin_id.clone(),
+                ..origin.clone()
+            };
+            excluded.insert(carry.id.to_string(), carried);
+        }
+        if previous == excluded.len() {
+            break;
+        }
+    }
+    excluded
+}
+
 /// One exclusion set before classification. Originals stay in the caller's
 /// context for immutable ledger-source lookup and accepted-unresolved duties.
+/// It holds withdrawn records, retired-author evidence, records of a
+/// stale-marked role (see [`stale_exclusions`]) and carries of any of them.
 pub fn excluded_record_ids(
     context: &[ContextRecord],
     gate: &str,
@@ -154,6 +313,7 @@ pub fn excluded_record_ids(
     artifact_root: Option<&Value>,
 ) -> Result<BTreeSet<String>, String> {
     let mut excluded = withdrawn_record_ids(context, artifact_root)?;
+    excluded.extend(stale_exclusions(context).into_keys());
     if let Ok(Some(ledger)) =
         finding_ledger::latest_snapshot_for_recovery(context, gate, subject, artifact_root)
     {
@@ -249,7 +409,19 @@ pub fn applicability_origin_not_withdrawn(
         }
         break;
     }
+    let stale = stale_exclusions(earlier);
+    excluded.extend(stale.keys().cloned());
     propagate_exclusion(earlier, &mut excluded);
+    if let Some(cause) = data
+        .pointer("/origin/id")
+        .and_then(Value::as_str)
+        .and_then(|id| stale.get(id))
+    {
+        return Err(format!(
+            "{APPLICABILITY_RULE}: record `{record_id}` carries a stale-marked origin; {}",
+            cause.message()
+        ));
+    }
     if data
         .pointer("/origin/id")
         .and_then(Value::as_str)
@@ -856,5 +1028,269 @@ mod tests {
                 .any(|finding| finding.source.record_id() == "pending-origin"),
             "re-addition still does not resolve or remove accepted findings"
         );
+    }
+    fn binding(model: &str) -> Value {
+        json!({"model": model, "thinking": "high"})
+    }
+
+    fn amendment(id: &str, sequence: u64, roles: &[(&str, bool)]) -> ContextRecord {
+        let changes: Vec<_> = roles
+            .iter()
+            .map(|(role, mark_stale)| {
+                json!({"role": role, "old": binding("p/old"), "new": binding("p/new"), "mark_stale": mark_stale})
+            })
+            .collect();
+        row(
+            id,
+            MODEL_BINDING_AMENDMENT_RECORD_KIND,
+            sequence,
+            json!({
+                "actor": {"name": "owner", "kind": "human"},
+                "authority": {"kind": "owner"},
+                "words": "Use a different model.",
+                "changes": changes,
+            }),
+        )
+    }
+
+    /// Cold reader before and after the amendment, an ordinary reviewer, a
+    /// carry of the early cold-reader record, and one verdict of each kind.
+    fn stale_scenario(amendment_roles: &[(&str, bool)]) -> Vec<ContextRecord> {
+        let mut early = review("early-cold", 1, "reader", "pass");
+        early.data["assessment_id"] = json!("return-1");
+        let mut ordinary = review("early-ordinary", 2, "other", "pass");
+        ordinary.data["gate"] = json!("design-review");
+        ordinary.data["subject"] = json!("design.json");
+        let mut late = review("late-cold", 7, "reader", "pass");
+        late.data["assessment_id"] = json!("return-2");
+        vec![
+            early,
+            ordinary,
+            row(
+                "early-verdict",
+                "criterion-verdict",
+                3,
+                json!({"criterion_id": "AC-1", "result": "pass", "author": {"name": "judge", "kind": "agent"}}),
+            ),
+            row(
+                "early-goal",
+                "goal-verdict",
+                4,
+                json!({"result": "pass", "author": {"name": "judge", "kind": "agent"}}),
+            ),
+            carry("carry-of-early", "early-cold", 5, "r2"),
+            amendment("amend-1", 6, amendment_roles),
+            late,
+            carry("carry-of-carry", "carry-of-early", 8, "r3"),
+        ]
+    }
+
+    /// The (gate, subject) pairs the commission packet, the evidence and
+    /// gate paths and the validation path pass to `excluded_record_ids`.
+    const CALL_SITES: [(&str, &str); 6] = [
+        ("intent-review", "intent.json"),
+        ("intent-adversarial-review", "intent.json"),
+        ("design-review", "design.json"),
+        ("plan-adversarial-review", "plan.json"),
+        ("validation-review", "validation-report.json"),
+        ("validation-adversarial-review", "validation-report.json"),
+    ];
+
+    fn excluded_at(
+        context: &[ContextRecord],
+        gate: &str,
+        subject: &str,
+        root: &Root,
+    ) -> BTreeSet<String> {
+        excluded_record_ids(context, gate, subject, Some(&root.value())).unwrap()
+    }
+
+    #[test]
+    fn stale_unmarked_amendment_excludes_nothing() {
+        let root = Root::new();
+        let unmarked = stale_scenario(&[("cold-reader", false), ("criterion-author", false)]);
+        let without: Vec<_> = unmarked
+            .iter()
+            .filter(|row| row.kind != MODEL_BINDING_AMENDMENT_RECORD_KIND)
+            .cloned()
+            .collect();
+        assert!(stale_exclusions(&unmarked).is_empty());
+        for (gate, subject) in CALL_SITES {
+            assert_eq!(
+                excluded_at(&unmarked, gate, subject, &root),
+                excluded_at(&without, gate, subject, &root),
+                "{gate}"
+            );
+            assert!(excluded_at(&unmarked, gate, subject, &root).is_empty());
+        }
+        // An amendment that marks nothing, or marks no role, is the same.
+        let no_mark = amendment("plain", 6, &[("cold-reader", false)]);
+        assert!(stale_exclusions(&[stale_scenario(&[])[0].clone(), no_mark]).is_empty());
+    }
+
+    #[test]
+    fn stale_marked_amendment_excludes_earlier_records_of_the_role_and_their_carries() {
+        let root = Root::new();
+        let marked = stale_scenario(&[("cold-reader", true), ("criterion-author", true)]);
+        let expected: BTreeSet<String> = [
+            "early-cold",
+            "early-verdict",
+            "early-goal",
+            "carry-of-early",
+            "carry-of-carry",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        for (gate, subject) in CALL_SITES {
+            let excluded = excluded_at(&marked, gate, subject, &root);
+            assert_eq!(excluded, expected, "{gate}");
+            assert!(!excluded.contains("late-cold"), "later returns count");
+            assert!(!excluded.contains("early-ordinary"), "other role is kept");
+            assert!(!excluded.contains("amend-1"));
+        }
+        // Marking only the cold reader leaves the verdicts alone.
+        let cold_only = stale_scenario(&[("cold-reader", true)]);
+        let excluded = excluded_at(&cold_only, "intent-review", "intent.json", &root);
+        assert!(excluded.contains("early-cold") && excluded.contains("carry-of-early"));
+        assert!(!excluded.contains("early-verdict") && !excluded.contains("early-goal"));
+        // The mark is the amendment's: a record before the first of two
+        // amendments is excluded by it, a record between them by the second.
+        let mut sequenced = marked.clone();
+        sequenced.push(amendment("amend-2", 9, &[("cold-reader", true)]));
+        let excluded = excluded_at(&sequenced, "intent-review", "intent.json", &root);
+        assert!(excluded.contains("late-cold"));
+        let causes = stale_exclusions(&sequenced);
+        assert_eq!(causes["early-cold"].amendment_id, "amend-1");
+        assert_eq!(causes["late-cold"].amendment_id, "amend-2");
+    }
+
+    #[test]
+    fn stale_exclusion_sets_are_identical_across_commission_and_checked_event_sites() {
+        let root = Root::new();
+        for roles in [
+            &[("cold-reader", false)][..],
+            &[("cold-reader", true)][..],
+            &[("cold-reader", true), ("criterion-author", true)][..],
+        ] {
+            let context = stale_scenario(roles);
+            let stale: BTreeSet<String> = stale_exclusions(&context).into_keys().collect();
+            for (gate, subject) in CALL_SITES {
+                let set = excluded_at(&context, gate, subject, &root);
+                assert_eq!(set, stale, "{gate} {roles:?}");
+                // Every site sees the one function over the same context, so
+                // the commission-side and gate-side sets are the same set.
+                assert_eq!(
+                    set,
+                    excluded_at(&context, "intent-review", "intent.json", &root)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stale_exclusion_cause_names_amendment_role_author_assessment_and_axis() {
+        let context = stale_scenario(&[("cold-reader", true), ("criterion-author", true)]);
+        let causes = stale_exclusions(&context);
+        let review = causes["early-cold"].message();
+        for needle in [
+            "early-cold",
+            "amend-1",
+            "role `cold-reader`",
+            "reader (agent)",
+            "assessment `return-1`",
+            "axis `intent-sufficient`",
+        ] {
+            assert!(review.contains(needle), "{needle} in {review}");
+        }
+        let verdict = causes["early-verdict"].message();
+        for needle in [
+            "amend-1",
+            "criterion-author",
+            "judge (agent)",
+            "criterion `AC-1`",
+        ] {
+            assert!(verdict.contains(needle), "{needle} in {verdict}");
+        }
+        assert!(causes["early-goal"].message().contains("criterion `goal`"));
+        let carried = causes["carry-of-carry"].message();
+        assert!(carried.contains("carry-of-carry") && carried.contains("early-cold"));
+        assert!(carried.contains("amend-1") && carried.contains("axis `intent-sufficient`"));
+    }
+
+    #[test]
+    fn stale_marked_origin_refuses_a_new_carry_with_the_cause() {
+        let root = Root::new();
+        let marked = stale_scenario(&[("cold-reader", true), ("criterion-author", true)]);
+        let candidate = carry("new-carry", "early-cold", 20, "r4");
+        let error = applicability_origin_not_withdrawn(
+            "new-carry",
+            &candidate.data,
+            &marked,
+            Some(&root.value()),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("amend-1") && error.contains("role `cold-reader`"),
+            "{error}"
+        );
+        assert!(error.contains("reader (agent)") && error.contains("axis `intent-sufficient`"));
+        // A carry of a carry of a stale origin, and of a stale verdict, too.
+        for origin in ["carry-of-early", "early-verdict"] {
+            let candidate = carry("new-carry", origin, 20, "r4");
+            let error = applicability_origin_not_withdrawn(
+                "new-carry",
+                &candidate.data,
+                &marked,
+                Some(&root.value()),
+            )
+            .unwrap_err();
+            assert!(error.contains("amend-1"), "{origin}: {error}");
+        }
+        // Unmarked amendment, later return and other-role origin are allowed.
+        let unmarked = stale_scenario(&[("cold-reader", false)]);
+        for (context, origin) in [
+            (&unmarked, "early-cold"),
+            (&marked, "late-cold"),
+            (&marked, "early-ordinary"),
+        ] {
+            let candidate = carry("new-carry", origin, 20, "r4");
+            assert!(applicability_origin_not_withdrawn(
+                "new-carry",
+                &candidate.data,
+                context,
+                Some(&root.value())
+            )
+            .is_ok());
+        }
+    }
+
+    #[test]
+    fn stale_marks_from_invalid_amendments_are_ignored() {
+        let root = Root::new();
+        let mut context = stale_scenario(&[]);
+        for (id, edit) in [
+            (
+                "non-human",
+                json!({"actor": {"name": "bot", "kind": "agent"}}),
+            ),
+            ("not-owner", json!({"authority": {"kind": "delegation"}})),
+            ("blank-words", json!({"words": " "})),
+            (
+                "driver-mark",
+                json!({"changes": [{"role": "driver", "old": null, "new": null, "mark_stale": true}]}),
+            ),
+            (
+                "unknown-role",
+                json!({"changes": [{"role": "boss", "old": null, "new": null, "mark_stale": true}]}),
+            ),
+        ] {
+            let mut record = amendment(id, 6, &[("cold-reader", true)]);
+            for (key, value) in edit.as_object().unwrap() {
+                record.data[key] = value.clone();
+            }
+            context.push(record);
+        }
+        assert!(excluded_at(&context, "intent-review", "intent.json", &root).is_empty());
     }
 }

@@ -94,6 +94,18 @@ pub(super) fn read_bounded_observation(
             output["advice_policy"] = json!({"state":"unavailable","reason":"observation deadline reached before advice policy sampling"});
             output["completeness"]["advice_policy"] = json!("unavailable");
         }
+        let model_bindings = if std::time::Instant::now() < deadline {
+            load_model_bindings(&transaction, &run, deadline)
+        } else {
+            Err("observation deadline reached before model binding sampling".to_owned())
+        };
+        match model_bindings {
+            Ok(view) => output["model_bindings"] = view,
+            Err(reason) => {
+                output["model_bindings"] = json!({"state":"unavailable","reason":reason});
+                output["completeness"]["model_bindings"] = json!("unavailable");
+            }
+        }
         if std::time::Instant::now() < deadline {
             match load_status_invocations(&transaction, run_id, sampled_at_ms, deadline) {
                 Ok((total, items)) => {
@@ -164,12 +176,14 @@ pub(super) fn read_bounded_observation(
     }
 }
 
-// Read only policy changes, never the full context/captures on the bounded lane.
-fn load_advice_policy(
+// Read only records of one kind, never the full context/captures on the bounded lane.
+fn load_records_of_kind(
     connection: &Connection,
-    run: &loop_core::Run,
+    run_id: &RunId,
+    kind: &str,
+    what: &str,
     deadline: std::time::Instant,
-) -> Result<serde_json::Value, String> {
+) -> Result<Vec<loop_core::ContextRecord>, String> {
     let mut statement = connection
         .prepare(
             "SELECT record_id, sequence, data_json, created_at FROM context_records
@@ -177,36 +191,71 @@ fn load_advice_policy(
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map(
-            params![run.id.as_str(), loop_core::ADVICE_POLICY_CHANGE_RECORD_KIND],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                ))
-            },
-        )
+        .query_map(params![run_id.as_str(), kind], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
         .map_err(|error| error.to_string())?;
     let mut context = Vec::new();
     for row in rows {
         if std::time::Instant::now() >= deadline {
-            return Err("observation deadline reached during advice policy sampling".into());
+            return Err(format!(
+                "observation deadline reached during {what} sampling"
+            ));
         }
         let (id, sequence, data, created_at) = row.map_err(|error| error.to_string())?;
         context.push(loop_core::ContextRecord::new(
             id,
-            loop_core::ADVICE_POLICY_CHANGE_RECORD_KIND,
-            decode_json(&data, "advice policy change").map_err(|error| error.to_string())?,
+            kind,
+            decode_json(&data, what).map_err(|error| error.to_string())?,
             super::from_sqlite_u64(sequence, "semantic sequence")
                 .map_err(|error| error.to_string())?
                 .into(),
             loop_core::Timestamp::from_unix_millis(created_at),
         ));
     }
+    Ok(context)
+}
+
+// Read only policy changes, never the full context/captures on the bounded lane.
+fn load_advice_policy(
+    connection: &Connection,
+    run: &loop_core::Run,
+    deadline: std::time::Instant,
+) -> Result<serde_json::Value, String> {
+    let context = load_records_of_kind(
+        connection,
+        &run.id,
+        loop_core::ADVICE_POLICY_CHANGE_RECORD_KIND,
+        "advice policy change",
+        deadline,
+    )?;
     let policy = loop_core::effective_advice_policy(&run.initial_input, &run.workflow, &context)?;
     serde_json::to_value(policy).map_err(|error| error.to_string())
+}
+
+// Read only binding amendments; the bound original comes from the frozen input.
+fn load_model_bindings(
+    connection: &Connection,
+    run: &loop_core::Run,
+    deadline: std::time::Instant,
+) -> Result<serde_json::Value, String> {
+    let context = load_records_of_kind(
+        connection,
+        &run.id,
+        loop_core::MODEL_BINDING_AMENDMENT_RECORD_KIND,
+        "model binding amendment",
+        deadline,
+    )?;
+    let view = loop_core::model_bindings_view(&run.initial_input, &context);
+    match view["reason"].as_str() {
+        Some(reason) if view["state"] == "unavailable" => Err(reason.to_owned()),
+        _ => Ok(view),
+    }
 }
 
 fn load_status_invocations(
@@ -548,5 +597,126 @@ mod advice_policy_tests {
             invalid["advice_policy"].get("enabled").is_none(),
             "no stale fallback"
         );
+    }
+
+    fn bound_run(initial_input: serde_json::Value) -> super::super::SqlitePersistence {
+        let persistence = super::super::SqlitePersistence::open_in_memory().unwrap();
+        let workflow = Workflow::new(
+            "bindings",
+            "work",
+            vec![
+                State::new("work", "Work", "", false),
+                State::new("done", "Done", "", true),
+            ],
+            vec![Transition::check_free("work", "finish", "done")],
+        );
+        persistence
+            .create_run(CreateRunRequest::new(
+                "run",
+                None,
+                workflow,
+                ProviderAssociation::new(json!({})),
+                initial_input,
+                "work",
+                Lifecycle::Active,
+                Timestamp::from_unix_millis(1),
+                "test",
+                None,
+            ))
+            .unwrap();
+        // Arming observation records that the run was observed, which append requires.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        persistence
+            .read_bounded_observation(&"run".into(), deadline, true)
+            .unwrap();
+        persistence
+    }
+
+    fn observe(persistence: &super::super::SqlitePersistence) -> serde_json::Value {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        persistence
+            .read_bounded_observation(&"run".into(), deadline, false)
+            .unwrap()
+    }
+
+    #[test]
+    fn bounded_observation_states_a_run_never_bound_and_leaves_completeness_alone() {
+        let observed = observe(&bound_run(json!({})));
+        assert_eq!(
+            observed["model_bindings"],
+            json!({"state":"never-bound","statement":loop_core::NEVER_BOUND_STATEMENT})
+        );
+        assert!(observed["completeness"].get("model_bindings").is_none());
+    }
+
+    #[test]
+    fn bounded_observation_shows_original_and_amended_bindings_from_amendment_records_only() {
+        let persistence = bound_run(
+            json!({"model_bindings":{"roles":{"cold-reader":{"model":"p/m1","thinking":"high"}}}}),
+        );
+        let before = observe(&persistence);
+        assert_eq!(before["model_bindings"]["state"], "bound");
+        assert_eq!(before["model_bindings"]["history"], json!([]));
+        for (id, kind, data) in [
+            ("note", "note", json!({"unrelated": true})),
+            (
+                "amend-1",
+                loop_core::MODEL_BINDING_AMENDMENT_RECORD_KIND,
+                json!({
+                    "actor":{"name":"owner","kind":"human"},
+                    "authority":{"kind":"owner","reference":"chat"},
+                    "words":"Use the cheaper reader.",
+                    "changes":[{
+                        "role":"cold-reader",
+                        "old":{"model":"p/m1","thinking":"high"},
+                        "new":{"model":"p/m2","thinking":"low"},
+                        "mark_stale":true
+                    }]
+                }),
+            ),
+        ] {
+            persistence
+                .append_context(AppendContextRequest::new(
+                    "run",
+                    id,
+                    kind,
+                    data,
+                    Timestamp::from_unix_millis(2),
+                ))
+                .unwrap();
+        }
+        let after = observe(&persistence);
+        let view = &after["model_bindings"];
+        let reader = view["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["role"] == "cold-reader")
+            .unwrap();
+        assert_eq!(reader["original"]["model"], "p/m1");
+        assert_eq!(reader["in_force"]["model"], "p/m2");
+        assert_eq!(view["history"][0]["record_id"], "amend-1");
+        assert_eq!(view["history"][0]["words"], "Use the cheaper reader.");
+        assert_eq!(view["history"][0]["changes"][0]["mark_stale"], true);
+    }
+
+    #[test]
+    fn bounded_observation_reports_an_invalid_amendment_as_unavailable_not_stale() {
+        let persistence = bound_run(json!({}));
+        persistence
+            .append_context(AppendContextRequest::new(
+                "run",
+                "broken",
+                loop_core::MODEL_BINDING_AMENDMENT_RECORD_KIND,
+                json!({}),
+                Timestamp::from_unix_millis(2),
+            ))
+            .unwrap();
+        let observed = observe(&persistence);
+        assert_eq!(
+            observed["model_bindings"]["state"], "unavailable",
+            "{observed}"
+        );
+        assert_eq!(observed["completeness"]["model_bindings"], "unavailable");
     }
 }

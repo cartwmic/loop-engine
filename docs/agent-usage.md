@@ -236,6 +236,178 @@ content/report/state digest meaning is unchanged; physical file-byte SHA-256 cha
 with whitespace. Accepted history binds and retains actual verified bytes/name,
 including compact/manual encodings, without rewriting or duplicating equivalent proof.
 
+## Software-change model bindings
+
+A software-change run may require a model and thinking level per role. Use a build
+that implements these fields, started on a new run: runs started by earlier builds
+never gain bindings, declaration checks or amendments. A run with no `model_bindings`
+and no `model-binding-amendment` record behaves exactly as it did before: no session
+is needed, no new refusal exists, and shipped profiles carry no bindings.
+
+Role ids are exactly `driver`, `author`, `implementer`, `ordinary-reviewer`,
+`challenge-reviewer`, `cold-reader` and `criterion-author`. A binding is
+`{"model": "provider/model", "thinking": "level"}`, both nonblank strings. A session
+is the same two-field object. Comparison is exact text: no alias, case folding or
+normalization, and only the declared values are compared.
+
+### Declared-value boundary
+
+The check compares what the session says it ran with against the binding. The
+engine cannot see the real session. The driver reads the model and thinking level
+from that session's own metadata and supplies them; a wrong declaration equal to the
+binding passes. This catches an honest wrong launch or an omitted declaration. It does
+not authenticate the declarer, prove the real model, or detect a driver that changes
+model between its declarations. The driver declares only at run start and in each
+binding amendment, not on every command or append.
+
+### Bind at setup
+
+A per-run profile may carry an optional top-level `model_bindings` object. It freezes
+with the run, appears in the exact profile bytes and hash the owner confirms (a changed
+binding changes the hash), and later profile-file edits do not change a started run.
+`driver_session` is required exactly when `roles.driver` exists and must equal it:
+
+```json
+"model_bindings": {
+  "roles": {
+    "driver": {"model": "provider/driver-model", "thinking": "high"},
+    "ordinary-reviewer": {"model": "provider/reviewer-model", "thinking": "high"}
+  },
+  "driver_session": {"model": "provider/driver-model", "thinking": "high"}
+}
+```
+
+Setup writes the same key with repeated `--set` settings (a role id, then
+`provider/model@thinking`), records each in `FILE.explain.json` `overrides`, and
+needs no hand edit:
+
+```sh
+software-change setup --rigor standard --decline-advice --output /absolute/profile.json \
+  --set binding.ordinary-reviewer=provider/reviewer-model@high \
+  --set binding.driver=provider/driver-model@high \
+  --set binding.driver-session=provider/driver-model@high
+```
+
+Start refuses a malformed `model_bindings` value or a missing or unequal
+`driver_session`, naming the cause. Bind any subset of roles, including none.
+
+### Declare a session
+
+A role with no binding in force needs no session. For a bound role:
+
+- Review returns: put `session` in the `assignment` given to `review-candidates`. It is
+  stored on each resulting `review-evidence` record. The role comes from the gate:
+  an ordinary-gate return is `ordinary-reviewer`, except `intent-sufficient` at
+  `intent-review`, which is `cold-reader`; an adversarial-gate return (including
+  `intent-sufficient` at `intent-adversarial-review`) is `challenge-reviewer`.
+- Criterion and goal verdicts (`criterion-author`): put an optional top-level
+  `session` object in the `criterion-verdict` or `goal-verdict` record data.
+- Author drafts (intent, design, plan, validation report) and implementer reports:
+  append a `session-declaration` for the exact subject revision before the checked
+  event. The checked event requires a match for the current revision when that role is
+  bound.
+
+```json
+{
+  "subject": "design.json",
+  "subject_revision": "3",
+  "role": "author",
+  "session": {"model": "provider/author-model", "thinking": "high"}
+}
+```
+
+Append it with `loop-engine append --record-id RECORD RUN session-declaration @/absolute/data.json`.
+Use role `implementer` and subject `implementation-report.json` for a report. A missing
+or unequal session is refused at the append (returns) or at the checked event (drafts
+and reports), naming the role, expected value and actual value (or that the statement
+is missing) and whether model, thinking or both differ; the run is left unchanged and
+nothing is counted. The refusal reads like: model binding for role `cold-reader` is not
+met: expected model `p/m1` at thinking `high`; actual model `p/m2` at thinking `high`;
+differs in model only.
+
+A return is judged against the binding in force at its own position in history: stored
+records are never re-judged after an amendment, and work stored while a role was
+unbound stays accepted.
+
+### Amend bindings mid-run
+
+Only a human actor with owner authority and the owner's verbatim, nonblank words may
+add, change or remove bindings; standing delegation cannot. Append a closed
+`model-binding-amendment` record. Each change names `role`, `old` (the binding actually
+in force, or `null` when adding) and `new` (or `null` when removing). It works on a run
+that started with no bindings and needs no restart. It takes effect at its own position,
+cannot be back-dated, and rewrites no earlier record. Example, adding an unbound role
+(owner words copied verbatim):
+
+```json
+{
+  "actor": {"name": "owner", "kind": "human"},
+  "authority": {"kind": "owner", "reference": "owner chat, 2026-10-17"},
+  "words": "Bind the cold reader to provider/cold-model at high.",
+  "changes": [
+    {
+      "role": "cold-reader",
+      "old": null,
+      "new": {"model": "provider/cold-model", "thinking": "high"}
+    }
+  ]
+}
+```
+
+Append it with `loop-engine append --record-id amend-1 RUN model-binding-amendment @/absolute/amendment.json`.
+This closed example changes a bound reviewer on a run where the driver is also bound and
+marks that role's earlier evidence stale:
+
+```json
+{
+  "actor": {"name": "owner", "kind": "human"},
+  "authority": {"kind": "owner", "reference": "owner chat, 2026-10-17"},
+  "words": "Move ordinary review to provider/new-reviewer at high and discard its earlier reviews.",
+  "changes": [
+    {
+      "role": "ordinary-reviewer",
+      "old": {"model": "provider/reviewer-model", "thinking": "high"},
+      "new": {"model": "provider/new-reviewer", "thinking": "high"},
+      "mark_stale": true
+    }
+  ],
+  "driver_session": {"model": "provider/driver-model", "thinking": "high"}
+}
+```
+
+`driver_session` is the driver's own declaration. It is required whenever a driver
+binding is in force after the amendment (even when only other roles change) and must
+equal it; removing the driver needs none. The unmarked default is the first example's
+form. `authority` may also be the bare string `"owner"`.
+
+An amendment is refused, with the run unchanged, for these causes:
+`malformed-amendment`, `actor-not-human`, `authority-not-owner`, `words-blank`,
+`unknown-role`, `old-binding-not-in-force` (also adding to a bound role, or changing or
+removing an unbound one), `new-binding-malformed`, `driver-declaration-missing`,
+`driver-declaration-mismatch` and `stale-mark-not-allowed`. The first failing check is
+reported (actor, authority, words, then changes).
+
+### Stale marking
+
+By default evidence made under a superseded, changed or removed binding, or while the
+role was unbound, stays eligible exactly as before, including carrying by explicit
+evidence-applicability. Setting `mark_stale: true` on a change makes that role's earlier
+records (before the amendment) stop counting for gate decisions requested after it and
+uncarryable to new targets. `software-change commission` and the checked event give the
+same answer, and a refusal names the amendment, role, author, assessment and axis.
+Decisions already made are not reopened and no record is changed or relabeled. Returns
+made after the amendment under the binding then in force count normally. Stale marking
+is allowed only for `ordinary-reviewer`, `challenge-reviewer`, `cold-reader` and
+`criterion-author`; any other role is refused as `stale-mark-not-allowed`.
+
+### See the bindings
+
+The `show` status and full views and the owner approval view from `software-change
+commission` carry a `model_bindings` projection: per role the original binding (or
+none), the binding in force (or none), and the ordered amendment history (time, actor,
+verbatim words, old and new binding, stale mark). A run that never had bindings and has
+no amendment says so explicitly.
+
 ## Provider tools
 
 Use `describe`/`evaluate`, `checkpoint`, `commission`, `review-candidates`, `prepare-validation`, `source-identity`, `author-counts`, and `data-dump`. `setup` edits policy only with `--set`, `--add-axis`, `--remove-axis`; use explain/drift to inspect policy changes. Tools prepare or evaluate data, not external execution. Keep frozen run obligations and original runtime; no active-run migration is authorized.

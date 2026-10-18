@@ -120,6 +120,12 @@ pub(crate) enum EvidenceDiagnostic {
         expected: Vec<AuthorIdentity>,
         actual: Vec<AuthorIdentity>,
     },
+    /// A model binding amendment marked the role stale and the exclusion
+    /// removed records for this axis; each cause names amendment, role,
+    /// author, assessment and axis.
+    ExcludedByStaleMark {
+        causes: Vec<String>,
+    },
 }
 
 /// A present pass that did not count toward an axis, with the rule that
@@ -146,6 +152,7 @@ impl EvidenceDiagnostic {
             Self::MixedAuthors { .. } => "mixed_authors",
             Self::AssessmentMissing { .. } => "assessment_missing",
             Self::AssessmentInconsistent { .. } => "assessment_inconsistent",
+            Self::ExcludedByStaleMark { .. } => "excluded_by_stale_mark",
         }
     }
 }
@@ -281,6 +288,28 @@ enum Attribution {
     Current { axis: String },
     OtherConfigured,
     Inert(InertEvidence),
+}
+
+/// Causes of stale-mark exclusions that removed records for one gate axis.
+/// `stage` is `None` for the unstaged evaluation.
+fn stale_mark_causes(
+    context: &[ContextRecord],
+    gate: &str,
+    axis: &str,
+    stage: Option<&str>,
+) -> Vec<String> {
+    software_change_provider::recovery::stale_exclusions(context)
+        .values()
+        .filter(|cause| {
+            cause.gate.as_deref() == Some(gate)
+                && cause.axis.as_deref() == Some(axis)
+                && match (stage, cause.stage.as_deref()) {
+                    (Some(stage), Some(recorded)) => stage == recorded,
+                    _ => true,
+                }
+        })
+        .map(software_change_provider::recovery::StaleExclusion::message)
+        .collect()
 }
 
 /// Run §7's six-stage evidence pipeline.
@@ -589,6 +618,10 @@ pub(crate) fn evaluate_evidence_with_dispositions(
                     excluded: Vec::new(),
                     counted: Vec::new(),
                 });
+            }
+            let causes = stale_mark_causes(context, gate, axis, None);
+            if !causes.is_empty() {
+                axis_diagnostics.push(EvidenceDiagnostic::ExcludedByStaleMark { causes });
             }
             diagnostics.push(AxisDiagnostic {
                 review_stage: "aggregate".to_owned(),
@@ -1234,6 +1267,10 @@ pub(crate) fn evaluate_staged_evidence_excluding(
                             Vec::new()
                         },
                     });
+                }
+                let causes = stale_mark_causes(context, gate, axis, Some(stage));
+                if !causes.is_empty() {
+                    axis_diagnostics.push(EvidenceDiagnostic::ExcludedByStaleMark { causes });
                 }
                 diagnostics.push(AxisDiagnostic {
                     review_stage: stage.clone(),
@@ -5379,6 +5416,163 @@ mod tests {
             ),
         ];
         assert!(evaluate(&config, &allow, "1", &owner).is_satisfied());
+    }
+
+    fn stale_mark_amendment(sequence: u64, role: &str, mark_stale: bool) -> ContextRecord {
+        let binding = |model: &str| json!({"model": model, "thinking": "high"});
+        ContextRecord::new(
+            format!("amend-{sequence}"),
+            "model-binding-amendment",
+            json!({
+                "actor": {"name": "owner", "kind": "human"},
+                "authority": {"kind": "owner"},
+                "words": "Use a different reviewer model.",
+                "changes": [{"role": role, "old": binding("p/old"), "new": binding("p/new"), "mark_stale": mark_stale}],
+            }),
+            SemanticSequence::new(sequence),
+            Timestamp::from_unix_millis(sequence as i64),
+        )
+    }
+
+    fn stale_mark_causes_of(result: &EvidenceEvaluation) -> Vec<String> {
+        result
+            .diagnostics()
+            .iter()
+            .flat_map(|axis| &axis.diagnostics)
+            .filter_map(|diagnostic| match diagnostic {
+                EvidenceDiagnostic::ExcludedByStaleMark { causes } => Some(causes.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    #[test]
+    fn stale_marked_reviewer_evidence_is_excluded_and_the_shortage_names_the_cause() {
+        let config = config_with_axes(1);
+        let owner = author("owner", "human");
+        let reviewer = author("reviewer", "agent");
+        let judgment = |index| {
+            context_record(
+                index,
+                evidence(
+                    GATE,
+                    "axis",
+                    "pass",
+                    "",
+                    &reviewer,
+                    SUBJECT,
+                    "1",
+                    RUN_VERSION,
+                ),
+            )
+        };
+        let early = judgment(1);
+        // Unmarked amendment: the earlier evidence still satisfies.
+        let unmarked = [
+            early.clone(),
+            stale_mark_amendment(2, "ordinary-reviewer", false),
+        ];
+        let result = evaluate(&config, &unmarked, "1", &owner);
+        assert!(result.is_satisfied());
+        assert!(stale_mark_causes_of(&result).is_empty());
+        // Another role marked stale: nothing changes for the ordinary reviewer.
+        let other = [
+            early.clone(),
+            stale_mark_amendment(2, "challenge-reviewer", true),
+        ];
+        assert!(evaluate(&config, &other, "1", &owner).is_satisfied());
+        // Marked amendment: the earlier evidence no longer counts and the
+        // shortage names amendment, role, author, assessment and axis.
+        let marked = [
+            early.clone(),
+            stale_mark_amendment(2, "ordinary-reviewer", true),
+        ];
+        let result = evaluate(&config, &marked, "1", &owner);
+        assert!(!result.is_satisfied());
+        assert!(has_category(&result, "missing"));
+        let causes = stale_mark_causes_of(&result);
+        assert_eq!(causes.len(), 1, "{causes:?}");
+        for needle in [
+            "context-1",
+            "amend-2",
+            "role `ordinary-reviewer`",
+            "reviewer (agent)",
+            "assessment none",
+            "axis `axis`",
+        ] {
+            assert!(causes[0].contains(needle), "{needle} in {}", causes[0]);
+        }
+        // A return stored after the amendment counts.
+        let mut returned = marked.to_vec();
+        returned.push(judgment(3));
+        let result = evaluate(&config, &returned, "1", &owner);
+        assert!(result.is_satisfied());
+        assert!(stale_mark_causes_of(&result).is_empty());
+    }
+
+    #[test]
+    fn stale_marked_staged_evidence_names_the_cause_for_its_stage_and_axis() {
+        const PLAN_GATE: &str = "plan-review";
+        const PLAN_SUBJECT: &str = "plan.json";
+        const PLAN_AXIS: &str = "parallelism-honest";
+        const PLAN_GROUP: &str = "plan-review.individual.parallelism-honest";
+        let config = parse_initial_input(&json!({
+            "contract_version": 4,
+            "criterion_policy": {"required_authors": 1, "goal_required_authors": 1},
+            "config_version": "stale-mark-15",
+            "review_policies": {
+                PLAN_GATE: [{
+                    "id": PLAN_AXIS,
+                    "description": "whole-graph concurrency",
+                    "review_stage": "individual",
+                    "group": PLAN_GROUP
+                }]
+            },
+            "artifact_schemas": {PLAN_SUBJECT: metadata_schema()}
+        }))
+        .unwrap();
+        let mut judgment = evidence(
+            PLAN_GATE,
+            PLAN_AXIS,
+            "pass",
+            "",
+            &author("reviewer", "agent"),
+            PLAN_SUBJECT,
+            "1",
+            "stale-mark-15",
+        );
+        judgment["review_stage"] = json!("individual");
+        judgment["group"] = json!(PLAN_GROUP);
+        let evaluate_with = |amendment: Option<ContextRecord>| {
+            let mut context = vec![context_record(1, judgment.clone())];
+            context.extend(amendment);
+            evaluate_staged_evidence_with_dispositions(
+                &context,
+                PLAN_GATE,
+                PLAN_SUBJECT,
+                "1",
+                &author("owner", "human"),
+                config.config_version(),
+                config.staged_axes_for_gate(PLAN_GATE).unwrap(),
+                config.axis_namespace(),
+                config.artifact_root(),
+                None,
+                true,
+            )
+        };
+        assert!(evaluate_with(None).is_satisfied());
+        assert!(
+            evaluate_with(Some(stale_mark_amendment(2, "ordinary-reviewer", false))).is_satisfied()
+        );
+        let result = evaluate_with(Some(stale_mark_amendment(2, "ordinary-reviewer", true)));
+        assert!(!result.is_satisfied());
+        assert_eq!(axis(&result).review_stage, "individual");
+        let causes = stale_mark_causes_of(&result);
+        assert_eq!(causes.len(), 1, "{causes:?}");
+        assert!(
+            causes[0].contains("amend-2") && causes[0].contains(&format!("axis `{PLAN_AXIS}`"))
+        );
     }
 
     #[test]

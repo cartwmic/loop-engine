@@ -62,6 +62,34 @@ Use --bookends only for an explicit opt-in. Read the resulting exact config/cont
 versions; do not apply current contracts to historical runs or silently migrate them.
 Register the absolute provider command under exact alias software-change.
 
+## Model bindings
+
+A run may require a model and thinking level per role: `driver`, `author`,
+`implementer`, `ordinary-reviewer`, `challenge-reviewer`, `cold-reader` and
+`criterion-author`. Shipped profiles bind none, and a run with no `model_bindings` and
+no `model-binding-amendment` behaves as before (no session needed, no new refusal).
+Use exact shapes in checkout-root `docs/agent-usage.md`, section Software-change model
+bindings.
+
+- Setup: `--set binding.<role>=provider/model@thinking` and, when the driver is bound,
+  `--set binding.driver-session=provider/model@thinking`. This writes the top-level
+  `model_bindings` key, which the confirmed profile bytes and hash include. Confirm it
+  with the owner before start.
+- Declare, from each session's own metadata: `assignment.session` at
+  `review-candidates` intake; a top-level `session` on `criterion-verdict` and
+  `goal-verdict` data; a `session-declaration` record (`subject`, `subject_revision`,
+  `role`, `session`) for an author draft or implementer report of the exact current
+  revision before the checked event. A bound role with a missing or unequal session is
+  refused naming the role, expected and actual; read the cause and correct the session,
+  not the binding.
+- Amend only on the owner's own words: append `model-binding-amendment` (human actor,
+  owner authority, verbatim `words`, per-role `changes` with `old` and `new`, optional
+  `mark_stale` for the four evidence roles, and `driver_session` when the driver is
+  bound afterward). Never edit the profile of a started run or fabricate owner words.
+  Evidence under an older binding stays eligible unless the owner marks it stale.
+- The check compares declared text only. It cannot prove the real model, and the driver
+  declares only at start and at each amendment.
+
 ## Optional narratives and owner checkpoints
 
 Use the current source provider for this procedure. Its `minimal-17`, `standard-17`

@@ -483,6 +483,7 @@ fn inspect_with_stage_raw(
         review_subject(slot_id).unwrap_or("validation-report.json"),
         artifact_root,
     )?;
+    let stale_exclusions = crate::recovery::stale_exclusions(&records);
     records.retain(|record| !exclusions.contains(record.id.as_str()));
     if let Some(stage) = requested_stage {
         if !matches!(stage, "individual" | "aggregate") {
@@ -510,6 +511,12 @@ fn inspect_with_stage_raw(
     let plan = load_plan(Path::new(root))?;
     let mut selected = select(&records, &slots, slot_id, plan.as_ref(), task)?;
     selected.review_stage = requested_stage.map(str::to_owned);
+    selected.diagnostics.extend(
+        stale_exclusions
+            .values()
+            .filter(|cause| slot.stdin_context_kinds.contains(&cause.kind))
+            .map(crate::recovery::StaleExclusion::message),
+    );
     for diagnostic in &selected.diagnostics {
         eprintln!("{diagnostic}");
     }
@@ -959,7 +966,10 @@ fn inspect_with_stage_inner(
             .narrative
             .and_then(|n| phase.sources.iter().find(|s| s.locator == n.markdown))
             .map(|s| source_projection(root, s));
+        let bindings_context: Vec<ContextRecord> =
+            serde_json::from_value(packet["context"].clone()).map_err(|error| error.to_string())?;
         output["owner_approval_view"] = json!({
+            "model_bindings":loop_core::model_bindings_view(&packet["initial_input"], &bindings_context),
             "checkpoint":slot,"phase":phase.phase,"subject":phase.subject,
             "subject_revision":phase.identity["fact"]["revision"],
             "subject_record_id":phase.identity["record_id"],"subject_identity":phase.identity,
@@ -1907,6 +1917,18 @@ fn project_review_context_with_diagnostics_excluding(
             }
         }
     }
+    diagnostics.extend(
+        crate::recovery::stale_exclusions(recovery_context)
+            .into_values()
+            .filter(|cause| {
+                cause.gate.as_deref() == Some(gate)
+                    || cause
+                        .gate
+                        .as_deref()
+                        .is_some_and(|cause_gate| parent_gate(gate) == Some(cause_gate))
+            })
+            .map(|cause| json!({"record_id":cause.record_id,"reason":cause.message()})),
+    );
     let mut admission_refusals = BTreeMap::new();
     if let Some((ctx, extensions)) = admission {
         let selected: BTreeSet<String> = records
@@ -2660,6 +2682,7 @@ fn owner_approval_view(
         }
     }
     json!({
+        "model_bindings":loop_core::model_bindings_view(initial, actor_context),
         "current_intent":{"locator":"intent.json","sha256":current_sha256,"value":intent},
         "owner_sources":owner_sources,
         "exact_substantive_wording_delta":exact_diff,
@@ -4169,6 +4192,135 @@ mod tests {
             .to_string()
             .contains("latest admitted narrative revision"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn owner_views_project_the_model_bindings_fold() {
+        let binding = |model: &str| json!({"model": model, "thinking": "high"});
+        let amendment = typed_record(
+            "amend-1",
+            "model-binding-amendment",
+            90,
+            json!({
+                "actor": {"name": "owner", "kind": "human"},
+                "authority": {"kind": "owner"},
+                "words": "Use the new model.",
+                "changes": [{"role": "ordinary-reviewer", "old": binding("p/old"), "new": binding("p/new"), "mark_stale": true}],
+            }),
+        );
+        let in_force_of = |view: &Value, role: &str| {
+            view["model_bindings"]["roles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["role"] == role)
+                .unwrap()["in_force"]
+                .clone()
+        };
+        // Checkpoint owner view: never-bound, then frozen input plus amendment.
+        let (mut input, root) = narrative_fixture("design", true);
+        let output = inspect(&input, Some("design-checkpoint"), None).unwrap();
+        let view = &output["owner_approval_view"];
+        assert_eq!(view["model_bindings"]["state"], "never-bound");
+        assert!(view["model_bindings"]["statement"].is_string());
+        input["result"]["initial_input"]["model_bindings"] =
+            json!({"roles": {"ordinary-reviewer": binding("p/old")}});
+        input["result"]["context"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(amendment));
+        let output = inspect(&input, Some("design-checkpoint"), None).unwrap();
+        let view = &output["owner_approval_view"];
+        assert_eq!(view["model_bindings"]["state"], "bound");
+        assert_eq!(in_force_of(view, "ordinary-reviewer"), binding("p/new"));
+        assert_eq!(view["model_bindings"]["history"][0]["record_id"], "amend-1");
+        assert_eq!(
+            view["model_bindings"]["history"][0]["words"],
+            "Use the new model."
+        );
+        std::fs::remove_dir_all(root).unwrap();
+        // Intent owner view.
+        let intent = json!({"revision": "r1", "author": {"name": "drafter", "kind": "agent"}});
+        let initial = json!({"model_bindings": {"roles": {"ordinary-reviewer": binding("p/old")}}});
+        let view = owner_approval_view(
+            &intent,
+            "sha256:x",
+            &[],
+            std::slice::from_ref(&amendment),
+            &initial,
+        );
+        assert_eq!(view["model_bindings"]["state"], "bound");
+        assert_eq!(in_force_of(&view, "ordinary-reviewer"), binding("p/new"));
+        let view = owner_approval_view(&intent, "sha256:x", &[], &[], &json!({}));
+        assert_eq!(view["model_bindings"]["state"], "never-bound");
+    }
+
+    #[test]
+    fn stale_marked_review_evidence_is_dropped_from_commission_with_its_cause() {
+        use crate::recovery::test_support::*;
+        let root = Root::new();
+        let binding = |model: &str| json!({"model": model, "thinking": "high"});
+        let amendment = |mark_stale: bool| {
+            row(
+                "amend-1",
+                "model-binding-amendment",
+                2,
+                json!({
+                    "actor": {"name": "owner", "kind": "human"},
+                    "authority": {"kind": "owner"},
+                    "words": "Use the new cold reader.",
+                    "changes": [{"role": "cold-reader", "old": binding("p/old"), "new": binding("p/new"), "mark_stale": mark_stale}],
+                }),
+            )
+        };
+        let project = |mark_stale: bool| {
+            let records = vec![
+                review("old", 1, "reader", "pass"),
+                amendment(mark_stale),
+                review("replacement", 3, "new", "pass"),
+            ];
+            let filtered: Vec<_> = records
+                .iter()
+                .filter(|row| row.kind == "review-evidence")
+                .cloned()
+                .collect();
+            let (projected, diagnostics) = project_review_context_with_diagnostics(
+                &filtered,
+                &records,
+                "intent-review",
+                "intent.json",
+                "r1",
+                Some("aggregate"),
+                &root.path,
+            )
+            .unwrap();
+            let ids: Vec<_> = projected.iter().map(|row| row.id.to_string()).collect();
+            let gate_side = crate::recovery::excluded_record_ids(
+                &records,
+                "intent-review",
+                "intent.json",
+                Some(&root.value()),
+            )
+            .unwrap();
+            (ids, diagnostics, gate_side)
+        };
+        let (ids, diagnostics, gate_side) = project(false);
+        assert_eq!(ids, ["old", "replacement"]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(gate_side.is_empty());
+        let (ids, diagnostics, gate_side) = project(true);
+        assert_eq!(ids, ["replacement"]);
+        assert_eq!(gate_side, BTreeSet::from(["old".to_owned()]));
+        let text = json!(diagnostics).to_string();
+        for needle in [
+            "amend-1",
+            "role `cold-reader`",
+            "reader (agent)",
+            "axis `intent-sufficient`",
+        ] {
+            assert!(text.contains(needle), "{needle} in {text}");
+        }
+        assert_eq!(diagnostics[0]["record_id"], "old");
     }
 
     #[test]

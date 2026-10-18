@@ -54,6 +54,9 @@ pub(crate) fn evaluate(request: &EvaluateRequest) -> EvaluationOutcome {
     let Some(duties) = duties_for_snapshotted_transition(request) else {
         return EvaluationOutcome::Response(unsupported_response());
     };
+    if let Some(denial) = crate::option_evaluation::session_declaration_denial(request, duties) {
+        return denial;
+    }
     let options =
         workflow::phase_options_for_state(request.transition.source.as_str()).filter(|o| {
             workflow::option_enabled(Some(&request.initial_input), "narratives", o.phase.name)

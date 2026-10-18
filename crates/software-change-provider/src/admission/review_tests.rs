@@ -496,3 +496,27 @@ fn exclusions_and_state_change_do_not_reclassify_stored_review_by_write_only_ext
     assert_eq!(result.len(), 1);
     assert!(result[0].1.is_ok());
 }
+
+#[test]
+fn bound_review_evidence_requires_the_declared_session_through_the_real_table() {
+    let mut fixture = Fixture::new();
+    let bound = json!({"model": "p/reviewer", "thinking": "high"});
+    fixture.input["model_bindings"] = json!({"roles": {"ordinary-reviewer": bound}});
+    let ctx = fixture.ctx(&[]);
+    let mut declared = fixture.review();
+    declared["session"] = bound.clone();
+    assert!(check(&ctx, &proposed("review-evidence", declared.clone())).is_ok());
+    let missing = check(&ctx, &proposed("review-evidence", fixture.review())).unwrap_err();
+    assert_eq!(missing.rule, MODEL_SESSION_RULE);
+    assert!(missing.message.contains("`ordinary-reviewer`"));
+    assert!(missing.message.contains("statement missing"));
+    declared["session"]["model"] = json!("p/other");
+    let unequal = check(&ctx, &proposed("review-evidence", declared)).unwrap_err();
+    assert_eq!(unequal.rule, MODEL_SESSION_RULE);
+    assert!(unequal.message.contains("differs in model only"));
+    // Stored history keeps classifying cleanly after the binding appears.
+    let records = vec![stored("older", "review-evidence", fixture.review(), 1)];
+    assert!(classify(&fixture.ctx(&records), &BTreeSet::new(), &[])[0]
+        .1
+        .is_ok());
+}

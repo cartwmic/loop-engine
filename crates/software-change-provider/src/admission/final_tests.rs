@@ -209,6 +209,49 @@ fn verdict_result_references_coverage_and_current_target_controls() {
     assert!(check(&f.ctx(), &candidate("goal-verdict", partial)).is_ok()); // no gate clearance requirement
 }
 #[test]
+fn bound_criterion_author_verdicts_carry_and_are_checked_on_a_declared_session() {
+    let declared = json!({"model":"p/criterion","thinking":"medium"});
+    let mut f = Fixture::new();
+    let unbound = [
+        ("criterion-verdict", f.context[3].data.clone()),
+        ("goal-verdict", f.context[2].data.clone()),
+    ];
+    for (kind, data) in &unbound {
+        // No session on an unbound run: the stored shape is unchanged.
+        assert!(!data.as_object().unwrap().contains_key("session"));
+        assert!(
+            check(&f.ctx(), &candidate(kind, data.clone())).is_ok(),
+            "{kind}"
+        );
+        // A session is accepted by the shape rule and ignored without a binding.
+        let mut with = data.clone();
+        with["session"] = declared.clone();
+        assert!(check(&f.ctx(), &candidate(kind, with)).is_ok(), "{kind}");
+    }
+    f.input["model_bindings"] = json!({"roles": {"criterion-author": declared.clone()}});
+    for (kind, data) in unbound {
+        let mut matching = data.clone();
+        matching["session"] = declared.clone();
+        let accepted = check(&f.ctx(), &candidate(kind, matching.clone()));
+        assert!(accepted.is_ok(), "{kind}: {accepted:?}");
+        for (label, session) in [
+            ("model", json!({"model":"p/other","thinking":"medium"})),
+            ("thinking", json!({"model":"p/criterion","thinking":"low"})),
+        ] {
+            let mut wrong = data.clone();
+            wrong["session"] = session;
+            let refusal = check(&f.ctx(), &candidate(kind, wrong)).unwrap_err();
+            assert_eq!(refusal.rule, MODEL_SESSION_RULE, "{kind} {label}");
+            assert!(
+                refusal.message.contains("criterion-author"),
+                "{kind} {label}"
+            );
+        }
+        let refusal = check(&f.ctx(), &candidate(kind, data)).unwrap_err();
+        assert_eq!(refusal.rule, MODEL_SESSION_RULE, "{kind} missing");
+    }
+}
+#[test]
 fn commands_check_named_spec_scope_and_current_source_but_history_is_shape_only() {
     let f = Fixture::new();
     let good = f.context[1].data.clone();

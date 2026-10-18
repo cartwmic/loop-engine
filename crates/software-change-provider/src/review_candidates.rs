@@ -52,6 +52,14 @@ pub fn project(input: &Value) -> Result<Value, String> {
     if !["human", "agent", "script"].contains(&text(author, "kind")?) {
         return Err("invalid author kind".into());
     }
+    let session = assignment
+        .get("session")
+        .map(|session| {
+            loop_core::Session::from_value(session)
+                .map(|session| session.to_value())
+                .map_err(|error| format!("assignment.session {error}"))
+        })
+        .transpose()?;
     let original = content(&input["original"])?;
     let request = content(&input["request"])?;
     let projection = input.get("projection").unwrap_or(&original["structured"]);
@@ -264,6 +272,9 @@ pub fn project(input: &Value) -> Result<Value, String> {
             continue;
         }
         data["assessment_id"] = assessment.clone();
+        if let Some(session) = &session {
+            data["session"] = session.clone();
+        }
         data["external_review"] = json!({"request":request,"original":original,"direct":direct});
         if let Some(formatter) = input.get("formatter") {
             text(formatter, "name")?;
@@ -379,6 +390,56 @@ mod tests {
         assert!(project(&packet)
             .unwrap_err()
             .contains("inconsistent explicit assessment"));
+    }
+
+    #[test]
+    fn assignment_session_is_stored_on_every_projected_review_record_and_absent_stays_absent() {
+        let mut packet = input();
+        packet["projection"]["judgments"] = json!([
+            {"axis":"intent-sufficient","result":"pass","findings":"","grounds":{"reason":"adequate","evidence":[{"locator":"intent.json#goal"}]}},
+            {"axis":"intent-sufficient","result":"fail","findings":"gap","grounds":{"reason":"gap","evidence":[{"locator":"intent.json#goal"}]}}
+        ]);
+        let unchanged = project(&packet).unwrap();
+        assert_eq!(unchanged["records"].as_array().unwrap().len(), 2);
+        for record in unchanged["records"].as_array().unwrap() {
+            assert!(record["data"].get("session").is_none());
+        }
+        packet["assignment"]["session"] = json!({"model":"p/reviewer","thinking":"high"});
+        let with_session = project(&packet).unwrap();
+        let mut expected = unchanged.clone();
+        for record in expected["records"].as_array_mut().unwrap() {
+            record["data"]["session"] = json!({"model":"p/reviewer","thinking":"high"});
+        }
+        for item in expected["items"].as_array_mut().unwrap() {
+            if !item["candidate"].is_null() {
+                item["candidate"]["data"]["session"] =
+                    json!({"model":"p/reviewer","thinking":"high"});
+            }
+        }
+        assert_eq!(with_session, expected);
+    }
+
+    #[test]
+    fn malformed_assignment_sessions_are_refused() {
+        for session in [
+            json!(null),
+            json!("p/m@high"),
+            json!([]),
+            json!({}),
+            json!({"model":"p/m"}),
+            json!({"model":"p/m","thinking":"  "}),
+            json!({"model":"","thinking":"high"}),
+            json!({"model":"p/m","thinking":"high","extra":true}),
+            json!({"model":7,"thinking":"high"}),
+        ] {
+            let mut packet = input();
+            packet["assignment"]["session"] = session.clone();
+            let error = project(&packet).expect_err(&session.to_string());
+            assert!(
+                error.starts_with("assignment.session "),
+                "{session}: {error}"
+            );
+        }
     }
 
     #[test]

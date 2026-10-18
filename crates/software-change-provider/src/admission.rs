@@ -4,6 +4,9 @@
 mod final_rules;
 #[cfg(test)]
 mod final_tests;
+mod model_rules;
+#[cfg(test)]
+mod model_tests;
 mod review_rules;
 #[cfg(test)]
 mod review_tests;
@@ -159,6 +162,8 @@ pub const VALIDATED_KINDS: &[&str] = &[
     "artifact-admitted",
     "narrative-admitted",
     "reconciliation-decision",
+    "model-binding-amendment",
+    "session-declaration",
 ];
 
 /// Inventory not yet covered by the production table.
@@ -187,6 +192,9 @@ fn ordinary_during_challenge(
         None => Ok(()),
     }
 }
+
+/// Rule id shared by every write-time model-binding session check.
+pub const MODEL_SESSION_RULE: &str = "model-binding-session";
 
 /// One production table. Peer rules remain controller-owned extensions.
 pub static RULES: &[Rule] = &[
@@ -430,6 +438,42 @@ pub static RULES: &[Rule] = &[
         applicability: Applicability::WriteOnly,
         check: ordinary_during_challenge,
     },
+    Rule {
+        kind: "model-binding-amendment",
+        id: "model-binding-amendment-valid",
+        applicability: Applicability::Always,
+        check: model_rules::amendment,
+    },
+    Rule {
+        kind: "session-declaration",
+        id: "session-declaration-shape",
+        applicability: Applicability::Always,
+        check: model_rules::declaration,
+    },
+    Rule {
+        kind: "review-evidence",
+        id: MODEL_SESSION_RULE,
+        applicability: Applicability::WriteOnly,
+        check: model_rules::session,
+    },
+    Rule {
+        kind: "criterion-verdict",
+        id: MODEL_SESSION_RULE,
+        applicability: Applicability::WriteOnly,
+        check: model_rules::session,
+    },
+    Rule {
+        kind: "goal-verdict",
+        id: MODEL_SESSION_RULE,
+        applicability: Applicability::WriteOnly,
+        check: model_rules::session,
+    },
+    Rule {
+        kind: "session-declaration",
+        id: MODEL_SESSION_RULE,
+        applicability: Applicability::WriteOnly,
+        check: model_rules::session,
+    },
 ];
 
 pub fn check(ctx: &AdmissionContext<'_>, record: &CandidateRecord) -> Result<(), Refusal> {
@@ -575,7 +619,7 @@ mod tests {
     }
     #[test]
     fn existing_inventory_is_covered_and_correction_is_explicitly_reserved() {
-        assert_eq!(VALIDATED_KINDS.len(), 21);
+        assert_eq!(VALIDATED_KINDS.len(), 23);
         assert!(unmigrated_kinds().is_empty());
         let mut ids = BTreeSet::new();
         for rule in RULES {

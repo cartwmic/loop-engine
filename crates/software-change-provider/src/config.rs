@@ -70,6 +70,7 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "artifact_schemas",
     "revision_links",
     "extra",
+    loop_core::MODEL_BINDINGS_INPUT_KEY,
 ];
 
 const REVISION_LINK_KEYS: &[&str] = &["from", "field", "to"];
@@ -294,6 +295,9 @@ pub(crate) enum ConfigViolation {
     SemanticContract {
         message: String,
     },
+    ModelBindingsInvalid {
+        message: String,
+    },
     UnknownTopLevelKey {
         key: String,
     },
@@ -443,6 +447,7 @@ impl ConfigViolation {
         match self {
             Self::TopLevelNotObject => "top-level-shape",
             Self::SemanticContract { .. } => "semantic-contract",
+            Self::ModelBindingsInvalid { .. } => "model-bindings-invalid",
             Self::UnknownTopLevelKey { .. } => "unknown-top-level-key",
             Self::MissingConfigVersion => "config-version-missing",
             Self::ConfigVersionNotString => "config-version-not-string",
@@ -484,6 +489,9 @@ impl fmt::Display for ConfigViolation {
                 )
             }
             Self::SemanticContract { message } => write!(formatter, "{}: {message}", self.class()),
+            Self::ModelBindingsInvalid { message } => {
+                write!(formatter, "{}: {message}", self.class())
+            }
             Self::UnknownTopLevelKey { key } => {
                 write!(formatter, "{}: unknown top-level key `{key}`", self.class())
             }
@@ -678,6 +686,11 @@ pub(crate) fn parse_initial_input(
         .unwrap_or_default();
     if let Err(message) = crate::recovery_contract::RecoveryContract::from_input(initial_input) {
         violations.push(ConfigViolation::SemanticContract { message });
+    }
+    if let Some(bindings) = root.get(loop_core::MODEL_BINDINGS_INPUT_KEY) {
+        if let Err(message) = loop_core::parse_frozen_model_bindings(bindings) {
+            violations.push(ConfigViolation::ModelBindingsInvalid { message });
+        }
     }
     for key in root.keys() {
         if !TOP_LEVEL_KEYS.contains(&key.as_str()) {
@@ -1826,6 +1839,90 @@ mod tests {
         config["artifact_schema"] = json!({});
         let error = parse_initial_input(&config).expect_err("typoed top-level key must fail");
         assert!(classes(error).contains(&"unknown-top-level-key"));
+    }
+
+    fn bound_config(model_bindings: Value) -> Value {
+        let mut config = empty_config();
+        config["model_bindings"] = model_bindings;
+        config
+    }
+
+    #[test]
+    fn model_bindings_are_optional_and_valid_shapes_parse() {
+        parse_initial_input(&empty_config()).expect("no model_bindings is valid");
+        for bindings in [
+            json!({"roles": {}}),
+            json!({"roles": {"ordinary-reviewer": {"model": "p/m", "thinking": "high"}}}),
+            json!({
+                "roles": {
+                    "driver": {"model": "p/d", "thinking": "low"},
+                    "cold-reader": {"model": "p/c", "thinking": "high"}
+                },
+                "driver_session": {"model": "p/d", "thinking": "low"}
+            }),
+        ] {
+            parse_initial_input(&bound_config(bindings.clone()))
+                .unwrap_or_else(|error| panic!("{bindings} refused: {error}"));
+        }
+    }
+
+    #[test]
+    fn invalid_model_bindings_refuse_with_named_diagnostics() {
+        let binding = json!({"model": "p/m", "thinking": "high"});
+        let driver = json!({"model": "p/d", "thinking": "low"});
+        let cases = [
+            ("not an object", json!([]), "must be an object"),
+            ("missing roles", json!({}), "roles must be an object"),
+            (
+                "unknown key",
+                json!({"roles": {}, "extra": 1}),
+                "unknown field `extra`",
+            ),
+            (
+                "unknown role",
+                json!({"roles": {"reviewer": binding}}),
+                "unknown role `reviewer`",
+            ),
+            (
+                "blank model",
+                json!({"roles": {"author": {"model": " ", "thinking": "high"}}}),
+                "`model` must be a nonblank string",
+            ),
+            (
+                "blank thinking",
+                json!({"roles": {"author": {"model": "p/m", "thinking": ""}}}),
+                "`thinking` must be a nonblank string",
+            ),
+            (
+                "unknown binding field",
+                json!({"roles": {"author": {"model": "p/m", "thinking": "high", "x": 1}}}),
+                "unknown field `x`",
+            ),
+            (
+                "driver without session",
+                json!({"roles": {"driver": driver}}),
+                "driver_session is required",
+            ),
+            (
+                "driver session mismatch",
+                json!({"roles": {"driver": driver}, "driver_session": binding}),
+                "driver_session is refused",
+            ),
+            (
+                "session without driver",
+                json!({"roles": {}, "driver_session": driver}),
+                "only allowed when roles.driver is bound",
+            ),
+        ];
+        for (name, bindings, expected) in cases {
+            let error = parse_initial_input(&bound_config(bindings))
+                .expect_err(&format!("{name} must refuse start"));
+            assert!(classes(error.clone()).contains(&"model-bindings-invalid"));
+            assert!(
+                error.to_string().contains(expected),
+                "{name}: `{error}` lacks `{expected}`"
+            );
+        }
     }
 
     #[test]

@@ -69,6 +69,32 @@ fn no_arguments_keep_stdin_protocol_and_unsupported_arguments_keep_error_taxonom
     assert!(String::from_utf8_lossy(&unsupported.stderr).contains("unsupported command"));
 }
 
+#[test]
+fn describe_refuses_malformed_model_bindings_at_run_start_and_leaves_other_inputs_alone() {
+    let driver = json!({"model": "p/d", "thinking": "low"});
+    let describe = |initial_input: Value| {
+        let request = json!({"operation": "describe", "initial_input": initial_input});
+        invoke(&[], request.to_string().as_bytes())
+    };
+    let bare: Value =
+        serde_json::from_str(include_str!("../../data/configs/minimal.json")).unwrap();
+    assert_eq!(describe(bare.clone()).status.code(), Some(0));
+
+    let mut bound = bare.clone();
+    bound["model_bindings"] =
+        json!({"roles": {"driver": driver.clone()}, "driver_session": driver.clone()});
+    assert_eq!(describe(bound).status.code(), Some(0));
+
+    let mut missing_session = bare;
+    missing_session["model_bindings"] = json!({"roles": {"driver": driver}});
+    let refused = describe(missing_session);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(refused.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("model-bindings-invalid"), "{stderr}");
+    assert!(stderr.contains("driver_session is required"), "{stderr}");
+}
+
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn candidate_temp_dir() -> PathBuf {

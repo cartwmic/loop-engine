@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{fs, path::PathBuf};
 
-const USAGE: &str = "usage: software-change setup (--rigor minimal|standard|high | --profile FILE) --output FILE (--enable-advice | --decline-advice) [--bookends] [--set KEY=VALUE (including narrative.<design|plan|validation>=true|false and checkpoint.<intent|design|plan|implementation|validation>=true|false)] [--remove-axis gate.stage.axis] [--add-axis gate.stage.axis=gate.stage.axis] [--previous-explain FILE]";
+const USAGE: &str = "usage: software-change setup (--rigor minimal|standard|high | --profile FILE) --output FILE (--enable-advice | --decline-advice) [--bookends] [--set KEY=VALUE (including narrative.<design|plan|validation>=true|false, checkpoint.<intent|design|plan|implementation|validation>=true|false, binding.<driver|author|implementer|ordinary-reviewer|challenge-reviewer|cold-reader|criterion-author>=provider/model@thinking and binding.driver-session=provider/model@thinking)] [--remove-axis gate.stage.axis] [--add-axis gate.stage.axis=gate.stage.axis] [--previous-explain FILE]";
 
 pub fn run_from_args(args: &[String]) -> i32 {
     if args == ["--help"] || args == ["-h"] {
@@ -127,10 +127,58 @@ fn set_phase_option(profile: &mut Value, kind: &str, phase: &str, raw: &str) -> 
     Ok(())
 }
 
+/// Parse `provider/model@thinking` into a `{model, thinking}` binding value.
+fn parse_binding_value(key: &str, raw: &str) -> Result<Value, String> {
+    let (model, thinking) = raw
+        .rsplit_once('@')
+        .ok_or_else(|| format!("{key} must be provider/model@thinking"))?;
+    if model.trim().is_empty() || thinking.trim().is_empty() {
+        return Err(format!(
+            "{key} must name a nonblank provider/model and a nonblank thinking level"
+        ));
+    }
+    Ok(json!({"model": model, "thinking": thinking}))
+}
+
+/// Write `binding.<role>` or `binding.driver-session` into `model_bindings`.
+/// The key is created only here, so a profile with no binding keeps none.
+fn set_binding(profile: &mut Value, name: &str, raw: &str) -> Result<(), String> {
+    let key = format!("binding.{name}");
+    let slot = if name == "driver-session" {
+        "driver_session"
+    } else if loop_core::ModelRole::parse(name).is_some() {
+        "roles"
+    } else {
+        return Err(format!("unknown binding role `{name}` in {key}"));
+    };
+    let value = parse_binding_value(&key, raw)?;
+    let root = profile.as_object_mut().ok_or("profile must be an object")?;
+    let bindings = root
+        .entry(loop_core::MODEL_BINDINGS_INPUT_KEY)
+        .or_insert_with(|| json!({"roles": {}}));
+    let bindings = bindings
+        .as_object_mut()
+        .ok_or("model_bindings must be an object to set bindings")?;
+    if slot == "driver_session" {
+        bindings.insert(slot.into(), value);
+    } else {
+        bindings
+            .entry("roles")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .ok_or("model_bindings.roles must be an object to set bindings")?
+            .insert(name.into(), value);
+    }
+    Ok(())
+}
+
 fn set(profile: &mut Value, key: &str, raw: &str) -> Result<(), String> {
     let parts: Vec<_> = key.split('.').collect();
     if let [kind @ ("narrative" | "checkpoint"), phase] = parts.as_slice() {
         return set_phase_option(profile, kind, phase, raw);
+    }
+    if let ["binding", name] = parts.as_slice() {
+        return set_binding(profile, name, raw);
     }
     let (slot, field) = match parts.as_slice() {
         ["review", gate, stage, axis, field @ ("required_authors" | "self_review" | "group")] => (
@@ -202,6 +250,8 @@ fn setting(profile: &Value, key: &str) -> Value {
         ["checkpoint", phase] => json!(profile["extra"]["checkpoints"]
             .as_array()
             .is_some_and(|phases| phases.contains(&json!(phase)))),
+        ["binding", "driver-session"] => profile["model_bindings"]["driver_session"].clone(),
+        ["binding", role] => profile["model_bindings"]["roles"][*role].clone(),
         [section, "enabled"] => profile["extra"][*section]["enabled"].clone(),
         _ => Value::Null,
     };
@@ -438,7 +488,10 @@ fn resolve(args: &[String]) -> Result<(Value, PathBuf, Value), String> {
             }
         }
     }
-    let explain = json!({"base":{"id":base["config_version"],"sha256":digest},"overrides":overrides,"effective":{"config_version":profile["config_version"],"review_policies":profile["review_policies"],"criterion_policy":profile["criterion_policy"],"advice":profile["extra"]["advice"],"bookends":profile["extra"]["bookends"],"narratives":profile["extra"]["narratives"].as_array().cloned().unwrap_or_default(),"checkpoints":profile["extra"]["checkpoints"].as_array().cloned().unwrap_or_default()},"drift":drift});
+    let mut explain = json!({"base":{"id":base["config_version"],"sha256":digest},"overrides":overrides,"effective":{"config_version":profile["config_version"],"review_policies":profile["review_policies"],"criterion_policy":profile["criterion_policy"],"advice":profile["extra"]["advice"],"bookends":profile["extra"]["bookends"],"narratives":profile["extra"]["narratives"].as_array().cloned().unwrap_or_default(),"checkpoints":profile["extra"]["checkpoints"].as_array().cloned().unwrap_or_default()},"drift":drift});
+    if let Some(bindings) = profile.get(loop_core::MODEL_BINDINGS_INPUT_KEY) {
+        explain["effective"][loop_core::MODEL_BINDINGS_INPUT_KEY] = bindings.clone();
+    }
     Ok((profile, output.ok_or("missing --output")?, explain))
 }
 
@@ -562,6 +615,177 @@ mod tests {
         assert!(ledger["data"]["findings"][0].get("statement").is_none());
         assert!(ledger["data"]["findings"][0]["summary"].is_string());
         assert!(read("data/review-worker-preamble.txt").contains("baseline-to-covered-commit"));
+    }
+
+    fn setup_args(sets: &[&str]) -> Vec<String> {
+        let mut args = [
+            "--rigor",
+            "minimal",
+            "--output",
+            "p.json",
+            "--decline-advice",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        for set in sets {
+            args.push("--set".into());
+            args.push((*set).into());
+        }
+        args
+    }
+
+    fn profile_bytes(profile: &Value) -> Vec<u8> {
+        serde_json::to_vec_pretty(profile).unwrap()
+    }
+
+    #[test]
+    fn binding_settings_write_model_bindings_and_record_each_override() {
+        let (unbound, _, unbound_explain) = resolve(&setup_args(&[])).unwrap();
+        assert!(unbound.get("model_bindings").is_none());
+        assert!(unbound_explain["effective"].get("model_bindings").is_none());
+        let (bound, _, explain) = resolve(&setup_args(&[
+            "binding.ordinary-reviewer=anthropic/claude-sonnet-5@high",
+            "binding.driver=openai/gpt-5@low",
+            "binding.driver-session=openai/gpt-5@low",
+        ]))
+        .unwrap();
+        assert_eq!(
+            bound["model_bindings"],
+            json!({
+                "roles": {
+                    "ordinary-reviewer": {"model": "anthropic/claude-sonnet-5", "thinking": "high"},
+                    "driver": {"model": "openai/gpt-5", "thinking": "low"}
+                },
+                "driver_session": {"model": "openai/gpt-5", "thinking": "low"}
+            })
+        );
+        assert_eq!(
+            explain["effective"]["model_bindings"],
+            bound["model_bindings"]
+        );
+        for (key, value) in [
+            (
+                "binding.ordinary-reviewer",
+                json!({"model": "anthropic/claude-sonnet-5", "thinking": "high"}),
+            ),
+            (
+                "binding.driver",
+                json!({"model": "openai/gpt-5", "thinking": "low"}),
+            ),
+            (
+                "binding.driver-session",
+                json!({"model": "openai/gpt-5", "thinking": "low"}),
+            ),
+        ] {
+            let change = explain["overrides"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["key"] == key)
+                .unwrap_or_else(|| panic!("{key} not recorded"));
+            assert_eq!(
+                change,
+                &json!({"key": key, "base_value": null, "value": value})
+            );
+        }
+        let mut without = bound.clone();
+        without.as_object_mut().unwrap().remove("model_bindings");
+        assert_eq!(without, unbound);
+        config::validate_config(&bound).unwrap();
+        config::validate_config(&overlay::apply(&bound)).unwrap();
+    }
+
+    #[test]
+    fn profiles_differing_only_in_a_binding_have_different_file_sha256() {
+        let digest = |sets: &[&str]| {
+            let (profile, _, _) = resolve(&setup_args(sets)).unwrap();
+            format!("{:x}", Sha256::digest(profile_bytes(&profile)))
+        };
+        let unbound = digest(&[]);
+        let reviewer = digest(&["binding.ordinary-reviewer=p/m@high"]);
+        let other_thinking = digest(&["binding.ordinary-reviewer=p/m@low"]);
+        let other_model = digest(&["binding.ordinary-reviewer=p/n@high"]);
+        let unique: std::collections::BTreeSet<_> =
+            [&unbound, &reviewer, &other_thinking, &other_model]
+                .into_iter()
+                .collect();
+        assert_eq!(unique.len(), 4);
+        assert_eq!(unbound, digest(&[]));
+    }
+
+    #[test]
+    fn unbound_setup_output_has_no_binding_key_and_matches_shipped_profile_bytes() {
+        let (profile, _, explain) = resolve(&setup_args(&[])).unwrap();
+        let path = "crates/software-change-provider/data/configs/minimal.json";
+        let mut expected: Value = serde_json::from_slice(
+            embedded_data::FILES
+                .iter()
+                .find(|entry| entry.path == path)
+                .unwrap()
+                .bytes,
+        )
+        .unwrap();
+        expected["extra"]["advice"]["enabled"] = json!(false);
+        assert_eq!(profile_bytes(&profile), profile_bytes(&expected));
+        assert!(!explain.to_string().contains("model_bindings"));
+    }
+
+    #[test]
+    fn a_later_binding_setting_replaces_the_earlier_one_and_both_are_recorded() {
+        let (profile, _, explain) = resolve(&setup_args(&[
+            "binding.author=p/a@low",
+            "binding.author=p/b@high",
+        ]))
+        .unwrap();
+        assert_eq!(
+            profile["model_bindings"]["roles"]["author"],
+            json!({"model": "p/b", "thinking": "high"})
+        );
+        let recorded: Vec<_> = explain["overrides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["key"] == "binding.author")
+            .collect();
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(recorded[1]["base_value"], Value::Null);
+        assert_eq!(recorded[1]["value"]["model"], "p/b");
+    }
+
+    #[test]
+    fn malformed_binding_settings_refuse_with_a_diagnostic() {
+        for (set, expected) in [
+            ("binding.author=p/m", "must be provider/model@thinking"),
+            ("binding.author=@high", "nonblank provider/model"),
+            ("binding.author=p/m@", "nonblank thinking level"),
+            ("binding.author= @ ", "nonblank provider/model"),
+            (
+                "binding.reviewer=p/m@high",
+                "unknown binding role `reviewer`",
+            ),
+            ("binding.driver.session=p/m@high", "unknown setting"),
+            (
+                "binding.driver-session=p/m",
+                "must be provider/model@thinking",
+            ),
+            ("binding.driver=p/m@high", "driver_session is required"),
+            (
+                "binding.driver-session=p/m@high",
+                "only allowed when roles.driver is bound",
+            ),
+        ] {
+            let error = resolve(&setup_args(&[set])).expect_err(set);
+            assert!(
+                error.contains(expected),
+                "{set}: `{error}` lacks `{expected}`"
+            );
+        }
+        let error = resolve(&setup_args(&[
+            "binding.driver=p/m@high",
+            "binding.driver-session=p/m@low",
+        ]))
+        .unwrap_err();
+        assert!(error.contains("driver_session is refused"), "{error}");
     }
 
     #[test]

@@ -1835,6 +1835,7 @@ fn bounded_show_packet(
         "action_guidance":state["action_guidance"],"requestable_events":events,"work_slots":slots,
         "override_summary":snapshot["run"]["override_summary"],
         "advice_policy":snapshot["advice_policy"],
+        "model_bindings":snapshot["model_bindings"],
         "invocations":snapshot["invocations"],"assignments":snapshot["assignments"],
         "delta_sequence":snapshot["delta_sequence"],"completeness":snapshot["completeness"],
         "workflow":workflow_lane,"execution":execution_lane,"worker":worker_lane,
@@ -1955,8 +1956,63 @@ fn render_bounded_show_human(packet: &Value, view: &str) -> String {
         }
     }
     lines.push(format!("advice policy: {}", packet["advice_policy"]));
+    lines.extend(model_binding_lines(&packet["model_bindings"]));
     lines.push(format!("completeness: {}", packet["completeness"]));
     lines.join("\n") + "\n"
+}
+
+fn binding_text(binding: &Value) -> String {
+    match (binding["model"].as_str(), binding["thinking"].as_str()) {
+        (Some(model), Some(thinking)) => format!("{model} at thinking {thinking}"),
+        _ => "none".to_owned(),
+    }
+}
+
+/// Human lines for the `model_bindings` projection: the never-bound
+/// statement, or each role's original and in-force binding and the ordered
+/// amendment history.
+fn model_binding_lines(view: &Value) -> Vec<String> {
+    match view["state"].as_str() {
+        Some("never-bound") => vec![format!(
+            "model bindings: never bound. {}",
+            view["statement"].as_str().unwrap_or_default()
+        )],
+        Some("bound") => {
+            let mut lines = vec!["model bindings: bound".to_owned()];
+            for row in view["roles"].as_array().into_iter().flatten() {
+                lines.push(format!(
+                    "  role {}: original {}; in force {}",
+                    row["role"].as_str().unwrap_or("?"),
+                    binding_text(&row["original"]),
+                    binding_text(&row["in_force"])
+                ));
+            }
+            for entry in view["history"].as_array().into_iter().flatten() {
+                lines.push(format!(
+                    "  amendment {} when={} actor={} ({}) words: {}",
+                    entry["record_id"].as_str().unwrap_or("?"),
+                    entry["when"],
+                    entry["actor"]["name"].as_str().unwrap_or("?"),
+                    entry["actor"]["kind"].as_str().unwrap_or("?"),
+                    entry["words"].as_str().unwrap_or("?")
+                ));
+                for change in entry["changes"].as_array().into_iter().flatten() {
+                    lines.push(format!(
+                        "    {}: {} -> {}; evidence marked stale: {}",
+                        change["role"].as_str().unwrap_or("?"),
+                        binding_text(&change["old"]),
+                        binding_text(&change["new"]),
+                        change["mark_stale"].as_bool().unwrap_or(false)
+                    ));
+                }
+            }
+            lines
+        }
+        _ => vec![format!(
+            "model bindings: unavailable ({})",
+            view["reason"].as_str().unwrap_or("not sampled")
+        )],
+    }
 }
 
 /// Bound execution instructions and provider obligations remain opaque; this
@@ -1979,6 +2035,8 @@ fn show_packet(
         },
         None => json!({"state":"unavailable","reason":"show omitted stored workflow"}),
     };
+    value["model_bindings"] =
+        core::model_bindings_view(&projection.initial_input, &projection.context);
     let lanes = visibility::show_lanes(&value, view, database);
     let object = value.as_object_mut().expect("show projection is an object");
     object.insert("view".into(), json!(view));
@@ -3456,5 +3514,146 @@ printf '%s' '{"id":"cli-fixture","initial_state":"start","states":[{"id":"start"
         );
         assert_eq!(action["advice_policy"], full["advice_policy"]);
         assert!(render_bounded_show_human(&action, "action").contains("owner-off"));
+    }
+
+    fn bindings_projection(
+        initial_input: Value,
+        context: Vec<core::ContextRecord>,
+    ) -> core::ShowProjection {
+        let workflow = core::Workflow::new(
+            "bindings",
+            "work",
+            vec![
+                core::State::new("work", "Work", "External work", false),
+                core::State::new("done", "Done", "", true),
+            ],
+            vec![core::Transition::check_free("work", "finish", "done")],
+        );
+        let run = core::Run::new(
+            "run",
+            None,
+            workflow,
+            core::ProviderAssociation::new(json!({})),
+            initial_input,
+            "work",
+            core::Lifecycle::Active,
+            4_u64.into(),
+            8_u64.into(),
+            Timestamp::from_unix_millis(1),
+        );
+        core::project_show(core::ShowData {
+            run,
+            context,
+            checked_evaluations: vec![],
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn model_bindings_full_packet_states_a_run_never_bound_and_changes_no_other_field() {
+        let projection = bindings_projection(json!({}), vec![]);
+        let mut full = show_packet(
+            projection.into(),
+            "full",
+            Timestamp::from_unix_millis(2),
+            Path::new("/unused/test.sqlite"),
+        );
+        assert_eq!(
+            full["model_bindings"],
+            json!({"state":"never-bound","statement":core::NEVER_BOUND_STATEMENT})
+        );
+        full.as_object_mut().unwrap().remove("model_bindings");
+        assert!(full.get("initial_input").is_some() && full.get("context").is_some());
+    }
+
+    #[test]
+    fn model_bindings_full_packet_matches_the_stored_records_before_and_after_an_amendment() {
+        let initial =
+            json!({"model_bindings":{"roles":{"author":{"model":"p/m1","thinking":"high"}}}});
+        let before = show_packet(
+            bindings_projection(initial.clone(), vec![]).into(),
+            "full",
+            Timestamp::from_unix_millis(2),
+            Path::new("/unused/test.sqlite"),
+        );
+        assert_eq!(before["model_bindings"]["state"], "bound");
+        assert_eq!(before["model_bindings"]["history"], json!([]));
+        let amendment = core::ContextRecord::new(
+            "amend-1",
+            core::MODEL_BINDING_AMENDMENT_RECORD_KIND,
+            json!({
+                "actor":{"name":"owner","kind":"human"},"authority":{"kind":"owner"},
+                "words":"Author on the other model.",
+                "changes":[{"role":"author","old":{"model":"p/m1","thinking":"high"},
+                    "new":{"model":"p/m2","thinking":"low"}}]
+            }),
+            9_u64.into(),
+            Timestamp::from_unix_millis(5),
+        );
+        let after = show_packet(
+            bindings_projection(initial, vec![amendment]).into(),
+            "full",
+            Timestamp::from_unix_millis(6),
+            Path::new("/unused/test.sqlite"),
+        );
+        let view = &after["model_bindings"];
+        let author = &view["roles"][1];
+        assert_eq!(author["role"], "author");
+        assert_eq!(
+            author["original"],
+            json!({"model":"p/m1","thinking":"high"})
+        );
+        assert_eq!(author["in_force"], json!({"model":"p/m2","thinking":"low"}));
+        assert_eq!(view["history"][0]["record_id"], "amend-1");
+        assert_eq!(view["history"][0]["words"], "Author on the other model.");
+        assert_eq!(view["history"][0]["changes"][0]["mark_stale"], false);
+        assert_eq!(after["context"][0]["id"], "amend-1");
+    }
+
+    #[test]
+    fn model_bindings_status_packet_and_human_text_state_never_bound_and_show_amendments() {
+        let snapshot = |view: Value| {
+            json!({"run":{"run_id":"run","current_state":"work","lifecycle":"active"},
+                "model_bindings":view,"completeness":{}})
+        };
+        let never = bounded_show_packet(
+            snapshot(core::model_bindings_view(&json!({}), &[])),
+            "status",
+            Path::new("/unused/test.sqlite"),
+            std::time::Instant::now(),
+        );
+        assert_eq!(never["model_bindings"]["state"], "never-bound");
+        let text = render_bounded_show_human(&never, "status");
+        assert!(text.contains("model bindings: never bound."), "{text}");
+        assert!(text.contains(core::NEVER_BOUND_STATEMENT), "{text}");
+
+        let amendment = core::ContextRecord::new(
+            "amend-1",
+            core::MODEL_BINDING_AMENDMENT_RECORD_KIND,
+            json!({
+                "actor":{"name":"owner","kind":"human"},"authority":{"kind":"owner"},
+                "words":"Add a cold reader.",
+                "changes":[{"role":"cold-reader","old":null,"new":{"model":"p/m3","thinking":"xhigh"},
+                    "mark_stale":true}]
+            }),
+            3_u64.into(),
+            Timestamp::from_unix_millis(5),
+        );
+        let bound = bounded_show_packet(
+            snapshot(core::model_bindings_view(&json!({}), &[amendment])),
+            "status",
+            Path::new("/unused/test.sqlite"),
+            std::time::Instant::now(),
+        );
+        let text = render_bounded_show_human(&bound, "status");
+        assert!(
+            text.contains("role cold-reader: original none; in force p/m3 at thinking xhigh"),
+            "{text}"
+        );
+        assert!(text.contains("Add a cold reader."), "{text}");
+        assert!(
+            text.contains("none -> p/m3 at thinking xhigh; evidence marked stale: true"),
+            "{text}"
+        );
     }
 }
