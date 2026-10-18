@@ -51010,11 +51010,12 @@
     "review_stage": "aggregate",
     "fixture_id": "narrative-101",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "14207b23158e3a03ab13d20f7c84d540de851d7c60ee541dc5385c540902977b"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "14207b23158e3a03ab13d20f7c84d540de851d7c60ee541dc5385c540902977b",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|design-narrative-adversarial-review|narrative-faithful|aggregate|narrative-101"
   },
   {
     "config_version": "high-rigor-17",
@@ -51041,11 +51042,12 @@
     "review_stage": "individual",
     "fixture_id": "narrative-101",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "de740fd5f1681b00a7e01050da0ab01714fd96e6ff48b3c54f8989c7e08bb370"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "de740fd5f1681b00a7e01050da0ab01714fd96e6ff48b3c54f8989c7e08bb370",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|design-narrative-adversarial-review|narrative-faithful|individual|narrative-101"
   },
   {
     "config_version": "high-rigor-17",
@@ -51216,11 +51218,12 @@
     "review_stage": "aggregate",
     "fixture_id": "narrative-101",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "d6299eda27acb9b407247141e22e9e2e3cd641bd03b701e432906010af4cde85"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "d6299eda27acb9b407247141e22e9e2e3cd641bd03b701e432906010af4cde85",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|design-narrative-review|narrative-faithful|aggregate|narrative-101"
   },
   {
     "config_version": "high-rigor-17",
@@ -51247,11 +51250,12 @@
     "review_stage": "individual",
     "fixture_id": "narrative-101",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "6cc2d8e3c129e9d1ffe836ab708c15e16611a2bfd4b69bf8ab6a9b2cf409bed0"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "6cc2d8e3c129e9d1ffe836ab708c15e16611a2bfd4b69bf8ab6a9b2cf409bed0",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|design-narrative-review|narrative-faithful|individual|narrative-101"
   },
   {
     "config_version": "high-rigor-17",
@@ -51854,11 +51858,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "4a1356a6c401391e01bfebc58f9fea0fa463f3a4d6eecc2887e8bb50318a4e30"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "4a1356a6c401391e01bfebc58f9fea0fa463f3a4d6eecc2887e8bb50318a4e30",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "high-rigor-17",
@@ -51867,11 +51872,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "f2325c207cb96d1cbd52e9a0773340dd28af181d7da297662e491b5e7e6fcc37"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "f2325c207cb96d1cbd52e9a0773340dd28af181d7da297662e491b5e7e6fcc37",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "high-rigor-17",
@@ -51880,11 +51886,12 @@
     "review_stage": "individual",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "596d89ca04eafe05dd616c9d1984b375d9526143fb789869c8ea58a4e1cf6cc0"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "596d89ca04eafe05dd616c9d1984b375d9526143fb789869c8ea58a4e1cf6cc0",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-adversarial-review|design-faithful-final|individual|implementation-report-replacement-case-02"
   },
   {
     "config_version": "high-rigor-17",
@@ -51893,11 +51900,12 @@
     "review_stage": "individual",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "26ae3144fcbf5ab4d469a1b19c9649a99a19417bc6e47cf5d0ec2d3566fc82c3"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "26ae3144fcbf5ab4d469a1b19c9649a99a19417bc6e47cf5d0ec2d3566fc82c3",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-adversarial-review|design-faithful-final|individual|implementation-report-replacement-case-01"
   },
   {
     "config_version": "high-rigor-17",
@@ -51906,11 +51914,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "86de7af155350cecb31ea7990186dfe32e4bdba9f41fe86033435cc1432acc3f"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "86de7af155350cecb31ea7990186dfe32e4bdba9f41fe86033435cc1432acc3f",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "high-rigor-17",
@@ -51919,11 +51928,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "ed3283c6db2839cf7a2d31ebd0bcb8e8effe34075ddeacd1d44ec6fe13878265"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "ed3283c6db2839cf7a2d31ebd0bcb8e8effe34075ddeacd1d44ec6fe13878265",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "high-rigor-17",
@@ -51932,11 +51942,12 @@
     "review_stage": "individual",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "92d274252f5ccb5c47bb4c6735129cc2ff962580398bb3f5e566379a4cfdd414"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "92d274252f5ccb5c47bb4c6735129cc2ff962580398bb3f5e566379a4cfdd414",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-adversarial-review|no-scope-creep|individual|implementation-report-replacement-case-02"
   },
   {
     "config_version": "high-rigor-17",
@@ -51945,11 +51956,12 @@
     "review_stage": "individual",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "7838afd45ecbd358495a7fe0548a87f4917542cede623e97054c7f9c8e85c103"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "7838afd45ecbd358495a7fe0548a87f4917542cede623e97054c7f9c8e85c103",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-adversarial-review|no-scope-creep|individual|implementation-report-replacement-case-01"
   },
   {
     "config_version": "high-rigor-17",
@@ -51958,11 +51970,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "90ab42182dc20c7df3ac0f9adb70dd2b1947d8eee1f28177080ddee365f5a97b"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "90ab42182dc20c7df3ac0f9adb70dd2b1947d8eee1f28177080ddee365f5a97b",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "high-rigor-17",
@@ -51971,11 +51984,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "b9d2c906b08ef0d668a70f1101e70e85ecf43ece3e5fa12f09bfc8163d9fa608"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "b9d2c906b08ef0d668a70f1101e70e85ecf43ece3e5fa12f09bfc8163d9fa608",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "high-rigor-17",
@@ -51984,11 +51998,12 @@
     "review_stage": "individual",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "5896f12a77d3a81a2ae2d08a79d472a63a9951a24dd8a559db9c37d81fd28ca4"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "5896f12a77d3a81a2ae2d08a79d472a63a9951a24dd8a559db9c37d81fd28ca4",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-adversarial-review|tasks-actually-done|individual|implementation-report-replacement-case-02"
   },
   {
     "config_version": "high-rigor-17",
@@ -51997,11 +52012,12 @@
     "review_stage": "individual",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "95ddae876e905f7ba3675128eef50b66bbd3e647a77ba0ab33dc83edb07aa0c0"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "95ddae876e905f7ba3675128eef50b66bbd3e647a77ba0ab33dc83edb07aa0c0",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-adversarial-review|tasks-actually-done|individual|implementation-report-replacement-case-01"
   },
   {
     "config_version": "high-rigor-17",
@@ -52010,11 +52026,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "f6543e984f7547569c9860d9fb54da8b12abed063d103e41e34f12e4f0c540b2"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "f6543e984f7547569c9860d9fb54da8b12abed063d103e41e34f12e4f0c540b2",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "high-rigor-17",
@@ -52023,12 +52040,13 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review with input framing locator-line-counts/v1+locator-syntax/v1.1: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, the driver-derived locator line-count note and the fixed locator syntax requirement, then request one JSON review-evidence record; no prompt adaptation beyond those versioned framing records.",
     "input_sha256": "9b3685ade3a5c03f0147c3c37cf064412ee44eb4571fc777c641b8fd8279c70b",
-    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1"
+    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "high-rigor-17",
@@ -52037,11 +52055,12 @@
     "review_stage": "individual",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "aa7de7f33028fbb336d8e11de37048facd3135007f303842efedf39f859521c0"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "aa7de7f33028fbb336d8e11de37048facd3135007f303842efedf39f859521c0",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-review|design-faithful-final|individual|implementation-report-replacement-case-02"
   },
   {
     "config_version": "high-rigor-17",
@@ -52050,11 +52069,12 @@
     "review_stage": "individual",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "4201a4bb5a6b9b80d4842a15191f36a6b3f04a96e7d279a83434438b2022c5dc"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "4201a4bb5a6b9b80d4842a15191f36a6b3f04a96e7d279a83434438b2022c5dc",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-review|design-faithful-final|individual|implementation-report-replacement-case-01"
   },
   {
     "config_version": "high-rigor-17",
@@ -52063,11 +52083,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "b36c075c5f24f52964f906e73b18ffb609a431f5a66c1a5be7e50d8805c7a7a6"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "b36c075c5f24f52964f906e73b18ffb609a431f5a66c1a5be7e50d8805c7a7a6",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "high-rigor-17",
@@ -52076,11 +52097,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "6a1487b77bfbd62799418102be285a7efa1890d7f25eb7b2e6b208121300117d"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "6a1487b77bfbd62799418102be285a7efa1890d7f25eb7b2e6b208121300117d",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "high-rigor-17",
@@ -52089,11 +52111,12 @@
     "review_stage": "individual",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "fd7536549d1874b35b5cd0318a3e0add2c3d619fc2c0277a7285c24685e61073"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "fd7536549d1874b35b5cd0318a3e0add2c3d619fc2c0277a7285c24685e61073",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-review|no-scope-creep|individual|implementation-report-replacement-case-02"
   },
   {
     "config_version": "high-rigor-17",
@@ -52102,11 +52125,12 @@
     "review_stage": "individual",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "ed304ec2773a6eb4b2c4a144ca406d4c244edd644a82153afab3b82e15b1bc4b"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "ed304ec2773a6eb4b2c4a144ca406d4c244edd644a82153afab3b82e15b1bc4b",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-review|no-scope-creep|individual|implementation-report-replacement-case-01"
   },
   {
     "config_version": "high-rigor-17",
@@ -52115,11 +52139,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "821523af4a4aa8d95fdbee749686c7ceaac619a5f2cf358d79961c89c400b537"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "821523af4a4aa8d95fdbee749686c7ceaac619a5f2cf358d79961c89c400b537",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "high-rigor-17",
@@ -52128,11 +52153,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "70ed537a0d7298e0e83e9a2d99c2b034beaeb548bd1f4db9b5bf4dd69fe8d71d"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "70ed537a0d7298e0e83e9a2d99c2b034beaeb548bd1f4db9b5bf4dd69fe8d71d",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "high-rigor-17",
@@ -52141,11 +52167,12 @@
     "review_stage": "individual",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "c7711aaa5e29b1dcea566e0544555c888b8eafe8c505f28b92122120e4ace3fe"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "c7711aaa5e29b1dcea566e0544555c888b8eafe8c505f28b92122120e4ace3fe",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-review|tasks-actually-done|individual|implementation-report-replacement-case-02"
   },
   {
     "config_version": "high-rigor-17",
@@ -52154,11 +52181,12 @@
     "review_stage": "individual",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "adf9a42ceba975461b4b3b92d802083d8da67fa323bb3e5256695f1ddf3a1be8"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "adf9a42ceba975461b4b3b92d802083d8da67fa323bb3e5256695f1ddf3a1be8",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|implementation-review|tasks-actually-done|individual|implementation-report-replacement-case-01"
   },
   {
     "config_version": "high-rigor-17",
@@ -54993,11 +55021,12 @@
     "review_stage": "aggregate",
     "fixture_id": "validation-report-good",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "6d3897ace546d7740d83413913f6898b8abfdf883c7531404b448c6bb61e934a"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "6d3897ace546d7740d83413913f6898b8abfdf883c7531404b448c6bb61e934a",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|validation-adversarial-review|docs-integrated|aggregate|validation-report-good"
   },
   {
     "config_version": "high-rigor-17",
@@ -55024,11 +55053,12 @@
     "review_stage": "individual",
     "fixture_id": "validation-report-good",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "d33e10e87de164b22404ecf1b2888dea2d83ef7d3a046e6fe75ef20975c8b4a2"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "d33e10e87de164b22404ecf1b2888dea2d83ef7d3a046e6fe75ef20975c8b4a2",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|validation-adversarial-review|docs-integrated|individual|validation-report-good"
   },
   {
     "config_version": "high-rigor-17",
@@ -55631,12 +55661,13 @@
     "review_stage": "aggregate",
     "fixture_id": "validation-report-good",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review with input framing locator-line-counts/v1+locator-syntax/v1.1: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, the driver-derived locator line-count note and the fixed locator syntax requirement, then request one JSON review-evidence record; no prompt adaptation beyond those versioned framing records.",
     "input_sha256": "a23d0febfb462e99ed01b486ca0165da69e34d592d0229b2c7444f9417f8c7e3",
-    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1"
+    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|validation-review|docs-integrated|aggregate|validation-report-good"
   },
   {
     "config_version": "high-rigor-17",
@@ -55663,12 +55694,13 @@
     "review_stage": "individual",
     "fixture_id": "validation-report-good",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review with input framing locator-line-counts/v1+locator-syntax/v1.1: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, the driver-derived locator line-count note and the fixed locator syntax requirement, then request one JSON review-evidence record; no prompt adaptation beyond those versioned framing records.",
     "input_sha256": "0a5e2932fcd3fb55f8c676c703591ab3394f5e6ffcf32a57be3522d8528f206a",
-    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1"
+    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/high-rigor-17|validation-review|docs-integrated|individual|validation-report-good"
   },
   {
     "config_version": "high-rigor-17",
@@ -56037,11 +56069,12 @@
     "review_stage": "aggregate",
     "fixture_id": "narrative-101",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "82adb491d1e53a9de43ac0d6de2be3b650119536b330071ca2d58d200870150e"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "82adb491d1e53a9de43ac0d6de2be3b650119536b330071ca2d58d200870150e",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|design-narrative-adversarial-review|narrative-faithful|aggregate|narrative-101"
   },
   {
     "config_version": "minimal-17",
@@ -56140,11 +56173,12 @@
     "review_stage": "aggregate",
     "fixture_id": "narrative-101",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "eac462ef574c57a37f996067ce9b038931c26f92e47ca8c6ef4d5a04651792ef"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "eac462ef574c57a37f996067ce9b038931c26f92e47ca8c6ef4d5a04651792ef",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|design-narrative-review|narrative-faithful|aggregate|narrative-101"
   },
   {
     "config_version": "minimal-17",
@@ -56459,11 +56493,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "ad6c6333d2e05bc3a80861a0340ae0932f62b4d3577265ca2f744d628bcdf24a"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "ad6c6333d2e05bc3a80861a0340ae0932f62b4d3577265ca2f744d628bcdf24a",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "minimal-17",
@@ -56472,11 +56507,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "ea997f3dd5ef42a57ffd6b1d3bc640d33c659765b4efe3d135b8a1d89ed40283"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "ea997f3dd5ef42a57ffd6b1d3bc640d33c659765b4efe3d135b8a1d89ed40283",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "minimal-17",
@@ -56485,11 +56521,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "15d6d358dd1ab657c8300d9200c0bf75d33e52f2198038d7a3f8d945e804196b"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "15d6d358dd1ab657c8300d9200c0bf75d33e52f2198038d7a3f8d945e804196b",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "minimal-17",
@@ -56498,12 +56535,13 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review with input framing locator-line-counts/v1+locator-syntax/v1.1: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, the driver-derived locator line-count note and the fixed locator syntax requirement, then request one JSON review-evidence record; no prompt adaptation beyond those versioned framing records.",
     "input_sha256": "f8917653b48a5e79940a66775c522ca27c15184b675705c2e8b65d98a8f83156",
-    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1"
+    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "minimal-17",
@@ -56512,11 +56550,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "068dc3c04c03a4c16128b2ddae083f15df90d5b98bfe28ba2f05e0c5a51830f8"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "068dc3c04c03a4c16128b2ddae083f15df90d5b98bfe28ba2f05e0c5a51830f8",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "minimal-17",
@@ -56525,12 +56564,13 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review with input framing locator-line-counts/v1+locator-syntax/v1.1: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, the driver-derived locator line-count note and the fixed locator syntax requirement, then request one JSON review-evidence record; no prompt adaptation beyond those versioned framing records.",
     "input_sha256": "4247625b0bcfe5820f77c5a63d10bbc5453558fed1647c5c30a9b201875175af",
-    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1"
+    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "minimal-17",
@@ -56539,11 +56579,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "bb1082a495a904ab2ea1784cb39c1a3c9afecd567fb06735d1f289b87c6ec4a7"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "bb1082a495a904ab2ea1784cb39c1a3c9afecd567fb06735d1f289b87c6ec4a7",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "minimal-17",
@@ -56552,11 +56593,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "c76beecb492edc6b5a8c8e2d963e780be1167e14ddca8d62d6372712c7dc9614"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "c76beecb492edc6b5a8c8e2d963e780be1167e14ddca8d62d6372712c7dc9614",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "minimal-17",
@@ -56565,11 +56607,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "65b9df1f6a08d2e8a23051fe812dc8e32eecff0832f687dc0b18e77e55fc7f01"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "65b9df1f6a08d2e8a23051fe812dc8e32eecff0832f687dc0b18e77e55fc7f01",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "minimal-17",
@@ -56578,11 +56621,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "5720f9d21ddcc250846d265f00762cb57fe0c8f1f300fa25ea799a345ac48628"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "5720f9d21ddcc250846d265f00762cb57fe0c8f1f300fa25ea799a345ac48628",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "minimal-17",
@@ -56591,11 +56635,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "4b8d0bf802cd011aa767adc41ea901cc0ff46657db611599232cbc74e24e327b"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "4b8d0bf802cd011aa767adc41ea901cc0ff46657db611599232cbc74e24e327b",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "minimal-17",
@@ -56604,11 +56649,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "3656896afae5d4c52f0cbad4e8e0c74bee7406d28e438e3c4d57361de77b8f17"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "3656896afae5d4c52f0cbad4e8e0c74bee7406d28e438e3c4d57361de77b8f17",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "minimal-17",
@@ -58147,12 +58193,13 @@
     "review_stage": "aggregate",
     "fixture_id": "validation-report-good",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review with input framing locator-line-counts/v1+locator-syntax/v1.1: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, the driver-derived locator line-count note and the fixed locator syntax requirement, then request one JSON review-evidence record; no prompt adaptation beyond those versioned framing records.",
     "input_sha256": "1325fa828ae11b725552a81285ec627831f462c24642d1aa9879704955f4bc06",
-    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1"
+    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|validation-adversarial-review|docs-integrated|aggregate|validation-report-good"
   },
   {
     "config_version": "minimal-17",
@@ -58467,12 +58514,13 @@
     "review_stage": "aggregate",
     "fixture_id": "validation-report-good",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review with input framing locator-line-counts/v1+locator-syntax/v1.1: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, the driver-derived locator line-count note and the fixed locator syntax requirement, then request one JSON review-evidence record; no prompt adaptation beyond those versioned framing records.",
     "input_sha256": "8655f988d2396749e18f67b43127cbf7179d9e1d799d425bdc2fe87a4c9614aa",
-    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1"
+    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/minimal-17|validation-review|docs-integrated|aggregate|validation-report-good"
   },
   {
     "config_version": "minimal-17",
@@ -58769,11 +58817,12 @@
     "review_stage": "aggregate",
     "fixture_id": "narrative-101",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "f47b1700d518d9276de8c1336c02d9df49e34be8843fc0f0f4839fb2aedb309f"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "f47b1700d518d9276de8c1336c02d9df49e34be8843fc0f0f4839fb2aedb309f",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|design-narrative-adversarial-review|narrative-faithful|aggregate|narrative-101"
   },
   {
     "config_version": "standard-17",
@@ -58872,11 +58921,12 @@
     "review_stage": "aggregate",
     "fixture_id": "narrative-101",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "008318a485926519c904ddd4bf69102f4cf0cc4cfd9a1f1e2bd388fec59ef022"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "008318a485926519c904ddd4bf69102f4cf0cc4cfd9a1f1e2bd388fec59ef022",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|design-narrative-review|narrative-faithful|aggregate|narrative-101"
   },
   {
     "config_version": "standard-17",
@@ -59191,11 +59241,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "b98414cc7f9869994d3be132bd8967a64426a739a7b291fb1dbf771124afa6ef"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "b98414cc7f9869994d3be132bd8967a64426a739a7b291fb1dbf771124afa6ef",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "standard-17",
@@ -59204,11 +59255,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "fc5c3424c70ca09a0d2a7d07b8f5b04cd2c80e0adccb7dc62a8d6b4c3f06716f"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "fc5c3424c70ca09a0d2a7d07b8f5b04cd2c80e0adccb7dc62a8d6b4c3f06716f",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "standard-17",
@@ -59217,11 +59269,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "211121a4198b73a816e4762f55e1fd4487a90e9fb6bdfc4fc169c033eaa4bc9f"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "211121a4198b73a816e4762f55e1fd4487a90e9fb6bdfc4fc169c033eaa4bc9f",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "standard-17",
@@ -59230,11 +59283,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "b2212d43e8be332f7ed3a4a59294e8a40976fa274ab5c3483b4c58e92a5706ea"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "b2212d43e8be332f7ed3a4a59294e8a40976fa274ab5c3483b4c58e92a5706ea",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "standard-17",
@@ -59243,11 +59297,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "a9ead22797740fa4381591e4a29508c76438c94a3958dd4165ab59cbfbe5cf5b"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "a9ead22797740fa4381591e4a29508c76438c94a3958dd4165ab59cbfbe5cf5b",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "standard-17",
@@ -59256,11 +59311,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "5e412ae2ebdfb368b161bb3c53801350c51c7084cf212f8ea328641091081075"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "5e412ae2ebdfb368b161bb3c53801350c51c7084cf212f8ea328641091081075",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "standard-17",
@@ -59269,11 +59325,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "ec2a0fa474696c9dc9e4ace01614542f73774f2e7ee21df7c88f4dd6f8af0ea2"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "ec2a0fa474696c9dc9e4ace01614542f73774f2e7ee21df7c88f4dd6f8af0ea2",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "standard-17",
@@ -59282,11 +59339,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "b4904f7292e69ecfb8033187c8c8428ee2bb4af3162bd3ea47ab4b8cc8a49dc3"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "b4904f7292e69ecfb8033187c8c8428ee2bb4af3162bd3ea47ab4b8cc8a49dc3",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "standard-17",
@@ -59295,11 +59353,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "246e43cc8af4a7be2577abebf663b1ce03803eaf311080ae0eb0f7c32f6df62f"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "246e43cc8af4a7be2577abebf663b1ce03803eaf311080ae0eb0f7c32f6df62f",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "standard-17",
@@ -59308,11 +59367,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "f1cfbef4fb19ab6d576eb710b92bcc5a30627e3d88bab5e7b5e97c97f4f161ee"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "f1cfbef4fb19ab6d576eb710b92bcc5a30627e3d88bab5e7b5e97c97f4f161ee",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "standard-17",
@@ -59321,11 +59381,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-02",
     "expected": "fail",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "00508832c3dd7d54668dc8bf407d424bc443fcee721f0372ab6c3972a3f53963"
+    "observed": "fail",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "00508832c3dd7d54668dc8bf407d424bc443fcee721f0372ab6c3972a3f53963",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02"
   },
   {
     "config_version": "standard-17",
@@ -59334,11 +59395,12 @@
     "review_stage": "aggregate",
     "fixture_id": "implementation-report-replacement-case-01",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
-    "input_sha256": "0ab523af65fb1e92533b5ebf2a583794a32a071d5d64e1b8fb306cfa13d3b3a8"
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
+    "input_sha256": "0ab523af65fb1e92533b5ebf2a583794a32a071d5d64e1b8fb306cfa13d3b3a8",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01"
   },
   {
     "config_version": "standard-17",
@@ -60877,12 +60939,13 @@
     "review_stage": "aggregate",
     "fixture_id": "validation-report-good",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review with input framing locator-line-counts/v1: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, the driver-derived locator line-count note, then request one JSON review-evidence record; no prompt adaptation beyond that versioned framing record.",
     "input_sha256": "fdd388e43c6046c6a163f9266652a1df162b5e8b80d47171ecc37bdd5b355d6a",
-    "input_framing": "locator-line-counts/v1"
+    "input_framing": "locator-line-counts/v1",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|validation-adversarial-review|docs-integrated|aggregate|validation-report-good"
   },
   {
     "config_version": "standard-17",
@@ -61197,12 +61260,13 @@
     "review_stage": "aggregate",
     "fixture_id": "validation-report-good",
     "expected": "pass",
-    "observed": "pending",
-    "attested_by": "",
-    "model": "",
-    "invocation": "Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.",
+    "observed": "pass",
+    "attested_by": "Loop Engine reviewer-returns-44-45 owner-delegated calibration driver (claude-compat/claude-sonnet-5-5:high), acting on Michael's relayed T6 decision 'No cap, run to completion'; actual raw-return intake and A11-shape checks inspected; not owner corpus promotion",
+    "model": "openai-codex/gpt-6.1-sol:high",
+    "invocation": "Fresh owner-attested review with input framing locator-line-counts/v1+locator-syntax/v1.1: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, the driver-derived locator line-count note and the fixed locator syntax requirement, then request one JSON review-evidence record; no prompt adaptation beyond those versioned framing records.",
     "input_sha256": "9184a1016c7e39d76e249612ac57673f0dd67bb5b2649095a111bd961a223993",
-    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1"
+    "input_framing": "locator-line-counts/v1+locator-syntax/v1.1",
+    "result_ref": "crates/software-change-provider/data/calibration/returned-v17-r2.json#/returns/standard-17|validation-review|docs-integrated|aggregate|validation-report-good"
   },
   {
     "config_version": "standard-17",

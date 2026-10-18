@@ -4427,10 +4427,9 @@ fn input_framing_marks_exactly_the_approved_rows_and_keeps_their_evidence() {
         );
         assert!(string_field(entry, "config_version").ends_with(CURRENT_CONFIG_SUFFIX));
         assert!(!is_narrative_gate(string_field(entry, "gate")));
-        if framing == INPUT_FRAMING_V11 && string_field(entry, "observed") == "pending" {
-            // After a reviewer-protocol edit the packet bytes change, so a retained judgment against the old
-            // bytes no longer matches this row's hash: the row waits, in the existing pending form, for a
-            // genuine fresh judgment under the exact current packet. It is never relabeled or oracle-copied.
+        if string_field(entry, "observed") == "pending" {
+            // A row without a genuine fresh judgment under the exact current packet waits in the existing
+            // pending form. It is never relabeled or oracle-copied.
             versioned_pending += 1;
             assert_eq!(
                 string_field(entry, "invocation"),
@@ -4440,8 +4439,9 @@ fn input_framing_marks_exactly_the_approved_rows_and_keeps_their_evidence() {
             assert!(string_field(entry, "attested_by").is_empty(), "{key}");
             assert!(string_field(entry, "model").is_empty(), "{key}");
             assert!(entry.get("result_ref").is_none(), "{key}");
-        } else if framing == INPUT_FRAMING_V11 {
-            // The exact versioned matching result is retained under the exact judged packet hash.
+        } else {
+            // The exact versioned matching result is retained under the exact judged packet hash, in the
+            // original v17 returns or the post-protocol-edit returned-v17-r2.json.
             versioned_matches += 1;
             assert_eq!(
                 string_field(entry, "observed"),
@@ -4450,26 +4450,21 @@ fn input_framing_marks_exactly_the_approved_rows_and_keeps_their_evidence() {
             );
             assert_eq!(
                 string_field(entry, "invocation"),
-                CURRENT_INVOCATION_V11,
+                if framing == INPUT_FRAMING_V11 {
+                    CURRENT_INVOCATION_V11
+                } else {
+                    CURRENT_INVOCATION_V1
+                },
                 "{key}"
             );
             assert!(!string_field(entry, "attested_by").is_empty(), "{key}");
             assert!(!string_field(entry, "model").is_empty(), "{key}");
+            let result_ref = string_field(entry, "result_ref");
             assert!(
-                string_field(entry, "result_ref").contains("returned-v17.json#/returns/"),
+                result_ref.contains("returned-v17.json#/returns/")
+                    || result_ref.contains("returned-v17-r2.json#/returns/"),
                 "{key}"
             );
-        } else {
-            // v1 row kept pending: its valid judgment disagrees with the oracle (external evidence only).
-            assert_eq!(framing, INPUT_FRAMING_V1);
-            assert_eq!(string_field(entry, "observed"), "pending", "{key}");
-            assert_eq!(
-                string_field(entry, "invocation"),
-                PENDING_INVOCATION,
-                "{key}"
-            );
-            assert!(string_field(entry, "attested_by").is_empty(), "{key}");
-            assert!(entry.get("result_ref").is_none(), "{key}");
         }
         // Without the framing records, and with the reviewer protocol exactly as it was when the zero-framing
         // identity was approved, the very same row reproduces that hash: the evidence bodies and expected
@@ -4484,7 +4479,7 @@ fn input_framing_marks_exactly_the_approved_rows_and_keeps_their_evidence() {
         assert_eq!(digest(&approved_input), approved_hash, "{key}");
         assert_ne!(string_field(entry, "input_sha256"), approved_hash, "{key}");
     }
-    assert_eq!(versioned_matches + versioned_pending, 8);
+    assert_eq!(versioned_matches + versioned_pending, 9);
 }
 
 #[test]

@@ -1,0 +1,935 @@
+{
+  "format": "native raw-return archive, not legacy facade capture list",
+  "returns": {
+    "high-rigor-17|design-narrative-adversarial-review|narrative-faithful|aggregate|narrative-101": {
+      "row_key": "high-rigor-17|design-narrative-adversarial-review|narrative-faithful|aggregate|narrative-101",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "14207b23158e3a03ab13d20f7c84d540de851d7c60ee541dc5385c540902977b",
+      "output": "{\"review_contract_version\":3,\"review_stage\":\"aggregate\",\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"judgments\":[{\"axis\":\"narrative-faithful\",\"result\":\"pass\",\"findings\":\"\",\"grounds\":{\"reason\":\"The narrative preserves the approved design's frozen configuration, engine/provider boundary, structural validation, independent-evidence aggregation, terminal obligations, and declared limitations. Its summaries do not materially contradict the artifact or overpromise delivery. No remaining material defect falsifies the ordinary conclusion within the frozen operating boundary.\",\"evidence\":[{\"locator\":\"design-narrative.md#L3-L11\"},{\"locator\":\"design.json#/approach\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"design.json#/risks\"},{\"locator\":\"design.json#/coverage\"},{\"locator\":\"intent.json#/operating_context\"}]}}]}",
+      "output_utf8_sha256": "2fd33ee775c38436d3f20a1ab06edc5e15660e8b8e2c3a16ff222ec547722699",
+      "run_id": "01a14ef4-3860-717b-9e94-d946e272045e",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|design-narrative-adversarial-review|narrative-faithful|individual|narrative-101": {
+      "row_key": "high-rigor-17|design-narrative-adversarial-review|narrative-faithful|individual|narrative-101",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "de740fd5f1681b00a7e01050da0ab01714fd96e6ff48b3c54f8989c7e08bb370",
+      "output": "{\"review_contract_version\":3,\"review_stage\":\"individual\",\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"judgments\":[{\"axis\":\"narrative-faithful\",\"result\":\"pass\",\"findings\":\"\",\"grounds\":{\"reason\":\"The narrative faithfully summarizes the bound approved r15 design: frozen engine-composed configuration, static describe behavior, structural checking, independent evidence aggregation, unchanged workflow, and external semantic authority. It preserves the consequential limitations, including unauthenticated identities and undetectable dishonest same-revision edits. Comparing these claims against the approved artifact revealed no material contradiction, omission, invention, or softened uncertainty. The ordinary aggregate conclusion survives this independent comparison within the frozen local operating boundary.\",\"evidence\":[{\"locator\":\"design-narrative.json#/artifact\"},{\"locator\":\"design-narrative.md#L3-L11\"},{\"locator\":\"design.json#/approach\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"design.json#/risks\"},{\"locator\":\"design.json#/coverage\"},{\"locator\":\"intent.json#/operating_context\"}]}}]}",
+      "output_utf8_sha256": "90b0ee9bd83291651c61e25e21cfd26984deaaafc5b46b72615e2424e2f1372a",
+      "run_id": "01a14ef4-3a28-74ef-b04b-13f96f56cc22",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|design-narrative-review|narrative-faithful|aggregate|narrative-101": {
+      "row_key": "high-rigor-17|design-narrative-review|narrative-faithful|aggregate|narrative-101",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "d6299eda27acb9b407247141e22e9e2e3cd641bd03b701e432906010af4cde85",
+      "output": "{\"review_contract_version\":3,\"review_stage\":\"aggregate\",\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"judgments\":[{\"axis\":\"narrative-faithful\",\"result\":\"pass\",\"findings\":\"\",\"grounds\":{\"reason\":\"The narrative faithfully summarizes approved design r15: engine-composed frozen configuration, static description, bounded structural checking, independent evidence aggregation, unchanged workflow, and external semantic authority. It preserves the material limitations concerning unauthenticated identities and undetectable same-revision edits. No material contradiction, omission, invention, or delivery overclaim was found.\",\"evidence\":[{\"locator\":\"design-narrative.json#/artifact\"},{\"locator\":\"design-narrative.md#L3-L11\"},{\"locator\":\"design.json#/approach\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"design.json#/risks\"},{\"locator\":\"design.json#/coverage\"},{\"locator\":\"intent.json#/operating_context\"}]}}]}",
+      "output_utf8_sha256": "6ea24f9ecd92018fcfaef25ad1c8f7262c162cdd093038bed6c019427dcec3da",
+      "run_id": "01a14ef4-3a20-7749-80e5-ea0e8817d244",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|design-narrative-review|narrative-faithful|individual|narrative-101": {
+      "row_key": "high-rigor-17|design-narrative-review|narrative-faithful|individual|narrative-101",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "6cc2d8e3c129e9d1ffe836ab708c15e16611a2bfd4b69bf8ab6a9b2cf409bed0",
+      "output": "{\"review_contract_version\":3,\"review_stage\":\"individual\",\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"judgments\":[{\"axis\":\"narrative-faithful\",\"result\":\"pass\",\"findings\":\"\",\"grounds\":{\"reason\":\"The narrative faithfully summarizes the bound r15 design: engine-composed frozen configuration, static description, bounded exhaustive structural checking, independent current-revision evidence aggregation, unchanged workflow, and declared-identity and revision-trust limitations. It preserves material qualifications and describes proposed behavior without claiming delivery or validation. No material contradiction, omission, invention, or softened uncertainty was found within the frozen local operating boundary.\",\"evidence\":[{\"locator\":\"design-narrative.json#/artifact\"},{\"locator\":\"design-narrative.md#L3-L11\"},{\"locator\":\"design.json#/approach\"},{\"locator\":\"design.json#/elements\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"design.json#/coverage\"},{\"locator\":\"design.json#/risks\"},{\"locator\":\"intent.json#/operating_context\"}]}}]}",
+      "output_utf8_sha256": "8cc4d0a74aac2256b77b7594e29a696e625b1d6dc570547ff107ab7bf9408564",
+      "run_id": "01a14ef4-39f6-71d9-b31f-589f82571452",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "high-rigor-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "4a1356a6c401391e01bfebc58f9fea0fa463f3a4d6eecc2887e8bb50318a4e30",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-adversarial-review\",\n    \"policy_id\": \"design-faithful-final\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"The covered replacement contradicts the frozen provider boundary. judge.rs::automatic_judgment ignores its input and returns \\\"pass\\\" instead of aggregating independent external evidence; service.rs::main retains a TCP listener across requests and writes bare verdict bytes instead of implementing the strict one-request subprocess JSON protocol. These violate design decisions 4 and 6 and the intent's explicit external-semantic-authority obligation. Moreover, the complete covered-tree inventory contains no provider/Cargo.toml or protocol, structural-checking, evidence-aggregation, or checked-transition implementation, so the required provider cannot be built or invoked from this covered state. A trusted operator therefore cannot execute the accepted provider interface; wiring the replacement service would substitute unconditional provider-authored approval for required independent review. Existing validation does not resolve either defect: the report expressly records no new runtime execution, and historical receipts do not cover this replacement commit.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Inspection of the supplied complete baseline-to-covered change falsifies design fidelity: the only source additions implement automatic semantic approval and a retained server, while the accepted stateless subprocess provider and deterministic checking components are absent. This directly affects the declared local operating boundary, without requiring excluded hostile-user assumptions.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context/outside_obligations/0\"},\n        {\"locator\": \"intent.json#/constraints/2\"},\n        {\"locator\": \"design.json#/decisions/3\"},\n        {\"locator\": \"design.json#/decisions/5\"},\n        {\"locator\": \"implementation-report.json#/summary\"},\n        {\"locator\": \"implementation-report.json#/validation/0/proof\"},\n        {\"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/high-rigor-17_implementation-adversarial-review_design-faithful-final_aggregate_implementation-report-replacement-case-02/high-rigor-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-02/instructions.txt#L3478-L3509\"}\n      ]\n    },\n    \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"high-rigor-17\"\n  }\n}",
+      "output_utf8_sha256": "ad63b90c10295201ae39962d6cc2212ff51084d7235054c1afe8aa0529b3d7f3",
+      "run_id": "01a14ef4-38af-7580-93b2-f4bc4731f6a1",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "high-rigor-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "f2325c207cb96d1cbd52e9a0773340dd28af181d7da297662e491b5e7e6fcc37",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-adversarial-review\",\n    \"policy_id\": \"design-faithful-final\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"pass\",\n    \"findings\": \"\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Within the frozen trusted-local operating boundary, the supplied baseline-to-covered-source change preserves the accepted design: strict flat protocol, unchanged static topology and canonical reference bytes, caller-supplied frozen configuration, bounded exhaustive structural validation before evidence aggregation, exact name-kind independence, current revision/config filtering, distinct-author floors, and standing-fail/supersession semantics. The supplied current mechanical controls exercise these behaviors without claiming semantic review or execution at the later synthetic commit. No material design drift was established.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context\"},\n        {\"locator\": \"design.json#/decisions\"},\n        {\"locator\": \"fictional-repo/provider/src/protocol.rs#L1-L50\"},\n        {\"locator\": \"fictional-repo/provider/src/schema.rs#L1-L60\"},\n        {\"locator\": \"fictional-repo/provider/src/evidence.rs#L1-L95\"},\n        {\"locator\": \"fictional-repo/provider/src/gates.rs#L1-L45\"},\n        {\"locator\": \"fictional-repo/provider/src/workflow.rs#L1-L30\"},\n        {\"locator\": \"implementation-report.json#/validation/5\"}\n      ]\n    },\n    \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"high-rigor-17\"\n  }\n}",
+      "output_utf8_sha256": "ac5b8fbe37d9844bc75fabac8819a1dbaa1618cb2bf8ead3562631a5cab4ccd9",
+      "run_id": "01a14ef4-39d8-7424-9533-1351379ec9f5",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-adversarial-review|design-faithful-final|individual|implementation-report-replacement-case-02": {
+      "row_key": "high-rigor-17|implementation-adversarial-review|design-faithful-final|individual|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "596d89ca04eafe05dd616c9d1984b375d9526143fb789869c8ea58a4e1cf6cc0",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-adversarial-review\",\n    \"policy_id\": \"design-faithful-final\",\n    \"review_stage\": \"individual\",\n    \"result\": \"fail\",\n    \"findings\": \"The covered implementation replaces the accepted provider boundary rather than implementing it. fictional-repo/provider/src/judge.rs:1-4 ignores the artifact and returns \\\"pass\\\"; service.rs:6-16 retains a TCP listener and writes that bare verdict. This contradicts design decisions 4 and 6: one strict request per subprocess, exact JSON response variants, and deterministic aggregation of external judgments without provider semantic authority. If wired up, a request lacking qualifying external evidence receives the same pass as any other input. As delivered, the complete covered-file inventory also lacks provider/Cargo.toml and the protocol, schema, artifact, evidence, and gate implementations, so the repository-local provider cannot build or supply the designed checked-transition behavior. These are direct interface and guardrail failures within the trusted local operating boundary, not speculative hardening demands. Existing validation does not resolve them: the report explicitly records no new runtime execution and no current execution receipts.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Inspected the complete supplied baseline-to-covered change and frozen operating context. The only source additions implement unconditional provider-authored acceptance through a retained TCP server, while the declared complete tree contains no buildable implementation of the accepted stateless provider.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context/outside_obligations/0\"},\n        {\"locator\": \"design.json#/decisions/3\"},\n        {\"locator\": \"design.json#/decisions/5\"},\n        {\"locator\": \"implementation-report.json#/validation/0/proof\"},\n        {\"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/high-rigor-17_implementation-adversarial-review_design-faithful-final_individual_implementation-report-replacement-case-02/high-rigor-17|implementation-adversarial-review|design-faithful-final|individual|implementation-report-replacement-case-02/instructions.txt#L980-L1046\"},\n        {\"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/high-rigor-17_implementation-adversarial-review_design-faithful-final_individual_implementation-report-replacement-case-02/high-rigor-17|implementation-adversarial-review|design-faithful-final|individual|implementation-report-replacement-case-02/instructions.txt#L3482-L3505\"}\n      ]\n    },\n    \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"high-rigor-17\"\n  }\n}",
+      "output_utf8_sha256": "a841f46b66a21650e677c85e9a3bbeae0671e1ab7ef7069e6caf9d407e27243b",
+      "run_id": "01a14ef4-3a74-7076-b336-bb346fdf03ab",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-adversarial-review|design-faithful-final|individual|implementation-report-replacement-case-01": {
+      "row_key": "high-rigor-17|implementation-adversarial-review|design-faithful-final|individual|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "26ae3144fcbf5ab4d469a1b19c9649a99a19417bc6e47cf5d0ec2d3566fc82c3",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-adversarial-review\",\"policy_id\":\"design-faithful-final\",\"review_stage\":\"individual\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Inspected the complete supplied baseline/covered-source accounting, implementation, tests, and retained mechanical proof within the frozen trusted-local boundary. No material divergence from accepted protocol, canonical-data preservation, structural-denial precedence, evidence aggregation, or terminal-gate guardrails was found. Mechanical captures were not treated as semantic approval.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"fictional-repo/provider/src/protocol.rs#L1-L40\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L20-L55\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L35-L100\"},{\"locator\":\"fictional-repo/provider/src/workflow.rs#L1-L28\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"high-rigor-17\"}}",
+      "output_utf8_sha256": "26eb1e7ef99b35cd3438d2794b6f8c1b80ce5f7251f62d84fc625387513851b7",
+      "run_id": "01a14f04-49ec-7777-9ae7-99cd4b14a8f3",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "high-rigor-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "86de7af155350cecb31ea7990186dfe32e4bdba9f41fe86033435cc1432acc3f",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-adversarial-review\",\n    \"policy_id\": \"no-scope-creep\",\n    \"review_stage\": \"aggregate\",\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"high-rigor-17\",\n    \"review_contract_version\": 3,\n    \"author\": {\n      \"name\": \"calibration-reviewer\",\n      \"kind\": \"agent\"\n    },\n    \"result\": \"fail\",\n    \"findings\": \"The baseline-to-covered change introduces two material excluded capabilities: provider-side semantic acceptance and a retained TCP review server. judge.rs returns \\\"pass\\\" without examining external evidence, and service.rs accepts successive connections and returns that judgment. These additions cross the explicit external-reviewer authority boundary and the required one-local-subprocess-per-request boundary; they are not incidental implementation details. If used as the delivered provider, an artifact lacking independent review receives a semantic pass, while the engine's required subprocess protocol is replaced by a persistent service. This is a source-level scope finding, not a claim that these unbuilt additions executed. Existing validation does not resolve it: the report expressly records no new runtime execution and treats prior receipts as historical.\",\n    \"grounds\": {\n      \"reason\": \"Within the trusted local operating context, external semantic authority and subprocess compatibility remain binding outside obligations. Inspection of the supplied baseline and covered source shows newly added automatic judging and persistent-server implementation, both beyond the accepted deterministic provider plan.\",\n      \"evidence\": [\n        {\n          \"locator\": \"intent.json#/operating_context\"\n        },\n        {\n          \"locator\": \"intent.json#/constraints/0\"\n        },\n        {\n          \"locator\": \"intent.json#/constraints/2\"\n        },\n        {\n          \"locator\": \"intent.json#/non_goals/0\"\n        },\n        {\n          \"locator\": \"plan.json#/tasks/0/deliverables/1\"\n        },\n        {\n          \"locator\": \"plan.json#/tasks/2/out_of_scope/1\"\n        },\n        {\n          \"locator\": \"fictional-repo/provider/src/judge.rs#L1-L4\"\n        },\n        {\n          \"locator\": \"fictional-repo/provider/src/service.rs#L5-L14\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/validation/0/proof\"\n        }\n      ]\n    }\n  }\n}",
+      "output_utf8_sha256": "8d6e62c423e63ae0e264e263ee1b1d9cf6ac3ac9e7af3d7cf870ae5489996af3",
+      "run_id": "01a14ef6-84de-713e-b2b4-4f15d61b0345",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "high-rigor-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "ed3283c6db2839cf7a2d31ebd0bcb8e8effe34075ddeacd1d44ec6fe13878265",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-adversarial-review\",\"policy_id\":\"no-scope-creep\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Inspected the complete supplied baseline/covered-source accounting within the frozen trusted-local operating boundary. Runtime additions implement the planned protocol, bounded schema validation, contained artifact reads, deterministic evidence aggregation and unchanged workflow topology. Reference-data exposure, documentation, tests and proof adapters support the accepted tasks without introducing semantic judging, model invocation, workflow mutation, waivers or installed packaging. No material unplanned capability or boundary expansion was found; mechanical proof claims were not treated as semantic approval.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"intent.json#/non_goals\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/changed_surface\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L60\"},{\"locator\":\"fictional-repo/provider/src/main.rs#L1-L84\"},{\"locator\":\"fictional-repo/provider/src/workflow.rs#L1-L30\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"high-rigor-17\"}}",
+      "output_utf8_sha256": "f108b0b328109897792ac77ca360a45ed009214358725da329a3e6c6c38706c9",
+      "run_id": "01a14ef6-859b-7341-9780-c15da2f83b52",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-adversarial-review|no-scope-creep|individual|implementation-report-replacement-case-02": {
+      "row_key": "high-rigor-17|implementation-adversarial-review|no-scope-creep|individual|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "92d274252f5ccb5c47bb4c6735129cc2ff962580398bb3f5e566379a4cfdd414",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-adversarial-review\",\"policy_id\":\"no-scope-creep\",\"review_stage\":\"individual\",\"result\":\"fail\",\"findings\":\"The covered additions materially expand scope in two prohibited directions. fictional-repo/provider/src/judge.rs:1-4 implements provider-owned semantic acceptance by returning \\\"pass\\\" for every submitted artifact; service.rs:5-14 exposes that judgment through a retained TCP listener processing multiple connections. These are not incidental implementation details: intent non_goals[0], constraints[0], and operating_context.outside_obligations[0] reserve semantic judgment to external reviewers, while constraints[2] requires one local subprocess per request. Plan tasks[0].deliverables[1] preserves that lifecycle and tasks[2].out_of_scope[1] excludes provider semantic judging. On the added service path, even an unacceptable artifact receives \\\"pass\\\" without external evidence, and the process remains listening rather than completing one provider request. This defeats the intended judgment boundary and introduces an incompatible service lifecycle. This is a source-level scope finding, not a claim that the service ran: the report explicitly retains no new runtime proof, so existing validation does not resolve either expansion.\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Inspected the trusted local operating boundary and the supplied baseline-to-covered additions. Both new source files implement capabilities explicitly excluded by frozen intent and plan; unchanged reference data does not authorize them.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"intent.json#/constraints/0\"},{\"locator\":\"intent.json#/constraints/2\"},{\"locator\":\"intent.json#/non_goals/0\"},{\"locator\":\"plan.json#/tasks/0/deliverables/1\"},{\"locator\":\"plan.json#/tasks/2/out_of_scope/1\"},{\"locator\":\"fictional-repo/provider/src/judge.rs#L1-L4\"},{\"locator\":\"fictional-repo/provider/src/service.rs#L5-L14\"},{\"locator\":\"implementation-report.json#/validation/0/proof\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"high-rigor-17\"}}",
+      "output_utf8_sha256": "a734f261b737a4c6e613027a82efa17e487cf0cfe9695f610d859f1b33ec82c8",
+      "run_id": "01a14f04-4a4b-7277-81ef-ef792500879e",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-adversarial-review|no-scope-creep|individual|implementation-report-replacement-case-01": {
+      "row_key": "high-rigor-17|implementation-adversarial-review|no-scope-creep|individual|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "7838afd45ecbd358495a7fe0548a87f4917542cede623e97054c7f9c8e85c103",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-adversarial-review\",\"policy_id\":\"no-scope-creep\",\"review_stage\":\"individual\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"The supplied baseline-to-covered change remains within the seven accepted implementation packets. Runtime additions implement deterministic structural checking, external-evidence aggregation and unchanged reference topology. Reference-data exposure, documentation and proof tooling support planned deliverables rather than introduce semantic judging, workflow mutation, installed packaging or provenance enforcement. No material unplanned capability or boundary expansion was identified within the frozen trusted-local operating context.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"intent.json#/non_goals\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/changed_surface\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L40\"},{\"locator\":\"fictional-repo/provider/src/main.rs#L1-L30\"},{\"locator\":\"fictional-repo/provider/src/workflow.rs#L1-L28\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"high-rigor-17\"}}",
+      "output_utf8_sha256": "7aa3e6939101ebbee833122d56d9a98dc2ad06686e408889ede002a481a619cc",
+      "run_id": "01a14ef6-854b-71ee-b958-0d7ab6c3ba7a",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "high-rigor-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "90ab42182dc20c7df3ac0f9adb70dd2b1947d8eee1f28177080ddee365f5a97b",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-adversarial-review\",\n    \"policy_id\": \"tasks-actually-done\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"The assigned implementation has not landed. The complete covered-file inventory contains canonical data, a topology snapshot, and only two added Rust files; it lacks provider/Cargo.toml, the protocol entrypoint, structural validator, evidence evaluator, transition implementation, and the assigned tests, proof scripts, and documentation. These are explicit plan deliverables, not speculative omissions. Because the workspace declares provider as a member but that member has no manifest, the covered source cannot build the planned provider; a trusted local operator cannot obtain the required structural/evidence denial behavior or terminal validation enforcement. The report acknowledges these absences. Its validation entry records no new execution, and historical receipts explicitly do not prove this covered commit, so existing validation does not resolve the failure.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Within the frozen trusted-local operating boundary, repository evidence directly contradicts completion of the accepted plan. The baseline-to-covered change adds only judge.rs and service.rs; neither supplies the missing buildable provider or its assigned acceptance proof. Honest disclosure of unfinished work does not establish tasks-actually-done.\",\n      \"evidence\": [\n        {\n          \"locator\": \"intent.json#/operating_context\"\n        },\n        {\n          \"locator\": \"intent.json#/acceptance\"\n        },\n        {\n          \"locator\": \"plan.json#/tasks\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/summary\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/validation/0/proof\"\n        },\n        {\n          \"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/high-rigor-17_implementation-adversarial-review_tasks-actually-done_aggregate_implementation-report-replacement-case-02/high-rigor-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02/instructions.txt#L979-L1047\"\n        }\n      ]\n    },\n    \"author\": {\n      \"name\": \"calibration-reviewer\",\n      \"kind\": \"agent\"\n    },\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"high-rigor-17\"\n  }\n}",
+      "output_utf8_sha256": "19d243429450e513d6c618ac4466e02f60c60416a64f5fb17508b137d903995c",
+      "run_id": "01a14ef6-8553-72bb-8dc7-7d26b3af976b",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "high-rigor-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "b9d2c906b08ef0d668a70f1101e70e85ecf43ece3e5fa12f09bfc8163d9fa608",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-adversarial-review\",\"policy_id\":\"tasks-actually-done\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local boundary, the supplied baseline/covered snapshots substantiate all seven task surfaces: strict protocol, exhaustive structural checks, evidence aggregation, unchanged reference data, transition routing, acceptance proofs, and documentation integration. The current mechanical evidence binds the covered source to three completed profile journeys with deficit/refusal/repair controls. Historical execution and substituted harness boundaries are explicitly distinguished; no material unsupported task-completion claim remains.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/coverage\"},{\"locator\":\"implementation-report.json#/validation\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L40\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L25-L100\"},{\"locator\":\"fictional-repo/scripts/assert_new_current_proof.py#L15-L80\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"high-rigor-17\"}}",
+      "output_utf8_sha256": "0b752fb55527ddcb029f6501f1c1fa6090c6308dcafdee5154bcac425291bed9",
+      "run_id": "01a14ef6-85e9-72fe-a541-0f5205b878ad",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-adversarial-review|tasks-actually-done|individual|implementation-report-replacement-case-02": {
+      "row_key": "high-rigor-17|implementation-adversarial-review|tasks-actually-done|individual|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "5896f12a77d3a81a2ae2d08a79d472a63a9951a24dd8a559db9c37d81fd28ca4",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-adversarial-review\",\n    \"policy_id\": \"tasks-actually-done\",\n    \"review_stage\": \"individual\",\n    \"result\": \"fail\",\n    \"findings\": \"Assigned implementation has not landed. The complete covered-file inventory contains only the unchanged workspace/data/snapshot files and two added Rust files; it lacks provider/Cargo.toml and the planned protocol, structural-validation, evidence-aggregation, and checked-transition implementations. Consequently, building the declared workspace fails at its missing provider member manifest, and the operator cannot invoke the required provider to obtain AC-1–AC-4 behavior. The planned acceptance tests, public journey, proof checker, and documentation deliverables are also absent from that inventory. This is positive repository-state evidence of missing named deliverables, not an inference from report silence. The report explicitly confirms the missing implementation and says no new runtime process executed; historical failed/not-run outcomes do not establish completion at the covered commit.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Within the frozen trusted-local operating boundary, the baseline-to-covered change does not deliver the accepted plan. Inspecting the complete supplied file inventory and added source bodies contradicts the parent completion claim: the only additions are an unconditional judgment function and a TCP service, neither a buildable implementation of the assigned provider nor its required proof and documentation.\",\n      \"evidence\": [\n        {\n          \"locator\": \"intent.json#/operating_context\"\n        },\n        {\n          \"locator\": \"plan.json#/tasks\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/summary\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/validation/0/proof\"\n        },\n        {\n          \"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/high-rigor-17_implementation-adversarial-review_tasks-actually-done_individual_implementation-report-replacement-case-02/high-rigor-17|implementation-adversarial-review|tasks-actually-done|individual|implementation-report-replacement-case-02/instructions.txt#L960-L1030\"\n        }\n      ]\n    },\n    \"author\": {\n      \"name\": \"calibration-reviewer\",\n      \"kind\": \"agent\"\n    },\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"high-rigor-17\"\n  }\n}",
+      "output_utf8_sha256": "21ba23047045878d61f4d8bcb12033b4267d180dfb0966cb4df05e8370dbafa3",
+      "run_id": "01a14ef6-85ef-71d5-a5e2-c4807f8d70d9",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-adversarial-review|tasks-actually-done|individual|implementation-report-replacement-case-01": {
+      "row_key": "high-rigor-17|implementation-adversarial-review|tasks-actually-done|individual|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "95ddae876e905f7ba3675128eef50b66bbd3e647a77ba0ab33dc83edb07aa0c0",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-adversarial-review\",\"policy_id\":\"tasks-actually-done\",\"review_stage\":\"individual\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, the supplied baseline and covered snapshots substantiate the seven assigned tasks: strict protocol handling, structural validation, evidence aggregation, unchanged reference-data exposure, transition routing, acceptance proofs, and documentation integration. Inspected implementation and test bodies support these claims rather than merely listing files. The current mechanical proof binds the covered source bytes and records decisive deficient-evidence refusals, repairs, and terminal completion across three profiles. It explicitly does not claim complete workspace validation or semantic review. No material tasks-actually-done defect was established.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/coverage\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L58\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L100\"},{\"locator\":\"fictional-repo/scripts/assert_new_current_proof.py#L1-L110\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L28\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"high-rigor-17\"}}",
+      "output_utf8_sha256": "c6219b6a458bf7c0bef56260d431829daaf63e1ea252c8619d2c2c38bcbdda3b",
+      "run_id": "01a14ef6-8603-7368-83b1-94747dfcc0f0",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "high-rigor-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "f6543e984f7547569c9860d9fb54da8b12abed063d103e41e34f12e4f0c540b2",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-review\",\n    \"policy_id\": \"design-faithful-final\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"The covered replacement materially contradicts the accepted design. (1) fictional-repo/provider/src/judge.rs:1-4 ignores the submitted artifact and unconditionally returns semantic acceptance; service.rs:13 sends that result without inspecting external evidence. This violates design decisions 3 and 6 and the intent's outside obligation reserving semantic authority to external reviewers: an artifact with no qualifying independent evidence receives the same pass as a reviewed artifact. (2) service.rs:5-16 implements a retained TCP listener returning raw pass bytes instead of the frozen one-request subprocess interface, strict describe/evaluate dispatch, JSON response variants and exit taxonomy required by design decision 4. An engine subprocess request therefore has no compatible provider implementation. The complete covered inventory also lacks provider/Cargo.toml and the designed protocol, schema, evidence and gate implementation, so these additions do not deliver an executable alternative satisfying those interfaces. Existing validation resolves neither defect: no runtime commands ran for this replacement, and historical receipts explicitly do not prove this covered commit.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Inspected the frozen trusted-local operating boundary and the supplied complete baseline-to-covered source change. Preserved reference-data bytes do not compensate for replacing deterministic external-evidence evaluation with unconditional provider judgment and a retained server, or for the absent executable provider package. These are explicit design-interface and authority violations, not speculative hardening requirements.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context/outside_obligations/0\"},\n        {\"locator\": \"intent.json#/constraints/2\"},\n        {\"locator\": \"design.json#/decisions/3\"},\n        {\"locator\": \"design.json#/decisions/5\"},\n        {\"locator\": \"fictional-repo/provider/src/judge.rs#L1-L4\"},\n        {\"locator\": \"fictional-repo/provider/src/service.rs#L1-L16\"},\n        {\"locator\": \"implementation-report.json#/validation/0/proof\"}\n      ]\n    },\n    \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"high-rigor-17\"\n  }\n}",
+      "output_utf8_sha256": "8bf0c8c71d6abdcc0a84936cab368a1db0e80411631f8fd5a33eec7cb098410a",
+      "run_id": "01a14ef8-8ade-7403-9e64-5fd23c0bef45",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "high-rigor-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "9b3685ade3a5c03f0147c3c37cf064412ee44eb4571fc777c641b8fd8279c70b",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-review\",\"policy_id\":\"design-faithful-final\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, the supplied baseline-to-covered-source change preserves the accepted static topology, strict subprocess protocol, unchanged canonical reference data, bounded exhaustive structural checking, revision linkage, and independent declared-identity evidence aggregation. Structural denial precedes evidence evaluation; terminal progress uses configured obligations without semantic judging. Current mechanical proof is explicitly distinguished from historical executions and semantic approval. No material design drift found.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"fictional-repo/provider/src/protocol.rs#L1-L69\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L52\"},{\"locator\":\"fictional-repo/provider/src/artifacts.rs#L1-L65\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L100\"},{\"locator\":\"fictional-repo/provider/src/workflow.rs#L1-L29\"},{\"locator\":\"fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py#L1-L321\"},{\"locator\":\"implementation-report.json#/validation\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"high-rigor-17\"}}",
+      "output_utf8_sha256": "a707753aa880575d6c81991569636f85a3335962562ec6143d38d5fb2ea14af2",
+      "run_id": "01a14ef1-9d67-7229-9b2a-5391cb26161a",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-review|design-faithful-final|individual|implementation-report-replacement-case-02": {
+      "row_key": "high-rigor-17|implementation-review|design-faithful-final|individual|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "aa7de7f33028fbb336d8e11de37048facd3135007f303842efedf39f859521c0",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-review\",\n    \"policy_id\": \"design-faithful-final\",\n    \"review_stage\": \"individual\",\n    \"result\": \"fail\",\n    \"findings\": \"1. fictional-repo/provider/src/judge.rs:1-4 replaces external semantic authority with unconditional provider-side acceptance: automatic_judgment ignores the artifact and returns \\\"pass\\\". This contradicts design decisions 3 and 6 and the intent's outside obligation preserving external judgment. Malformed or unreviewed submissions receive the same acceptance string as reviewed submissions; no structural or independent-evidence checking exists in this path.\\n2. fictional-repo/provider/src/service.rs:5-13 implements a retained TCP listener rather than the frozen one-request subprocess interface. It reads socket bytes and writes plain \\\"pass\\\", not strict describe/evaluate JSON responses. An engine invoking the required stdin/stdout protocol cannot obtain the designed response, violating design decision 4 and intent constraint 3.\\n3. The covered tree contains no provider/Cargo.toml or planned protocol, schema, evidence, and gate implementations; its only implementation additions are judge.rs and service.rs. The workspace therefore cannot build the provider, and the accepted deterministic structural-denial and evidence-gating design is not delivered. The report explicitly confirms these absences and states that no new runtime execution occurred, so existing validation resolves none of these defects.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Within the frozen trusted-local operating boundary, the actual baseline-to-covered additions contradict the accepted external-judgment and subprocess-interface guardrails, while the covered implementation lacks the runnable deterministic provider required by the design. These are functional design departures, not speculative hardening requirements.\",\n      \"evidence\": [\n        {\n          \"locator\": \"intent.json#/operating_context/outside_obligations/0\"\n        },\n        {\n          \"locator\": \"intent.json#/constraints/2\"\n        },\n        {\n          \"locator\": \"design.json#/decisions/3\"\n        },\n        {\n          \"locator\": \"design.json#/decisions/5\"\n        },\n        {\n          \"locator\": \"design.json#/elements/4\"\n        },\n        {\n          \"locator\": \"fictional-repo/provider/src/judge.rs#L1-L4\"\n        },\n        {\n          \"locator\": \"fictional-repo/provider/src/service.rs#L1-L16\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/summary\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/validation/0/proof\"\n        }\n      ]\n    },\n    \"author\": {\n      \"name\": \"calibration-reviewer\",\n      \"kind\": \"agent\"\n    },\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"high-rigor-17\"\n  }\n}",
+      "output_utf8_sha256": "a81b4353c8cab2e833dd15a7af08c1a6975a00eabd16679b079e831f2fa21d20",
+      "run_id": "01a14f04-4a20-7044-a55b-daef5e3d3869",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-review|design-faithful-final|individual|implementation-report-replacement-case-01": {
+      "row_key": "high-rigor-17|implementation-review|design-faithful-final|individual|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "4201a4bb5a6b9b80d4842a15191f36a6b3f04a96e7d279a83434438b2022c5dc",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-review\",\"policy_id\":\"design-faithful-final\",\"review_stage\":\"individual\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, the supplied baseline-to-covered-source change preserves the accepted design: strict flat protocol, unchanged topology, caller-frozen configuration, bounded deterministic schema validation, structural-denial precedence, and exact name-kind evidence aggregation without semantic judging. Canonical reference bytes remain unchanged. Inspected coverage includes decisive evidence deficits, repairs, standing-failure controls and terminal validation; current mechanical proof is explicitly distinguished from historical execution and semantic review. No material design drift was identified.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"implementation-report.json#/coverage\"},{\"locator\":\"fictional-repo/provider/src/protocol.rs#L1-L40\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L55\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L100\"},{\"locator\":\"fictional-repo/provider/src/workflow.rs#L1-L30\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L20\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"high-rigor-17\"}}",
+      "output_utf8_sha256": "cf2ac9d89a69f89457b9d98c1869c491bbde43d252f9453a35baa67447bf36dc",
+      "run_id": "01a14f04-4a4a-75fa-8abc-ff37dd3468fc",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "high-rigor-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "b36c075c5f24f52964f906e73b18ffb609a431f5a66c1a5be7e50d8805c7a7a6",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-review\",\n    \"policy_id\": \"no-scope-creep\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"The baseline-to-covered additions introduce two explicitly excluded capabilities. First, provider/src/judge.rs adds provider-owned semantic acceptance that returns \\\"pass\\\" for every submitted artifact without external evidence, violating intent.non_goals[0], constraints[0], and the outside obligation preserving external semantic authority. Used as supplied by service.rs, an artifact receives acceptance regardless of independent review. Second, service.rs adds a retained TCP listener serving multiple connections, expanding the required one-local-subprocess-per-request boundary in constraints[2] and plan.tasks[0].deliverables[1]. These are substantive replacement capabilities, not incidental implementation details. No current runtime validation resolves either expansion: the supplied evidence explicitly records no execution and no runnable provider package.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Inspected the frozen trusted-local operating context and actual supplied baseline-to-covered source additions. Automatic unconditional judgment and retained server operation cross explicit semantic-authority and process-lifecycle boundaries; neither is authorized by the accepted plan.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context\"},\n        {\"locator\": \"intent.json#/non_goals/0\"},\n        {\"locator\": \"intent.json#/constraints/0\"},\n        {\"locator\": \"intent.json#/constraints/2\"},\n        {\"locator\": \"plan.json#/tasks/0/deliverables/1\"},\n        {\"locator\": \"fictional-repo/provider/src/judge.rs#L1-L4\"},\n        {\"locator\": \"fictional-repo/provider/src/service.rs#L1-L16\"},\n        {\"locator\": \"implementation-report.json#/validation/0/proof\"}\n      ]\n    },\n    \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"high-rigor-17\"\n  }\n}",
+      "output_utf8_sha256": "14d977c43c93f86e0167d2993110551a1d8ebbd497cbaa0c501195b8de7b7d95",
+      "run_id": "01a14ef8-8b0f-7320-99ab-ccd8147872ca",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "high-rigor-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "6a1487b77bfbd62799418102be285a7efa1890d7f25eb7b2e6b208121300117d",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-review\",\n    \"policy_id\": \"no-scope-creep\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"pass\",\n    \"findings\": \"\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"The supplied baseline-to-covered-source change remains within the accepted provider, testing, reference-data exposure, and documentation tasks. Runtime evaluation is deterministic, external judgments remain supplied evidence, canonical data and workflow topology are unchanged, and proof-support additions do not expand product capability or introduce provenance enforcement.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context\"},\n        {\"locator\": \"intent.json#/non_goals\"},\n        {\"locator\": \"plan.json#/tasks\"},\n        {\"locator\": \"implementation-report.json#/changed_surface\"},\n        {\"locator\": \"fictional-repo/provider/src/evidence.rs#L1-L90\"},\n        {\"locator\": \"fictional-repo/provider/src/workflow.rs#L1-L27\"},\n        {\"locator\": \"fictional-repo/provider/src/main.rs#L1-L33\"}\n      ]\n    },\n    \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"high-rigor-17\"\n  }\n}",
+      "output_utf8_sha256": "0041534064e326c23f1999f7d02f8e34f82a834db77233bd59dc19f58285cec8",
+      "run_id": "01a14ef8-8b31-7466-a1c8-05a91e523f37",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-review|no-scope-creep|individual|implementation-report-replacement-case-02": {
+      "row_key": "high-rigor-17|implementation-review|no-scope-creep|individual|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "fd7536549d1874b35b5cd0318a3e0add2c3d619fc2c0277a7285c24685e61073",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-review\",\n    \"policy_id\": \"no-scope-creep\",\n    \"review_stage\": \"individual\",\n    \"result\": \"fail\",\n    \"findings\": \"The covered additions materially expand two expressly excluded boundaries. fictional-repo/provider/src/judge.rs:1-4 introduces provider-owned semantic acceptance, ignoring the artifact and returning \\\"pass\\\" rather than aggregating external judgments. This contradicts intent non_goals[0], constraints[0], and operating_context.outside_obligations[0]; its consumer would accept even an artifact lacking independent review. fictional-repo/provider/src/service.rs:5-14 introduces a retained TCP service handling successive connections, contrary to constraints[2] and the plan's one-request/process contract. It returns the automatic verdict instead of the defined provider response, making this an incompatible replacement capability rather than incidental implementation detail. Neither expansion is resolved by validation: the supplied evidence explicitly records no new runtime execution, and historical receipts do not cover these additions. These are source-scope findings, not claims that an integrated executable was demonstrated.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Within the trusted local operating boundary, external semantic authority and one subprocess per request remain binding. Inspection of the supplied baseline-to-covered additions shows automatic semantic acceptance and a retained network service crossing those explicit boundaries.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context\"},\n        {\"locator\": \"intent.json#/constraints/0\"},\n        {\"locator\": \"intent.json#/constraints/2\"},\n        {\"locator\": \"intent.json#/non_goals/0\"},\n        {\"locator\": \"plan.json#/tasks/0/deliverables/1\"},\n        {\"locator\": \"fictional-repo/provider/src/judge.rs#L1-L4\"},\n        {\"locator\": \"fictional-repo/provider/src/service.rs#L5-L14\"},\n        {\"locator\": \"implementation-report.json#/validation/0/proof\"}\n      ]\n    },\n    \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"high-rigor-17\"\n  }\n}",
+      "output_utf8_sha256": "619fef8e4b8395be0a74c1c3cde0e5e7c682c75b66dbc95d02c34aff63cdc93b",
+      "run_id": "01a14ef8-8b7f-752d-b711-954184d60a95",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-review|no-scope-creep|individual|implementation-report-replacement-case-01": {
+      "row_key": "high-rigor-17|implementation-review|no-scope-creep|individual|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "ed304ec2773a6eb4b2c4a144ca406d4c244edd644a82153afab3b82e15b1bc4b",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-review\",\"policy_id\":\"no-scope-creep\",\"review_stage\":\"individual\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, the supplied baseline-to-covered-source changes implement the planned protocol, bounded validation, external-evidence aggregation, reference-data exposure, tests and documentation. Canonical data and workflow topology remain unchanged. Additional proof inventories, adapters and regression controls support planned validation rather than introduce material product capabilities. No provider-side semantic judging, workflow persistence, waiver mechanism or packaging expansion was found.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"intent.json#/non_goals\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/changed_surface\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L60\"},{\"locator\":\"fictional-repo/provider/src/workflow.rs#L1-L30\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"high-rigor-17\"}}",
+      "output_utf8_sha256": "a5fbd0abc14e1f6c36b529fedb707f26abe51d1b3d4f1dd50df03c447c435896",
+      "run_id": "01a14ef8-8b1d-73ef-a268-8365022e9313",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "high-rigor-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "821523af4a4aa8d95fdbee749686c7ceaac619a5f2cf358d79961c89c400b537",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-review\",\n    \"policy_id\": \"tasks-actually-done\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"The assigned implementation has not landed. Plan tasks require a buildable provider package, strict one-request protocol, structural validation, external-evidence aggregation, checked-transition routing, reference-data integration, acceptance proofs, and authoritative documentation. The complete covered-file inventory contains only unchanged workspace/data/snapshot files plus judge.rs and service.rs; provider/Cargo.toml and the required implementation, tests, proof scripts, and documentation are absent. Consequently, a trusted local operator cannot build the workspace provider or exercise the required describe/evaluate and checked-transition outcomes (AC-1 through AC-4). Preserved reference bytes and the two added source files do not fulfill those tasks. The report explicitly acknowledges missing implementation and no new execution; historical failed/not-run outcomes provide no validation resolving these omissions.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Within the frozen trusted-local operating boundary, the supplied complete baseline-to-covered inventory establishes substantive missing deliverables, not merely an incomplete report narrative. The report's coverage commit matches the companion, but its changed surface and validation do not demonstrate completion of the accepted plan.\",\n      \"evidence\": [\n        {\n          \"locator\": \"intent.json#/operating_context\"\n        },\n        {\n          \"locator\": \"intent.json#/acceptance\"\n        },\n        {\n          \"locator\": \"plan.json#/tasks\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/summary\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/validation/0/proof\"\n        },\n        {\n          \"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/high-rigor-17_implementation-review_tasks-actually-done_aggregate_implementation-report-replacement-case-02/high-rigor-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02/instructions.txt#L978-L1055\"\n        }\n      ]\n    },\n    \"author\": {\n      \"name\": \"calibration-reviewer\",\n      \"kind\": \"agent\"\n    },\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"high-rigor-17\"\n  }\n}",
+      "output_utf8_sha256": "ff655181227b1388810244261698e11f8820ec0f19b93f4887852a2aaf7a01f8",
+      "run_id": "01a14ef8-8b27-72a1-accb-06e5489faf46",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "high-rigor-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "70ed537a0d7298e0e83e9a2d99c2b034beaeb548bd1f4db9b5bf4dd69fe8d71d",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-review\",\"policy_id\":\"tasks-actually-done\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"The supplied baseline-to-covered-source accounting supports all seven assigned tasks: strict protocol handling, exhaustive structural validation, independent-evidence aggregation, unchanged canonical reference data, checked-transition routing, executable acceptance proofs, and integrated authoritative documentation. The inspected current execution harness exercises structural denial, deficient-evidence refusal and repair, and terminal completion across three profiles. Retained proof explicitly binds the covered source bytes and does not misrepresent synthetic judgments as semantic review or claim a current complete workspace test run. No material task-completion defect was identified within the frozen trusted-local operating boundary.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/coverage\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L109\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L52\"},{\"locator\":\"fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py#L1-L280\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L25\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"high-rigor-17\"}}",
+      "output_utf8_sha256": "a86eb1a51a42ea1a5684bbebf4e2821a5eea309a292e7dc400e59fd5dd08c560",
+      "run_id": "01a14efa-a17f-73db-bff6-71bdeef80021",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-review|tasks-actually-done|individual|implementation-report-replacement-case-02": {
+      "row_key": "high-rigor-17|implementation-review|tasks-actually-done|individual|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "c7711aaa5e29b1dcea566e0544555c888b8eafe8c505f28b92122120e4ace3fe",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-review\",\n    \"policy_id\": \"tasks-actually-done\",\n    \"review_stage\": \"individual\",\n    \"result\": \"fail\",\n    \"findings\": \"The assigned implementation has not landed. The complete covered-file inventory contains reference data, a topology snapshot, and only two added Rust files; it lacks provider/Cargo.toml, the planned protocol/schema/artifact/evidence/gate/workflow implementations, acceptance tests and public journey, proof-map checker, and documentation deliverables. The root workspace nevertheless names provider as its member, so the covered tree cannot build the required provider package. An operator therefore has no delivered one-request provider implementing structural denial, independent-evidence enforcement, or terminal validation gating (AC-1 through AC-4). The added constant-pass judge and TCP listener do not implement those tasks. Existing validation does not resolve this: the report explicitly records no new runtime execution and says historical outcomes do not prove this covered commit.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Within the frozen trusted-local operating boundary, the supplied baseline-to-covered inventory and actual added source establish missing named plan deliverables, not merely incomplete report prose. Honest disclosure of noncompletion cannot establish task completion.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context\"},\n        {\"locator\": \"plan.json#/tasks\"},\n        {\"locator\": \"implementation-report.json#/summary\"},\n        {\"locator\": \"implementation-report.json#/validation/0/proof\"},\n        {\"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/high-rigor-17_implementation-review_tasks-actually-done_individual_implementation-report-replacement-case-02/high-rigor-17|implementation-review|tasks-actually-done|individual|implementation-report-replacement-case-02/instructions.txt#L1000-L1058\"},\n        {\"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/high-rigor-17_implementation-review_tasks-actually-done_individual_implementation-report-replacement-case-02/high-rigor-17|implementation-review|tasks-actually-done|individual|implementation-report-replacement-case-02/instructions.txt#L3482-L3506\"}\n      ]\n    },\n    \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"high-rigor-17\"\n  }\n}",
+      "output_utf8_sha256": "577a91edff0c49e23434e2d5bae307ddbcb09c09b450daf06400099afb3b839b",
+      "run_id": "01a14efa-a18d-71f7-a7e9-2c365a6f3549",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|implementation-review|tasks-actually-done|individual|implementation-report-replacement-case-01": {
+      "row_key": "high-rigor-17|implementation-review|tasks-actually-done|individual|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "adf9a42ceba975461b4b3b92d802083d8da67fa323bb3e5256695f1ddf3a1be8",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-review\",\"policy_id\":\"tasks-actually-done\",\"review_stage\":\"individual\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, the supplied baseline/covered snapshots demonstrate all seven planned task surfaces landed. Canonical reference data and topology remain unchanged. Inspected runtime, tests, documentation and proof checkers support the report; current mechanical evidence demonstrates structural refusals, deficient-evidence refusals and repairs, and terminal completion across three profiles without overrides. Historical execution and current-proof limitations are explicitly distinguished.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/coverage\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L50\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L100\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L15\"},{\"locator\":\"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/high-rigor-17_implementation-review_tasks-actually-done_individual_implementation-report-replacement-case-01/high-rigor-17|implementation-review|tasks-actually-done|individual|implementation-report-replacement-case-01/instructions.txt#L1320-L1500\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"high-rigor-17\"}}",
+      "output_utf8_sha256": "f90b02d2cc7613628aa553040cc412ffd4a982e19561c075d37126abb6982782",
+      "run_id": "01a14f04-4a32-712a-82f0-002936b38550",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|validation-adversarial-review|docs-integrated|aggregate|validation-report-good": {
+      "row_key": "high-rigor-17|validation-adversarial-review|docs-integrated|aggregate|validation-report-good",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "6d3897ace546d7740d83413913f6898b8abfdf883c7531404b448c6bb61e934a",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"validation-adversarial-review\",\n    \"policy_id\": \"docs-integrated\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"pass\",\n    \"findings\": \"\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Within the frozen trusted-local boundary, no material documentation contradiction or parallel product authority was found. The authoritative PRD, READMEs and supplemental documents consistently distinguish static describe, frozen show/evaluate input, separate canonical data exposure, deterministic evidence checks and external semantic judgment. Inspected public assertions establish structural denial, deficient-evidence refusal and repair, and ordinary terminal completion rather than merely command success. Historical execution and current-harness scopes remain explicitly distinguished.\",\n      \"evidence\": [\n        {\n          \"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/high-rigor-17_validation-adversarial-review_docs-integrated_aggregate_validation-report-good/high-rigor-17|validation-adversarial-review|docs-integrated|aggregate|validation-report-good/instructions.txt#L1490-L1518\"\n        },\n        {\n          \"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/high-rigor-17_validation-adversarial-review_docs-integrated_aggregate_validation-report-good/high-rigor-17|validation-adversarial-review|docs-integrated|aggregate|validation-report-good/instructions.txt#L2301-L2490\"\n        },\n        {\n          \"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/high-rigor-17_validation-adversarial-review_docs-integrated_aggregate_validation-report-good/high-rigor-17|validation-adversarial-review|docs-integrated|aggregate|validation-report-good/instructions.txt#L2780-L2900\"\n        }\n      ]\n    },\n    \"author\": {\n      \"name\": \"calibration-reviewer\",\n      \"kind\": \"agent\"\n    },\n    \"subject\": \"validation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"high-rigor-17\"\n  }\n}",
+      "output_utf8_sha256": "97d8496d10a385acb9852cfbfebed0d7aef5c2c4496d7f1c0aa65feb09967eb1",
+      "run_id": "01a14ef1-9d6d-7575-b6f0-556d1615153f",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|validation-adversarial-review|docs-integrated|individual|validation-report-good": {
+      "row_key": "high-rigor-17|validation-adversarial-review|docs-integrated|individual|validation-report-good",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "d33e10e87de164b22404ecf1b2888dea2d83ef7d3a046e6fe75ef20975c8b4a2",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"validation-adversarial-review\",\"policy_id\":\"docs-integrated\",\"review_stage\":\"individual\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, the authoritative PRD and supplied supporting documents consistently describe frozen profile inspection, exhaustive structural denial, independent-evidence mechanics, and configured terminal validation. Supplemental documents explicitly disclaim competing authority. Inspected public assertions establish deficient-evidence refusal followed by qualifying repair, structural diagnostics, unchanged frozen input, and terminal completion without overrides. Current and historical proof identities remain distinguished; mechanical proof is not represented as semantic judgment. No material documentation contradiction was established.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"fictional-repo/docs/PRD.md#L1-L15\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L27\"},{\"locator\":\"fictional-repo/provider/README.md#L1-L16\"},{\"locator\":\"fictional-repo/implementation-evidence/current-mechanical-proof.json#/scope_limits\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"validation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"high-rigor-17\"}}",
+      "output_utf8_sha256": "04cbc5e1bddf6e2684d938f6188c7d873cab025b84316b994f7b4cfde3ad703c",
+      "run_id": "01a14efa-a1cf-75b0-9168-69e16dc00ca1",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|validation-review|docs-integrated|aggregate|validation-report-good": {
+      "row_key": "high-rigor-17|validation-review|docs-integrated|aggregate|validation-report-good",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "a23d0febfb462e99ed01b486ca0165da69e34d592d0229b2c7444f9417f8c7e3",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"validation-review\",\"policy_id\":\"docs-integrated\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, authoritative and supplemental documentation agree on frozen profile inspection, exhaustive structural denial, independent evidence aggregation and terminal validation. The change PRD explicitly defers to the repository PRD and is linked from it. Inspected public-journey assertions exercise deficient-evidence refusal, targeted repair, unchanged frozen input and ordinary terminal completion; current mechanical proof is explicitly distinguished from semantic judgment and historical executions.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"fictional-repo/docs/PRD.md#L1-L13\"},{\"locator\":\"fictional-repo/loop-engine-software-change-provider-prd.md#L1-L11\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L25\"},{\"locator\":\"fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py#L1-L321\"},{\"locator\":\"fictional-repo/implementation-evidence/current-mechanical-proof.json#/scope_limits\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"validation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"high-rigor-17\"}}",
+      "output_utf8_sha256": "55e1dd7293c360f8d9357311a62b22e4b5f1fcc0c89be3ba1cde5ec25357a93f",
+      "run_id": "01a14efa-a1c9-744e-94ad-3845c068140b",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "high-rigor-17|validation-review|docs-integrated|individual|validation-report-good": {
+      "row_key": "high-rigor-17|validation-review|docs-integrated|individual|validation-report-good",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "0a5e2932fcd3fb55f8c676c703591ab3394f5e6ffcf32a57be3522d8528f206a",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"validation-review\",\"policy_id\":\"docs-integrated\",\"review_stage\":\"individual\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, repository and provider documents consistently describe frozen-input inspection, exhaustive structural denial before evidence aggregation, external semantic authority, and configured terminal obligations. The authoritative PRD links the proof matrix and explicitly subordinates the linked supplemental change PRD. Inspected public assertions check preserved frozen input, named simultaneous structural violations, deficient-evidence refusal followed by qualifying repair, and final completion without overrides. Current proof is explicitly distinguished from historical runner execution and semantic review; no material documentation inconsistency was found.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"fictional-repo/docs/PRD.md#L1-L13\"},{\"locator\":\"fictional-repo/loop-engine-software-change-provider-prd.md#L1-L11\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L25\"},{\"locator\":\"fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py#L1-L321\"},{\"locator\":\"fictional-repo/implementation-evidence/current-mechanical-proof.json#/scope_limits\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"validation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"high-rigor-17\"}}",
+      "output_utf8_sha256": "fd070abab98c44857e3a70353da7300e79c5bacb36f7bacd1bace1e0ad493749",
+      "run_id": "01a14efa-a139-77a4-a7df-9381019ec12a",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|design-narrative-adversarial-review|narrative-faithful|aggregate|narrative-101": {
+      "row_key": "minimal-17|design-narrative-adversarial-review|narrative-faithful|aggregate|narrative-101",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "82adb491d1e53a9de43ac0d6de2be3b650119536b330071ca2d58d200870150e",
+      "output": "{\"review_contract_version\":3,\"review_stage\":\"aggregate\",\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"judgments\":[{\"axis\":\"narrative-faithful\",\"result\":\"pass\",\"findings\":\"\",\"grounds\":{\"reason\":\"The narrative faithfully summarizes the bound r15 design: frozen composed input, static workflow description, bounded structural checking, exact evidence attribution, independent-author requirements, and terminal validation obligations. It preserves the external semantic-judgment boundary and the limitation that dishonest same-revision edits remain undetectable. No material contradiction, omission, or overpromise remains; omitted protocol details do not change the described outcome.\",\"evidence\":[{\"locator\":\"design-narrative.json#/artifact\"},{\"locator\":\"design-narrative.md#L3-L11\"},{\"locator\":\"design.json#/approach\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"design.json#/risks\"},{\"locator\":\"design.json#/coverage\"},{\"locator\":\"intent.json#/operating_context\"}]}}]}",
+      "output_utf8_sha256": "625cb0510ec5bebe2f97667a3e791a1c734cd4b0e01c280a556e0ca0bdd69856",
+      "run_id": "01a14efa-a17e-73a2-8073-84884372c0ce",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|design-narrative-review|narrative-faithful|aggregate|narrative-101": {
+      "row_key": "minimal-17|design-narrative-review|narrative-faithful|aggregate|narrative-101",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "eac462ef574c57a37f996067ce9b038931c26f92e47ca8c6ef4d5a04651792ef",
+      "output": "{\"review_contract_version\":3,\"review_stage\":\"aggregate\",\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"judgments\":[{\"axis\":\"narrative-faithful\",\"result\":\"pass\",\"findings\":\"\",\"grounds\":{\"reason\":\"The narrative faithfully summarizes the bound r15 design: frozen composed input, static description, structural checking, independent evidence aggregation, unchanged workflow, and declared-identity and revision-trust limits. It describes proposed behavior without claiming completed delivery. No material contradiction, invention, omission, or softened uncertainty was found.\",\"evidence\":[{\"locator\":\"design-narrative.json#/artifact\"},{\"locator\":\"design-narrative.md#L1-L11\"},{\"locator\":\"design.json#/approach\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"design.json#/risks\"},{\"locator\":\"design.json#/coverage\"},{\"locator\":\"intent.json#/operating_context\"}]}}]}",
+      "output_utf8_sha256": "6b0e7a393f7ca10988e89891c2ad1e754e7e66d908e5c0b43333ed217645dc62",
+      "run_id": "01a14ef1-9d80-7038-b65d-88ba1a261102",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "minimal-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "ad6c6333d2e05bc3a80861a0340ae0932f62b4d3577265ca2f744d628bcdf24a",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-adversarial-review\",\n    \"policy_id\": \"design-faithful-final\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"F1: The delivered source contradicts the external-judgment guardrail. fictional-repo/provider/src/judge.rs:1-4 ignores the artifact and unconditionally returns \\\"pass\\\"; service.rs:13 writes that judgment without inspecting external evidence. This violates design.json elements[2] and decisions[5], intent constraints[0], and the explicit outside obligation reserving semantic authority to external reviewers. If used as the proposed evaluator, an artifact with absent, stale, self-authored, or failing evidence receives the same pass response as a properly reviewed artifact, defeating configured review obligations. This is concrete replacement code, not hypothetical hostile-user hardening. No retained validation establishes a correction: the report expressly says no new runtime process executed.\\nF2: The covered implementation does not deliver the frozen provider interface. The complete covered inventory contains no provider/Cargo.toml, main.rs, protocol implementation, structural checker, or evidence evaluator; its only added entry point, service.rs:5-16, binds a TCP listener, retains the process across connections, and emits bare \\\"pass\\\" bytes. Design decisions[3] instead require one local subprocess per request, strict describe/evaluate requests, prescribed JSON responses, and defined exits. A normal engine provider invocation therefore cannot build or invoke the required workspace member; using the supplied server instead still cannot satisfy describe/evaluate or enforce structural and evidence gates. This materially prevents the accepted design from operating. The unchanged topology snapshot and canonical data do not supply an executable implementation, and historical receipts explicitly do not prove this covered commit.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Inspected the complete supplied packet, including the trusted local operating boundary, accepted immaterial-edit residual, binding external-judgment obligation, frozen design, and actual baseline-to-covered inventory and source bodies. The replacement introduces unconditional provider judgment and a persistent TCP service instead of delivering the specified deterministic subprocess provider; the supplied validation does not resolve either divergence.\",\n      \"evidence\": [\n        {\n          \"locator\": \"intent.json#/operating_context/outside_obligations/0\"\n        },\n        {\n          \"locator\": \"intent.json#/constraints\"\n        },\n        {\n          \"locator\": \"design.json#/elements/2\"\n        },\n        {\n          \"locator\": \"design.json#/decisions/3\"\n        },\n        {\n          \"locator\": \"design.json#/decisions/5\"\n        },\n        {\n          \"locator\": \"fictional-repo/provider/src/judge.rs#L1-L4\"\n        },\n        {\n          \"locator\": \"fictional-repo/provider/src/service.rs#L1-L16\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/summary\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/validation/0/proof\"\n        }\n      ]\n    },\n    \"author\": {\n      \"name\": \"calibration-reviewer\",\n      \"kind\": \"agent\"\n    },\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"minimal-17\"\n  }\n}",
+      "output_utf8_sha256": "fbd88a0c362ee1bab73214cf79cb7c6f7e3246397895eb1143ce6de6832a03c5",
+      "run_id": "01a14efa-a10c-7513-ad9f-4233ca08e218",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "minimal-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "ea997f3dd5ef42a57ffd6b1d3bc640d33c659765b4efe3d135b8a1d89ed40283",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-adversarial-review\",\"policy_id\":\"design-faithful-final\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"The supplied baseline-to-covered source preserves the frozen protocol, topology, canonical reference bytes, structural-denial precedence, and revision/config/exact-author evidence rules. Current mechanical proof exercises qualifying deficits, refusals, repairs, and terminal progression. No material design drift was found within the frozen trusted-local boundary; no full-workspace validation claim is inferred.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"design.json#/decisions/3\"},{\"locator\":\"design.json#/decisions/5\"},{\"locator\":\"fictional-repo/provider/src/protocol.rs#L1-L45\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L20-L104\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L6-L47\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"minimal-17\"}}",
+      "output_utf8_sha256": "efe129d410d8113ddcd218dcc67b22bb4df48b929ffe7183335f9d69f2cfdccb",
+      "run_id": "01a14efc-9741-7780-838b-bbb2f4c56dad",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "minimal-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "15d6d358dd1ab657c8300d9200c0bf75d33e52f2198038d7a3f8d945e804196b",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-adversarial-review\",\n    \"policy_id\": \"no-scope-creep\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"The covered change adds two explicitly excluded capabilities. fictional-repo/provider/src/judge.rs:1-4 introduces provider-owned semantic acceptance, returning pass regardless of the artifact or independent external evidence. This violates intent.non_goals[0], constraints[0], and the operating_context outside obligation reserving semantic authority to external reviewers. fictional-repo/provider/src/service.rs:5-14 adds a retained TCP review server that repeatedly accepts connections and invokes that automatic judgment, expanding the required one-local-subprocess-per-request lifecycle into an unplanned service. If adopted as the provider implementation, these additions would replace independent review with unconditional acceptance and require a different invocation/lifecycle contract. These are substantive boundary expansions, not incidental helpers. No current runtime validation resolves either issue: the supplied companion explicitly records no execution at the covered commit, and historical receipts do not establish these additions comply.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Inspected the complete supplied packet, including the trusted local operating boundary and actual baseline-to-covered source additions. Both added source files implement capabilities excluded by the frozen intent and accepted plan. This judgment does not infer successful compilation, deployment, or runtime bypass from the incomplete covered tree.\",\n      \"evidence\": [\n        {\n          \"locator\": \"intent.json#/operating_context/outside_obligations/0\"\n        },\n        {\n          \"locator\": \"intent.json#/non_goals/0\"\n        },\n        {\n          \"locator\": \"intent.json#/constraints/2\"\n        },\n        {\n          \"locator\": \"plan.json#/tasks/2/out_of_scope/1\"\n        },\n        {\n          \"locator\": \"fictional-repo/provider/src/judge.rs#L1-L4\"\n        },\n        {\n          \"locator\": \"fictional-repo/provider/src/service.rs#L5-L14\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/validation/0/proof\"\n        }\n      ]\n    },\n    \"author\": {\n      \"name\": \"calibration-reviewer\",\n      \"kind\": \"agent\"\n    },\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"minimal-17\"\n  }\n}",
+      "output_utf8_sha256": "115e5af269cbf7cf684ecc2bf9894161481635d72ec0004060dbe8bf5473603d",
+      "run_id": "01a14efc-9717-7059-8b73-44db96e78102",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "minimal-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "f8917653b48a5e79940a66775c522ca27c15184b675705c2e8b65d98a8f83156",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-adversarial-review\",\"policy_id\":\"no-scope-creep\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, the supplied baseline-to-covered change implements the planned protocol, bounded structural checks, external-evidence aggregation, reference-data exposure, tests and documentation. Runtime evaluation neither invokes semantic reviewers nor persists workflow state; topology remains the unchanged baseline snapshot. Additional proof accounting supports planned validation rather than adding material product capability. No material unplanned capability or boundary expansion was found.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L52\"},{\"locator\":\"fictional-repo/provider/src/main.rs#L1-L84\"},{\"locator\":\"fictional-repo/provider/src/workflow.rs#L1-L29\"},{\"locator\":\"fictional-repo/implementation-evidence/repository-state.txt#L1-L1140\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"minimal-17\"}}",
+      "output_utf8_sha256": "6ce6a103132962c08d909645f46eb0162c46543a07dcefc2120cac74138f7842",
+      "run_id": "01a14efc-9790-72f3-b656-4b8e879b6173",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "minimal-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "068dc3c04c03a4c16128b2ddae083f15df90d5b98bfe28ba2f05e0c5a51830f8",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-adversarial-review\",\n    \"policy_id\": \"tasks-actually-done\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"The assigned implementation has not landed. The supplied complete covered-file inventory contains the existing workspace/data/snapshot plus only judge.rs and service.rs; it lacks provider/Cargo.toml, the planned protocol/schema/artifact/evidence/gate/workflow implementations, acceptance proofs, and documentation deliverables. The workspace explicitly lists provider as a member, so the missing provider manifest prevents building the planned provider. Consequently the operator cannot exercise the required inspectable frozen configuration, structural denials, independent-evidence checks, or terminal validation gate (AC-1–AC-4). This is affirmative repository-inventory evidence against named plan deliverables, not an inference from report silence. The report acknowledges these missing implementations and says no new runtime execution occurred; historical failed/not-run outcomes do not establish completion at the covered commit.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Within the trusted local operating boundary, the actual baseline-to-covered change adds only an unconditional judgment function and a TCP service, rather than the accepted plan's runnable deterministic provider and its required proof/documentation. Honest disclosure of noncompletion does not satisfy tasks-actually-done.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context\"},\n        {\"locator\": \"intent.json#/acceptance\"},\n        {\"locator\": \"plan.json#/tasks\"},\n        {\"locator\": \"implementation-report.json#/summary\"},\n        {\"locator\": \"implementation-report.json#/changed_surface\"},\n        {\"locator\": \"implementation-report.json#/validation\"}\n      ]\n    },\n    \"author\": {\n      \"name\": \"calibration-reviewer\",\n      \"kind\": \"agent\"\n    },\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"minimal-17\"\n  }\n}",
+      "output_utf8_sha256": "c2aadf0b5fcc97aa49c64ed75ffc5457dc002e34c90108d5d1721b396848547e",
+      "run_id": "01a14efc-9744-7217-a14c-d05f19a79e10",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "minimal-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "4247625b0bcfe5820f77c5a63d10bbc5453558fed1647c5c30a9b201875175af",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-adversarial-review\",\"policy_id\":\"tasks-actually-done\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, the supplied baseline/covered-source accounting and complete source bodies substantiate the seven assigned tasks. Protocol handling, exhaustive structural validation, evidence reduction, unchanged reference-data exposure, checked routing, acceptance proofs, and documentation integration are implemented rather than merely listed. The current mechanical proof exercises frozen-input inspection, structural denials, deficient evidence and restoration, and terminal completion across three profiles. Its source binding distinguishes the synthetic covered commit from earlier execution identities. The report expressly does not claim complete current workspace validation or semantic review; those limitations do not establish an unlanded implementation task.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/coverage\"},{\"locator\":\"implementation-report.json#/validation\"},{\"locator\":\"fictional-repo/provider/src/main.rs#L1-L84\"},{\"locator\":\"fictional-repo/provider/src/artifacts.rs#L1-L65\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L283\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L52\"},{\"locator\":\"fictional-repo/provider/src/embedded_data.rs#L1-L50\"},{\"locator\":\"fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py#L1-L321\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L25\"},{\"locator\":\"fictional-repo/docs/PRD.md#L1-L13\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"minimal-17\"}}",
+      "output_utf8_sha256": "f2d571832156cbe6f0d92259e376b1faa5ecc091ef2ae99bc1cf251042b45a89",
+      "run_id": "01a14efc-9765-7635-8e54-2bdaa8fd3745",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "minimal-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "bb1082a495a904ab2ea1784cb39c1a3c9afecd567fb06735d1f289b87c6ec4a7",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-review\",\n    \"policy_id\": \"design-faithful-final\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"1. The covered source replaces external semantic authority with automatic acceptance: judge.rs ignores the submitted artifact and returns \\\"pass\\\", and service.rs writes that judgment to each connection. This contradicts design.json#/elements/2, design.json#/decisions/5, and intent.json#/operating_context/outside_obligations/0. If used as delivered, an artifact with no qualifying external evidence receives the same acceptance response as a reviewed artifact; configured independence and standing-failure requirements are not evaluated. This is an explicit design-boundary violation, not speculative hostile-user hardening.\\n2. The delivered interface is a retained TCP listener, not the frozen one-request subprocess protocol. service.rs neither dispatches flat describe/evaluate requests nor emits the required JSON response variants. Moreover, the complete covered inventory lacks provider/Cargo.toml and the protocol, schema, artifact, evidence, and gate implementation needed to supply a conforming provider. An operator therefore cannot invoke the designed repository-local provider to inspect topology or obtain exhaustive structural/evidence denials. This violates design.json#/decisions/3 and the responsibilities in design.json#/elements. Preserving static reference files does not implement those interfaces. Existing validation resolves neither finding: the companion explicitly records runtime_commands_executed=false and new_runtime_proof=null, and the report states that original failed/not-run outcomes are historical rather than execution evidence for this covered commit.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Inspected the frozen trusted-local operating boundary and the complete supplied baseline-to-covered change. Its only source additions implement unconditional judgment and a retained socket server, while the required deterministic subprocess provider is absent. These materially contradict accepted authority, interface, and validation guardrails. No deployed execution or actual bypass is claimed.\",\n      \"evidence\": [\n        {\n          \"locator\": \"intent.json#/operating_context\"\n        },\n        {\n          \"locator\": \"design.json#/elements\"\n        },\n        {\n          \"locator\": \"design.json#/decisions/3\"\n        },\n        {\n          \"locator\": \"design.json#/decisions/5\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/validation/0/proof\"\n        },\n        {\n          \"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/minimal-17_implementation-review_design-faithful-final_aggregate_implementation-report-replacement-case-02/minimal-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-02/instructions.txt#L3482-L3504\"\n        }\n      ]\n    },\n    \"author\": {\n      \"name\": \"calibration-reviewer\",\n      \"kind\": \"agent\"\n    },\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"minimal-17\"\n  }\n}",
+      "output_utf8_sha256": "84778adc42c51837ea5991a40fce3c6512a62b27e3fa797f396d63a81bf4cf61",
+      "run_id": "01a14ef1-9cfe-76a4-a513-c65743da9355",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "minimal-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "c76beecb492edc6b5a8c8e2d963e780be1167e14ddca8d62d6372712c7dc9614",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-review\",\"policy_id\":\"design-faithful-final\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local boundary, the supplied baseline-to-covered change preserves strict subprocess interfaces, unchanged topology and canonical reference bytes, exhaustive structural-denial precedence, and configured independent-evidence aggregation. Retained mechanical coverage exercises frozen-profile inspection, evidence deficits and repairs, and terminal validation without claiming semantic authority or reexecution at the synthetic commit. No material design drift found.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"fictional-repo/provider/src/protocol.rs#L1-L45\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L59\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L105\"},{\"locator\":\"implementation-report.json#/validation/5\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"minimal-17\"}}",
+      "output_utf8_sha256": "a94bf29ee217e85b23dc15a633cfbf0ac58cee7b7a417152265da8489ee090c0",
+      "run_id": "01a14efc-96a7-7636-bade-d07e4a59f622",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "minimal-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "65b9df1f6a08d2e8a23051fe812dc8e32eecff0832f687dc0b18e77e55fc7f01",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-review\",\n    \"policy_id\": \"no-scope-creep\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"1. fictional-repo/provider/src/judge.rs:1-4 adds provider-owned semantic acceptance that returns pass for every artifact. This materially expands scope beyond intent.json non_goals[0], constraints[0], and operating_context.outside_obligations[0], which reserve semantic authority to external reviewers. Its caller in service.rs:13 returns this judgment without external evidence; an unacceptable submitted artifact therefore receives pass under the added service's logic. 2. fictional-repo/provider/src/service.rs:5-14 adds a retained TCP review server handling successive connections, contrary to intent.json constraints[2] and the accepted one-request-per-process boundary. This introduces an unplanned service lifecycle and network interface rather than an incidental private implementation detail. Neither finding is resolved by validation: implementation-report.json validation[0] explicitly reports no new execution, and the companion supplies no current runtime proof. These are findings about covered source additions, not claims that a buildable service has been deployed.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Inspected the frozen trusted-local operating context and the supplied baseline-to-covered inventory and source bodies. The only additions introduce automatic semantic acceptance and a persistent network service, both explicitly outside the accepted boundary. Missing planned implementation and packaging are not independently judged on this axis.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context\"},\n        {\"locator\": \"intent.json#/constraints/0\"},\n        {\"locator\": \"intent.json#/constraints/2\"},\n        {\"locator\": \"intent.json#/non_goals/0\"},\n        {\"locator\": \"plan.json#/tasks/2/out_of_scope/1\"},\n        {\"locator\": \"fictional-repo/provider/src/judge.rs#L1-L4\"},\n        {\"locator\": \"fictional-repo/provider/src/service.rs#L1-L16\"},\n        {\"locator\": \"implementation-report.json#/validation/0\"}\n      ]\n    },\n    \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"minimal-17\"\n  }\n}",
+      "output_utf8_sha256": "4d0780c5e5e0f2876063c0419cc84251d605c8118b32e8a83e7432b4270aebff",
+      "run_id": "01a14efc-977d-70d0-b516-3dd55907256d",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "minimal-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "5720f9d21ddcc250846d265f00762cb57fe0c8f1f300fa25ea799a345ac48628",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-review\",\"policy_id\":\"no-scope-creep\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Inspected the complete supplied baseline/covered-source accounting within the frozen trusted-local operating boundary. Added provider code implements planned protocol, bounded structural validation, external-evidence aggregation and unchanged workflow routing. Canonical reference data and topology remain unchanged. Added tests, documentation and proof-accounting helpers support planned verification without introducing semantic judging, identity authentication, workflow mutation or installed packaging.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"intent.json#/non_goals\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/changed_surface\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L25\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L20\"},{\"locator\":\"fictional-repo/provider/src/workflow.rs#L1-L20\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"minimal-17\"}}",
+      "output_utf8_sha256": "a4fdb4b1e961e4d6a241c3022bac4e085270fee685112fc3adb73f929516ca30",
+      "run_id": "01a14efc-9778-74a5-a3bf-77b1eb1b2329",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "minimal-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "4b8d0bf802cd011aa767adc41ea901cc0ff46657db611599232cbc74e24e327b",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-review\",\n    \"policy_id\": \"tasks-actually-done\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"The assigned implementation has not landed. The complete covered-file inventory lacks provider/Cargo.toml, the required protocol/schema/artifact/evidence/gate/workflow implementations, executable acceptance proofs, and authoritative-document integration. The baseline-to-covered change adds only judge.rs and service.rs; neither supplies those deliverables. Consequently, the workspace's declared provider member cannot build, and an operator cannot exercise the planned structural denial, independent-evidence enforcement, or terminal-validation gate required by AC-1 through AC-4. Preserved reference data and a topology snapshot do not implement these behaviors. The report explicitly retains failed/not-run historical outcomes and supplies no execution evidence for this covered commit, so existing validation does not resolve the missing work.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Inspected the frozen trusted-local operating context and actual supplied baseline/covered contents. The failure concerns explicitly assigned deliverables, not speculative hardening or report silence: the complete covered inventory and added source bodies demonstrate that the planned provider, proofs, and documentation are absent.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context\"},\n        {\"locator\": \"intent.json#/acceptance\"},\n        {\"locator\": \"plan.json#/tasks\"},\n        {\"locator\": \"implementation-report.json#/validation/0/proof\"},\n        {\"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/minimal-17_implementation-review_tasks-actually-done_aggregate_implementation-report-replacement-case-02/minimal-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02/instructions.txt#L958-L1023\"},\n        {\"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/minimal-17_implementation-review_tasks-actually-done_aggregate_implementation-report-replacement-case-02/minimal-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02/instructions.txt#L3482-L3505\"}\n      ]\n    },\n    \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"minimal-17\"\n  }\n}",
+      "output_utf8_sha256": "4e1f53c35f42d06469d36423884f48710dbe5c572b5b9c2a1be21655e5a251fc",
+      "run_id": "01a14efe-4127-716c-9276-3f5ffd4d5064",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "minimal-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "3656896afae5d4c52f0cbad4e8e0c74bee7406d28e438e3c4d57361de77b8f17",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-review\",\"policy_id\":\"tasks-actually-done\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"The supplied baseline and covered snapshots substantiate all seven planned tasks: strict protocol handling, exhaustive structural checks, independent-evidence aggregation, unchanged reference data, checked-transition routing, acceptance proofs, and authoritative documentation integration. Current mechanical evidence is bound to the covered source bytes and demonstrates deficient-evidence refusals, targeted restoration, and ordinary terminal completion across all three profiles. Historical execution and current proof limits are distinguished honestly; no semantic-review or full-workspace rerun is inferred.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/coverage\"},{\"locator\":\"implementation-report.json#/validation\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L40\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L100\"},{\"locator\":\"fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py#L100-L200\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L22\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"minimal-17\"}}",
+      "output_utf8_sha256": "30efd71662a7877dfcec1ed249972e2befe8c4148dae51a7fa3f4eb86adc4f08",
+      "run_id": "01a14f04-4a4e-76c2-9014-1829ac30eb64",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|validation-adversarial-review|docs-integrated|aggregate|validation-report-good": {
+      "row_key": "minimal-17|validation-adversarial-review|docs-integrated|aggregate|validation-report-good",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "1325fa828ae11b725552a81285ec627831f462c24642d1aa9879704955f4bc06",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"validation-adversarial-review\",\"policy_id\":\"docs-integrated\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen local trusted-operator boundary, authoritative and supplemental documents consistently describe delivered structural validation, frozen configuration, external-evidence aggregation and terminal gating. Inspected public assertions exercise observable denial, unchanged state, targeted repair and ordinary completion—not merely matching requirement tokens. Current harness proof and historical journey evidence are explicitly distinguished; neither is represented as semantic review or complete current workspace execution. No material documentation contradiction or parallel product authority was found.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"fictional-repo/docs/PRD.md#L1-L13\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L25\"},{\"locator\":\"fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py#L1-L321\"},{\"locator\":\"fictional-repo/implementation-evidence/current-mechanical-proof.json#/scope_limits\"},{\"locator\":\"fictional-repo/loop-engine-software-change-provider-prd.md#L1-L11\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"validation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"minimal-17\"}}",
+      "output_utf8_sha256": "ca7ab3bfb6fd6acf7ef7daa3eed7fe17a240e7e5e4e77836df4925b252615b37",
+      "run_id": "01a14efe-41e8-7703-96c3-c8030f52a4d0",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "minimal-17|validation-review|docs-integrated|aggregate|validation-report-good": {
+      "row_key": "minimal-17|validation-review|docs-integrated|aggregate|validation-report-good",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "8655f988d2396749e18f67b43127cbf7179d9e1d799d425bdc2fe87a4c9614aa",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"validation-review\",\n    \"policy_id\": \"docs-integrated\",\n    \"review_stage\": \"aggregate\",\n    \"subject\": \"validation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"minimal-17\",\n    \"review_contract_version\": 3,\n    \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n    \"result\": \"pass\",\n    \"findings\": \"\",\n    \"grounds\": {\n      \"reason\": \"Within the frozen trusted-local operating boundary, the authoritative PRD, READMEs and supplemental documents consistently describe frozen input, structural-denial precedence, external evidence mechanics and terminal validation. The change PRD is explicitly supplemental and linked from product authority. Inspected public proof assertions establish unchanged frozen input, named structural denials, deficient-evidence refusal and repair, and final completion without overrides. Current versus historical execution scopes and the absence of semantic judging are explicitly distinguished; no material documentation inconsistency was found.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context\"},\n        {\"locator\": \"fictional-repo/docs/PRD.md#L1-L13\"},\n        {\"locator\": \"fictional-repo/loop-engine-software-change-provider-prd.md#L1-L11\"},\n        {\"locator\": \"fictional-repo/provider/README.md#L1-L16\"},\n        {\"locator\": \"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L25\"},\n        {\"locator\": \"fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py#L58-L222\"},\n        {\"locator\": \"fictional-repo/implementation-evidence/current-mechanical-proof.json#/scope_limits\"},\n        {\"locator\": \"fictional-repo/implementation-evidence/current-mechanical-proof.json#/historical_production_journey_body_scope\"}\n      ]\n    }\n  }\n}",
+      "output_utf8_sha256": "d70664e3c23406ac64bb320773a0766b6949c89abb80f472587f3b70070b5e36",
+      "run_id": "01a14efe-4145-7797-a546-d586662b3829",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|design-narrative-adversarial-review|narrative-faithful|aggregate|narrative-101": {
+      "row_key": "standard-17|design-narrative-adversarial-review|narrative-faithful|aggregate|narrative-101",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "f47b1700d518d9276de8c1336c02d9df49e34be8843fc0f0f4839fb2aedb309f",
+      "output": "{\"review_contract_version\":3,\"review_stage\":\"aggregate\",\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"judgments\":[{\"axis\":\"narrative-faithful\",\"result\":\"pass\",\"findings\":\"\",\"grounds\":{\"reason\":\"The ordinary clean conclusion withstands comparison with the exact approved r15 design. The narrative preserves frozen input composition, static description, exhaustive bounded structural checks, exact evidence attribution and independence, terminal validation obligations, and the limits concerning identity, semantic judgment and same-revision edits. Its summaries introduce no material contradiction, omission or overpromise within the frozen operating boundary.\",\"evidence\":[{\"locator\":\"design-narrative.json#/artifact\"},{\"locator\":\"design-narrative.md#L3-L11\"},{\"locator\":\"design.json#/approach\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"design.json#/coverage\"},{\"locator\":\"design.json#/risks\"},{\"locator\":\"intent.json#/operating_context\"}]}}]}",
+      "output_utf8_sha256": "1e02d3fdcb25dae79815bf2d2a628b2542f9f957123cf19d5feeef5a46fc37c2",
+      "run_id": "01a14efe-41d5-7702-b855-af525a417f68",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|design-narrative-review|narrative-faithful|aggregate|narrative-101": {
+      "row_key": "standard-17|design-narrative-review|narrative-faithful|aggregate|narrative-101",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "008318a485926519c904ddd4bf69102f4cf0cc4cfd9a1f1e2bd388fec59ef022",
+      "output": "{\"review_contract_version\":3,\"review_stage\":\"aggregate\",\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"judgments\":[{\"axis\":\"narrative-faithful\",\"result\":\"pass\",\"findings\":\"\",\"grounds\":{\"reason\":\"The narrative faithfully summarizes the bound r15 design: frozen engine-composed configuration, structural checking, independent external-evidence aggregation, unchanged workflow/protocol, and terminal validation obligations. It preserves material limitations, including unauthenticated declared identities and undetectable dishonest same-revision edits, without claiming semantic enforcement or completed delivery. No material contradiction, omission, or overpromise was identified.\",\"evidence\":[{\"locator\":\"design-narrative.md#L3-L11\"},{\"locator\":\"design-narrative.json#/artifact\"},{\"locator\":\"design.json#/approach\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"design.json#/risks\"},{\"locator\":\"design.json#/coverage\"},{\"locator\":\"intent.json#/operating_context\"}]}}]}",
+      "output_utf8_sha256": "14ea09a9cee94d5913c6c9cce19f828b03f5a349203f41e79da19d5a5f17342b",
+      "run_id": "01a14efe-40f1-77fa-9b5e-ba00daa1718a",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "standard-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "b98414cc7f9869994d3be132bd8967a64426a739a7b291fb1dbf771124afa6ef",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-adversarial-review\",\n    \"policy_id\": \"design-faithful-final\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"1. The supplied judge.rs ignores the submitted artifact and unconditionally returns \\\"pass\\\"; service.rs uses that result without consuming external evidence. This contradicts design.json#/elements/2 and /decisions/5, and the intent's explicit outside obligation preserving external semantic authority. If used, malformed artifacts and absent, stale, self-authored, or failing evidence receive the same acceptance response. This is a concrete violation within the trusted local boundary, not speculative hardening. 2. The delivered service binds a TCP listener and repeatedly serves connections instead of implementing the frozen one-request subprocess protocol. It emits bare \\\"pass\\\", not the required describe workflow or evaluate response variants. The complete covered inventory also lacks provider/Cargo.toml and the required protocol, structural-checking, evidence, and transition implementation. Consequently the covered tree cannot supply the designed repository-local provider; manually launching the supplied service would still not satisfy the engine interface. Existing validation resolves neither defect: the report explicitly records no new runtime execution, and historical receipts do not prove this covered commit.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Inspected the frozen operating context and the complete supplied baseline-to-covered source change. The only implementation additions replace the accepted deterministic external-evidence boundary with unconditional provider judgment and a retained TCP service; the required executable provider implementation is absent.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context/outside_obligations/0\"},\n        {\"locator\": \"intent.json#/constraints/2\"},\n        {\"locator\": \"design.json#/elements/2\"},\n        {\"locator\": \"design.json#/decisions/3\"},\n        {\"locator\": \"design.json#/decisions/5\"},\n        {\"locator\": \"fictional-repo/provider/src/judge.rs#L1-L4\"},\n        {\"locator\": \"fictional-repo/provider/src/service.rs#L1-L17\"},\n        {\"locator\": \"implementation-report.json#/summary\"},\n        {\"locator\": \"implementation-report.json#/validation/0/proof\"}\n      ]\n    },\n    \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"standard-17\"\n  }\n}",
+      "output_utf8_sha256": "9127e16145948d04cfa760bbf2f6e5de2e61b08b9204a9f1bddd24e8ea41cf84",
+      "run_id": "01a14efe-41ec-733d-a30b-cae722e0f87d",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "standard-17|implementation-adversarial-review|design-faithful-final|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "fc5c3424c70ca09a0d2a7d07b8f5b04cd2c80e0adccb7dc62a8d6b4c3f06716f",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-adversarial-review\",\"policy_id\":\"design-faithful-final\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Inspected the complete supplied baseline-to-covered change within the trusted local operating boundary. The implementation preserves static topology and strict protocol envelopes, consumes frozen profile declarations without mutable catalog lookup, projects exhaustive structural denials before evidence evaluation, and retains exact name-kind independence, supersession and author-floor rules. Supplied current mechanical coverage supports these boundaries without claiming semantic review or full workspace validation. No material design drift identified.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"fictional-repo/provider/src/protocol.rs#L1-L80\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L50\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L100\"},{\"locator\":\"fictional-repo/provider/src/workflow.rs#L1-L29\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"standard-17\"}}",
+      "output_utf8_sha256": "3626197ceffa3bebab0e943052734329113e934d9b24f6a984c8e073f1fb0f9d",
+      "run_id": "01a14efe-421a-75cd-b24a-f96aa36a0cbd",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "standard-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "211121a4198b73a816e4762f55e1fd4487a90e9fb6bdfc4fc169c033eaa4bc9f",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-adversarial-review\",\n    \"policy_id\": \"no-scope-creep\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"The baseline-to-covered change adds two explicitly excluded capabilities. First, fictional-repo/provider/src/judge.rs:1-4 implements provider-owned semantic acceptance as an unconditional pass, and service.rs:13 writes that judgment to clients. This violates intent.json non_goals[0], constraints[0], and the outside obligation reserving semantic authority to external reviewers; plan.json tasks[2].out_of_scope[1] also expressly excludes it. If used for review, even an artifact lacking independent external evidence receives pass, replacing rather than aggregating external judgment. Second, service.rs:5-15 introduces a retained TCP review server processing successive connections, materially expanding the planned one-request subprocess boundary contrary to intent.json constraints[2] and plan.json tasks[0].deliverables[1]. Its connection loop does not implement the engine's one-request/process lifecycle. These are concrete newly added source implementations, not harmless private helpers. No runtime execution or working integration is established: the report explicitly retains failed/not-run historical outcomes and supplies no new execution proof, so existing validation does not resolve either expansion.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Within the frozen trusted-local operating boundary, the supplied baseline and covered inventories identify judge.rs and service.rs as the only additions. Their actual bodies introduce automatic semantic judgment and a persistent socket service, both outside the accepted plan and explicit intent boundaries. This judgment concerns added capability, not missing planned implementation or speculative security hardening.\",\n      \"evidence\": [\n        {\n          \"locator\": \"intent.json#/operating_context/outside_obligations/0\"\n        },\n        {\n          \"locator\": \"intent.json#/non_goals/0\"\n        },\n        {\n          \"locator\": \"intent.json#/constraints/2\"\n        },\n        {\n          \"locator\": \"plan.json#/tasks/2/out_of_scope/1\"\n        },\n        {\n          \"locator\": \"plan.json#/tasks/0/deliverables/1\"\n        },\n        {\n          \"locator\": \"fictional-repo/provider/src/judge.rs#L1-L4\"\n        },\n        {\n          \"locator\": \"fictional-repo/provider/src/service.rs#L5-L17\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/validation/0/proof\"\n        }\n      ]\n    },\n    \"author\": {\n      \"name\": \"calibration-reviewer\",\n      \"kind\": \"agent\"\n    },\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"standard-17\"\n  }\n}",
+      "output_utf8_sha256": "00c8f3937dacaab7c0ad08a189e875d781ff935f85cd3dc007d4232978d48f50",
+      "run_id": "01a14f00-1bb6-7520-a40a-c533b57bd43a",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "standard-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "b2212d43e8be332f7ed3a4a59294e8a40976fa274ab5c3483b4c58e92a5706ea",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-adversarial-review\",\"policy_id\":\"no-scope-creep\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, the supplied baseline-to-covered-source change implements the seven planned provider, proof, and documentation tasks. Canonical reference data and workflow topology remain unchanged. Evaluation remains deterministic, external judgments remain supplied claims, and engine persistence stays outside the provider. Data exposure and supplemental proof-checking scripts support planned inspection and validation rather than introducing material unplanned capability. No material scope expansion found.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"intent.json#/non_goals\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/changed_surface\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L64\"},{\"locator\":\"fictional-repo/provider/src/workflow.rs#L1-L35\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"standard-17\"}}",
+      "output_utf8_sha256": "36b519a97b0f66156b272a186820bfaedfcfca46be5f849215d4f53472f95b79",
+      "run_id": "01a14f00-1bc7-774c-8e55-1781f8f26a0d",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "standard-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "a9ead22797740fa4381591e4a29508c76438c94a3958dd4165ab59cbfbe5cf5b",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-adversarial-review\",\n    \"policy_id\": \"tasks-actually-done\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"The assigned implementation has not landed. The complete covered-tree inventory and baseline-to-covered change contain only existing reference data/topology plus additions judge.rs and service.rs; provider/Cargo.toml, the planned protocol/schema/artifact/evidence/gate/workflow implementations, executable acceptance proofs, and documentation deliverables are absent. The root workspace still requires member provider, so the covered repository cannot build the planned provider package, much less demonstrate AC-1 through AC-4 through the required operator paths. This violates plan tasks protocol-and-config-contract through authoritative-doc-integration. The report acknowledges the missing implementation rather than proving completion. Existing validation does not resolve this: no runtime commands were executed for the covered commit, and historical receipts explicitly do not prove this replacement state.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Within the frozen trusted local-operator boundary, actual repository contents contradict the parent completion claim. This is missing expressly assigned functionality and proof, not a speculative hardening requirement or an inference from report silence.\",\n      \"evidence\": [\n        {\n          \"locator\": \"intent.json#/operating_context\"\n        },\n        {\n          \"locator\": \"intent.json#/acceptance\"\n        },\n        {\n          \"locator\": \"plan.json#/tasks\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/summary\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/validation/0/proof\"\n        },\n        {\n          \"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/standard-17_implementation-adversarial-review_tasks-actually-done_aggregate_implementation-report-replacement-case-02/standard-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02/instructions.txt#L970-L1040\"\n        }\n      ]\n    },\n    \"author\": {\n      \"name\": \"calibration-reviewer\",\n      \"kind\": \"agent\"\n    },\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"standard-17\"\n  }\n}",
+      "output_utf8_sha256": "6482db280fd7225143c8b4c4afe5f43197b46fc1e004950230df5708b64a3e45",
+      "run_id": "01a14f00-1c1b-70fd-b793-b4186fff4c48",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "standard-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "5e412ae2ebdfb368b161bb3c53801350c51c7084cf212f8ea328641091081075",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-adversarial-review\",\"policy_id\":\"tasks-actually-done\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, the supplied baseline-to-covered-source accounting and complete source bodies substantiate all seven implementation tasks. Protocol handling, exhaustive structural denial, evidence filtering, unchanged reference data and topology, terminal gating, acceptance checks, and document integration are implemented rather than merely asserted. The supplied exact-source mechanical proof exercises deficit/refusal/repair and terminal outcomes, while explicitly distinguishing historical executions and withholding any complete workspace-test or semantic-review claim. No material unsupported completion claim was established.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"fictional-repo/implementation-evidence/source-inventory.json#/files_sha256\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L26-L110\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L62\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L26\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"standard-17\"}}",
+      "output_utf8_sha256": "a50d1be9891df4bced98f18375fa018c1c300aef49c4145e6f2c4283bd2cb607",
+      "run_id": "01a14f00-1c09-7293-b0de-f7e253c92812",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "standard-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "ec2a0fa474696c9dc9e4ace01614542f73774f2e7ee21df7c88f4dd6f8af0ea2",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-review\",\n    \"policy_id\": \"design-faithful-final\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"1. fictional-repo/provider/src/judge.rs:1-4 replaces external judgment with unconditional provider-authored \\\"pass\\\", contradicting design.elements[2], design.decisions[5], and intent.operating_context.outside_obligations[0]. An artifact without qualifying independent evidence receives the same judgment as a reviewed artifact; this cannot implement the frozen evidence boundary. 2. fictional-repo/provider/src/service.rs:1-17 implements a retained TCP listener returning bare \\\"pass\\\", rather than the strict one-request subprocess and JSON describe/evaluate interface required by design.decisions[3] and intent.constraints[2]. The existing engine cannot invoke this as its compatible provider. 3. The complete covered-file inventory contains neither provider/Cargo.toml nor the designed protocol, schema, evidence, or checked-transition implementation. The workspace declares provider as a member, so the covered delivery cannot build the required provider or deliver its structural/evidence gates. These are implementation/design failures, not speculative hardening requests. The report expressly states that no new runtime process executed; historical outcomes do not validate this covered replacement.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Inspected the frozen trusted-local operating boundary and the supplied complete baseline-to-covered source snapshots. The two actual additions replace the accepted deterministic external-evidence provider with an unconditional semantic judge and retained server, while the complete inventory establishes that the required runnable provider and gate implementations are absent. No current execution evidence resolves these incompatibilities.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context\"},\n        {\"locator\": \"intent.json#/constraints/2\"},\n        {\"locator\": \"design.json#/elements/2\"},\n        {\"locator\": \"design.json#/decisions/3\"},\n        {\"locator\": \"design.json#/decisions/5\"},\n        {\"locator\": \"fictional-repo/provider/src/judge.rs#L1-L4\"},\n        {\"locator\": \"fictional-repo/provider/src/service.rs#L1-L17\"},\n        {\"locator\": \"fictional-repo/Cargo.toml#L1-L3\"},\n        {\"locator\": \"implementation-report.json#/summary\"},\n        {\"locator\": \"implementation-report.json#/validation/0/proof\"}\n      ]\n    },\n    \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"standard-17\"\n  }\n}",
+      "output_utf8_sha256": "8e82057d3c94521a95b40fdaca9409af72b793bc0f7cec6c7359082480e1c710",
+      "run_id": "01a14f00-1c09-707f-a66b-9311dca37a15",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "standard-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "b4904f7292e69ecfb8033187c8c8428ee2bb4af3162bd3ea47ab4b8cc8a49dc3",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-review\",\"policy_id\":\"design-faithful-final\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, the supplied baseline-to-covered-source change preserves the accepted design: strict flat subprocess interfaces, unchanged static topology and canonical reference bytes, bounded deterministic structural validation before evidence aggregation, exact declared-author identity and current-revision/config filtering, and configured terminal obligations. The supplied current mechanical evidence supports these relationships without claiming semantic judgment or historical reexecution. No material design drift found.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"implementation-report.json#/coverage\"},{\"locator\":\"fictional-repo/provider/src/protocol.rs#L1-L45\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L58\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L105\"},{\"locator\":\"fictional-repo/provider/src/schema.rs#L1-L100\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"standard-17\"}}",
+      "output_utf8_sha256": "0ea0d51e28cfafd621d0e1266eb67f4307e4efffc7c3cb03ffe239ea8eb85e9c",
+      "run_id": "01a14f00-1b81-7444-b7ca-5793867a04e9",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "standard-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "246e43cc8af4a7be2577abebf663b1ce03803eaf311080ae0eb0f7c32f6df62f",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-review\",\n    \"policy_id\": \"no-scope-creep\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"The covered additions introduce two explicitly excluded capabilities. fictional-repo/provider/src/judge.rs:1-4 implements provider-owned semantic acceptance by returning \\\"pass\\\" for every submitted artifact, contrary to intent.json#/non_goals/0 and the outside obligation preserving external reviewers' semantic authority. fictional-repo/provider/src/service.rs:6-14 adds a retained TCP review server that calls this judge, contrary to intent.json#/constraints/2 and the planned one-request/process protocol. If used, this path returns acceptance without external review and substitutes a persistent network service for the required local subprocess boundary. These are material scope additions, not incidental helpers. No current runtime proof resolves them: implementation-report.json#/validation/0 explicitly reports no new execution. The finding concerns added source capabilities, not a claim that the unbuilt server is currently operational.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Inspected the complete supplied packet, frozen trusted-local operating context, accepted plan, unchanged baseline contents, and both actual baseline-to-covered additions. The semantic judge and retained server cross explicit scope boundaries; excluded hostile-user hardening and unrelated missing deliverables are not grounds for this judgment.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context\"},\n        {\"locator\": \"intent.json#/non_goals/0\"},\n        {\"locator\": \"intent.json#/constraints/2\"},\n        {\"locator\": \"plan.json#/tasks/0/deliverables/1\"},\n        {\"locator\": \"plan.json#/tasks/2/out_of_scope/1\"},\n        {\"locator\": \"fictional-repo/provider/src/judge.rs#L1-L4\"},\n        {\"locator\": \"fictional-repo/provider/src/service.rs#L6-L14\"},\n        {\"locator\": \"implementation-report.json#/validation/0\"}\n      ]\n    },\n    \"author\": {\n      \"name\": \"calibration-reviewer\",\n      \"kind\": \"agent\"\n    },\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"standard-17\"\n  }\n}",
+      "output_utf8_sha256": "d88290270a088122515b49e1d3a33fcc632c61cb1f6740b82bba30b5a915decc",
+      "run_id": "01a14f00-1c5e-7291-b824-8299630193e2",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "standard-17|implementation-review|no-scope-creep|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "f1cfbef4fb19ab6d576eb710b92bcc5a30627e3d88bab5e7b5e97c97f4f161ee",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-review\",\"policy_id\":\"no-scope-creep\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, the supplied baseline-to-covered change implements the seven planned provider, proof, and documentation tasks without material capability expansion. Canonical reference data and workflow topology remain unchanged. Provider evaluation performs structural checks and deterministic external-evidence aggregation, not semantic judging, model invocation, or workflow persistence. Data exposure and auxiliary proof checkers support planned inspectability and acceptance proof.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"intent.json#/non_goals\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/changed_surface\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L55\"},{\"locator\":\"fictional-repo/provider/src/workflow.rs#L1-L30\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"standard-17\"}}",
+      "output_utf8_sha256": "a5a81958bea64a78d9e48852e84cf2d3b8bcc443956cd41dc7bde5bb52e5306e",
+      "run_id": "01a14f00-1c53-7112-a81f-6fb5133fccf5",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02": {
+      "row_key": "standard-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "00508832c3dd7d54668dc8bf407d424bc443fcee721f0372ab6c3972a3f53963",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"implementation-review\",\n    \"policy_id\": \"tasks-actually-done\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"fail\",\n    \"findings\": \"Assigned implementation has not landed. Plan tasks require the provider manifest, one-request protocol, structural validation, evidence aggregation, checked-transition routing, executable acceptance proofs, and integrated documents. The complete covered-file inventory contains only the pre-existing data/snapshot/workspace files and additions judge.rs and service.rs; the required manifest, implementation modules, tests, proof scripts, and integrated documents are absent. Consequently, building the workspace cannot load its provider member, and the operator cannot exercise the required inspectable-profile, structural-denial, evidence-denial, or terminal-validation paths (AC-1–AC-4). The report acknowledges missing implementation and supplies no new execution evidence; historical failed/not-run outcomes do not establish completion at the covered commit.\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Within the frozen trusted-local operating boundary, the supplied baseline-to-covered inventory and source bodies demonstrate that the required deliverables are missing, rather than merely undocumented. Preserved reference data and two replacement source additions do not complete the assigned provider, proof, and document integration tasks.\",\n      \"evidence\": [\n        {\n          \"locator\": \"intent.json#/operating_context\"\n        },\n        {\n          \"locator\": \"plan.json#/tasks\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/summary\"\n        },\n        {\n          \"locator\": \"implementation-report.json#/validation/0/proof\"\n        },\n        {\n          \"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/standard-17_implementation-review_tasks-actually-done_aggregate_implementation-report-replacement-case-02/standard-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-02/instructions.txt#L998-L1031\"\n        }\n      ]\n    },\n    \"author\": {\n      \"name\": \"calibration-reviewer\",\n      \"kind\": \"agent\"\n    },\n    \"subject\": \"implementation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"standard-17\"\n  }\n}",
+      "output_utf8_sha256": "c3272268c5fb50a930240cb20a91a87d1eb8d7815b6f456a8a9c417a5c8b9e2a",
+      "run_id": "01a14f02-4ef9-7140-af9e-64c1267f28b1",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01": {
+      "row_key": "standard-17|implementation-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "0ab523af65fb1e92533b5ebf2a583794a32a071d5d64e1b8fb306cfa13d3b3a8",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"implementation-review\",\"policy_id\":\"tasks-actually-done\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, the supplied baseline and covered source demonstrate all seven planned task surfaces landed: strict protocol/config handling, exhaustive structural checks, evidence aggregation, unchanged reference-data exposure, transition routing, acceptance proof, and authoritative documentation integration. Retained current mechanical evidence binds the covered source bytes and demonstrates three complete public workflows, deficient-evidence refusal/restoration, structural denials, and linked-parent controls. Historical proof is explicitly scoped rather than relabelled; no complete current workspace-suite or semantic-review execution is inferred.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/coverage\"},{\"locator\":\"implementation-report.json#/validation\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L111\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L55\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L18\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"implementation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"standard-17\"}}",
+      "output_utf8_sha256": "ee8914402e9ca8fa08afde64adbc755e52dd4f92cb6c2e5c41b39cbe82694d8a",
+      "run_id": "01a14f02-4eec-723f-8c5b-c459950327c3",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|validation-adversarial-review|docs-integrated|aggregate|validation-report-good": {
+      "row_key": "standard-17|validation-adversarial-review|docs-integrated|aggregate|validation-report-good",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "fdd388e43c6046c6a163f9266652a1df162b5e8b80d47171ecc37bdd5b355d6a",
+      "output": "{\n  \"kind\": \"review-evidence\",\n  \"data\": {\n    \"gate\": \"validation-adversarial-review\",\n    \"policy_id\": \"docs-integrated\",\n    \"review_stage\": \"aggregate\",\n    \"result\": \"pass\",\n    \"findings\": \"\",\n    \"review_contract_version\": 3,\n    \"grounds\": {\n      \"reason\": \"Within the frozen local, trusted-operator boundary, no material documentation contradiction was found. The repository PRD is explicitly authoritative; supplemental documents preserve that hierarchy and the deterministic-provider/external-judgment boundary. The proof matrix describes observable frozen-input, exhaustive-denial, evidence-deficit/repair and terminal outcomes. The supplied public scenario and current harness assert those outcomes rather than merely command success. Current proof explicitly distinguishes its executed harness from historical production-journey execution and disclaims semantic-review and full-workspace proof.\",\n      \"evidence\": [\n        {\"locator\": \"intent.json#/operating_context\"},\n        {\"locator\": \"fictional-repo/docs/PRD.md#L1-L13\"},\n        {\"locator\": \"fictional-repo/loop-engine-software-change-provider-prd.md#L1-L11\"},\n        {\"locator\": \"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L25\"},\n        {\"locator\": \"fictional-repo/scripts/production-journey.py#L150-L300\"},\n        {\"locator\": \"fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py#L80-L224\"},\n        {\"locator\": \"fictional-repo/implementation-evidence/current-mechanical-proof.json#/journeys\"},\n        {\"locator\": \"fictional-repo/implementation-evidence/current-mechanical-proof.json#/scope_limits\"},\n        {\"locator\": \"fictional-repo/implementation-evidence/current-mechanical-proof.json#/historical_production_journey_body_scope\"}\n      ]\n    },\n    \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n    \"subject\": \"validation-report.json\",\n    \"subject_revision\": \"r15\",\n    \"config_version\": \"standard-17\"\n  }\n}",
+      "output_utf8_sha256": "e6d8585e6e0d721bd5f89825e265466f0aa6f59ed18cd62a9d5ebcf16fd27a70",
+      "run_id": "01a14ef1-9cc4-74af-bcc4-567a631758f3",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    },
+    "standard-17|validation-review|docs-integrated|aggregate|validation-report-good": {
+      "row_key": "standard-17|validation-review|docs-integrated|aggregate|validation-report-good",
+      "model": "openai-codex/gpt-6.1-sol:high",
+      "input_sha256": "9184a1016c7e39d76e249612ac57673f0dd67bb5b2649095a111bd961a223993",
+      "output": "{\"kind\":\"review-evidence\",\"data\":{\"gate\":\"validation-review\",\"policy_id\":\"docs-integrated\",\"review_stage\":\"aggregate\",\"result\":\"pass\",\"findings\":\"\",\"review_contract_version\":3,\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, authoritative and supplemental documents consistently describe frozen-input inspection, exhaustive structural denial, independent-evidence mechanics and terminal validation. The repository PRD explicitly owns product authority and links the supplemental change PRD and proof matrix. Inspected public harness assertions demonstrate preserved frozen input, named structural violations, deficient-evidence refusal followed by qualifying repair, and ordinary terminal completion without overrides. Current proof distinguishes its actual harness from historical production-journey execution and does not claim semantic review or whole-current-workspace execution. No material documentation-integration defect was found.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"fictional-repo/docs/PRD.md#L3-L13\"},{\"locator\":\"fictional-repo/loop-engine-software-change-provider-prd.md#L3-L11\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L25\"},{\"locator\":\"fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py#L1-L321\"},{\"locator\":\"fictional-repo/implementation-evidence/current-mechanical-proof.json#/scope_limits\"},{\"locator\":\"fictional-repo/implementation-evidence/current-mechanical-proof.json#/historical_production_journey_body_scope\"}]},\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"subject\":\"validation-report.json\",\"subject_revision\":\"r15\",\"config_version\":\"standard-17\"}}",
+      "output_utf8_sha256": "6cb4057a749aae18893d2eb27a5e0342514d03c46eb261dc48b1f5d241b2ea0d",
+      "run_id": "01a14f02-4eff-731f-bc2c-52020f2ab626",
+      "declared_author": {
+        "name": "calibration-reviewer",
+        "kind": "agent"
+      },
+      "thinking": "high",
+      "mechanical_validation": "A11-shape checks; locator resolution not asserted; semantic acceptance NOT asserted"
+    }
+  },
+  "retained_not_intaken": {},
+  "excluded_invalid": {
+    "c008": {
+      "output": "{\"review_contract_version\":3,\"review_stage\":\"individual\",\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"judgments\":[{\"axis\":\"design-faithful-final\",\"result\":\"pass\",\"findings\":\"\",\"grounds\":{\"reason\":\"The supplied baseline-to-covered change preserves the accepted flat protocol, static topology, canonical reference bytes, bounded structural checking, structural-denial precedence, and exact-identity evidence aggregation. No material design drift was established within the frozen trusted-local operating boundary. Current mechanical evidence is explicitly distinguished from historical executions and semantic judgment.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"fictional-repo/provider/src/protocol.rs#L1-L80\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L60\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L110\"},{\"locator\":\"implementation-report.json#/validation\"}]}}]}",
+      "output_utf8_sha256": "731335a9bc6904ed2b3ae2a6b678bfb216dc414fa683e484b3f85522171e2b7c",
+      "reason": "subject identity mismatch: narrative-style judgments batch instead of a review-evidence record; judgment kept as evidence only; superseded by a fresh rerun of the same row"
+    },
+    "c011": {
+      "output": "{\n  \"review_contract_version\": 3,\n  \"review_stage\": \"individual\",\n  \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n  \"judgments\": [\n    {\n      \"axis\": \"no-scope-creep\",\n      \"result\": \"fail\",\n      \"findings\": \"The baseline-to-covered change adds two explicitly excluded capabilities. judge.rs introduces provider-side semantic acceptance that ignores the artifact and always returns pass, violating intent non_goals[0], constraints[0], and the outside obligation preserving external semantic authority. service.rs introduces a retained TCP server accepting successive connections, violating constraints[2]'s one-local-subprocess-per-request boundary. These are substantive architectural additions, not incidental helpers: the supplied server path returns provider-authored acceptance without external evidence and replaces request-scoped execution with retained service operation. Neither capability is authorized by the accepted plan. No runtime execution at the covered commit is claimed, so this is a finding about the delivered source expansion, not a demonstrated running bypass. Historical outcomes and the report's explicit absence of new execution do not resolve either expansion.\",\n      \"grounds\": {\n        \"reason\": \"Inspected the frozen trusted-local operating context and the actual supplied baseline-to-covered additions. Both added source bodies implement boundaries expressly excluded by intent and plan; excluded hostile-user concerns and unrelated implementation omissions are not needed for this finding.\",\n        \"evidence\": [\n          {\"locator\": \"intent.json#/operating_context/outside_obligations/0\"},\n          {\"locator\": \"intent.json#/non_goals/0\"},\n          {\"locator\": \"intent.json#/constraints/0\"},\n          {\"locator\": \"intent.json#/constraints/2\"},\n          {\"locator\": \"plan.json#/tasks/0/deliverables/1\"},\n          {\"locator\": \"plan.json#/tasks/2/out_of_scope/1\"},\n          {\"locator\": \"implementation-report.json#/validation/0/proof\"},\n          {\"locator\": \"/Volumes/Workshop/macbook/loop-engine/runs/reviewer-returns-44-45-20261017/calib/packets/high-rigor-17_implementation-adversarial-review_no-scope-creep_individual_implementation-report-replacement-case-02/high-rigor-17|implementation-adversarial-review|no-scope-creep|individual|implementation-report-replacement-case-02/instructions.txt#L3482-L3506\"}\n        ]\n      }\n    }\n  ]\n}",
+      "output_utf8_sha256": "014f66714fbdd61d0077be93a6f99eca3034954f6e1f17397cbf09538253bb21",
+      "reason": "subject identity mismatch: narrative-style judgments batch instead of a review-evidence record; judgment kept as evidence only; superseded by a fresh rerun of the same row"
+    },
+    "c019": {
+      "output": "{\n  \"review_contract_version\": 3,\n  \"review_stage\": \"individual\",\n  \"author\": {\"name\": \"calibration-reviewer\", \"kind\": \"agent\"},\n  \"judgments\": [\n    {\n      \"axis\": \"design-faithful-final\",\n      \"result\": \"fail\",\n      \"findings\": \"The covered implementation contradicts two frozen design boundaries. First, fictional-repo/provider/src/judge.rs:1-4 ignores the submitted artifact and returns \\\"pass\\\"; service.rs:13 writes that judgment directly. This substitutes provider-authored acceptance for external evidence aggregation, violating design.json#/elements/2 and #/decisions/5 and the intent's explicit external-semantic-authority obligation. If used, absent, stale or failing external evidence cannot affect this acceptance result. Second, service.rs:5-14 implements a retained TCP listener rather than the strict one-request subprocess protocol required by design.json#/decisions/3. An engine request through the required subprocess interface receives no JSON response; the service instead waits for socket connections and emits a bare pass. These are architectural and interface substitutions, not replaceable private implementation details. Moreover, the supplied complete covered inventory lacks provider/Cargo.toml and the designed protocol, structural-checking, evidence and gate implementation, so the covered repository does not supply a runnable conforming alternative. Existing validation resolves neither defect: the report explicitly records no new runtime execution, and historical receipts do not establish behavior at this covered commit.\",\n      \"grounds\": {\n        \"reason\": \"Inspected the frozen trusted-local operating boundary and all supplied baseline/covered source bytes. The only added implementation replaces external evidence evaluation and the frozen subprocess interface, while the covered inventory contains no conforming provider implementation.\",\n        \"evidence\": [\n          {\"locator\": \"intent.json#/operating_context\"},\n          {\"locator\": \"design.json#/elements/2\"},\n          {\"locator\": \"design.json#/decisions/3\"},\n          {\"locator\": \"design.json#/decisions/5\"},\n          {\"locator\": \"fictional-repo/provider/src/judge.rs#L1-L4\"},\n          {\"locator\": \"fictional-repo/provider/src/service.rs#L1-L16\"},\n          {\"locator\": \"implementation-report.json#/summary\"},\n          {\"locator\": \"implementation-report.json#/validation/0/proof\"}\n        ]\n      }\n    }\n  ]\n}",
+      "output_utf8_sha256": "5bb71955f98e4cca9aedaa6ee1c836c02c30330a7b2c0390d388477358449275",
+      "reason": "subject identity mismatch: narrative-style judgments batch instead of a review-evidence record; judgment kept as evidence only; superseded by a fresh rerun of the same row"
+    },
+    "c020": {
+      "output": "{\"review_contract_version\":3,\"review_stage\":\"individual\",\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"judgments\":[{\"axis\":\"design-faithful-final\",\"result\":\"pass\",\"findings\":\"\",\"grounds\":{\"reason\":\"Inspected the supplied baseline-to-covered additions and unchanged canonical files within the trusted local operating boundary. The strict stateless protocol, preserved topology, bounded exhaustive structural checks, structural-denial precedence, and exact revision/config/author evidence aggregation remain faithful to the accepted design. Supplied current public-journey evidence corroborates mechanical behavior without claiming semantic review or complete workspace validation.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"design.json#/decisions\"},{\"locator\":\"fictional-repo/provider/src/main.rs#L1-L70\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L60\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L100\"},{\"locator\":\"fictional-repo/provider/tests/snapshots/describe.json#/transitions\"},{\"locator\":\"implementation-report.json#/validation/5\"}]}}]}",
+      "output_utf8_sha256": "2dd50c7a771c019d040dc94f184d09414e1ed245a2372f5fb0b2628e2cdcf6f4",
+      "reason": "subject identity mismatch: narrative-style judgments batch instead of a review-evidence record; judgment kept as evidence only; superseded by a fresh rerun of the same row"
+    },
+    "c028": {
+      "output": "{\"review_contract_version\":3,\"review_stage\":\"individual\",\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"judgments\":[{\"axis\":\"tasks-actually-done\",\"result\":\"pass\",\"findings\":\"\",\"grounds\":{\"reason\":\"Within the frozen trusted-local operating boundary, the supplied baseline-to-covered snapshots demonstrate all seven planned components landed: strict protocol, structural validation, evidence aggregation, unchanged reference data, transition evaluation, acceptance proofs, and authoritative documentation integration. The current mechanical proof binds the covered source bytes and demonstrates three-profile completion, decisive evidence deficits and repairs, structural refusals, and linked-parent controls. Historical execution and substitute-harness boundaries are disclosed rather than represented as current workspace or semantic-review success. No material assigned-work defect was established.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/coverage\"},{\"locator\":\"implementation-report.json#/validation\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L25\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L95\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L20\"},{\"locator\":\"fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py#L1-L200\"}]}}]}",
+      "output_utf8_sha256": "b4161a5a97f4051b7aaa497080003f0d890567feb7aad81238d9db86f16f55ed",
+      "reason": "subject identity mismatch: narrative-style judgments batch instead of a review-evidence record; judgment kept as evidence only; superseded by a fresh rerun of the same row"
+    },
+    "c046": {
+      "output": "{\"review_contract_version\":3,\"review_stage\":\"aggregate\",\"author\":{\"name\":\"calibration-reviewer\",\"kind\":\"agent\"},\"judgments\":[{\"axis\":\"tasks-actually-done\",\"result\":\"pass\",\"findings\":\"\",\"grounds\":{\"reason\":\"The supplied baseline-to-covered source accounting, implementation, tests and bound mechanical proof support delivery of all seven planned tasks. Canonical reference data and topology remain unchanged. Current three-profile journeys demonstrate frozen-input inspection, structural denial, deficient-evidence refusal and repair, and terminal completion without overrides. Historical executions are not misrepresented as current workspace validation or semantic review.\",\"evidence\":[{\"locator\":\"intent.json#/operating_context\"},{\"locator\":\"plan.json#/tasks\"},{\"locator\":\"implementation-report.json#/coverage\"},{\"locator\":\"fictional-repo/provider/src/gates.rs#L1-L50\"},{\"locator\":\"fictional-repo/provider/src/evidence.rs#L1-L95\"},{\"locator\":\"fictional-repo/implementation-evidence/requirement-to-proof.md#L1-L24\"}]}}]}",
+      "output_utf8_sha256": "95f1cc14ac5e69f12debb17e63508cd5d73a16bb5e8e13aacb7a5f5c76dadb68",
+      "reason": "subject identity mismatch: narrative-style judgments batch instead of a review-evidence record; judgment kept as evidence only; superseded by a fresh rerun of the same row"
+    }
+  },
+  "note": "Fresh Sol (openai-codex/gpt-6.1-sol, high) returns for the 64 rows pending after the reviewer-protocol edit (issue #44). Each return is the output file delivered by the subagent harness for a fresh read-only child; the children also appended an acceptance-report block that the harness did not save. 6 rows were rerun after an invalid first return."
+}
