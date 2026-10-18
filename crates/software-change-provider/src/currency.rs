@@ -216,15 +216,17 @@ fn changed_for_cites(
     let earlier = context.iter().filter(|row| row.sequence < source.sequence);
     let origin_text = if source.data["subject"] == "intent.json" {
         let revision = source.data["subject_revision"].as_str().unwrap_or_default();
-        if revision == current_revision {
-            return Ok(Vec::new());
+        match intent_at_revision(context, revision) {
+            Some(text) => text,
+            // Same revision and nothing retained to compare: unchanged.
+            None if revision == current_revision => return Ok(Vec::new()),
+            None => {
+                return Err(format!(
+                    "unable to verify carried judgment `{}`: its cited criteria cannot be compared because no exact bytes of intent revision `{revision}` are retained",
+                    source.id
+                ))
+            }
         }
-        intent_at_revision(context, revision).ok_or_else(|| {
-            format!(
-                "unable to verify carried judgment `{}`: its cited criteria cannot be compared because no exact bytes of intent revision `{revision}` are retained",
-                source.id
-            )
-        })?
     } else {
         // Other subjects: the intent that was current is the latest retained
         // copy before the judgment. Without one the judgment stays driver-attested.
@@ -237,9 +239,8 @@ fn changed_for_cites(
         else {
             return Ok(Vec::new());
         };
-        if revision_of(&text).as_deref() == Some(current_revision) {
-            return Ok(Vec::new());
-        }
+        // Compare even when the revision strings match: an in-place edit that kept
+        // the revision must still be seen.
         text
     };
     let origin: Value = serde_json::from_str(&origin_text)
@@ -413,6 +414,66 @@ mod tests {
         assert_eq!(
             changed_criterion_for_verdict("AC-2", &verdict, &bare, Some(&root)),
             Ok(Vec::new())
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_in_place_criterion_edit_that_kept_the_revision_string_is_still_stale() {
+        let (dir, root, _context, _source) = fixture(&intent("2", "second"));
+        // Verdict written while intent revision 2 said "second"; the retained copy has the same revision.
+        let retained = row(
+            "retained",
+            "retained-artifacts",
+            1,
+            json!({"artifacts": [{"name": "intent.json", "content": intent("2", "second")}]}),
+        );
+        let verdict = row(
+            "verdict",
+            "criterion-verdict",
+            2,
+            json!({"subject": "validation-report.json", "criterion_id": "AC-2"}),
+        );
+        let context = vec![retained, verdict.clone()];
+        assert_eq!(
+            changed_criterion_for_verdict("AC-2", &verdict, &context, Some(&root)),
+            Ok(Vec::new())
+        );
+        // Edit the statement in place; the revision string is unchanged.
+        std::fs::write(
+            dir.join("intent.json"),
+            intent("2", "second, edited in place"),
+        )
+        .unwrap();
+        assert_eq!(
+            changed_criterion_for_verdict("AC-2", &verdict, &context, Some(&root)),
+            Ok(vec!["AC-2".to_owned()])
+        );
+        assert_eq!(
+            changed_criterion_for_verdict("AC-1", &verdict, &context, Some(&root)),
+            Ok(Vec::new())
+        );
+        // A review judgment on the intent itself (equal revision, retained bytes) is compared too.
+        let source = row(
+            "src",
+            "review-evidence",
+            2,
+            json!({"subject": "intent.json", "subject_revision": "2"}),
+        );
+        let ctx = vec![
+            row(
+                "correction",
+                "intent-correction",
+                1,
+                json!({"prior_intent": {"revision": "2", "json_bytes": intent("2", "second")}}),
+            ),
+            source.clone(),
+        ];
+        let grounds =
+            json!({"reason": "x", "evidence": [{"locator": "intent.json#/acceptance/1"}]});
+        assert_eq!(
+            changed_cited_criteria(Some(&grounds), &source, &ctx, Some(&root)),
+            Ok(vec!["AC-2".to_owned()])
         );
         let _ = std::fs::remove_dir_all(dir);
     }
