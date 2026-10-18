@@ -12,20 +12,30 @@ from inspect_ai import Task, eval
 from inspect_ai.model import GenerateConfig, get_model
 
 from . import pi  # register the host SDK provider even before wheel metadata refresh
+from inspect_ai.model._model import sample_role_usage  # live per-sample usage, used for the dollar stop
 from inspect_ai.scorer import Score, scorer
 from inspect_ai.solver import solver
+import anyio
 
 from .accounting import CLASSIFICATION_RULES, TrialRecord, classify_exception, core_metrics
+from .limits import CampaignGuard, budget_summary, watch_trial
 from .provenance import cohort
-from .report import UnsafeReportError, protected_values, utc_timestamp, write_report
+from .publish import publish
+from .report import UnsafeReportError, protected_values, utc_timestamp
 from .settings import CampaignSettings, OVERHEAD_ROLES, matched_assignment
-from .target import Target, TrialContext
+from .target import LimitReached, Target, TrialContext
+
+
+PROBE_TIMEOUT_SECONDS = 10  # version probes must never hold the command past the cap
 
 
 def harness_versions() -> dict:
     repo = Path(__file__).resolve().parents[3]
     def git(*args):
-        result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+        try:
+            result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=PROBE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            return "unknown"
         return result.stdout.strip() if result.returncode == 0 else "unknown"
     return {"inspect_ai": importlib.metadata.version("inspect-ai"),
             "evalcore": importlib.metadata.version("loop-engine-evals"),
@@ -33,8 +43,42 @@ def harness_versions() -> dict:
             "checkout_dirty": bool(git("status", "--porcelain"))}
 
 
+def limit_step_of(error: BaseException) -> str | None:
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error, LimitReached):
+            return error.step
+        error = error.__cause__ or error.__context__
+    return None
+
+
+async def run_trial_stoppable(target: Target, state, context: TrialContext, guard: CampaignGuard, role_models: dict):
+    """Run the model-driven part with the campaign watcher beside it. A target that ignores a stop is cancelled after the grace."""
+    execution = None
+    try:
+        with anyio.CancelScope() as trial_scope:
+            async with anyio.create_task_group() as group:
+                if guard.active:
+                    group.start_soon(watch_trial, guard, role_models,
+                                     lambda: {role: usage.model_dump() for role, usage in sample_role_usage().items()}, trial_scope)
+                try:
+                    execution = await target.run_trial(state, context)
+                finally:
+                    group.cancel_scope.cancel()
+    except BaseExceptionGroup as errors:
+        # anyio wraps even a single error; classification needs the original exception.
+        error = errors
+        while isinstance(error, BaseExceptionGroup) and len(error.exceptions) == 1:
+            error = error.exceptions[0]
+        raise error
+    if execution is None:
+        raise LimitReached(guard.step_stop_reason(), "trial_work")
+    return execution
+
+
 @solver
-def trial_solver(target: Target, contexts: dict[str, TrialContext], records: dict[str, TrialRecord]):
+def trial_solver(target: Target, contexts: dict[str, TrialContext], records: dict[str, TrialRecord], guard: CampaignGuard):
     async def solve(state, generate):
         context = contexts[str(state.sample_id)]
         assignment = context.assignment
@@ -42,24 +86,36 @@ def trial_solver(target: Target, contexts: dict[str, TrialContext], records: dic
         records[assignment.sample_id] = record
         started = time.monotonic()
         execution = None
+        role_models = {**context.combination.role_models(),
+                       **dict(zip(OVERHEAD_ROLES, (context.settings.simulator_model, context.settings.judge_model)))}
+        deadline = (asyncio.timeout(context.settings.hard_limit_seconds)
+                    if context.settings.hard_limit_seconds is not None else None)
         try:
+            if not guard.can_start_trial():
+                raise LimitReached(guard.stop_reason, "not_started")
             # Include scoring in the same limit. Target subprocesses must also honour it.
-            deadline = (asyncio.timeout(context.settings.hard_limit_seconds)
-                        if context.settings.hard_limit_seconds is not None else nullcontext())
-            async with deadline:
-                execution = await target.run_trial(state, context)
+            async with deadline or nullcontext():
+                execution = await run_trial_stoppable(target, state, context, guard, role_models)
                 record.terminal = execution.terminal
                 scored = await target.score(state, execution, context)
                 record.terminal = execution.terminal
                 record.target_metrics = scored.metrics
                 record.outcome = "success" if execution.terminal and scored.success else "failure"
                 record.reason = "passed" if record.outcome == "success" else "target_failure"
+                if execution.stop_reason:
+                    record.outcome, record.reason = "limit", execution.stop_reason
         except Exception as error:
             if execution is not None:
                 record.terminal = execution.terminal
             if hasattr(target, "failure_metrics"):
                 record.target_metrics = target.failure_metrics(context)
             record.outcome, record.reason = classify_exception(error)
+            record.limit_step = limit_step_of(error)
+            if isinstance(error, TimeoutError) and deadline is not None and deadline.expired():
+                # The per-trial hard limit is a budget stop, not a model or harness failure.
+                record.outcome, record.reason = "limit", "trial_time"
+            if record.outcome == "limit":
+                guard.note_cut_off(record.limit_step or "trial", record.reason, assignment.sample_id)
             # The exception class name is safe to report; the full traceback may
             # contain private case text, so it stays in the ignored local logs.
             record.error_type = type(error).__name__
@@ -69,6 +125,7 @@ def trial_solver(target: Target, contexts: dict[str, TrialContext], records: dic
                 "".join(traceback.format_exception(error)))
         finally:
             record.wall_seconds = time.monotonic() - started
+            guard.add_finished(role_models, {role: usage.model_dump() for role, usage in sample_role_usage().items()})
             if hasattr(target, "checkpoint_record"):
                 target.checkpoint_record(context, record)
         state.completed = True
@@ -85,7 +142,9 @@ def trial_scorer(records: dict[str, TrialRecord]):
 
 
 def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_paths: tuple[Path, ...] = (), report_directory: Path | None = None,
-                 carried_records: list[TrialRecord] = (), assignments_override=None) -> Path:
+                 carried_records: list[TrialRecord] = (), assignments_override=None, clock_start: float | None = None) -> Path:
+    # The campaign clock starts when the evalctl command starts (the CLI passes it); a direct call starts it here.
+    guard = CampaignGuard(settings, clock_start)
     if report_directory is not None and report_directory.exists():
         raise FileExistsError("report directory already exists")
     provider_config_paths = (*settings.provider_config_paths, *provider_config_paths,
@@ -110,32 +169,41 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
     records: dict[str, TrialRecord] = {r.sample_id: r for r in carried_records}
     carried_ids = set(records)
     tasks = []
-    # Resolve all model providers before executing any trial. No generation here.
-    for combo in settings.resolved_combinations():
-        model_ids = {**combo.role_models(), **dict(zip(OVERHEAD_ROLES, (settings.simulator_model, settings.judge_model)))}
-        contexts = {a.sample_id: TrialContext(settings, a, case_lookup[a.case_id], combo)
-                    for a in assignments if a.combination_id == combo.id and a.sample_id not in carried_ids}
-        if not contexts:
-            continue
-        role_models = {role: get_model(
-            model_id, role=role, memoize=False,
-            config=GenerateConfig(**settings.model_generation[model_id].model_dump())
-            if model_id in settings.model_generation else GenerateConfig(),
-            **settings.model_args.get(model_id, {})) for role, model_id in model_ids.items()}
-        samples = []
-        for context in contexts.values():
-            sample = target.prepare_sample(context)
-            sample.id = context.assignment.sample_id
-            samples.append(sample)
-        tasks.append(Task(
-            name=f"{target.name}-{len(tasks)}", dataset=samples,
-            solver=trial_solver(target, contexts, records), scorer=trial_scorer(records),
-            model=role_models["role-driver"], model_roles=role_models,
-            fail_on_error=False, time_limit=settings.hard_limit_seconds,
-        ))
+    setup_limit = None
+    try:
+        # Resolve all model providers before executing any trial. No generation here.
+        for combo in settings.resolved_combinations():
+            model_ids = {**combo.role_models(), **dict(zip(OVERHEAD_ROLES, (settings.simulator_model, settings.judge_model)))}
+            contexts = {a.sample_id: TrialContext(settings, a, case_lookup[a.case_id], combo, guard)
+                        for a in assignments if a.combination_id == combo.id and a.sample_id not in carried_ids}
+            if not contexts:
+                continue
+            role_models = {role: get_model(
+                model_id, role=role, memoize=False,
+                config=GenerateConfig(**settings.model_generation[model_id].model_dump())
+                if model_id in settings.model_generation else GenerateConfig(),
+                **settings.model_args.get(model_id, {})) for role, model_id in model_ids.items()}
+            samples = []
+            for context in contexts.values():
+                sample = target.prepare_sample(context)
+                sample.id = context.assignment.sample_id
+                samples.append(sample)
+            tasks.append(Task(
+                name=f"{target.name}-{len(tasks)}", dataset=samples,
+                solver=trial_solver(target, contexts, records, guard), scorer=trial_scorer(records),
+                model=role_models["role-driver"], model_roles=role_models,
+                fail_on_error=False, time_limit=settings.hard_limit_seconds,
+            ))
+    except LimitReached as error:
+        # A synchronous setup step ran out of time: no trial starts and the campaign ends as a limit, step named.
+        guard.fire(error.reason)
+        guard.note_cut_off(error.step, error.reason)
+        setup_limit = {"reason": error.reason, "step": error.step}
+        tasks = []
     started = time.monotonic()
     logs = eval(tasks, log_dir=str(target.logs_dir), display="none", retry_on_error=0,
-                log_model_api=False, max_tasks=1) if tasks else []
+                log_model_api=False, max_tasks=1,
+                max_samples=1) if tasks else []  # sequential: the guard sees one trial's live spend at a time
     sample_logs = {str(s.id): s for log in logs for s in log.samples or []}
     for assignment in assignments:
         if assignment.sample_id in carried_ids:
@@ -143,14 +211,17 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
         sample = sample_logs.get(assignment.sample_id)
         record = records.get(assignment.sample_id)
         if record is None:
-            record = TrialRecord(**assignment.model_dump(), outcome="infrastructure", reason="inspect_sample_unavailable")
+            if setup_limit:
+                record = TrialRecord(**assignment.model_dump(), outcome="limit", reason=setup_limit["reason"], limit_step=setup_limit["step"])
+            else:
+                record = TrialRecord(**assignment.model_dump(), outcome="infrastructure", reason="inspect_sample_unavailable")
             records[assignment.sample_id] = record
         if sample is not None:
             record.wall_seconds = sample.total_time or record.wall_seconds
             record.usage_by_role = {role: usage.model_dump() for role, usage in sample.role_usage.items()}
             if sample.limit:
-                record.outcome = "failure"
-                record.reason = "timeout" if sample.limit.type in ("time", "working") else "limit"
+                record.outcome = "limit"
+                record.reason = "trial_time" if sample.limit.type in ("time", "working") else sample.limit.type
             elif sample.error:
                 # All target/model exceptions were caught inside our solver. An error
                 # outside it is Inspect setup/scorer/cleanup infrastructure. EvalError
@@ -200,16 +271,25 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
         roles = {**combo.role_models(), "simulator": settings.simulator_model, "judge": settings.judge_model}
         comparisons.append({"id": combo.id, "role_models": roles, "core": core_metrics(trials, settings, roles),
                             "target_metrics": target.report_metrics([r.target_metrics for r in trials if r.target_metrics])})
+    try:
+        target_versions = target.versions(settings)
+    except (subprocess.TimeoutExpired, LimitReached):
+        # A version probe that blocks must not hold the command past the cap.
+        target_versions = {"unavailable": "version probe timed out"}
+        guard.note_cut_off("version_probe", guard.step_stop_reason())
+    models_in_use = sorted({m for c in comparisons for m in c["role_models"].values()})
     summary = {
         "schema_version": 1, "campaign": settings.campaign, "target": target.name,
         "projection_cohort": projection_cohort,
         "settings": settings.recorded(),
         "pinned_models": {"simulator": settings.simulator_model, "judge": settings.judge_model},
-        "versions": {"harness": harness_versions(), "target": target.versions(settings),
+        "versions": {"harness": harness_versions(), "target": target_versions,
                      "eval_cases": {c.id: c.version for c in cases}},
         "matched_assignment": [a.model_dump() for a in assignments],
         "classification_rules": CLASSIFICATION_RULES,
-        "campaign_wall_seconds": time.monotonic() - started,
+        "campaign_wall_seconds": None,  # finalized when the report is written (command start to report written)
+        "budget": budget_summary(guard, comparisons, models_in_use),
+        "setup_limit": setup_limit,
         "comparisons": comparisons, "trials": [r.recorded() for r in ordered_records],
         "capture_run": str(target.run_directory) if hasattr(target, "run_directory") else None,
         "sources": {**{k: str(v) for k, v in getattr(target, "carried_sources", {}).items()},
@@ -227,8 +307,9 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
         # This is private, never a report-export bypass.
         (target.run_directory / "records.json").write_text(json.dumps(summary, indent=2) + "\n")
     try:
-        return write_report(target.results_dir, summary, provider_config_paths=provider_config_paths,
-                            report_directory=report_directory)
+        return publish(target.results_dir, summary, provider_config_paths=provider_config_paths,
+                       report_directory=report_directory, deadline=guard.deadline, command_start=guard.started,
+                       minimal_only=setup_limit is not None)
     except UnsafeReportError:
         if hasattr(target, "run_directory"):
             print(f"Private captures kept. Rescore with: evalctl rescore {target.run_directory}", flush=True)

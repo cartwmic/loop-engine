@@ -2,9 +2,10 @@ import pytest
 from inspect_ai.model import ModelOutput, ModelRefusalError
 from inspect_ai.util import SandboxUnavailableError
 
-from evalcore.accounting import TrialRecord, classify_exception, core_metrics, cost_by_role
+from evalcore.accounting import (TrialRecord, campaign_totals, classify_exception, core_metrics, cost_by_role,
+                                 cost_verdict, estimate_usd, usage_cost_usd)
 from evalcore.settings import CampaignSettings
-from evalcore.target import InfrastructureError, ModelError
+from evalcore.target import InfrastructureError, LimitReached, ModelError
 
 
 def settings(**overrides):
@@ -74,3 +75,59 @@ def test_cached_input_counts_toward_tokens_and_cost():
     assert row["total_tokens"] == 10 + 5 + 1_000_000 + 100
     # cache write falls back to the input price
     assert row["estimated_usd"] == pytest.approx((10 * 1 + 5 * 2 + 1_000_000 * 0.1 + 100 * 1) / 1_000_000)
+
+
+def test_limit_reached_is_limit_with_its_reason_even_when_nested():
+    assert classify_exception(LimitReached("campaign_dollars", "judge")) == ("limit", "campaign_dollars")
+    outer = RuntimeError()
+    outer.__cause__ = LimitReached("campaign_wall_time", "capture")
+    assert classify_exception(outer) == ("limit", "campaign_wall_time")
+
+
+def test_limit_counts_as_scorable_non_success():
+    configuration = settings()
+    roles = {**configuration.resolved_combinations()[0].role_models(),
+             "simulator": configuration.simulator_model, "judge": configuration.judge_model}
+    limited = record("a", 1, "limit")
+    limited.reason = "campaign_dollars"
+    result = core_metrics([limited, record("a", 2, "success"), record("a", 3, "success")], configuration, roles)
+    assert (result["success_rate"]["numerator"], result["success_rate"]["denominator"]) == (2, 3)
+    assert result["pass_k"]["numerator"] == 0
+    assert result["limits"] == {"campaign_dollars": 1}
+    assert result["infrastructure_failure_rate"]["numerator"] == 0
+
+
+def test_one_price_rule_for_live_and_final_estimates():
+    s = settings(prices={"mockllm/model": {"input_per_million": 1, "output_per_million": 2, "cache_read_per_million": 0.1}})
+    usage = {"input_tokens": 10, "output_tokens": 5, "input_tokens_cache_read": 1_000_000, "input_tokens_cache_write": 100}
+    r = record("c", 1, "success")
+    r.usage_by_role = {"role-driver": usage}
+    final = cost_by_role([r], s, {"role-driver": "mockllm/model"}, ("role-driver",))["by_role"]["role-driver"]["estimated_usd"]
+    assert usage_cost_usd(usage, s.prices["mockllm/model"]) == pytest.approx(final)
+    assert estimate_usd(s, {"role-driver": "mockllm/model"}, {"role-driver": usage}) == pytest.approx(final)
+
+
+def test_unpriced_model_never_estimates_as_zero():
+    s = settings()
+    usage = {"input_tokens": 10, "output_tokens": 5}
+    assert usage_cost_usd(usage, None) is None
+    assert estimate_usd(s, {"role-driver": "mockllm/model"}, {"role-driver": usage}) is None
+    assert estimate_usd(s, {"role-driver": "mockllm/model"}, {"role-driver": {}}) == 0
+
+
+def test_cost_verdicts():
+    priced = settings(prices={"mockllm/model": {"input_per_million": 1, "output_per_million": 2}}, campaign_budget_usd=5)
+    models = ["mockllm/model"]
+    assert cost_verdict(priced, models, 4.99) == "pass"
+    assert cost_verdict(priced, models, 5.0) == "pass"
+    assert cost_verdict(priced, models, 5.01) == "fail_over_cap"
+    assert cost_verdict(priced, models, None) == "fail_unknown_usage"
+    assert cost_verdict(priced, ["mockllm/other"], 0.0) == "fail_unpriced"
+    assert cost_verdict(settings(), models, None) == "not_budgeted"
+
+
+def test_campaign_totals_are_none_when_any_part_is_unknown():
+    part = {"total_tokens": 10, "estimated_usd": 1.0}
+    unknown = {"total_tokens": 10, "estimated_usd": None}
+    assert campaign_totals([{"core": {"workflow_cost": part, "evaluation_overhead": part}}]) == {"total_tokens": 20, "estimated_usd": 2.0}
+    assert campaign_totals([{"core": {"workflow_cost": part, "evaluation_overhead": unknown}}])["estimated_usd"] is None

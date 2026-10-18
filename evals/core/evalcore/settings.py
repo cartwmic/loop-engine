@@ -44,7 +44,7 @@ class CampaignSettings(StrictModel):
     preset: Literal["small", "medium"] = "small"
     case_count: int | None = Field(default=None, ge=1)
     trials_per_case: int | None = Field(default=None, ge=1)
-    profile: str = "standard-14"
+    profile: str = "standard-16"
     cases_path: Path
     simulator_model: str = Field(pattern=r"^[^/\s]+/\S+$")
     judge_model: str = Field(pattern=r"^[^/\s]+/\S+$")
@@ -58,8 +58,21 @@ class CampaignSettings(StrictModel):
     model_generation: dict[str, ModelGenerationSettings] = Field(default_factory=dict, alias="model_config")
     # Read on the host for the pre-write scan; contents are never serialized.
     provider_config_paths: tuple[Path, ...] = ()
-    loop_engine_version: str = "v0.24.0"
-    provider_version: str = "v0.24.0"
+    loop_engine_version: str = "v0.26.0"
+    provider_version: str = "v0.26.0"
+    # Campaign budget. All optional; unset means that limit is off. D is the cap, S = D - post_trial_reserve
+    # is where trial work stops, H = D - publication_reserve is where post-trial steps must be done.
+    campaign_wall_limit_seconds: int | None = Field(default=None, ge=1)
+    campaign_budget_usd: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    campaign_token_budget: int | None = Field(default=None, ge=1)
+    # Best effort: the dollar stop line is the cap minus this margin (size it to the largest single call).
+    dollar_margin_usd: float = Field(default=0.25, ge=0, allow_inf_nan=False)
+    post_trial_reserve_seconds: int = Field(default=600, ge=1)
+    publication_reserve_seconds: int = Field(default=120, ge=1)
+    guard_poll_seconds: float = Field(default=5, gt=0, allow_inf_nan=False)
+    stop_grace_seconds: float = Field(default=30, ge=0, allow_inf_nan=False)
+    tier: str | None = None
+    report_note: str | None = None
     # Target-specific options (e.g. a driver command) are not interpreted by core.
     target_options: dict = Field(default_factory=dict)
 
@@ -74,6 +87,15 @@ class CampaignSettings(StrictModel):
                   *(model for combo in combos for model in combo.role_models().values())]
         if any(key not in models for key in self.model_generation):
             raise ValueError("model_config keys must name a configured role model")
+        if self.campaign_budget_usd is not None:
+            unpriced = sorted({m for m in models if m not in self.prices})
+            if unpriced:
+                raise ValueError("a dollar budget needs a price for every model in use; unpriced: " + ", ".join(unpriced))
+            if self.dollar_margin_usd >= self.campaign_budget_usd:
+                raise ValueError("dollar_margin_usd must be below campaign_budget_usd")
+        if self.campaign_wall_limit_seconds is not None and not (
+                self.publication_reserve_seconds < self.post_trial_reserve_seconds < self.campaign_wall_limit_seconds):
+            raise ValueError("need publication_reserve_seconds < post_trial_reserve_seconds < campaign_wall_limit_seconds")
         if any(model.startswith("pi/") for model in models):
             from .pi import pi_config_paths
             paths = tuple(dict.fromkeys((*self.provider_config_paths, *pi_config_paths())))

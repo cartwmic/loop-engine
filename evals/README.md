@@ -15,10 +15,12 @@ software-change workflow on their own private cases. Do not use it when you need
 
 - A public benchmark, leaderboard or statistically significant ranking. Defaults
   are 3 cases x 3 trials, and the first pilot ran 3 cases x 1 trial.
-- Cheap or fast runs. One real trial can take one to three hours and millions of
-  workflow tokens.
+- Cheap or fast runs by default. One full real trial can take one to three hours and
+  millions of workflow tokens. Budgeted small campaigns exist for that reason:
+  [software-change/TIERS.md](software-change/TIERS.md) defines Tier 0, a 30-minute, 5-dollar
+  cost-and-time floor, and the single-step build-up from it.
 - Another host setup. It needs native arm64 Docker, uv, host Pi/Node for `pi/`
-  models, and an image built from a pinned local Loop Engine ref (default `v0.24.0`).
+  models, and an image built from a pinned local Loop Engine ref (default `v0.26.0`).
 - A trustworthy intent-quality verdict. The first owner-labelled calibration of the
   intent judge agreed with the owner on 4 of 10 labelled intents (0 of 2 deficient
   intents passed). Treat intent-judge scores as low-confidence signal.
@@ -60,7 +62,7 @@ uv run --project evals evalctl image-check
 uv run --project evals evalctl case-check evals/software-change/example-case
 ```
 
-`image-check` builds from a pinned local Git ref (default `v0.24.0`), records the
+`image-check` builds from a pinned local Git ref (default `v0.26.0`), records the
 resolved commit and executable versions, and checks an empty mount list. Building
 requires network access for image-layer dependencies, but no model credentials.
 Use `--ref REF --tag TAG` for another pinned image. `case-check` verifies and reuses the existing pinned arm64 image; it never builds.
@@ -165,13 +167,15 @@ public single-case example explicitly selects 1 x 1; a small campaign against on
 that case is rejected rather than silently reducing counts. `--preset medium`,
 `--case-count N`, `--trials-per-case K`, `--profile CONFIG_VERSION`, repeated
 `--model ID`, or repeated `--combination JSON` override settings. Default profile
-is shipped `standard-14` at `v0.24.0`; other shipped profiles require exact
+is shipped `standard-16` at `v0.26.0`; other shipped profiles (`minimal-16`, `high-rigor-16`) require exact
 config-version IDs. Defaults are `idle_limit_seconds = 1800` and `hard_limit_seconds = 28800`.
 The hard limit includes scoring; software-change stops idle drivers on unchanged
 engine history/sequence and role token usage. The former `time_limit_seconds`
 setting is replaced (update local TOMLs).
 All settings and versions are recorded. Paths resolve relative to invocation cwd.
-See the core README for price tables and the target README for target options.
+See the core README for price tables and for campaign budgets, stops and the `limit`
+outcome (`campaign_wall_limit_seconds`, `campaign_budget_usd`); see the target README for
+target options. Trials run one at a time.
 
 ### Calibration
 

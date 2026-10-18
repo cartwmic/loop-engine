@@ -40,7 +40,7 @@ def campaign(settings_name):
 
 def test_default_and_high_rigor_profiles_change_what_actually_runs():
     seen = {}
-    for settings_name, expected in (("scripted-example.toml", "standard-14"), ("scripted-high-rigor.toml", "high-rigor-14")):
+    for settings_name, expected in (("scripted-example.toml", "standard-16"), ("scripted-high-rigor.toml", "high-rigor-16")):
         summary, markdown = campaign(settings_name)
         trial = summary["trials"][0]
         metrics = trial["target_metrics"]
@@ -53,4 +53,4 @@ def test_default_and_high_rigor_profiles_change_what_actually_runs():
         assert f'"profile_config_version": "{expected}"' in markdown
         assert summary["comparisons"][0]["target_metrics"]["software_change_metrics"][0]["profile_config_version"] == expected
         seen[expected] = metrics["profile_config_version"]
-    assert seen == {"standard-14": "standard-14", "high-rigor-14": "high-rigor-14"}
+    assert seen == {"standard-16": "standard-16", "high-rigor-16": "high-rigor-16"}

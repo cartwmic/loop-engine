@@ -92,7 +92,7 @@ def validate_continuation(summary, current, assignments):
         raise ValueError("continuation would execute unintended assignments")
 
 
-def resume_campaign(target, settings, source, *, resume_interrupted=False, provider_config_paths=()):
+def resume_campaign(target, settings, source, *, resume_interrupted=False, provider_config_paths=(), clock_start=None):
     from .runner import run_campaign
     summary, captures = load_run(source)
     original = settings_from_recorded(summary["settings"])
@@ -143,4 +143,5 @@ def resume_campaign(target, settings, source, *, resume_interrupted=False, provi
         raise ValueError("deadline continuation cannot rerun a carried scored record")
     target.sources = sources
     target.carried_sources = carried_sources
-    return run_campaign(target, settings, carried_records=carried, provider_config_paths=provider_config_paths)
+    return run_campaign(target, settings, carried_records=carried, provider_config_paths=provider_config_paths,
+                        clock_start=clock_start)

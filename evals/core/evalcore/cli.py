@@ -1,4 +1,8 @@
 """evalctl and the target-owned subcommand registration contract."""
+import time
+
+COMMAND_START = time.monotonic()  # the campaign clock starts with the command, before the slow imports below
+
 import argparse
 import importlib
 import json
@@ -55,11 +59,11 @@ def campaign(args):
     if args.resume:
         from .continuation import resume_campaign
         destination = resume_campaign(target, settings, args.resume, resume_interrupted=args.resume_interrupted,
-                                      provider_config_paths=config_paths)
+                                      provider_config_paths=config_paths, clock_start=COMMAND_START)
     else:
         if args.resume_interrupted:
             raise ValueError("--resume-interrupted requires --resume")
-        destination = run_campaign(target, settings, provider_config_paths=config_paths)
+        destination = run_campaign(target, settings, provider_config_paths=config_paths, clock_start=COMMAND_START)
     print(f"Report written: {destination}")
     return 0
 
@@ -119,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         args = build_parser(plugins).parse_args(argv)
         return args.handler(args) or 0
     except ValidationError:
-        print("Settings invalid: supply models OR combinations, cases_path, simulator_model and judge_model; check positive counts and Inspect provider/model IDs.", file=sys.stderr)
+        print("Settings invalid: supply models OR combinations, cases_path, simulator_model and judge_model; check positive counts and Inspect provider/model IDs. A dollar budget needs a price for every model in use.", file=sys.stderr)
         return 2
     except OwnerApprovalRequired:
         print("Owner-pending: replace required model IDs with owner-chosen Inspect models and obtain paid-call approval before launch; no trial started.", file=sys.stderr)

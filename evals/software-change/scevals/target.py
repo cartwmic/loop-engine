@@ -23,7 +23,7 @@ from evalcore.report import utc_timestamp
 from .capture import ReplayContainer, captured_lifecycle, read_capture, restore
 from .label_gate import check_projection_label_gate
 from evalcore.settings import Case
-from evalcore.target import InfrastructureError, ModelError, TrialExecution, TrialScore
+from evalcore.target import InfrastructureError, LimitReached, ModelError, TrialExecution, TrialScore
 from .cases import RUNTIME, load_case
 from .calibration import calibration_for_report
 from .judge import JUDGE_CONTRACT, judge_intent
@@ -93,6 +93,24 @@ CAPTURE_TAR_COMMAND = ("tar --exclude-caches-all --exclude=.cache -cf /tmp/works
 
 # Time reserved after the driver stops for state capture and scoring.
 DRIVER_LIMIT_MARGIN_SECONDS = 300
+CAPTURE_SECONDS = 600       # own limit of the capture step; the campaign allowance can only shorten it
+PROBE_SECONDS = 60          # own limit of a synchronous setup probe (Docker image inspection, ref lookup)
+
+KILL_DRIVER = ["python3", "-c",
+               "import os,signal; from pathlib import Path;"
+               "\ntry: os.killpg(int(Path('/workspace/trial/driver.pid').read_text()), signal.SIGKILL)"
+               "\nexcept (ProcessLookupError,FileNotFoundError): pass"]
+
+
+def allowance(context, own_limit):
+    """Time for one post-trial step: its own limit bounded by what is left before the campaign's hard end."""
+    guard = getattr(context, "guard", None)
+    return guard.allowance(own_limit) if guard is not None else own_limit
+
+
+def limit_reason(context):
+    guard = getattr(context, "guard", None)
+    return guard.step_stop_reason() if guard is not None else "campaign_wall_time"
 from .image import DEFAULT_IMAGE, REPOSITORY, output
 from .owner import SimulatedOwner
 from .scoring import discipline, honesty, recall, reviews_passed, run_health
@@ -269,11 +287,18 @@ class SoftwareChangeTarget:
         if not re.fullmatch(r"[a-zA-Z0-9-]+", context.settings.profile):
             raise ValueError("profile must be a shipped config_version")
         image = options.get("image", DEFAULT_IMAGE)
-        identity = json.loads(subprocess.check_output(["docker", "image", "inspect", image], text=True))[0]
-        labels = identity["Config"].get("Labels") or {}
-        for ref in (context.settings.loop_engine_version, context.settings.provider_version):
-            if labels.get("org.opencontainers.image.revision") != resolve_ref(ref):
-                raise ValueError("trial image does not match the configured engine/provider ref; run image-check")
+        # Synchronous probes: bounded by the campaign's remaining time, so a blocked Docker cannot hold the command.
+        probe = allowance(context, PROBE_SECONDS)
+        if probe is not None and probe <= 0:
+            raise LimitReached(limit_reason(context), "image_inspection")
+        try:
+            identity = json.loads(output(["docker", "image", "inspect", image], timeout=probe))[0]
+            labels = identity["Config"].get("Labels") or {}
+            for ref in (context.settings.loop_engine_version, context.settings.provider_version):
+                if labels.get("org.opencontainers.image.revision") != resolve_ref(ref):
+                    raise ValueError("trial image does not match the configured engine/provider ref; run image-check")
+        except subprocess.TimeoutExpired:
+            raise LimitReached(limit_reason(context), "image_inspection") from None
         if identity["Architecture"] != "arm64" or identity["Os"] != "linux":
             raise ValueError("trial image must be native arm64 Linux")
         if identity["Config"].get("Volumes"):
@@ -400,9 +425,22 @@ class SoftwareChangeTarget:
                                         raise InfrastructureError("idle driver stop failed")
                                     return
 
+                        async def watch_campaign_stop():
+                            # A campaign stop (wall time, dollars, tokens) ends the driver the same way the idle stop does.
+                            while not driver_done.is_set():
+                                if context.guard.stop_reason:
+                                    evidence["driver_timed_out"] = True
+                                    evidence["driver_timeout_kind"] = "limit"
+                                    await env.exec(KILL_DRIVER, timeout=30)
+                                    return
+                                with anyio.move_on_after(0.5):
+                                    await driver_done.wait()
+
                         async with anyio.create_task_group() as drivers:
                             if context.settings.idle_limit_seconds is not None:
                                 drivers.start_soon(watch_progress)
+                            if context.guard is not None and context.guard.active:
+                                drivers.start_soon(watch_campaign_stop)
                             try:
                                 driver_started = True
                                 result = await env.exec(["python3", "/opt/sc-evals/driver_process.py",
@@ -441,10 +479,7 @@ class SoftwareChangeTarget:
             with anyio.CancelScope(shield=True):
                 if driver_started and not driver_finished:
                     # No outer deadline does not mean ignoring explicit cancellation.
-                    await env.exec(["python3", "-c",
-                                    "import os,signal; from pathlib import Path;"
-                                    "\ntry: os.killpg(int(Path('/workspace/trial/driver.pid').read_text()), signal.SIGKILL)"
-                                    "\nexcept (ProcessLookupError,FileNotFoundError): pass"], timeout=30)
+                    await env.exec(KILL_DRIVER, timeout=30)
                 reason = provider_route_failure()
                 if reason:
                     evidence["provider_route_failure"] = reason
@@ -456,7 +491,10 @@ class SoftwareChangeTarget:
         archive, meta = read_capture(self.capture_for(context))
         if captured_lifecycle(archive) not in ("final", "terminated") and reason:
             raise InfrastructureError(reason)
-        return TrialExecution(terminal=False, data=(archive, meta))
+        # A driver stopped by the per-trial hard limit or a campaign stop is a limit, not an ordinary failure.
+        kind = evidence.get("driver_timeout_kind")
+        stop = "trial_time" if kind == "hard" else (context.guard.stop_reason if kind == "limit" else None)
+        return TrialExecution(terminal=False, data=(archive, meta), stop_reason=stop)
 
     async def inspect_capture(self, trial):
         env, evidence = trial.env, trial.evidence
@@ -506,6 +544,24 @@ class SoftwareChangeTarget:
     async def capture_raw(self, trial, context, prior):
         """No host parsing or report secrecy scan may precede durable raw capture."""
         env = trial.env
+        capture = self.capture_for(context)
+        capture.mkdir(mode=0o700, parents=True, exist_ok=False)
+        # Per-trial isolation evidence goes to disk before the bulk archive, so a capture cut off at the deadline keeps it.
+        (capture / "isolation.json").write_text(json.dumps(trial.evidence["container"], indent=2) + "\n")
+        window = allowance(context, CAPTURE_SECONDS)
+        with anyio.move_on_after(window) as scope:
+            delay = context.settings.target_options.get("scripted_capture_delay_seconds")
+            if delay:  # proof hook: make capture deliberately slow
+                await anyio.sleep(delay)
+            await self.capture_archive(trial, context, prior, capture, 600 if window is None else max(1, min(600, window)))
+        if scope.cancelled_caught:
+            guard = getattr(context, "guard", None)
+            if guard is not None:
+                guard.note_cut_off("capture", limit_reason(context), context.assignment.sample_id)
+            raise LimitReached(limit_reason(context), "capture")
+
+    async def capture_archive(self, trial, context, prior, capture, tar_timeout):
+        env = trial.env
         # Generate raw CLI receipts without interpreting their contents. Failure
         # (including no run yet) is retained, not allowed to veto the workspace tar.
         for operation, arguments in (("show", ["show", "--view", "full", trial.evidence["run_id"]]),
@@ -520,12 +576,10 @@ class SoftwareChangeTarget:
         result = await env.exec(["sh", "-c", CAPTURE_TAR_COMMAND + ' && '
             'rm -rf /tmp/capture-parts && mkdir /tmp/capture-parts && '
             f'split -b {chunk} -d -a 6 /tmp/workspace.tar /tmp/capture-parts/part-'],
-            cwd="/workspace", timeout=600)
+            cwd="/workspace", timeout=tar_timeout)
         if not result.success:
             raise InfrastructureError("raw workspace capture failed")
         parts = await env.exec(["sh", "-c", "ls /tmp/capture-parts"], timeout=30)
-        capture = self.capture_for(context)
-        capture.mkdir(mode=0o700, parents=True, exist_ok=False)
         # Write incrementally: preserve completed chunks even if a later read fails.
         with (capture / "workspace.tar.partial").open("wb") as stream:
             for name in sorted(parts.stdout.split()):
@@ -550,6 +604,7 @@ class SoftwareChangeTarget:
             meta["execution_continuation"] = self.execution_continuation
         (capture / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
 
+
     async def score(self, state, execution, context):
         archive, meta = execution.data
         execution.terminal = captured_lifecycle(archive) in ("final", "terminated")
@@ -561,26 +616,37 @@ class SoftwareChangeTarget:
         if (getattr(self, "operation", "campaign") != "rescore" and
                 context.settings.target_options.get("scripted_scoring_error_trial") == context.assignment.trial):
             raise RuntimeError("scripted scoring harness error")
-        async with ReplayContainer(context.settings.target_options.get("image", DEFAULT_IMAGE)) as env:
-            await restore(env, archive)
-            case = load_case(context.case.path)
-            owner = SimulatedOwner(case, context.settings.simulator_model)
-            owner.answers = meta.get("simulated_owner", {}).get("answers", [])
-            evidence = dict(meta.get("evidence", {}))
-            evidence["original_usage_available"] = meta.get("original_usage_available", True)
-            evidence["owner_history_available"] = "simulated_owner" in meta
-            evidence.setdefault("run_id", "eval-trial")
-            evidence.setdefault("copy_log", [])
-            evidence.setdefault("copy_out_log", [{"kind": "external_workspace", "phase": "after_driver", "elapsed_seconds": 0}])
-            # Elapsed metrics use the original driver clock, not replay wall time.
-            elapsed = evidence.get("copy_out_log", [{}])[0].get("elapsed_seconds", 0)
-            evidence["started"] = time.monotonic() - elapsed
-            trial = TerminalTrial(env, case, owner, evidence, False, None)
-            await self.inspect_capture(trial)
-            execution.terminal = trial.terminal
-            if not trial.terminal:
-                return TrialScore(False, trial.metrics())
-            return await self.score_capture(trial, archive, context)
+        # Scoring has the time left before the campaign's hard end; a step that outlasts it is abandoned.
+        window = allowance(context, None)
+        with anyio.move_on_after(window) as scope:
+            async with ReplayContainer(context.settings.target_options.get("image", DEFAULT_IMAGE)) as env:
+                delay = context.settings.target_options.get("scripted_scoring_delay_seconds")
+                if delay and getattr(self, "operation", "campaign") != "rescore":
+                    await anyio.sleep(delay)  # proof hook: make scoring deliberately slow
+                await restore(env, archive)
+                case = load_case(context.case.path)
+                owner = SimulatedOwner(case, context.settings.simulator_model)
+                owner.answers = meta.get("simulated_owner", {}).get("answers", [])
+                evidence = dict(meta.get("evidence", {}))
+                evidence["original_usage_available"] = meta.get("original_usage_available", True)
+                evidence["owner_history_available"] = "simulated_owner" in meta
+                evidence.setdefault("run_id", "eval-trial")
+                evidence.setdefault("copy_log", [])
+                evidence.setdefault("copy_out_log", [{"kind": "external_workspace", "phase": "after_driver", "elapsed_seconds": 0}])
+                # Elapsed metrics use the original driver clock, not replay wall time.
+                elapsed = evidence.get("copy_out_log", [{}])[0].get("elapsed_seconds", 0)
+                evidence["started"] = time.monotonic() - elapsed
+                trial = TerminalTrial(env, case, owner, evidence, False, None)
+                await self.inspect_capture(trial)
+                execution.terminal = trial.terminal
+                if not trial.terminal:
+                    return TrialScore(False, trial.metrics())
+                return await self.score_capture(trial, archive, context)
+        if scope.cancelled_caught:
+            guard = getattr(context, "guard", None)
+            if guard is not None:
+                guard.note_cut_off("scoring", limit_reason(context), context.assignment.sample_id)
+            raise LimitReached(limit_reason(context), "scoring")
 
     async def score_capture(self, trial, archive, context):
         """All campaign and replay metrics read restored captured state only."""
@@ -629,11 +695,7 @@ class SoftwareChangeTarget:
         # evaluation overhead, never to the workflow model comparison.
         # The judge is evaluation overhead: its failure must not fail the trial of
         # the model under test. Report the judgment as unavailable instead.
-        try:
-            judge_metrics = ((await judge_intent(intent, trial.case.brief.read_text())).metrics() if intent_valid
-                             else {"status": "intent_missing_or_invalid", "model": context.settings.judge_model})
-        except ModelError:
-            judge_metrics = {"status": "judge_error", "model": context.settings.judge_model}
+        judge_metrics = await self.judge(trial, context, intent, intent_valid)
         health = run_health(snapshot, history, snapshot["lifecycle"] == "final", trial.evidence.get("driver_exit_code"))
         passed_reviews = reviews_passed(snapshot, history)
         sources = {h["action"]["transition"]["source"] for h in history if h["action"]["kind"] == "transition"}
@@ -656,6 +718,37 @@ class SoftwareChangeTarget:
             metrics["run_health"]["unattended_finish"] = None
         return TrialScore(success and intent_valid and snapshot["lifecycle"] == "final" and not trial.evidence.get("driver_timed_out", False), metrics)
 
+    def judge_skip_reason(self, trial, context):
+        """Why no judge model call may be made now: any campaign stop, a stopped trial, or a closed post-trial window."""
+        guard = getattr(context, "guard", None)
+        if guard is not None and not guard.model_calls_allowed():
+            return guard.step_stop_reason()
+        if getattr(self, "operation", "campaign") == "rescore":
+            return None
+        kind = trial.evidence.get("driver_timeout_kind")
+        if kind == "hard":
+            return "trial_time"
+        if kind == "limit":
+            return guard.stop_reason if guard is not None else "campaign_wall_time"
+        return None
+
+    async def judge(self, trial, context, intent, intent_valid):
+        """The judge is evaluation overhead: its failure or a budget stop never fails the trial under test."""
+        if not intent_valid:
+            return {"status": "intent_missing_or_invalid", "model": context.settings.judge_model}
+        guard = getattr(context, "guard", None)
+        skip = self.judge_skip_reason(trial, context)
+        if skip is None:
+            try:
+                with anyio.move_on_after(allowance(context, None)) as scope:
+                    return (await judge_intent(intent, trial.case.brief.read_text())).metrics()
+            except ModelError:
+                return {"status": "judge_error", "model": context.settings.judge_model}
+            skip = limit_reason(context)
+        if guard is not None:
+            guard.note_cut_off("judge", skip, context.assignment.sample_id)
+        return {"status": "limit", "reason": skip, "model": context.settings.judge_model}
+
     def finalize_metrics(self, metrics, *, usage_by_role, terminal, outcome, reason):
         """Core calls after Inspect has finalized authoritative alias accounting."""
         metrics = dict(metrics)
@@ -677,7 +770,8 @@ class SoftwareChangeTarget:
                    "revise_loops_per_gate": None, "schema_failures": None, "correction_retries": None,
                    "overruns": None, "timeouts": 0, "cancellations": 0})
         if reason == "timeout" or metrics.get("driver_timed_out"):
-            health["timeouts"] += 1
+            if metrics.get("driver_timeout_kind") != "limit":  # a campaign stop is a budget limit, not a timeout
+                health["timeouts"] += 1
             health["timeout_kind"] = metrics.get("driver_timeout_kind", "hard")
             health["unattended_finish"] = False
         health["trial_outcome"] = outcome

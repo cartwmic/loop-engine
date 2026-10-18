@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from evalcore.report import UnsafeReportError, protected_values, scan_results, write_report
+from evalcore.limits import DOLLAR_CAP_BASIS
+from evalcore.report import UnsafeReportError, protected_values, render_budget, render_markdown, scan_results, write_report
 
 
 def summary(value="safe"):
@@ -97,3 +98,28 @@ def test_short_config_words_do_not_refuse_reports(tmp_path):
     scan_results([json.dumps({"profile": "standard-14", "auth": "oauth email"})], protected)
     with pytest.raises(UnsafeReportError):
         scan_results([json.dumps({"leak": token})], protected)
+
+
+def budget(verdict, usd, **overrides):
+    value = {"tier": "tier-0", "note": "Tier 0 is a cost-and-time floor, not a ranking.",
+             "caps": {"wall_seconds": 1800, "usd": 5.0, "tokens": None, "dollar_margin_usd": 0.5},
+             "actual": {"usd": usd, "tokens": 1234, "wall_seconds": 12.5}, "wall_within_cap": True,
+             "cost_verdict": verdict, "dollar_cap_basis": DOLLAR_CAP_BASIS,
+             "stop_events": [{"reason": "campaign_dollars", "elapsed_seconds": 7.0}],
+             "cut_off_steps": [{"step": "judge", "reason": "campaign_dollars", "sample_id": "m0-c0-t1"}]}
+    return {**value, **overrides}
+
+
+@pytest.mark.parametrize("verdict,usd,text", [("pass", 3.2, "$3.2000"), ("fail_over_cap", 5.7, "$5.7000"),
+                                              ("fail_unpriced", None, "unknown (unpriced or unavailable)")])
+def test_budget_section_states_verdict_spend_stops_and_cut_off_steps(verdict, usd, text):
+    out = "\n".join(render_budget({**summary(), "campaign_wall_seconds": 12.5, "budget": budget(verdict, usd)}))
+    for expected in (f"Cost verdict: **{verdict}**", text, "stop line: 4.5000", "campaign_dollars at 7.0s",
+                     "judge (campaign_dollars, m0-c0-t1)", "best effort", "Tier 0 is a cost-and-time floor, not a ranking.", "12.5"):
+        assert expected in out
+    assert "Cost verdict" in render_markdown({**summary(), "campaign_wall_seconds": 12.5, "budget": budget(verdict, usd)})
+
+
+def test_unbudgeted_untiered_report_has_no_budget_section():
+    unbudgeted = budget("not_budgeted", 1.0, tier=None, note=None, caps={"wall_seconds": None, "usd": None, "tokens": None, "dollar_margin_usd": 0.25})
+    assert render_budget({**summary(), "budget": unbudgeted}) == []

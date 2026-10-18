@@ -1,7 +1,7 @@
 # Source is exported by scevals.image from this checkout at LOOP_ENGINE_REF.
 FROM rust:1.98.0-bookworm AS build
 ARG TARGETARCH
-ARG LOOP_ENGINE_REF=v0.24.0
+ARG LOOP_ENGINE_REF=v0.26.0
 ARG LOOP_ENGINE_COMMIT
 # Optional eval-only memory bound (empty = cargo default parallelism, unchanged behaviour).
 ARG SC_CARGO_JOBS=
@@ -12,7 +12,7 @@ RUN test "$TARGETARCH" = arm64 && tar -xf /tmp/source.tar -C /src \
 
 FROM node:24.18.1-bookworm
 ARG TARGETARCH
-ARG LOOP_ENGINE_REF=v0.24.0
+ARG LOOP_ENGINE_REF=v0.26.0
 ARG LOOP_ENGINE_COMMIT
 LABEL org.opencontainers.image.version=$LOOP_ENGINE_REF \
       org.opencontainers.image.revision=$LOOP_ENGINE_COMMIT

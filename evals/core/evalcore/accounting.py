@@ -5,16 +5,18 @@ from typing import Literal
 from inspect_ai.model import ModelRefusalError
 from inspect_ai.util import SandboxUnavailableError
 
-from .settings import CampaignSettings, OVERHEAD_ROLES, WORKFLOW_ROLES
-from .target import InfrastructureError, ModelError
+from .settings import CampaignSettings, OVERHEAD_ROLES, Price, WORKFLOW_ROLES
+from .target import InfrastructureError, LimitReached, ModelError
 
-Outcome = Literal["success", "failure", "infrastructure"]
+Outcome = Literal["success", "failure", "infrastructure", "limit"]
 
 CLASSIFICATION_RULES = (
     "Success requires a terminal trial and target success. Timeouts, hangs, limits and model errors "
     "are failures. Harness/container/bridge errors and provider-service failures (including exhausted "
     "429/5xx responses) are infrastructure. Unknown exceptions are failures unless the target marks "
-    "them InfrastructureError. Infrastructure is excluded from success rate and fixed-k pass^k; "
+    "them InfrastructureError. A trial or step stopped by a time, dollar or token budget is 'limit' with its "
+    "reason; it counts as a non-success in the headline rates, is listed separately and is never retried. "
+    "Infrastructure is excluded from success rate and fixed-k pass^k; "
     "cases with fewer than k scorable trials are listed as incomplete. No automatic trial retries."
 )
 
@@ -28,6 +30,9 @@ def classify_exception(error: Exception) -> tuple[Outcome, str]:
         seen.add(id(current))
         chain.append(current)
         current = current.__cause__ or current.__context__
+    limit = next((e for e in chain if isinstance(e, LimitReached)), None)
+    if limit is not None:
+        return "limit", limit.reason
     if any(isinstance(e, TimeoutError) or type(e).__name__ in {
         "APITimeoutError", "AttemptTimeoutError", "StreamIdleTimeoutError"
     } for e in chain):
@@ -75,6 +80,8 @@ class TrialRecord:
     segments: list[dict] = field(default_factory=list)
     carried_from: str | None = None
     usage_unknown_roles: list[str] = field(default_factory=list)
+    # For outcome 'limit': the step that was cut off (e.g. capture, scoring, judge, not_started).
+    limit_step: str | None = None
 
     def recorded(self) -> dict:
         return asdict(self)
@@ -83,6 +90,35 @@ class TrialRecord:
 def rate(numerator: int, denominator: int) -> dict:
     return {"numerator": numerator, "denominator": denominator,
             "rate": numerator / denominator if denominator else None}
+
+
+def usage_cost_usd(usage: dict, price: Price | None) -> float | None:
+    """The one price rule. None means unpriced, never zero. Used for live and final estimates."""
+    if price is None:
+        return None
+    read_price = price.input_per_million if price.cache_read_per_million is None else price.cache_read_per_million
+    write_price = price.input_per_million if price.cache_write_per_million is None else price.cache_write_per_million
+    def get(key):
+        return usage.get(key) or 0
+    return (get("input_tokens") * price.input_per_million + get("output_tokens") * price.output_per_million
+            + get("input_tokens_cache_read") * read_price + get("input_tokens_cache_write") * write_price) / 1_000_000
+
+
+def usage_tokens(usage: dict) -> int:
+    return sum(usage.get(k) or 0 for k in ("input_tokens", "output_tokens", "input_tokens_cache_read", "input_tokens_cache_write"))
+
+
+def estimate_usd(settings: CampaignSettings, role_models: dict[str, str], usage_by_role: dict) -> float | None:
+    """Dollar estimate over roles; None when any used role's model is unpriced."""
+    total = 0.0
+    for role, usage in usage_by_role.items():
+        if usage_tokens(usage) == 0:
+            continue
+        cost = usage_cost_usd(usage, settings.prices.get(role_models.get(role, "")))
+        if cost is None:
+            return None
+        total += cost
+    return total
 
 
 def cost_by_role(records: list[TrialRecord], settings: CampaignSettings, role_models: dict[str, str], roles: tuple) -> dict:
@@ -97,10 +133,8 @@ def cost_by_role(records: list[TrialRecord], settings: CampaignSettings, role_mo
         known = not any(role in r.usage_unknown_roles for r in records)
         usd = None
         if price and known:
-            read_price = price.input_per_million if price.cache_read_per_million is None else price.cache_read_per_million
-            write_price = price.input_per_million if price.cache_write_per_million is None else price.cache_write_per_million
-            usd = (inputs * price.input_per_million + outputs * price.output_per_million
-                   + cache_read * read_price + cache_write * write_price) / 1_000_000
+            usd = usage_cost_usd({"input_tokens": inputs, "output_tokens": outputs, "input_tokens_cache_read": cache_read,
+                                  "input_tokens_cache_write": cache_write}, price)
         result[role] = {
             "model": model, "input_tokens": inputs if known else None, "output_tokens": outputs if known else None,
             "cache_read_tokens": cache_read if known else None, "cache_write_tokens": cache_write if known else None,
@@ -112,6 +146,26 @@ def cost_by_role(records: list[TrialRecord], settings: CampaignSettings, role_mo
     totals = [v["total_tokens"] for v in result.values()]
     return {"by_role": result, "total_tokens": sum(totals) if all(v is not None for v in totals) else None,
             "estimated_usd": sum(dollars) if all(v is not None for v in dollars) else None}
+
+
+def cost_verdict(settings: CampaignSettings, models_in_use: list[str], total_usd: float | None) -> str:
+    """not_budgeted, pass, fail_over_cap, fail_unpriced or fail_unknown_usage. Unpriced is never zero."""
+    if settings.campaign_budget_usd is None:
+        return "not_budgeted"
+    if any(m not in settings.prices for m in models_in_use):
+        return "fail_unpriced"
+    if total_usd is None:
+        return "fail_unknown_usage"
+    return "pass" if total_usd <= settings.campaign_budget_usd else "fail_over_cap"
+
+
+def campaign_totals(comparisons: list[dict]) -> dict:
+    """Whole-campaign tokens and dollars from per-combination core metrics; None if any part is unknown."""
+    parts = [c["core"][section] for c in comparisons for section in ("workflow_cost", "evaluation_overhead")]
+    def add(key):
+        values = [p[key] for p in parts]
+        return None if any(v is None for v in values) else sum(values)
+    return {"total_tokens": add("total_tokens"), "estimated_usd": add("estimated_usd")}
 
 
 def core_metrics(records: list[TrialRecord], settings: CampaignSettings, role_models: dict[str, str]) -> dict:
@@ -137,6 +191,8 @@ def core_metrics(records: list[TrialRecord], settings: CampaignSettings, role_mo
         "incomplete_cases": incomplete,
         "infrastructure_failure_rate": rate(sum(r.outcome == "infrastructure" for r in records), len(records)),
         "timeouts": sum(r.reason == "timeout" for r in records),
+        "limits": {reason: sum(r.outcome == "limit" and r.reason == reason for r in records)
+                   for reason in sorted({r.reason for r in records if r.outcome == "limit"})},
         "model_errors": sum(r.reason == "model_error" for r in records),
         "failures": sum(r.outcome == "failure" for r in records),
         "workflow_completion": rate(sum(r.terminal for r in records), len(records)),

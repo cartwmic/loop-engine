@@ -5,7 +5,7 @@ campaign = "real-example"
 cases_path = "evals/software-change/example-case"
 case_count = 1
 trials_per_case = 1
-profile = "standard-14"
+profile = "standard-16"
 # A full standard-14 run took over 40 minutes with GPT-6.1 Sol.
 simulator_model = "openrouter/openai/gpt-6-luna"
 judge_model = "openrouter/openai/gpt-6-luna"

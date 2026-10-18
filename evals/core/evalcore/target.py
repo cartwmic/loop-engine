@@ -15,11 +15,16 @@ class TrialContext:
     assignment: Assignment
     case: Case
     combination: Combination
+    # Campaign guard (evalcore.limits.CampaignGuard) or None; targets use it for post-trial allowances.
+    guard: Any = None
 
 
 @dataclass
 class TrialExecution:
     terminal: bool
+    # Set by a target whose own driver was stopped by a budget (e.g. trial_time, campaign_dollars).
+    # Core still scores what was captured, then records the trial as outcome 'limit'.
+    stop_reason: str | None = None
     # Opaque host-side state, never exported by core. May hold sandbox handles.
     data: Any = None
 
@@ -33,6 +38,14 @@ class TrialScore:
 
 class InfrastructureError(RuntimeError):
     """Harness/container/bridge/provider-service failure, not model behaviour."""
+
+
+class LimitReached(RuntimeError):
+    """A budget or deadline ended this step. Core records outcome 'limit' with this reason and step."""
+
+    def __init__(self, reason: str, step: str):
+        super().__init__(f"{reason}:{step}")
+        self.reason, self.step = reason, step
 
 
 class OwnerApprovalRequired(ValueError):

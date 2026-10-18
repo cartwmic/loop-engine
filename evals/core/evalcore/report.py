@@ -95,8 +95,35 @@ def scan_results(contents: Iterable[str], protected: Iterable[str]) -> None:
         check(text)
 
 
+def render_budget(summary: dict) -> list[str]:
+    """Tier, caps, actual spend and time, stops and the explicit cost verdict. Empty when nothing is budgeted."""
+    budget = summary.get("budget")
+    caps = (budget or {}).get("caps") or {}
+    if not budget or not (budget.get("tier") or any(caps.get(k) is not None for k in ("wall_seconds", "usd", "tokens"))):
+        return []
+    actual = budget["actual"]
+    wall = summary.get("campaign_wall_seconds")
+    wall_text = "{CAMPAIGN_WALL_SECONDS}" if wall is None else f"{wall:.1f}"
+    usd = "unknown (unpriced or unavailable)" if actual["usd"] is None else f"${actual['usd']:.4f}"
+    lines = ["## Budget", ""]
+    if budget.get("tier"):
+        lines += [f"Tier: {budget['tier']}", ""]
+    if budget.get("note"):
+        lines += [budget["note"], ""]
+    lines += [f"- Cost verdict: **{budget['cost_verdict']}**",
+              f"- Estimated spend: {usd}; cap: {caps.get('usd')}; stop line: "
+              + ("n/a" if caps.get("usd") is None else f"{caps['usd'] - caps['dollar_margin_usd']:.4f}"),
+              f"- Tokens: {actual['tokens']}; cap: {caps.get('tokens')}",
+              f"- Campaign wall seconds (command start to report written): {wall_text}; cap: {caps.get('wall_seconds')}",
+              "- Dollar cap basis: " + budget["dollar_cap_basis"],
+              "- Stops that fired: " + (", ".join(f"{e['reason']} at {e['elapsed_seconds']}s" for e in budget["stop_events"]) or "none"),
+              "- Steps cut off: " + (", ".join(f"{c['step']} ({c['reason']}{', ' + c['sample_id'] if c.get('sample_id') else ''})"
+                                               for c in budget["cut_off_steps"]) or "none"), ""]
+    return lines
+
+
 def render_markdown(summary: dict) -> str:
-    lines = [f"# Campaign {summary['campaign']}", "", f"Target: {summary['target']}", "",
+    lines = [f"# Campaign {summary['campaign']}", "", f"Target: {summary['target']}", "", *render_budget(summary),
              *([f"Projection cohort: {summary['projection_cohort']} (not pooled with other cohorts)", ""]
                if "projection_cohort" in summary else []),
              "Dollar figures are estimated from the campaign price table; null means unpriced.", "",

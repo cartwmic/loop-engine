@@ -64,7 +64,9 @@ extracted. Unknown/unattributed model calls must not be made by targets.
 Raise `InfrastructureError` for harness, container, bridge or provider-service
 failures, and `ModelError` for model behaviour (e.g. bad schemas/refusals). Public
 Inspect sandbox/refusal exceptions and provider connection/429/5xx errors are
-also classified. Timeouts/hangs/model errors are failures, never exclusions.
+also classified. Idle hangs and model errors are failures, never exclusions. A trial or step stopped by a
+budget (the per-trial hard limit, campaign wall time, dollars or tokens) is the outcome `limit`
+with its reason; see Budgets and stops.
 Unknown exceptions in the target are failures unless explicitly declared
 infrastructure. Errors outside the target solver are Inspect lifecycle
 infrastructure; `EvalError` does not expose typed categories, so core never parses
@@ -75,13 +77,46 @@ missing, infrastructure and unclassified harness failures. Target-owned
 `rescore`/`resume-trial` commands recover private captures; resumed segments are
 excluded from headline success rate/pass^k and reported separately.
 
+## Budgets and stops
+
+All optional; unset means off. One campaign command runs exactly one campaign and starts no other.
+Trials run one at a time, so the guard sees one trial's live spend.
+
+- `campaign_wall_limit_seconds` (D): measured from the start of the `evalctl` command to the report
+  being written. `post_trial_reserve_seconds` (default 600) gives the stop line S = D - reserve, where trial work
+  stops. `publication_reserve_seconds` (default 120) gives H = D - reserve, where capture, scoring and the judge
+  must be done. Each post-trial step gets its own limit bounded by the time left before H; a step that runs out is
+  abandoned and recorded as `limit` with the step named (`limit_step`), and the work already on disk stays.
+- `campaign_budget_usd` with `dollar_margin_usd` (default 0.25): the dollar stop line is the cap minus the
+  margin. **The dollar cap is best effort.** Spend is read by polling (`guard_poll_seconds`, default 5), so a
+  campaign can very rarely overshoot by about one model call. The report states the actual spend against the cap and
+  an overshoot fails the cost verdict. A dollar budget is refused before any model call unless every model in use
+  (the three workflow roles, simulator and judge) has a price. `campaign_token_budget` is an extra stop, never a
+  substitute for a dollar budget.
+- The first stop that fires wins. Reasons: `trial_time` (per-trial `hard_limit_seconds`), `campaign_wall_time`,
+  `campaign_dollars`, `campaign_tokens`. After a campaign stop no further trial starts (recorded `limit`, step
+  `not_started`) and no new model call is admitted, so the judge is skipped. A target that ignores a stop is cancelled
+  after `stop_grace_seconds` (default 30). Nothing is retried.
+- Synchronous setup and version probes have explicit timeouts bounded by the remaining time. If one runs out, the
+  campaign ends as `limit` with that step named and publishes only the limit-only record.
+- Publication: a small limit-only record (outcomes, reasons, caps, no private text) is written first. A separate
+  child process then renders, scans and stages the full report and is killed at D. The staged report replaces the
+  record only if it finished in time; otherwise the record is the result. `campaign_wall_seconds` is the command-start
+  to report-written time, written just before the move, and `publication.json` records the interval.
+- `tier` and `report_note` appear in the report's Budget section with the caps, actual spend and time, per-stop
+  events, cut-off steps and the cost verdict (`pass`, `fail_over_cap`, `fail_unpriced`, `fail_unknown_usage`, or
+  `not_budgeted`). Core metrics count `limit` trials as scorable non-successes and list them by reason.
+- A target may set `TrialExecution.stop_reason` when its own driver was stopped by a budget; core still scores what was
+  captured and records the trial as `limit`. Targets read the guard from `TrialContext.guard`
+  (`allowance(own_limit)`, `model_calls_allowed()`, `stop_reason`).
+
 ## Settings and reports
 
 Supply explicit Inspect model IDs and pinned simulator/judge IDs: core invents no
 paid-model defaults. `models` compares each model in all three workflow roles;
 `combinations` instead accepts `{id, driver, implementer, reviewer}` objects.
 Use exactly one. Defaults are `preset = "small"` (3 cases x 3 trials),
-`profile = "standard-14"`, engine/provider ref `v0.24.0`, and limits `idle_limit_seconds = 1800`, `hard_limit_seconds = 28800`.
+`profile = "standard-16"`, engine/provider ref `v0.26.0`, and limits `idle_limit_seconds = 1800`, `hard_limit_seconds = 28800`.
 Inspect and core execution/scoring use the hard limit; idle detection belongs to
 the target. CLI overrides are `--idle-limit-seconds` and `--hard-limit-seconds`.
 The old `time_limit_seconds` setting is no longer accepted. `medium` is 6 x 3; `case_count` and `trials_per_case` override either count.

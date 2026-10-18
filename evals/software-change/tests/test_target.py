@@ -142,7 +142,7 @@ def test_driver_stops_before_trial_limit_so_the_outcome_is_recorded():
     summary, markdown = campaign("scripted-example.toml", hard_limit_seconds=120,
                                  target_options={"driver_command": ["sh", "-c", "sleep 1000", "sh"]})
     trial = summary["trials"][0]
-    assert trial["outcome"] == "failure" and trial["terminal"] is False
+    assert (trial["outcome"], trial["reason"]) == ("limit", "trial_time") and trial["terminal"] is False
     metrics = trial["target_metrics"]
     assert metrics.get("driver_timed_out") is True, (trial["reason"], metrics)
     assert metrics["run_health"]["timeouts"] == 1

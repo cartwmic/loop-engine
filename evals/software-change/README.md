@@ -154,8 +154,16 @@ public engine show/history and Inspect sample role usage about every 60 seconds
 increase in any role's total tokens resets the idle clock. A long progressing
 trial is not idle. An idle stop kills the driver process group; hard stops retain
 `DRIVER_LIMIT_MARGIN_SECONDS = 300` (minimum driver budget 60 seconds) for capture
-and scoring. Driver timeout failures report `driver_timeout_kind` and
-`run_health.timeout_kind` as `idle` or `hard`. Inspect's sample limit is the hard
+and scoring. Idle stops are failures. A hard stop or a campaign stop is a `limit` (see the core README's
+Budgets and stops); `driver_timeout_kind` and `run_health.timeout_kind` are `idle`, `hard` or `limit`, and a
+campaign stop is not counted in `run_health.timeouts`. The target honors campaign stops by killing the driver,
+then captures and scores what exists; capture, scoring and the judge are bounded by the time left before the campaign's
+hard end. The judge model is never called after a stop (`intent_judge.status = "limit"`). Before the bulk archive the
+target writes `isolation.json` (container id, image id, mounts, binds, platform) into the trial's capture, so a
+capture cut off at the deadline still carries its isolation evidence. Docker image inspection and ref lookups have
+timeouts. Scripted proof hooks: `target_options.scripted_capture_delay_seconds` and
+`scripted_scoring_delay_seconds` make those steps deliberately slow (see `tests/test_limit_proofs.py`).
+The Tier 0 campaign is `campaigns/tier0.toml`; see [TIERS.md](TIERS.md). Inspect's sample limit is the hard
 limit. The driver-finally hook captures even bridge/owner/driver exceptions before
 scoring. Docker loss, host disk failure or abrupt host process death during a copy
 can still prevent a complete capture; partial chunks remain private and unknown

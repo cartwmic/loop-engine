@@ -15,7 +15,7 @@ From the checkout root:
 uv run --project evals evalctl image-check
 ```
 
-It exports the committed tree at local Git ref `v0.24.0`, builds both Rust binaries
+It exports the committed tree at local Git ref `v0.26.0`, builds both Rust binaries
 inside native arm64 Linux, prints actual tool versions and a JSON `IMAGE_CHECK`
 receipt, and inspects a started trial-style container's mount configuration.
 It requires native arm64 Docker and build-network access, but no models or keys.
@@ -24,9 +24,9 @@ Use `--ref REF --tag TAG` for another pinned local ref/image. Version assertions
 compare the executables with the archived ref's Cargo workspace version; the image
 label records the resolved commit. Uncommitted product changes are never copied.
 
-Default image: `loop-engine-sc-evals:v0.24.0`. The Dockerfile expects `source.tar`
+Default image: `loop-engine-sc-evals:v0.26.0`. The Dockerfile expects `source.tar`
 in its build context, created with `git archive` from the resolved ref. Build args
-`LOOP_ENGINE_REF` (default `v0.24.0`) and `LOOP_ENGINE_COMMIT` record that identity;
+`LOOP_ENGINE_REF` (default `v0.26.0`) and `LOOP_ENGINE_COMMIT` record that identity;
 use `scevals.image.build_image` rather than packaging a working checkout.
 Pins: Rust 1.98.0, Node 24.18.1, official Dagu 2.14.0 Linux arm64 (SHA-256 checked),
 and the owner's npm package `@earendil-works/pi-coding-agent@1.0.0`.

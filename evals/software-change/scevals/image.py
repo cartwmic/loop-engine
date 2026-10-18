@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import tomllib
@@ -12,16 +13,27 @@ from contextlib import contextmanager
 
 REPOSITORY = Path(__file__).resolve().parents[3]
 IMAGE_DIR = Path(__file__).resolve().parents[1] / "image"
-DEFAULT_REF = "v0.24.0"
-DEFAULT_IMAGE = "loop-engine-sc-evals:v0.24.0"
+DEFAULT_REF = "v0.26.0"
+DEFAULT_IMAGE = "loop-engine-sc-evals:v0.26.0"
 
 
 def run(command, **kwargs):
     return subprocess.run(command, check=True, text=True, **kwargs)
 
 
-def output(command):
-    return run(command, stdout=subprocess.PIPE).stdout.strip()
+def output(command, timeout=60):
+    """Run a short command and return stdout. On timeout the whole process group is killed, so an orphaned child
+    that holds the pipe open cannot keep the caller waiting past the limit."""
+    with subprocess.Popen(command, stdout=subprocess.PIPE, text=True, start_new_session=True) as process:
+        try:
+            stdout, _ = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+            raise
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, command, stdout)
+    return stdout.strip()
 
 
 def build_image(ref=DEFAULT_REF, tag=DEFAULT_IMAGE):
@@ -130,6 +142,6 @@ def check_image(args):
 
 def register_subcommands(subparsers: argparse._SubParsersAction):
     parser = subparsers.add_parser("image-check", help="build pinned arm64 trial image and check versions/no mounts")
-    parser.add_argument("--ref", default=DEFAULT_REF, help="local Git ref to archive (default v0.24.0)")
+    parser.add_argument("--ref", default=DEFAULT_REF, help="local Git ref to archive (default v0.26.0)")
     parser.add_argument("--tag", default=DEFAULT_IMAGE, help="local Docker image tag")
     parser.set_defaults(handler=check_image)
