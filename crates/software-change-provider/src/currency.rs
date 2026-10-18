@@ -33,7 +33,8 @@ fn cited(grounds: &Value) -> Vec<Cited> {
         else {
             continue;
         };
-        if file != "intent.json" {
+        // criterion.rs accepts `./intent.json`; it names the same file.
+        if file.trim_start_matches("./") != "intent.json" {
             continue;
         }
         if let Some(pointer) = selector.strip_prefix('/') {
@@ -475,6 +476,30 @@ mod tests {
             changed_cited_criteria(Some(&grounds), &source, &ctx, Some(&root)),
             Ok(vec!["AC-2".to_owned()])
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_dot_slash_intent_locator_is_currency_checked_like_the_plain_one() {
+        let (dir, root, _context, source) = fixture(&intent("1", "second"));
+        std::fs::write(dir.join("intent.json"), intent("2", "second, now stricter")).unwrap();
+        let ctx = vec![
+            row(
+                "retained",
+                "retained-artifacts",
+                1,
+                json!({"artifacts": [{"name": "intent.json", "content": intent("1", "second")}]}),
+            ),
+            source.clone(),
+        ];
+        for locator in ["intent.json#/acceptance/1", "./intent.json#/acceptance/1"] {
+            let grounds = json!({"reason": "x", "evidence": [{"locator": locator}]});
+            assert_eq!(
+                changed_cited_criteria(Some(&grounds), &source, &ctx, Some(&root)),
+                Ok(vec!["AC-2".to_owned()]),
+                "{locator}"
+            );
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 }

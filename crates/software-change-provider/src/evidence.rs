@@ -721,6 +721,47 @@ pub(crate) fn evaluate_staged_evidence_excluding(
         .filter(|row| !excluded.contains(row.id.as_str()))
         .cloned()
         .collect();
+    // Why an axis lost a judgment: shown only if the axis ends up unsatisfied,
+    // so a driver can tell a withdrawn or retired source from absent review work.
+    let mut exclusion_notes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for row in context
+        .iter()
+        .filter(|row| excluded.contains(row.id.as_str()))
+    {
+        let (origin, note) = if row.kind == REVIEW_EVIDENCE_KIND {
+            (
+                Some(row),
+                format!(
+                    "judgment `{}` is excluded (withdrawn or retired author), so it does not count",
+                    row.id
+                ),
+            )
+        } else if row.kind == EVIDENCE_APPLICABILITY_KIND {
+            let origin_id = row.data.pointer("/origin/id").and_then(Value::as_str);
+            (
+                context.iter().find(|candidate| Some(candidate.id.as_str()) == origin_id),
+                format!(
+                    "carried record `{}` is invalid: its origin `{}` is excluded (withdrawn or retired author)",
+                    row.id,
+                    origin_id.unwrap_or("?")
+                ),
+            )
+        } else {
+            continue;
+        };
+        let Some(origin) = origin.filter(|origin| origin.kind == REVIEW_EVIDENCE_KIND) else {
+            continue;
+        };
+        if origin.data["gate"] != gate {
+            continue;
+        }
+        if let Some(axis) = origin.data["policy_id"].as_str() {
+            let notes = exclusion_notes.entry(axis.to_owned()).or_default();
+            if !notes.contains(&note) {
+                notes.push(note);
+            }
+        }
+    }
 
     let add_for_axis =
         |axis: &str, reasons: &[String], target: &mut BTreeMap<StageAxis, Vec<String>>| {
@@ -1151,6 +1192,14 @@ pub(crate) fn evaluate_staged_evidence_excluding(
                 axis_diagnostics.extend(
                     unverified_reasons
                         .iter()
+                        .cloned()
+                        .map(|reason| EvidenceDiagnostic::Unverified { reason }),
+                );
+                axis_diagnostics.extend(
+                    exclusion_notes
+                        .get(axis)
+                        .into_iter()
+                        .flatten()
                         .cloned()
                         .map(|reason| EvidenceDiagnostic::Unverified { reason }),
                 );

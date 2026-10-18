@@ -537,8 +537,12 @@ def review_cases(args, root):
                                       'reason': 'Scripted withdrawal of one carried origin.',
                                       'record_ids': [judged['reviewer-a'][axes[0]]]})
     ledger(ctx, PLAN_GATE, PLAN)
-    rows.append(trim(compare(ctx, PLAN_CHALLENGE, expect=('missing', axes[0]),
-                             label='AC-2 invalid source reference (withdrawn origin)')))
+    row = compare(ctx, PLAN_CHALLENGE, expect=('unverified', axes[0]),
+                  label='AC-2 invalid source reference (withdrawn origin)')
+    # The cause is the withdrawal itself, not a generic missing-judgment answer.
+    require('withdrawn' in json.dumps(row['commission_missing_inputs']), row)
+    require('withdrawn' in json.dumps(row['gate_response'].get('details', {})), row)
+    rows.append(trim(row))
 
     ctx = start('unresolved-finding')
     axes = list(policies(ctx, PLAN_GATE))
