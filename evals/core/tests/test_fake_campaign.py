@@ -235,6 +235,23 @@ def test_dollar_stop_fires_at_the_stop_line_and_later_trials_never_start(campaig
     assert 4.5 <= spent <= 8  # stopped at the line, overshoot by at most about a call or two
 
 
+def test_tiered_price_charges_each_request_by_its_size_not_the_aggregate_bound(campaign_root):
+    """Every fake request is far below the tier threshold, so the base rate applies even though a tier is configured."""
+    tiered = {"input_per_million": 2, "output_per_million": 0, "tiers": [
+        {"input_tokens_above": 5_000_000, "input_per_million": 4, "output_per_million": 0}]}
+    summary = run(campaign_root, models=[], combinations=[
+        {"id": "pricey", "driver": "fake/costly", "implementer": "fake/a", "reviewer": "fake/a"}],
+        prices={"fake/costly": tiered, "fake/a": {"input_per_million": 0, "output_per_million": 0}},
+        case_count=1, trials_per_case=1, campaign_budget_usd=100, dollar_margin_usd=1,
+        target_options={"inject_errors": False, "extra_driver_calls": 2, "call_gap_seconds": 0.1})
+    trial = summary["trials"][0]
+    driver_tokens = trial["usage_by_role"]["role-driver"]["input_tokens"]
+    assert driver_tokens >= 3_000_000 and trial["priced_usd_by_role"]["role-driver"] == pytest.approx(driver_tokens * 2 / 1e6)
+    actual = summary["budget"]["actual"]["usd"]
+    assert actual == pytest.approx(driver_tokens * 2 / 1e6, rel=0.01) and actual < driver_tokens * 4 / 1e6 / 1.5   # not the 4/M bound
+    assert summary["budget"]["cost_verdict"] == "pass"
+
+
 def test_unpriced_model_with_a_dollar_budget_is_refused_before_any_call(campaign_root):
     path = settings(campaign_root, campaign_budget_usd=5, prices={"fake/a": {"input_per_million": 1, "output_per_million": 1}})
     result = invoke(campaign_root, "campaign", "--settings", str(path))

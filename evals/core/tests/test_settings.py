@@ -76,6 +76,15 @@ def test_invalid_budget_settings(overrides):
         configuration(**overrides)
 
 
+def test_price_tiers_load_and_reject_bad_thresholds():
+    price = {**PRICE, "tiers": [{"input_tokens_above": 272000, "input_per_million": 4, "output_per_million": 15}]}
+    assert configuration(prices={"mockllm/model": price}).prices["mockllm/model"].tiers[0].input_tokens_above == 272000
+    with pytest.raises(ValidationError):
+        configuration(prices={"mockllm/model": {**PRICE, "tiers": [{"input_tokens_above": 0, "input_per_million": 4, "output_per_million": 15}]}})
+    with pytest.raises(ValidationError):
+        configuration(prices={"mockllm/model": {**PRICE, "tiers": [{"input_tokens_above": 5, "input_per_million": 4}]}})
+
+
 def test_budget_defaults_are_off_and_recorded():
     settings = configuration()
     assert (settings.campaign_wall_limit_seconds, settings.campaign_budget_usd, settings.campaign_token_budget) == (None, None, None)

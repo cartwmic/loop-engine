@@ -28,11 +28,19 @@ reasoning_effort = "high"
 [model_config."pi/claude-compat/claude-sonnet-5-5"]
 reasoning_effort = "high"
 
-# Flat upper-bound prices in dollars per million tokens, from Pi's model registry
-# (@earendil-works/pi-ai dist/providers/data, checked 2026-10-17). Where entries differ, the higher is used.
-# gpt-6.1-sol: base 2/10 (cache read 0.1, write 2.5); above 272k input tokens 4/15 (cache read 0.2, write 5) -> the higher tier.
+# Prices in dollars per million tokens, from Pi's model registry (@earendil-works/pi-ai dist/providers/data,
+# checked 2026-10-17). Each request is priced by its own size: the base rates, or the tier rates when that
+# request's total input is above the tier threshold. Where entries differ, the higher is used.
+# gpt-6.1-sol: base 2/10 (cache read 0.1, write 2.5); a request above 272k input tokens costs 4/15 (cache read 0.2, write 5).
 # claude-sonnet-5-5: 2/10, cache write 2.5; cache read is 0.1 in most entries and 0.2 in some -> 0.2.
 [prices."codex/gpt-6.1-sol"]
+input_per_million = 2
+output_per_million = 10
+cache_read_per_million = 0.1
+cache_write_per_million = 2.5
+
+[[prices."codex/gpt-6.1-sol".tiers]]
+input_tokens_above = 272000
 input_per_million = 4
 output_per_million = 15
 cache_read_per_million = 0.2

@@ -82,6 +82,8 @@ class TrialRecord:
     usage_unknown_roles: list[str] = field(default_factory=list)
     # For outcome 'limit': the step that was cut off (e.g. capture, scoring, judge, not_started).
     limit_step: str | None = None
+    # Exact per-role dollars from individual model calls (tiered by request size); None when unavailable.
+    priced_usd_by_role: dict[str, float] | None = None
 
     def recorded(self) -> dict:
         return asdict(self)
@@ -92,16 +94,58 @@ def rate(numerator: int, denominator: int) -> dict:
             "rate": numerator / denominator if denominator else None}
 
 
-def usage_cost_usd(usage: dict, price: Price | None) -> float | None:
-    """The one price rule. None means unpriced, never zero. Used for live and final estimates."""
-    if price is None:
-        return None
-    read_price = price.input_per_million if price.cache_read_per_million is None else price.cache_read_per_million
-    write_price = price.input_per_million if price.cache_write_per_million is None else price.cache_write_per_million
+def _rates(rates) -> tuple[float, float, float, float]:
+    """(input, output, cache read, cache write) per million; cache rates default to the input rate."""
+    read = rates.input_per_million if rates.cache_read_per_million is None else rates.cache_read_per_million
+    write = rates.input_per_million if rates.cache_write_per_million is None else rates.cache_write_per_million
+    return rates.input_per_million, rates.output_per_million, read, write
+
+
+def _apply(usage: dict, rates) -> float:
+    inp, out, read, write = _rates(rates)
     def get(key):
         return usage.get(key) or 0
-    return (get("input_tokens") * price.input_per_million + get("output_tokens") * price.output_per_million
-            + get("input_tokens_cache_read") * read_price + get("input_tokens_cache_write") * write_price) / 1_000_000
+    return (get("input_tokens") * inp + get("output_tokens") * out
+            + get("input_tokens_cache_read") * read + get("input_tokens_cache_write") * write) / 1_000_000
+
+
+def request_input_tokens(usage: dict) -> int:
+    return sum(usage.get(k) or 0 for k in ("input_tokens", "input_tokens_cache_read", "input_tokens_cache_write"))
+
+
+def call_cost_usd(usage: dict, price: Price | None) -> float | None:
+    """One request, priced by its own size: the highest tier whose threshold the request's total input exceeds."""
+    if price is None:
+        return None
+    size = request_input_tokens(usage)
+    tier = max((t for t in price.tiers if size > t.input_tokens_above), key=lambda t: t.input_tokens_above, default=None)
+    return _apply(usage, tier or price)
+
+
+def usage_cost_usd(usage: dict, price: Price | None) -> float | None:
+    """Aggregate usage has no per-request sizes, so this is an upper bound: the highest tier's rates for everything.
+    None means unpriced, never zero. Exact per-request cost comes from call_cost_usd over the individual calls."""
+    if price is None:
+        return None
+    top = max(price.tiers, key=lambda t: t.input_tokens_above, default=None)
+    return _apply(usage, top or price)
+
+
+def events_spend(events, role_models: dict[str, str], prices: dict) -> dict[str, float] | None:
+    """Exact spend per role from individual model-call events (each priced by its own size).
+    None when any call's model is unpriced, so an unpriced model can never read as zero."""
+    spend: dict[str, float] = {}
+    for event in events:
+        if type(event).__name__ != "ModelEvent" or not getattr(event, "role", None):
+            continue
+        usage = getattr(getattr(event, "output", None), "usage", None)
+        if usage is None:
+            continue
+        cost = call_cost_usd(usage.model_dump(), prices.get(role_models.get(event.role, "")))
+        if cost is None:
+            return None
+        spend[event.role] = spend.get(event.role, 0.0) + cost
+    return spend
 
 
 def usage_tokens(usage: dict) -> int:
@@ -135,6 +179,9 @@ def cost_by_role(records: list[TrialRecord], settings: CampaignSettings, role_mo
         if price and known:
             usd = usage_cost_usd({"input_tokens": inputs, "output_tokens": outputs, "input_tokens_cache_read": cache_read,
                                   "input_tokens_cache_write": cache_write}, price)
+            exact = [r.priced_usd_by_role for r in records]
+            if exact and all(e is not None for e in exact):
+                usd = sum(e.get(role, 0.0) for e in exact)  # per-request tiers applied; never above the upper bound
         result[role] = {
             "model": model, "input_tokens": inputs if known else None, "output_tokens": outputs if known else None,
             "cache_read_tokens": cache_read if known else None, "cache_write_tokens": cache_write if known else None,

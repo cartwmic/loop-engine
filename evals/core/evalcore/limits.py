@@ -71,12 +71,16 @@ class CampaignGuard:
         return self.stop_reason is None and (remaining is None or remaining > 0)
 
     # --- spend ------------------------------------------------------------------------------
-    def add_finished(self, role_models: dict[str, str], usage_by_role: dict) -> None:
-        cost = estimate_usd(self.settings, role_models, usage_by_role)
+    def add_finished(self, role_models: dict[str, str], usage_by_role: dict, exact_usd_by_role: dict | None = None) -> None:
+        """Bank a finished trial's spend: exact per-call dollars when known, else the aggregate upper bound."""
+        if exact_usd_by_role is not None:
+            cost = sum(exact_usd_by_role.values())
+        else:
+            cost = estimate_usd(self.settings, role_models, usage_by_role)
         self.finished_usd += cost or 0.0
         self.finished_tokens += sum(usage_tokens(u) for u in usage_by_role.values())
 
-    def check(self, role_models: dict[str, str], live_usage_by_role: dict) -> str | None:
+    def check(self, role_models: dict[str, str], live_usage_by_role: dict, live_exact_usd: float | None = None) -> str | None:
         """The first stop reason that applies now, or None. Does not fire it."""
         if self.stop_reason:
             return self.stop_reason
@@ -84,7 +88,8 @@ class CampaignGuard:
             return "campaign_wall_time"
         budget = self.settings.campaign_budget_usd
         if budget is not None:
-            spent = self.finished_usd + (estimate_usd(self.settings, role_models, live_usage_by_role) or 0.0)
+            live = live_exact_usd if live_exact_usd is not None else (estimate_usd(self.settings, role_models, live_usage_by_role) or 0.0)
+            spent = self.finished_usd + live
             if spent >= budget - self.settings.dollar_margin_usd:
                 return "campaign_dollars"
         tokens = self.settings.campaign_token_budget
@@ -99,11 +104,12 @@ class CampaignGuard:
         return reason is None
 
 
-async def watch_trial(guard: CampaignGuard, role_models: dict[str, str], live_usage, trial_scope: anyio.CancelScope) -> None:
+async def watch_trial(guard: CampaignGuard, role_models: dict[str, str], live_usage, trial_scope: anyio.CancelScope,
+                      live_spend=None) -> None:
     """Poll while a trial runs. On the first stop, fire it; a target that does not stop itself is cancelled after the grace."""
     while True:
         await anyio.sleep(guard.settings.guard_poll_seconds)
-        reason = guard.check(role_models, live_usage())
+        reason = guard.check(role_models, live_usage(), live_spend() if live_spend else None)
         if reason:
             guard.fire(reason)
             break

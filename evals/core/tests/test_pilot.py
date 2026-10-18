@@ -30,3 +30,5 @@ def test_tier0_campaign_file_is_priced_budgeted_and_names_the_two_models():
     assert {c.id: set(c.role_models().values()) for c in combos} == {m: {m} for m in settings.models}  # whole workflow each
     assert {settings.simulator_model, settings.judge_model, *settings.models} <= set(settings.prices)  # every role model priced
     assert "not a ranking" in settings.report_note
+    sol = settings.prices["codex/gpt-6.1-sol"]
+    assert (sol.input_per_million, sol.tiers[0].input_tokens_above, sol.tiers[0].input_per_million) == (2, 272000, 4)

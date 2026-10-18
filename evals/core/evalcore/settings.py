@@ -13,12 +13,24 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class PriceTier(StrictModel):
+    """Rates for any single request whose total input (fresh + cache read + cache write) is above the threshold."""
+    input_tokens_above: int = Field(ge=1)
+    input_per_million: float = Field(ge=0, allow_inf_nan=False)
+    output_per_million: float = Field(ge=0, allow_inf_nan=False)
+    cache_read_per_million: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    cache_write_per_million: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
 class Price(StrictModel):
     input_per_million: float = Field(ge=0, allow_inf_nan=False)
     output_per_million: float = Field(ge=0, allow_inf_nan=False)
     # Cached input is billed too; defaults to the input price when unset.
     cache_read_per_million: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     cache_write_per_million: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    # Optional per-request size tiers (largest threshold that a request exceeds applies to that whole request).
+    # The base fields are the rates for requests at or below every threshold.
+    tiers: tuple[PriceTier, ...] = ()
 
 
 class Combination(StrictModel):

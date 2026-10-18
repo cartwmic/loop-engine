@@ -53,6 +53,17 @@ def test_dollar_stop_line_is_cap_minus_margin_and_counts_finished_and_live_spend
     assert not g.can_start_trial() and not g.model_calls_allowed()
 
 
+def test_exact_live_spend_beats_the_aggregate_upper_bound():
+    g = guard(campaign_budget_usd=5, dollar_margin_usd=0.5)
+    roles = {"role-driver": "mockllm/model"}
+    huge = {"role-driver": {"input_tokens": 2_250_000}}   # the upper bound says $4.50: stop
+    assert g.check(roles, huge) == "campaign_dollars"
+    assert g.check(roles, huge, live_exact_usd=2.0) is None
+    g.add_finished(roles, huge, {"role-driver": 1.5})
+    assert g.finished_usd == 1.5
+    assert g.check(roles, {}, live_exact_usd=3.0) == "campaign_dollars"   # 1.5 + 3.0 = 4.5 = stop line
+
+
 def test_first_stop_wins_and_is_recorded_once():
     g = guard(campaign_budget_usd=5)
     g.fire("campaign_dollars")

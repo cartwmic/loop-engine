@@ -17,7 +17,7 @@ from inspect_ai.scorer import Score, scorer
 from inspect_ai.solver import solver
 import anyio
 
-from .accounting import CLASSIFICATION_RULES, TrialRecord, classify_exception, core_metrics
+from .accounting import CLASSIFICATION_RULES, TrialRecord, classify_exception, core_metrics, events_spend
 from .limits import CampaignGuard, budget_summary, watch_trial
 from .provenance import cohort
 from .publish import publish
@@ -43,6 +43,13 @@ def harness_versions() -> dict:
             "checkout_dirty": bool(git("status", "--porcelain"))}
 
 
+def live_spend_usd(settings: CampaignSettings, role_models: dict) -> float | None:
+    """This trial's spend so far, from its own model-call events (tiered by request size). None if unavailable."""
+    from inspect_ai.log import transcript
+    spend = events_spend(transcript().events, role_models, settings.prices)
+    return None if spend is None else sum(spend.values())
+
+
 def limit_step_of(error: BaseException) -> str | None:
     seen = set()
     while error is not None and id(error) not in seen:
@@ -61,7 +68,8 @@ async def run_trial_stoppable(target: Target, state, context: TrialContext, guar
             async with anyio.create_task_group() as group:
                 if guard.active:
                     group.start_soon(watch_trial, guard, role_models,
-                                     lambda: {role: usage.model_dump() for role, usage in sample_role_usage().items()}, trial_scope)
+                                     lambda: {role: usage.model_dump() for role, usage in sample_role_usage().items()}, trial_scope,
+                                     lambda: live_spend_usd(context.settings, role_models))
                 try:
                     execution = await target.run_trial(state, context)
                 finally:
@@ -125,7 +133,10 @@ def trial_solver(target: Target, contexts: dict[str, TrialContext], records: dic
                 "".join(traceback.format_exception(error)))
         finally:
             record.wall_seconds = time.monotonic() - started
-            guard.add_finished(role_models, {role: usage.model_dump() for role, usage in sample_role_usage().items()})
+            from inspect_ai.log import transcript
+            record.priced_usd_by_role = events_spend(transcript().events, role_models, context.settings.prices)
+            guard.add_finished(role_models, {role: usage.model_dump() for role, usage in sample_role_usage().items()},
+                               record.priced_usd_by_role)
             if hasattr(target, "checkpoint_record"):
                 target.checkpoint_record(context, record)
         state.completed = True
@@ -250,6 +261,7 @@ def run_campaign(target: Target, settings: CampaignSettings, *, provider_config_
                             if isinstance(value, (int, float)):
                                 current[key] = (current.get(key) or 0) + value
                 record.resumed = meta.get("resumed", False) or getattr(target, "operation", "campaign") != "rescore"
+                record.priced_usd_by_role = None  # earlier segments have no per-call figures; use the upper bound
                 record.segments = meta.get("segments", [])
     ordered_records = [records[a.sample_id] for a in assignments]
     # Targets that need finalized alias usage/failure classification cannot obtain

@@ -93,6 +93,9 @@ Trials run one at a time, so the guard sees one trial's live spend.
   an overshoot fails the cost verdict. A dollar budget is refused before any model call unless every model in use
   (the three workflow roles, simulator and judge) has a price. `campaign_token_budget` is an extra stop, never a
   substitute for a dollar budget.
+- Prices may carry per-request `tiers` (a request whose total input exceeds a threshold is billed at that tier's rates, as
+  published for Sol above 272k input tokens). Live and final dollars are summed over individual model calls, each priced by
+  its own size; where per-call data is missing the whole aggregate is priced at the highest tier, an upper bound.
 - The first stop that fires wins. Reasons: `trial_time` (per-trial `hard_limit_seconds`), `campaign_wall_time`,
   `campaign_dollars`, `campaign_tokens`. After a campaign stop no further trial starts (recorded `limit`, step
   `not_started`) and no new model call is admitted, so the judge is skipped. A target that ignores a stop is cancelled

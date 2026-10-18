@@ -2,8 +2,10 @@ import pytest
 from inspect_ai.model import ModelOutput, ModelRefusalError
 from inspect_ai.util import SandboxUnavailableError
 
-from evalcore.accounting import (TrialRecord, campaign_totals, classify_exception, core_metrics, cost_by_role,
-                                 cost_verdict, estimate_usd, usage_cost_usd)
+from types import SimpleNamespace
+
+from evalcore.accounting import (TrialRecord, call_cost_usd, campaign_totals, classify_exception, core_metrics, cost_by_role,
+                                 cost_verdict, estimate_usd, events_spend, usage_cost_usd)
 from evalcore.settings import CampaignSettings
 from evalcore.target import InfrastructureError, LimitReached, ModelError
 
@@ -113,6 +115,70 @@ def test_unpriced_model_never_estimates_as_zero():
     assert usage_cost_usd(usage, None) is None
     assert estimate_usd(s, {"role-driver": "mockllm/model"}, {"role-driver": usage}) is None
     assert estimate_usd(s, {"role-driver": "mockllm/model"}, {"role-driver": {}}) == 0
+
+
+SOL = {"input_per_million": 2, "output_per_million": 10, "cache_read_per_million": 0.1, "cache_write_per_million": 2.5,
+       "tiers": [{"input_tokens_above": 272000, "input_per_million": 4, "output_per_million": 15,
+                  "cache_read_per_million": 0.2, "cache_write_per_million": 5}]}
+
+
+def sol_price():
+    return settings(prices={"mockllm/model": SOL}).prices["mockllm/model"]
+
+
+def test_each_request_is_priced_by_its_own_size():
+    price = sol_price()
+    small = {"input_tokens": 1000, "output_tokens": 100, "input_tokens_cache_read": 99_000}      # 100k total input
+    edge = {"input_tokens": 272_000, "output_tokens": 0}                                          # at the threshold: base
+    big = {"input_tokens": 100_000, "output_tokens": 100, "input_tokens_cache_read": 200_000}     # 300k total: tier
+    assert call_cost_usd(small, price) == pytest.approx((1000 * 2 + 100 * 10 + 99_000 * 0.1) / 1e6)
+    assert call_cost_usd(edge, price) == pytest.approx(272_000 * 2 / 1e6)
+    assert call_cost_usd({"input_tokens": 272_001}, price) == pytest.approx(272_001 * 4 / 1e6)
+    assert call_cost_usd(big, price) == pytest.approx((100_000 * 4 + 100 * 15 + 200_000 * 0.2) / 1e6)
+    # Two small calls plus one big call: exact is far below the aggregate upper bound.
+    exact = sum(call_cost_usd(u, price) for u in (small, small, big))
+    total = {k: sum(u.get(k, 0) for u in (small, small, big)) for k in ("input_tokens", "output_tokens", "input_tokens_cache_read")}
+    assert exact < usage_cost_usd(total, price)
+    assert usage_cost_usd(total, price) == pytest.approx((total["input_tokens"] * 4 + total["output_tokens"] * 15 + total["input_tokens_cache_read"] * 0.2) / 1e6)
+
+
+def test_unpriced_call_and_no_tier_price_behave():
+    flat = settings(prices={"mockllm/model": {"input_per_million": 1, "output_per_million": 2}}).prices["mockllm/model"]
+    assert call_cost_usd({"input_tokens": 10_000_000}, flat) == pytest.approx(10.0)  # 10M tokens at 1 per million
+    assert call_cost_usd({"input_tokens": 1}, None) is None
+
+
+class ModelEvent:  # same class name as Inspect's event; events_spend matches on it
+    def __init__(self, role, usage):
+        self.role = role
+        self.output = SimpleNamespace(usage=None if usage is None else SimpleNamespace(model_dump=lambda: usage))
+
+
+def test_events_spend_prices_each_call_and_never_reads_unpriced_as_zero():
+    s = settings(prices={"mockllm/model": SOL})
+    roles = {"role-driver": "mockllm/model", "judge": "mockllm/model"}
+    events = [ModelEvent("role-driver", {"input_tokens": 100_000, "output_tokens": 0}),
+              ModelEvent("role-driver", {"input_tokens": 300_000, "output_tokens": 0}),
+              ModelEvent("judge", {"input_tokens": 1_000_000, "output_tokens": 0}), ModelEvent(None, {"input_tokens": 9}),
+              ModelEvent("role-driver", None), object()]
+    spend = events_spend(events, roles, s.prices)
+    assert spend == {"role-driver": pytest.approx(100_000 * 2 / 1e6 + 300_000 * 4 / 1e6), "judge": pytest.approx(4.0)}
+    assert events_spend(events, {"role-driver": "mockllm/other", "judge": "mockllm/model"}, s.prices) is None
+    assert events_spend([], roles, s.prices) == {}
+
+
+def test_final_cost_uses_exact_per_call_dollars_when_every_record_has_them():
+    s = settings(prices={"mockllm/model": SOL})
+    usage = {"input_tokens": 600_000, "output_tokens": 0}
+    a, b = record("c", 1, "success"), record("c", 2, "success")
+    for r in (a, b):
+        r.usage_by_role = {"role-driver": usage}
+        r.priced_usd_by_role = {"role-driver": 1.2}      # two 300k calls at 2 per million each... exact, not the 4 per million bound
+    exact = cost_by_role([a, b], s, {"role-driver": "mockllm/model"}, ("role-driver",))["by_role"]["role-driver"]["estimated_usd"]
+    assert exact == pytest.approx(2.4)
+    b.priced_usd_by_role = None                          # one record without per-call data: fall back to the upper bound
+    bound = cost_by_role([a, b], s, {"role-driver": "mockllm/model"}, ("role-driver",))["by_role"]["role-driver"]["estimated_usd"]
+    assert bound == pytest.approx(2 * 600_000 * 4 / 1e6) and bound > exact
 
 
 def test_cost_verdicts():
