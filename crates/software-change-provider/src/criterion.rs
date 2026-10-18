@@ -114,84 +114,135 @@ pub(crate) fn validate_grounding_with_context(
         } else {
             None
         };
-        let (file, selector) = locator.split_once('#').ok_or_else(|| {
-            format!("evidence locator `{locator}` needs a JSON Pointer or line selector")
-        })?;
-        if let Some(id) = file.strip_prefix("record:") {
-            validate_record_locator(id, selector)?;
-            let matches: Vec<_> = context
-                .iter()
-                .filter(|record| record.id.as_str() == id)
-                .collect();
-            if matches.len() != 1 {
-                return Err(format!("record citation `{id}` is missing or ambiguous"));
-            }
-            let record = matches[0];
-            if !REVIEW_SOURCE_KINDS.contains(&record.kind.as_str()) {
-                return Err(format!(
-                    "record citation `{id}` has disallowed kind `{}`",
-                    record.kind
-                ));
-            }
-            let stored = serde_json::to_value(record).map_err(|e| e.to_string())?;
-            if stored.pointer(selector).is_none() {
-                return Err(format!(
-                    "record citation `{locator}` does not resolve; {}",
-                    nearest_pointer_note(&stored, selector, &format!("record:{id}"))
-                ));
-            }
-            if version != Some(3) {
-                return Err("record citations require review contract v3".into());
-            }
-            continue;
-        }
-        let root = fs::canonicalize(artifact_root).map_err(|error| error.to_string())?;
-        let relative = Path::new(file.split_once(':').map_or(file, |(_, path)| path));
-        if relative.as_os_str().is_empty()
-            || relative.is_absolute()
-            || relative.components().any(|component| {
-                matches!(
-                    component,
-                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
-                )
-            })
-        {
-            return Err(format!(
-                "evidence locator `{locator}` must stay beneath a source root"
-            ));
-        }
-        let roots = crate::source_scopes::locator_roots(&root)?;
-        let path = if let Some((scope, _)) = file.split_once(':') {
-            let scope_root = crate::source_scopes::resolve(&roots, scope)?;
-            resolve_evidence_file(&scope_root, Some(&scope_root), relative)?
-        } else {
-            let primary =
-                roots
-                    .get("primary")
-                    .or(if roots.is_empty() { None } else { Some(&root) });
-            resolve_evidence_file(&root, primary.map(PathBuf::as_path), relative)?
-        };
-        let bytes = fs::read(&path)
-            .map_err(|error| format!("evidence source `{locator}` is unreadable: {error}"))?;
-        if digest.is_some_and(|digest| format!("sha256:{:x}", Sha256::digest(&bytes)) != digest) {
-            return Err(format!(
-                "evidence digest does not match exact source bytes for `{file}`"
-            ));
-        }
-        if selector.starts_with('/') {
-            let json: Value = serde_json::from_slice(&bytes)
-                .map_err(|_| format!("evidence selector `{locator}` requires a JSON source"))?;
-            if json.pointer(selector).is_none() {
-                return Err(format!(
-                    "evidence JSON Pointer in `{locator}` does not resolve; {}",
-                    nearest_pointer_note(&json, selector, file)
-                ));
-            }
-        } else {
-            validate_line_selector(selector, &bytes, locator)?;
-        }
+        resolve_locator(locator, digest, artifact_root, version, context)?;
     }
     Ok(())
+}
+
+/// Resolve one already shape-checked evidence locator exactly as admission does:
+/// a same-run record citation or a file citation beneath the artifact directory or a
+/// declared source root. Reads sources; never repairs, suggests-and-admits or writes.
+fn resolve_locator(
+    locator: &str,
+    digest: Option<&str>,
+    artifact_root: &Path,
+    version: Option<u32>,
+    context: &[loop_core::ContextRecord],
+) -> Result<(), String> {
+    let (file, selector) = locator.split_once('#').ok_or_else(|| {
+        format!("evidence locator `{locator}` needs a JSON Pointer or line selector")
+    })?;
+    if let Some(id) = file.strip_prefix("record:") {
+        validate_record_locator(id, selector)?;
+        let matches: Vec<_> = context
+            .iter()
+            .filter(|record| record.id.as_str() == id)
+            .collect();
+        if matches.len() != 1 {
+            return Err(format!("record citation `{id}` is missing or ambiguous"));
+        }
+        let record = matches[0];
+        if !REVIEW_SOURCE_KINDS.contains(&record.kind.as_str()) {
+            return Err(format!(
+                "record citation `{id}` has disallowed kind `{}`",
+                record.kind
+            ));
+        }
+        let stored = serde_json::to_value(record).map_err(|e| e.to_string())?;
+        if stored.pointer(selector).is_none() {
+            return Err(format!(
+                "record citation `{locator}` does not resolve; {}",
+                nearest_pointer_note(&stored, selector, &format!("record:{id}"))
+            ));
+        }
+        if version != Some(3) {
+            return Err("record citations require review contract v3".into());
+        }
+        return Ok(());
+    }
+    let root = fs::canonicalize(artifact_root).map_err(|error| error.to_string())?;
+    let relative = Path::new(file.split_once(':').map_or(file, |(_, path)| path));
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(format!(
+            "evidence locator `{locator}` must stay beneath a source root"
+        ));
+    }
+    let roots = crate::source_scopes::locator_roots(&root)?;
+    let path = if let Some((scope, _)) = file.split_once(':') {
+        let scope_root = crate::source_scopes::resolve(&roots, scope)?;
+        resolve_evidence_file(&scope_root, Some(&scope_root), relative)?
+    } else {
+        let primary = roots
+            .get("primary")
+            .or(if roots.is_empty() { None } else { Some(&root) });
+        resolve_evidence_file(&root, primary.map(PathBuf::as_path), relative)?
+    };
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("evidence source `{locator}` is unreadable: {error}"))?;
+    if digest.is_some_and(|digest| format!("sha256:{:x}", Sha256::digest(&bytes)) != digest) {
+        return Err(format!(
+            "evidence digest does not match exact source bytes for `{file}`"
+        ));
+    }
+    if selector.starts_with('/') {
+        let json: Value = serde_json::from_slice(&bytes)
+            .map_err(|_| format!("evidence selector `{locator}` requires a JSON source"))?;
+        if json.pointer(selector).is_none() {
+            return Err(format!(
+                "evidence JSON Pointer in `{locator}` does not resolve; {}",
+                nearest_pointer_note(&json, selector, file)
+            ));
+        }
+    } else {
+        validate_line_selector(selector, &bytes, locator)?;
+    }
+    Ok(())
+}
+
+/// The evidence locators of a grounds object that do not resolve, as
+/// `(index, locator, existing diagnostic)`. The grounds must be structurally valid
+/// in every other respect (shape, closed entries, no duplicates, locator syntax):
+/// any such defect is returned as `Err` so it can never be mistaken for a
+/// locator-resolution defect. Reads sources only.
+#[allow(dead_code)] // Consumed by the binary's review-candidates repair, not by the library copy.
+pub(crate) fn unresolvable_locators(
+    grounds: &Value,
+    artifact_root: &Path,
+    version: Option<u32>,
+    context: &[loop_core::ContextRecord],
+) -> Result<Vec<(usize, String, String)>, String> {
+    validate_grounding_shape_version(grounds, version)?;
+    if version == Some(3)
+        && grounds.as_object().is_none_or(|object| {
+            object.len() != 2 || !object.contains_key("reason") || !object.contains_key("evidence")
+        })
+    {
+        return Err("v3 grounds require exactly reason and evidence".to_owned());
+    }
+    let evidence = grounds
+        .get("evidence")
+        .and_then(Value::as_array)
+        .ok_or("grounds.evidence must contain source references")?;
+    let mut failures = Vec::new();
+    for (index, reference) in evidence.iter().enumerate() {
+        let locator = reference
+            .get("locator")
+            .and_then(Value::as_str)
+            .ok_or("evidence locator must be a non-empty repository-relative path and selector")?;
+        let digest = reference.get("sha256").and_then(Value::as_str);
+        if let Err(error) = resolve_locator(locator, digest, artifact_root, version, context) {
+            failures.push((index, locator.to_owned(), error));
+        }
+    }
+    Ok(failures)
 }
 
 /// Check retained citation structure without rebinding a historical digest to
@@ -987,6 +1038,105 @@ mod tests {
             {"locator":"notes.md#L2-L3","sha256":notes_digest}
         ]});
         assert!(validate_grounding(&lines, &root).is_ok());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unresolvable_locators_separates_resolution_from_every_other_defect() {
+        let root = std::env::temp_dir().join(format!(
+            "software-change-unresolvable-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let acceptance: Vec<Value> = (0..12)
+            .map(|i| json!({"id": format!("AC-{}", i + 1)}))
+            .collect();
+        fs::write(
+            root.join("intent.json"),
+            serde_json::to_vec(&json!({"revision":"1","acceptance":acceptance,
+                "operating_context":{"outside_obligations":["a","b","c","d"]}}))
+            .unwrap(),
+        )
+        .unwrap();
+        let grounds = |locators: &[&str]| json!({"reason":"checked","evidence": locators.iter().map(|l| json!({"locator": l})).collect::<Vec<_>>()});
+        // The two observed 2026-10-14 mistakes are reported with the existing diagnostic.
+        let found = unresolvable_locators(
+            &grounds(&[
+                "intent.json#/acceptance/12",
+                "intent.json#/outside_obligations/3",
+                "intent.json#/acceptance/11",
+            ]),
+            &root,
+            Some(3),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(found.len(), 2);
+        assert_eq!(
+            (found[0].0, found[0].1.as_str()),
+            (0, "intent.json#/acceptance/12")
+        );
+        assert!(
+            found[0]
+                .2
+                .contains("closest existing pointer: `intent.json#/acceptance/11`"),
+            "{}",
+            found[0].2
+        );
+        assert_eq!(
+            (found[1].0, found[1].1.as_str()),
+            (1, "intent.json#/outside_obligations/3")
+        );
+        // All resolving: nothing to repair.
+        assert!(unresolvable_locators(
+            &grounds(&["intent.json#/revision", "intent.json#/acceptance/11"]),
+            &root,
+            Some(3),
+            &[]
+        )
+        .unwrap()
+        .iter()
+        .all(|_| false));
+        // Every non-resolution defect is an Err, never a locator defect.
+        for (bad, why) in [
+            (
+                grounds(&["intent.json#/acceptance/12", "intent.json#/acceptance/12"]),
+                "duplicated",
+            ),
+            (grounds(&["../intent.json#/revision"]), "stay beneath"),
+            (grounds(&["intent.json#bogus"]), "malformed"),
+            (
+                json!({"reason":"","evidence":[{"locator":"intent.json#/revision"}]}),
+                "reason",
+            ),
+            (json!({"reason":"x","evidence":[]}), "source references"),
+            (
+                json!({"reason":"x","evidence":[{"locator":"intent.json#/revision","extra":1}]}),
+                "only locator",
+            ),
+            (
+                json!({"reason":"x","evidence":[{"locator":"intent.json#/revision"}],"more":1}),
+                "exactly reason and evidence",
+            ),
+        ] {
+            let error = unresolvable_locators(&bad, &root, Some(3), &[]).unwrap_err();
+            assert!(error.contains(why), "{why}: {error}");
+        }
+        // Ordinary validation keeps its behavior and message for the same input.
+        let ordinary = validate_grounding_with_context(
+            &grounds(&["intent.json#/acceptance/12"]),
+            &root,
+            Some(3),
+            &[],
+        )
+        .unwrap_err();
+        assert!(
+            ordinary
+                .contains("evidence JSON Pointer in `intent.json#/acceptance/12` does not resolve"),
+            "{ordinary}"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

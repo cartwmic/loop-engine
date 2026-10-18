@@ -361,7 +361,10 @@ in validation; repository-state mismatch uses shown revise-implementation.
    Commission's `locator_guidance` lists the accepted forms, the root each relative path
    resolves against (declared `source_scopes`, else the artifact directory's git top level,
    never the invoking directory) and each JSON source's real keys and array lengths. A refused
-   pointer names the closest existing one; correct it through the driver-attributed projection.
+   pointer names the closest existing one. When a structured return's only defect is evidence
+   locators that do not resolve, recover it with provider-checked locator repair (below), not
+   a new reviewer session; use the driver-attributed projection only for a non-JSON or
+   otherwise misshapen return.
 5. Triage before append or mutation: accept only in-scope material failures or genuinely
    supported passes. Preserve grounds/evidence and self-review declarations. Disputed
    substantive candidates need focused independent reconsideration; reject provably
@@ -369,6 +372,41 @@ in validation; repository-state mismatch uses shown revise-implementation.
 6. Append accepted review-evidence and a driver-authored finding-ledger snapshot, then
    observe and request approved/passed as shown. A process exit or projector success
    never supplies semantic judgment. Ordinary clearance precedes challenge clearance.
+
+### Locator repair for a return whose only defect is unresolvable locators
+
+Use it when `review-candidates` refused a structured review contract v3 return solely
+because one or more `grounds.evidence` locators do not resolve (for example `/acceptance/12`
+past the end of the array). Do not use it for any other defect (missing or empty reason,
+invalid verdict, duplicated or malformed locator, absolute or out-of-root path, non-JSON
+text, reused rows), and never to change what the reviewer judged.
+
+Input is the ordinary `review-candidates` stdin plus
+`locator_repair: {driver: {name, kind}, repaired: {text | reference}}`. `repaired` is a full
+copy of the original return in which only evidence locators were edited: replace each
+unresolvable locator with one that resolves, or delete it. Keep every locator that already
+resolves, in order. Do not add evidence, and keep at least one resolving entry per judgment.
+`locator_repair` cannot be combined with `projection` or `formatter`.
+
+The provider checks, with no catalog access, that the original is valid except for
+unresolvable locators in every judgment; that author, stage, contract version, assessment
+identity, judgment count and order, each axis, verdict, findings text and reason are
+identical; that nothing but permitted locator replacement or dropping differs; and that
+every corrected locator resolves. Any difference refuses the whole request (exit 2,
+`locator repair refused: ...` naming each difference) and releases no candidate, so run
+state, context and history are unchanged.
+
+On success the candidates are ordinary `review-evidence` of the original reviewer with the
+original's derived assessment identity; they count toward floors, independence and grouping
+exactly as the original return would, and no more. `external_review.original` is the
+unchanged original; `external_review.locator_repair` records `kind: "locator-repair"`, the
+repairing `driver`, `original_sha256` and each
+judgment's `corrections` (`before`, and `after` or null when dropped). The record is visibly
+a repair; it is not a fresh review and not the reviewer's unaltered return.
+
+Projection differs: it is the driver's own confirmation that a misshapen or prose return is
+faithfully represented, with the formatter named and no provider comparison of what changed.
+Triage repaired candidates like any other, then append them.
 
 ### Challenge review targets the clean conclusion
 

@@ -185,11 +185,44 @@ steering follows existing target/supersession selection; unrelated/superseded st
 is excluded. Reviewer truth remains external; citation availability is not support.
 Relative review locators resolve beneath the artifact directory, then the primary source root
 (declared `source_scopes`, else the git top level of the artifact directory), never the
-invoking directory; a refused pointer names the closest existing one. Commission's
+invoking directory; a refused pointer names the closest existing one. When a structured
+return's only defect is unresolvable evidence locators, use provider-checked locator repair
+(below) rather than a new reviewer session. Commission's
 `locator_guidance` gives the accepted forms and each JSON source's keys and array lengths.
 Carried and fresh judgments may cover one review group together (per axis, floors unchanged);
 commission's `parent_review` labels carried challenge-packet parts and names the cause when a
 carried aggregate cannot supply one.
+
+### Locator repair
+
+`software-change review-candidates` accepts an optional `locator_repair` object beside
+`original`: `{"driver": {"name": "...", "kind": "human|agent|script"}, "repaired": {"text": "..."}}`
+(or `{"reference": "/absolute/path"}` in place of `text`). `repaired` is a full copy of the
+original structured review contract v3 return in which only `grounds.evidence` locators were
+replaced with resolving ones or dropped (at least one entry stays per judgment; locators that
+already resolve stay, in order; nothing is added). It cannot be combined with `projection` or
+`formatter`, and it needs a contract 3 profile with an artifact root.
+
+```sh
+software-change review-candidates < repair-stdin.json   # show, assignment, request, original, locator_repair
+```
+
+The provider validates the original in every judgment except for locator resolution and
+refuses, with every difference named and no output (exit 2), any change to the author,
+stage, contract version, assessment identity, judgment order or count, axis, verdict,
+findings or reason; a locator that still does not resolve; a return with no unresolvable
+locator; and any other defect (missing reason, duplicated locator, reused rows). It reads
+sources and never touches a catalog. Refusal leaves run state, context and history
+unchanged because nothing is appended.
+
+Success yields ordinary `review-evidence` candidates for the original reviewer with the
+assessment identity derived from the original bytes, so floors, independence and grouping
+count exactly as for the original return. `data.external_review.original` is unchanged and
+`data.external_review.locator_repair` carries `kind: "locator-repair"`, `driver`,
+`original_sha256` and per-judgment `corrections` (`before`,
+`after` or null when dropped). Triage then append as usual. The driver-attributed
+`projection` route remains for non-JSON or otherwise misshapen returns; it is not a provider
+comparison of what changed.
 
 ### Driver intent correction
 

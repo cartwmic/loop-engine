@@ -24,6 +24,30 @@ fn content(value: &Value) -> Result<Value, String> {
         .map_err(|e| e.to_string())
 }
 
+/// A checked locator repair: who repaired it and what each judgment's locators became.
+struct LocatorRepair {
+    driver: Value,
+    corrections: Vec<crate::locator_repair::Correction>,
+}
+
+impl LocatorRepair {
+    /// Provenance stored beside the unchanged original on one repaired candidate.
+    fn provenance(&self, axis: &str, original_sha256: &str) -> Value {
+        let corrections: Vec<Value> = self
+            .corrections
+            .iter()
+            .filter(|correction| correction.axis == axis)
+            .map(|correction| json!({"before": correction.before, "after": correction.after}))
+            .collect();
+        json!({
+            "kind": "locator-repair",
+            "driver": self.driver,
+            "original_sha256": original_sha256,
+            "corrections": corrections,
+        })
+    }
+}
+
 pub fn project(input: &Value) -> Result<Value, String> {
     let show = &input["show"];
     if show["operation"] != "show"
@@ -62,7 +86,54 @@ pub fn project(input: &Value) -> Result<Value, String> {
         .transpose()?;
     let original = content(&input["original"])?;
     let request = content(&input["request"])?;
-    let projection = input.get("projection").unwrap_or(&original["structured"]);
+    let root = show["result"]
+        .get("artifact_root")
+        .or_else(|| initial.get("artifact_root"))
+        .and_then(Value::as_str);
+    // Optional provider-checked locator repair: `locator_repair`: {driver:{name,kind},
+    // repaired:{text|reference}} beside the unchanged `original`. The repaired return is
+    // used as the projection only after the repair check proves it differs from the original
+    // in nothing but permitted evidence locators.
+    let mut repaired_content = Value::Null;
+    let mut repair: Option<LocatorRepair> = None;
+    if let Some(request_repair) = input.get("locator_repair") {
+        if input.get("projection").is_some() || input.get("formatter").is_some() {
+            return Err("locator repair refused: locator_repair cannot be combined with projection or formatter".into());
+        }
+        if initial["contract_version"].as_u64().is_none_or(|v| v < 3) {
+            return Err(
+                "locator repair refused: it requires semantic contract version 3 or later".into(),
+            );
+        }
+        let root = root.ok_or("locator repair refused: it requires an artifact_root")?;
+        let driver = request_repair["driver"].clone();
+        text(&driver, "name")?;
+        if !["human", "agent", "script"].contains(&text(&driver, "kind")?) {
+            return Err("locator repair refused: invalid driver kind".into());
+        }
+        if original["structured"]["review_contract_version"] != 3 {
+            return Err(
+                "locator repair refused: it requires a review contract version 3 return".into(),
+            );
+        }
+        repaired_content = content(&request_repair["repaired"])?;
+        let corrections = crate::locator_repair::check(
+            &original["structured"],
+            &repaired_content["structured"],
+            std::path::Path::new(root),
+            &context,
+        )
+        .map_err(|error| format!("locator repair refused: {error}"))?;
+        repair = Some(LocatorRepair {
+            driver,
+            corrections,
+        });
+    }
+    let projection = if repair.is_some() {
+        &repaired_content["structured"]
+    } else {
+        input.get("projection").unwrap_or(&original["structured"])
+    };
     let mut attributed_projection = projection.clone();
     if attributed_projection.get("author").is_none() && attributed_projection.is_object() {
         attributed_projection["author"] = author.clone();
@@ -134,10 +205,6 @@ pub fn project(input: &Value) -> Result<Value, String> {
     let axes = policy
         .as_array()
         .ok_or("assignment gate has no review policy")?;
-    let root = show["result"]
-        .get("artifact_root")
-        .or_else(|| initial.get("artifact_root"))
-        .and_then(Value::as_str);
     let subject_value = root
         .and_then(|root| std::fs::read(std::path::Path::new(root).join(subject)).ok())
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
@@ -276,6 +343,11 @@ pub fn project(input: &Value) -> Result<Value, String> {
             data["session"] = session.clone();
         }
         data["external_review"] = json!({"request":request,"original":original,"direct":direct});
+        if let Some(repair) = &repair {
+            let axis_name = text(&data, "axis")?.to_owned();
+            data["external_review"]["locator_repair"] =
+                repair.provenance(&axis_name, &original_digest);
+        }
         if let Some(formatter) = input.get("formatter") {
             text(formatter, "name")?;
             if !["human", "agent", "script"].contains(&text(formatter, "kind")?) {
@@ -311,6 +383,21 @@ pub fn project(input: &Value) -> Result<Value, String> {
         let candidate = json!({"kind":"review-evidence","data":data});
         records.push(candidate.clone());
         item.candidate = Some(candidate);
+    }
+    if repair.is_some() {
+        // Repair mode is all-or-nothing: a repaired return is one reviewer assessment, so no
+        // candidate is released unless every judgment in it is accepted.
+        let refused: Vec<String> = items
+            .iter()
+            .filter(|item| item.candidate.is_none() || !item.diagnostics.is_empty())
+            .map(|item| format!("judgment {}: {}", item.index, item.diagnostics.join("; ")))
+            .collect();
+        if !refused.is_empty() || records.len() != judgments.len() {
+            return Err(format!(
+                "locator repair refused; repair is all-or-nothing and no candidate was released: {}",
+                refused.join(" | ")
+            ));
+        }
     }
     Ok(json!({"schema_version":"3","records":records,"items":items}))
 }
@@ -632,5 +719,199 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Contract-4 profile input with a real artifact directory, for the repair path.
+    fn repair_input(original: Value, corrected: Value) -> (Value, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "review-candidates-repair-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let acceptance: Vec<Value> = (0..12)
+            .map(|i| json!({"id": format!("AC-{}", i + 1)}))
+            .collect();
+        std::fs::write(
+            root.join("intent.json"),
+            serde_json::to_vec(
+                &json!({"revision":"1","outcome":"x","acceptance":acceptance,
+                "operating_context":{"outside_obligations":["a","b"]}}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut profile: Value =
+            serde_json::from_str(include_str!("../data/configs/high-rigor.json")).unwrap();
+        profile["artifact_root"] = json!(root);
+        let input = json!({
+            "show":{"operation":"show","status":"completed","result":{
+                "workflow_id":"software-change","initial_input":profile,"context":[],
+                "artifact_root":root}},
+            "assignment":{"gate":"intent-review","stage":"aggregate","group":"intent-review.aggregate",
+                "author":{"name":"reviewer","kind":"agent"},"subject":"intent.json","subject_revision":"1"},
+            "request":{"text":"review instructions"},
+            "original":{"text":original.to_string()},
+            "locator_repair":{"driver":{"name":"driver","kind":"agent"},"repaired":{"text":corrected.to_string()}}
+        });
+        (input, root)
+    }
+    fn batch(judgments: Value) -> Value {
+        json!({"review_contract_version":3,"review_stage":"aggregate",
+            "author":{"name":"reviewer","kind":"agent"},"judgments":judgments})
+    }
+    fn row(axis: &str, locators: &[&str]) -> Value {
+        json!({"axis":axis,"result":"pass","findings":"","grounds":{"reason":"checked the intent",
+            "evidence": locators.iter().map(|l| json!({"locator": l})).collect::<Vec<_>>()}})
+    }
+
+    #[test]
+    fn a_locator_only_repair_yields_ordinary_candidates_with_visible_provenance() {
+        let original = batch(json!([
+            row(
+                "scope-fenced",
+                &["intent.json#/outcome", "intent.json#/acceptance/12"]
+            ),
+            row(
+                "problem-grounded",
+                &["intent.json#/outside_obligations/3", "intent.json#/outcome"]
+            )
+        ]));
+        let corrected = batch(json!([
+            row(
+                "scope-fenced",
+                &["intent.json#/outcome", "intent.json#/acceptance/11"]
+            ),
+            row("problem-grounded", &["intent.json#/outcome"])
+        ]));
+        let (mut input, root) = repair_input(original.clone(), corrected.clone());
+        // Without the repair request the same original is refused row by row.
+        let mut plain = input.clone();
+        plain.as_object_mut().unwrap().remove("locator_repair");
+        let refused = project(&plain).unwrap();
+        assert!(
+            refused["records"].as_array().unwrap().is_empty(),
+            "{refused}"
+        );
+        assert!(refused["items"].to_string().contains("does not resolve"));
+        // With it, both rows become ordinary candidates carrying the original reviewer's identity.
+        let output = project(&input).unwrap();
+        let records = output["records"].as_array().unwrap();
+        assert_eq!(records.len(), 2, "{output}");
+        let assessment = records[0]["data"]["assessment_id"].clone();
+        assert!(assessment
+            .as_str()
+            .unwrap()
+            .starts_with("assessment:sha256:"));
+        for (record, source) in records
+            .iter()
+            .zip(original["judgments"].as_array().unwrap())
+        {
+            let data = &record["data"];
+            assert_eq!(record["kind"], "review-evidence");
+            assert_eq!(data["assessment_id"], assessment);
+            assert_eq!(data["author"], original["author"]);
+            assert_eq!(data["axis"], source["axis"]);
+            assert_eq!(data["result"], source["result"]);
+            assert_eq!(data["findings"], source["findings"]);
+            assert_eq!(data["grounds"]["reason"], source["grounds"]["reason"]);
+            assert_eq!(
+                data["external_review"]["original"]["original"],
+                original.to_string()
+            );
+            let repair = &data["external_review"]["locator_repair"];
+            assert_eq!(repair["kind"], "locator-repair");
+            assert_eq!(repair["driver"], json!({"name":"driver","kind":"agent"}));
+            assert!(repair["original_sha256"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:"));
+            // Minimum provenance: the corrected bytes are not stored a second time.
+            assert!(repair.get("repaired").is_none() && repair.get("repaired_sha256").is_none());
+        }
+        assert_eq!(
+            records[0]["data"]["external_review"]["locator_repair"]["corrections"],
+            json!([{"before":"intent.json#/acceptance/12","after":"intent.json#/acceptance/11"}])
+        );
+        assert_eq!(
+            records[1]["data"]["external_review"]["locator_repair"]["corrections"],
+            json!([{"before":"intent.json#/outside_obligations/3","after":null}])
+        );
+        // The same original bytes and assignment derive the same assessment as ordinary intake.
+        input.as_object_mut().unwrap().remove("locator_repair");
+        input["original"] = json!({"text":original.to_string()});
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn repair_refuses_the_whole_request_and_releases_nothing() {
+        let good = row("problem-grounded", &["intent.json#/outcome"]);
+        let mut defective = good.clone();
+        defective["grounds"]["reason"] = json!("");
+        for (original, corrected, why) in [
+            // A sibling judgment with a non-locator defect rides along with a repaired one.
+            (
+                batch(json!([
+                    row("scope-fenced", &["intent.json#/acceptance/12"]),
+                    defective.clone()
+                ])),
+                batch(json!([
+                    row("scope-fenced", &["intent.json#/acceptance/11"]),
+                    defective.clone()
+                ])),
+                "defect other than unresolvable locators",
+            ),
+            // A verdict change.
+            (
+                batch(json!([row(
+                    "scope-fenced",
+                    &["intent.json#/acceptance/12"]
+                )])),
+                {
+                    let mut c = batch(json!([row(
+                        "scope-fenced",
+                        &["intent.json#/acceptance/11"]
+                    )]));
+                    c["judgments"][0]["result"] = json!("fail");
+                    c
+                },
+                "field result differs",
+            ),
+            // A locator that still does not resolve.
+            (
+                batch(json!([row(
+                    "scope-fenced",
+                    &["intent.json#/acceptance/12"]
+                )])),
+                batch(json!([row(
+                    "scope-fenced",
+                    &["intent.json#/acceptance/13"]
+                )])),
+                "still does not resolve",
+            ),
+        ] {
+            let (input, root) = repair_input(original, corrected);
+            let error = project(&input).unwrap_err();
+            assert!(error.starts_with("locator repair refused"), "{error}");
+            assert!(error.contains(why), "{why}: {error}");
+            let _ = std::fs::remove_dir_all(root);
+        }
+        // Not combinable with the driver-attributed projection route.
+        let (mut input, root) = repair_input(
+            batch(json!([row(
+                "scope-fenced",
+                &["intent.json#/acceptance/12"]
+            )])),
+            batch(json!([row(
+                "scope-fenced",
+                &["intent.json#/acceptance/11"]
+            )])),
+        );
+        input["projection"] = batch(json!([row("scope-fenced", &["intent.json#/outcome"])]));
+        assert!(project(&input).unwrap_err().contains("cannot be combined"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

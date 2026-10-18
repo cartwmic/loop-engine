@@ -5,6 +5,7 @@ pathspecs = [
   "tests/workspace-integration/tests/c_packets_admission.rs",
   "tests/workspace-integration/tests/evidence_carry.rs",
   "tests/workspace-integration/tests/model_bindings.rs",
+  "tests/workspace-integration/tests/locator_repair.rs",
   "scripts/external-work-journey.py",
   "scripts/software-change-journey.py",
   "scripts/narrative-checkpoint-journey.py",

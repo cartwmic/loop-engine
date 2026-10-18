@@ -14,6 +14,7 @@ mod evidence;
 #[allow(dead_code)]
 mod finding_ledger;
 mod gates;
+mod locator_repair;
 mod narratives;
 mod option_evaluation;
 mod overlay;

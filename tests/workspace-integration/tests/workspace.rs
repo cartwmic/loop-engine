@@ -56,3 +56,6 @@ mod evidence_carry;
 
 #[cfg(unix)]
 mod model_bindings;
+
+#[cfg(unix)]
+mod locator_repair;
