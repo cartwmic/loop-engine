@@ -1,5 +1,6 @@
 """Private durable workspace snapshots and mount-free replay containers."""
 import json
+import subprocess
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -60,9 +61,10 @@ async def restore(env, archive):
 
 class ReplayContainer:
     """Small async file/exec surface shared with Inspect sandboxes; no host mounts."""
-    def __init__(self, image, cleanup_seconds=None):
+    def __init__(self, image, cleanup_seconds=None, on_abandon=None):
         self.image = image
         self.container = None
+        self.on_abandon = on_abandon  # called when removal ran out of time and was handed off
         # Seconds, or a callable evaluated when the container is removed (so time spent meanwhile is deducted).
         self.cleanup_seconds = self.CLEANUP_SECONDS if cleanup_seconds is None else cleanup_seconds
 
@@ -77,8 +79,15 @@ class ReplayContainer:
         seconds = self.cleanup_seconds() if callable(self.cleanup_seconds) else self.cleanup_seconds
         if seconds is None:
             seconds = self.CLEANUP_SECONDS
-        with anyio.CancelScope(shield=True, deadline=anyio.current_time() + seconds):
+        with anyio.CancelScope(shield=True, deadline=anyio.current_time() + seconds) as scope:
             await anyio.run_process(["docker", "rm", "-f", self.container], check=False)
+        if scope.cancelled_caught:
+            # Removal outlasted the campaign's allowance (a hung Docker). Hand it to a detached process so the container is
+            # still removed when Docker answers, and let the caller name the cut-off in the report.
+            subprocess.Popen(["docker", "rm", "-f", self.container], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if self.on_abandon is not None:
+                self.on_abandon()
 
     async def exec(self, command, *, cwd=None, timeout=120, env=None):
         argv = ["docker", "exec"]

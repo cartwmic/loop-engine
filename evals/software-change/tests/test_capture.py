@@ -103,7 +103,7 @@ def test_replay_container_cleanup_is_bounded(monkeypatch, tmp_path):
     import stat
     import time
     shim = tmp_path / "docker"
-    shim.write_text("#!/bin/sh\nsleep 600\n")
+    shim.write_text(f"#!/bin/sh\necho \"$@\" >> {tmp_path}/docker-calls\nsleep 5\n")
     shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
     container = ReplayContainer("image", cleanup_seconds=1)
@@ -131,7 +131,7 @@ def test_cleanup_deadline_is_computed_when_the_container_is_removed_not_when_it_
     import stat
     import time
     shim = tmp_path / "docker"
-    shim.write_text("#!/bin/sh\nsleep 600\n")
+    shim.write_text(f"#!/bin/sh\necho \"$@\" >> {tmp_path}/docker-calls\nsleep 5\n")
     shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
     calls = []
@@ -144,3 +144,20 @@ def test_cleanup_deadline_is_computed_when_the_container_is_removed_not_when_it_
     begun = time.monotonic()
     anyio.run(container.__aexit__, None, None, None)
     assert len(calls) == 1 and calls[0] >= begun and time.monotonic() - begun < 10
+
+
+def test_abandoned_removal_is_handed_off_detached_and_named(monkeypatch, tmp_path):
+    import stat
+    import time
+    shim = tmp_path / "docker"
+    shim.write_text(f"#!/bin/sh\necho \"$@\" >> {tmp_path}/docker-calls\nsleep 5\n")
+    shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    named = []
+    container = ReplayContainer("image", cleanup_seconds=1, on_abandon=lambda: named.append(True))
+    container.container = "c1"
+    begun = time.monotonic()
+    anyio.run(container.__aexit__, None, None, None)
+    assert time.monotonic() - begun < 4 and named == [True]
+    time.sleep(1)  # the detached second attempt has started
+    assert (tmp_path / "docker-calls").read_text().count("rm -f c1") == 2

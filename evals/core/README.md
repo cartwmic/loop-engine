@@ -102,7 +102,7 @@ Trials run one at a time, so the guard sees one trial's live spend.
   work returns and again after scoring (which may have made the final judge call, so a stop it reaches is recorded), so spend or time reached in its last seconds still stops the judge and later trials. A target that ignores a stop is cancelled
   after `stop_grace_seconds` (default 30). Nothing is retried.
 - Synchronous setup and version probes have explicit timeouts bounded by the remaining time (summary preparation shares the
-  time left before D minus a few seconds; the replay container's shielded removal is bounded by the time left before D minus 30 s, at most 60 s; capture metadata probes share the post-trial allowance). If one runs out, the
+  time left before D minus a few seconds; the replay container's shielded removal is bounded by the time left before D minus 30 s, at most 60 s; capture metadata probes share the post-trial allowance; a removal that runs out of time is handed to a detached process and named as a `replay_cleanup` cut-off in the report). If one runs out, the
   campaign ends as `limit` with that step named and publishes only the limit-only record.
 - Publication: a small limit-only record (outcomes, reasons, caps, no private text) is written first. A separate
   child process then renders, scans and stages the full report and is killed at D. The staged report replaces the

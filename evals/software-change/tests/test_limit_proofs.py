@@ -186,7 +186,7 @@ def test_a_stuck_replay_container_removal_cannot_push_publication_past_the_cap(t
     allowance (time left before D minus headroom), so the report still lands before D."""
     real = subprocess.run(["which", "docker"], capture_output=True, text=True).stdout.strip()
     shim = tmp_path / "docker"
-    shim.write_text(f'#!/bin/sh\nif [ "$1" = rm ]; then sleep 600; fi\nexec {real} "$@"\n')
+    shim.write_text(f'#!/bin/sh\nif [ "$1" = rm ]; then sleep 90; fi\nexec {real} "$@"\n')
     shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
     try:
         outcome = drive(campaign_wall_limit_seconds=300, post_trial_reserve_seconds=200, publication_reserve_seconds=40,
@@ -198,3 +198,5 @@ def test_a_stuck_replay_container_removal_cannot_push_publication_past_the_cap(t
     assert outcome.elapsed < 300
     assert outcome.summary["budget"]["wall_within_cap"] is True
     assert (outcome.trial["outcome"], outcome.trial["limit_step"]) == ("limit", "scoring")
+    steps = [c["step"] for c in outcome.summary["budget"]["cut_off_steps"]]
+    assert "replay_cleanup" in steps          # the abandoned removal is named in the report, and was handed off detached

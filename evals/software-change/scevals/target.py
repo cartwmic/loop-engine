@@ -120,6 +120,13 @@ def cleanup_allowance(context):
     return min(ReplayContainer.CLEANUP_SECONDS, max(1.0, remaining - PUBLICATION_HEADROOM_SECONDS))
 
 
+def note_cleanup_handoff(context):
+    """The replay container's removal ran out of time: name it in the report (the removal continues detached)."""
+    guard = getattr(context, "guard", None)
+    if guard is not None:
+        guard.note_cut_off("replay_cleanup", limit_reason(context), context.assignment.sample_id)
+
+
 def limit_reason(context):
     guard = getattr(context, "guard", None)
     return guard.step_stop_reason() if guard is not None else "campaign_wall_time"
@@ -632,7 +639,8 @@ class SoftwareChangeTarget:
         window = allowance(context, None)
         with anyio.move_on_after(window) as scope:
             async with ReplayContainer(context.settings.target_options.get("image", DEFAULT_IMAGE),
-                                       cleanup_seconds=lambda: cleanup_allowance(context)) as env:
+                                       cleanup_seconds=lambda: cleanup_allowance(context),
+                                       on_abandon=lambda: note_cleanup_handoff(context)) as env:
                 delay = context.settings.target_options.get("scripted_scoring_delay_seconds")
                 if delay and getattr(self, "operation", "campaign") != "rescore":
                     await anyio.sleep(delay)  # proof hook: make scoring deliberately slow
