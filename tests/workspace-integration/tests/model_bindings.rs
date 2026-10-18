@@ -18,6 +18,8 @@ const SCENARIOS: [&str; 7] = [
     "marked-amendment",
 ];
 
+// bookends:LE-195 bookends:LE-196 bookends:LE-197 bookends:LE-198
+// bookends:LE-199 bookends:LE-200
 #[test]
 fn model_binding_scenarios() {
     let repository = workspace_integration::repository_root();
