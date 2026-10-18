@@ -338,6 +338,10 @@ def test_blocked_rendering_cannot_hold_the_command_past_the_cap(campaign_root):
     assert record["record"] == "limit-only" and record["complete"] is False
     assert [t["outcome"] for t in record["trials"]] == ["success"]
     assert record["publication_cut_off"] is True
+    assert 14 - 4 <= record["campaign_wall_seconds"] <= 14 and record["wall_within_cap"] is True   # real time, not the pre-render time
+    assert record["actual"]["wall_seconds"] == record["campaign_wall_seconds"]
+    publication = json.loads((only_report(campaign_root) / "publication.json").read_text())
+    assert publication["full_report"] is False and publication["within_cap"] is True
     assert {"step": "publication", "reason": "campaign_wall_time", "sample_id": None} in record["cut_off_steps"]
     assert "Cut off: publication" in (only_report(campaign_root) / "report.md").read_text()
     leftover = subprocess.run(["pgrep", "-f", "evalcore.publish"], capture_output=True, text=True)

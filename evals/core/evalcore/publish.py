@@ -18,6 +18,7 @@ from .report import UnsafeReportError, protected_values, render_markdown, scan_r
 
 WALL_TOKEN = "{CAMPAIGN_WALL_SECONDS}"
 UNSAFE_EXIT = 3
+KILL_MARGIN_SECONDS = 1.0
 RECORD_NOTE = ("Limit-only record: the full report was not finished before the campaign cap. "
                "It holds outcomes, reasons and budget figures only, no private text.")
 
@@ -45,8 +46,24 @@ def minimal_markdown(record: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def record_publication_cut_off(destination: Path, record: dict) -> None:
+def finish_fallback(destination: Path, record: dict, command_start: float, publishing_started: float) -> float:
+    """The fallback record stands as the result, so its duration must be the real command-to-written time, not the time at
+    which it was first written, and the publication receipt must exist like on the normal path."""
+    elapsed = time.monotonic() - command_start
+    cap = (record.get("caps") or {}).get("wall_seconds")
+    record["campaign_wall_seconds"] = round(elapsed, 3)
+    if isinstance(record.get("actual"), dict):
+        record["actual"] = {**record["actual"], "wall_seconds": round(elapsed, 3)}
+    record["wall_within_cap"] = None if cap is None else elapsed <= cap
+    (destination / "publication.json").write_text(json.dumps({
+        "command_start_to_report_written_seconds": elapsed, "publication_started_seconds": publishing_started - command_start,
+        "cap_seconds": cap, "within_cap": record["wall_within_cap"], "full_report": False}, indent=2) + "\n")
+    return elapsed
+
+
+def record_publication_cut_off(destination: Path, record: dict, command_start: float, publishing_started: float) -> None:
     """Name the cut-off in the limit-only record the owner will read: campaign wall time ran out at publication."""
+    finish_fallback(destination, record, command_start, publishing_started)
     cut = {"step": "publication", "reason": "campaign_wall_time", "sample_id": None}
     record["cut_off_steps"] = [*record.get("cut_off_steps", []), cut]
     record["stop_events"] = [*record.get("stop_events", []), {"reason": "campaign_wall_time", "step": "publication"}]
@@ -91,8 +108,10 @@ def publish(results_dir: Path, summary: dict, *, provider_config_paths=(), repor
     if minimal_only:
         return destination
     publishing_started = time.monotonic()
-    remaining = None if deadline is None else deadline - publishing_started
+    # The kill and the fallback write take a moment, so the renderer is stopped slightly before D to keep the written time inside it.
+    remaining = None if deadline is None else deadline - publishing_started - KILL_MARGIN_SECONDS
     if remaining is not None and remaining <= 0:
+        record_publication_cut_off(destination, record, command_start, publishing_started)
         print("Cap reached before the full report could start; limit-only record kept.", flush=True)
         return destination
     work = Path(tempfile.mkdtemp(prefix="evalctl-publish-"))  # private: holds the unscanned summary
@@ -109,13 +128,16 @@ def publish(results_dir: Path, summary: dict, *, provider_config_paths=(), repor
         except subprocess.TimeoutExpired:
             os.killpg(child.pid, signal.SIGKILL)
             child.wait()
-            record_publication_cut_off(destination, record)
+            record_publication_cut_off(destination, record, command_start, publishing_started)
             print("Full report not finished by the cap; child killed, limit-only record kept.", flush=True)
             return destination
         if code == UNSAFE_EXIT:
             remove_destination(destination, results_dir)
             raise UnsafeReportError("result refused: credential or provider configuration detected")
         if code != 0:
+            finish_fallback(destination, record, command_start, publishing_started)
+            (destination / "summary.json").write_text(json.dumps(record, indent=2) + "\n")
+            (destination / "report.md").write_text(minimal_markdown(record))
             print("Full report failed to render; limit-only record kept.", flush=True)
             return destination
         # Finalize the one field that depends on when the report is written, then move into place.

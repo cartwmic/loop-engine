@@ -107,7 +107,7 @@ Trials run one at a time, so the guard sees one trial's live spend.
 - Publication: a small limit-only record (outcomes, reasons, caps, no private text) is written first. A separate
   child process then renders, scans and stages the full report and is killed at D. The staged report replaces the
   record only if it finished in time; otherwise the record is the result, and it names the cut-off (`publication_cut_off`, a `publication` step in
-  `cut_off_steps` and a `campaign_wall_time` stop event). `campaign_wall_seconds` is the command-start
+  `cut_off_steps` and a `campaign_wall_time` stop event); the fallback carries the real command-to-written time and `publication.json` is written with `full_report: false`. The renderer is stopped one second before D so the written time stays inside it. `campaign_wall_seconds` is the command-start
   to report-written time, written just before the move, and `publication.json` records the interval.
 - `tier` and `report_note` appear in the report's Budget section with the caps, actual spend and time, per-stop
   events, cut-off steps and the cost verdict (`pass`, `fail_over_cap`, `fail_unpriced`, `fail_unknown_usage`, or

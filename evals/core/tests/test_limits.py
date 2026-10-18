@@ -82,3 +82,19 @@ def test_harness_version_probes_give_up_when_their_budget_is_spent():
     out = harness_versions(0)
     assert out["checkout_commit"] == "unknown" and out["checkout_dirty"] is None
     assert harness_versions(60)["checkout_commit"] != "unknown"
+
+
+def test_publish_when_the_cap_is_already_reached_names_the_cut_off_with_real_time(tmp_path):
+    import json
+    import time
+    from evalcore.publish import publish
+    summary = {"campaign": "c", "target": "t", "setup_limit": None, "trials": [],
+               "budget": {"tier": None, "caps": {"wall_seconds": 10}, "actual": {"usd": 0.0, "tokens": 0, "wall_seconds": None},
+                          "cost_verdict": "not_budgeted", "stop_events": [], "cut_off_steps": []}}
+    start = time.monotonic() - 12            # the command is already past its 10 s cap
+    out = publish(tmp_path / "results", summary, deadline=start + 10, command_start=start)
+    record = json.loads((out / "summary.json").read_text())
+    assert record["publication_cut_off"] is True and record["campaign_wall_seconds"] >= 12
+    assert record["wall_within_cap"] is False and record["actual"]["wall_seconds"] == record["campaign_wall_seconds"]
+    receipt = json.loads((out / "publication.json").read_text())
+    assert receipt["within_cap"] is False and receipt["full_report"] is False

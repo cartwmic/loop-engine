@@ -141,6 +141,11 @@ def test_blocking_render_leaves_the_limit_only_record_and_the_command_still_ends
     assert outcome.elapsed < 240 + 30
     assert outcome.summary["record"] == "limit-only" and outcome.summary["trials"][0]["outcome"] == "success"
     assert outcome.summary["publication_cut_off"] is True and outcome.summary["cut_off_steps"][-1]["step"] == "publication"
+    # The fallback is the result, so it must report the real command-to-written time (the renderer was waited on until the cap).
+    assert 240 - 10 <= outcome.summary["campaign_wall_seconds"] <= 240 and outcome.summary["wall_within_cap"] is True
+    publication = json.loads((outcome.directory / "publication.json").read_text())
+    assert publication["full_report"] is False and publication["within_cap"] is True
+    assert abs(publication["command_start_to_report_written_seconds"] - outcome.summary["campaign_wall_seconds"]) < 1
     assert subprocess.run(["pgrep", "-f", "evalcore.publish"], capture_output=True, text=True).stdout.strip() == ""
 
 
