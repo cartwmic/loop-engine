@@ -7,7 +7,8 @@ programs run against private catalogs in a driver-owned output root. The install
 v0.26.0 programs are the control only: they must still show the defects this change fixes.
 --self-test checks collection and interface mechanics only; it proves no behavior.
 """
-# bookends:LE-114 bookends:LE-149 — admission and the checked gate share one command-carry eligibility answer.
+# bookends:LE-171 bookends:LE-183 — carried command and review evidence stays usable, and admission and the checked gate share one eligibility answer.
+# bookends:LE-149 bookends:LE-177 — parent context is faithful, and qualifying early evidence still counts in a mixed review group.
 # bookends:LE-44 bookends:LE-47 — intake supplies durable rows; it never grants progression.
 import argparse
 import copy
@@ -182,6 +183,14 @@ def command_carry(args, root, engine, provider, control):
     wrong['target']['revision'] = 'wrong-target'
     refuse(ctx, 'evidence-applicability', wrong, 'negative-wrong-target',
            'review-applicability-origin-target', 'target checkpoint is not current')
+    for variant, change in (('subject', {'subject': 'plan.json'}),
+                            ('checkpoint', {'checkpoint': {'phase': 'validation', 'report_revision': 'wrong-report'}})):
+        wrong_part = copy.deepcopy(declaration)
+        wrong_part['target'].update(change)
+        response = refuse(ctx, 'evidence-applicability', wrong_part, 'negative-wrong-' + variant,
+                          'review-applicability-origin-target', 'target')
+        matrix['wrong-' + variant] = {'status': response['status'], 'rule': response['details']['rule'],
+                                      'message': response['details']['message']}
     append(ctx, 'evidence-applicability', declaration, 'carry-A-B')
     ctx['event']('validation-ready')
     require(ctx['show']()['result']['current_state'] == 'validation-review', 'current index refused')
@@ -527,6 +536,24 @@ def review_cases(args, root):
     ledger(ctx, PLAN_GATE, PLAN)
     rows.append(trim(compare(ctx, PLAN_CHALLENGE, expect=('unverified', axes[0]),
                              label='AC-2 wrong revision target (carry names a superseded revision)')))
+
+    ctx = start('wrong-subject-checkpoint')
+    judged, revision = plan_prefix(ctx)
+    axes = list(judged['reviewer-a'])
+    for variant, change in (('subject', {'subject': 'design.json'}),
+                            ('checkpoint', {'checkpoint': {'phase': 'validation', 'report_revision': 'wrong-report'}})):
+        bad = {'origin': {'kind': 'context-record', 'id': judged['reviewer-a'][axes[0]]},
+               'target': dict({'subject': PLAN, 'revision': revision, 'checkpoint': None}, **change),
+               'attesting_driver': {'name': 'scripted-driver', 'kind': 'agent'},
+               'reason': 'Scripted wrong ' + variant + ' target.'}
+        response = refuse(ctx, 'evidence-applicability', bad, 'wrong-' + variant,
+                          'review-applicability-origin-target', 'target')
+        rows.append({'scenario': 'AC-2/AC-5 wrong ' + variant + ' target refused at write',
+                     'rule': response['details']['rule'], 'message': response['details']['message']})
+    # The refused carries stored nothing: commission and the checked event still agree on what is missing.
+    ledger(ctx, PLAN_GATE, PLAN)
+    rows.append(trim(compare(ctx, PLAN_CHALLENGE, expect=('missing', axes[0]),
+                             label='AC-2/AC-3 wrong subject or checkpoint target leaves the axis uncarried')))
 
     ctx = start('withdrawn-origin')
     judged, revision = plan_prefix(ctx)
