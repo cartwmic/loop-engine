@@ -72,10 +72,18 @@ pub fn check(
     };
     let mut differences: Vec<String> = Vec::new();
     if without(o, "judgments") != without(c, "judgments") {
-        differences.push(
-            "a top-level field other than judgments differs (author, stage, contract version or assessment identity may not change)"
-                .into(),
-        );
+        let mut keys: Vec<&String> = o
+            .keys()
+            .chain(c.keys())
+            .filter(|key| key.as_str() != "judgments" && o.get(*key) != c.get(*key))
+            .collect();
+        keys.sort();
+        keys.dedup();
+        let named: Vec<String> = keys.iter().map(|key| format!("`{key}`")).collect();
+        differences.push(format!(
+            "a top-level field other than judgments differs: {} (author, stage, group, subject, revision, contract version or assessment identity may not change)",
+            named.join(", ")
+        ));
     }
     if oj.len() != cj.len() {
         differences.push(format!(
@@ -365,6 +373,14 @@ mod tests {
             fix(&|c| c["assessment_id"] = json!("new")),
             "top-level field",
         );
+        for key in ["group", "subject", "assessment_id"] {
+            refused(
+                &f,
+                original.clone(),
+                fix(&|c| c[key] = json!("changed")),
+                &format!("differs: `{key}`"),
+            );
+        }
         refused(
             &f,
             original.clone(),

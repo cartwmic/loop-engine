@@ -86,9 +86,11 @@ def repair(args, root):
     axes = list(EC.policies(ctx, GATE))
     first, second = axes[0], axes[1]
     author = {'name': 'scripted-reviewer', 'kind': 'agent'}
-    # The two 2026-10-14 mistakes: one past the end of an array, one at the wrong level.
-    off_by_one = f'intent.json#/acceptance/{count}'
-    wrong_level = 'intent.json#/outside_obligations/0'
+    # The two pointers observed on 2026-10-14, byte for byte: one past the end of an array, one at the
+    # wrong level. This intent has fewer acceptance entries and no such obligations, so both fail to resolve.
+    require(count <= 12 and len(intent.get('outside_obligations', [])) <= 3, (count, intent.get('outside_obligations')))
+    off_by_one = 'intent.json#/acceptance/12'
+    wrong_level = 'intent.json#/outside_obligations/3'
     original = batch(judgments(ctx, {first: [off_by_one], second: [wrong_level]}), author)
     good = copy.deepcopy(original)
     good['judgments'][0]['grounds']['evidence'][1]['locator'] = f'intent.json#/acceptance/{count - 1}'  # replaced
@@ -122,10 +124,12 @@ def repair(args, root):
     refused(ctx, variant(lambda c: c['judgments'][2]['grounds'].update(reason='different reason')),
             ['reason may not change'], 'reason', table)
     refused(ctx, variant(lambda c: c['judgments'][2].update(axis='renamed-axis')), ['changes axis'], 'axis', table)
-    refused(ctx, variant(lambda c: c['author'].update(name='someone-else')), ['top-level field'], 'author', table)
-    refused(ctx, variant(lambda c: c.update(assessment_id='another-assessment')), ['top-level field'], 'assessment', table)
-    refused(ctx, variant(lambda c: c.update(review_stage='individual')), ['top-level field'], 'stage', table)
-    refused(ctx, variant(lambda c: c.update(subject_revision='99')), ['top-level field'], 'subject-revision', table)
+    refused(ctx, variant(lambda c: c['author'].update(name='someone-else')), ['top-level field', '`author`'], 'author', table)
+    refused(ctx, variant(lambda c: c.update(assessment_id='another-assessment')), ['top-level field', '`assessment_id`'], 'assessment', table)
+    refused(ctx, variant(lambda c: c.update(review_stage='individual')), ['top-level field', '`review_stage`'], 'stage', table)
+    refused(ctx, variant(lambda c: c.update(subject_revision='99')), ['top-level field', '`subject_revision`'], 'subject-revision', table)
+    refused(ctx, variant(lambda c: c.update(group='another-group')), ['top-level field', '`group`'], 'group', table)
+    refused(ctx, variant(lambda c: c.update(subject='plan.json')), ['top-level field', '`subject`'], 'subject', table)
     refused(ctx, variant(lambda c: c['judgments'].pop()), ['may not be added, removed or reordered'], 'judgment-removed', table)
     refused(ctx, variant(lambda c: c['judgments'].append(copy.deepcopy(c['judgments'][0]))),
             ['may not be added, removed or reordered'], 'judgment-added', table)
