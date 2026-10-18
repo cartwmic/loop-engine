@@ -604,15 +604,17 @@ fn pointer_escapes_are_valid(pointer: &str) -> bool {
     })
 }
 
-/// Syntax only (no source read): `Lstart` or `Lstart-Lend` with positive integers.
+/// Syntax only (no source read): `Lstart` or `Lstart-Lend` with positive integers, start <= end.
 fn line_selector_syntax_is_valid(selector: &str) -> bool {
     let Some(raw) = selector.strip_prefix('L') else {
         return false;
     };
     let (start, end) = raw.split_once("-L").unwrap_or((raw, raw));
-    [start, end]
-        .iter()
-        .all(|part| part.parse::<usize>().is_ok_and(|line| line > 0))
+    // Decided before any file lookup, so a missing file cannot hide a malformed range.
+    match (start.parse::<usize>(), end.parse::<usize>()) {
+        (Ok(start), Ok(end)) => start > 0 && end > 0 && start <= end,
+        _ => false,
+    }
 }
 
 fn validate_line_selector(selector: &str, bytes: &[u8], locator: &str) -> Result<(), LocatorError> {
@@ -1205,7 +1207,9 @@ mod tests {
         refused("does not resolve.txt#/a", "requires a JSON source");
         refused("AGENTS.md#/does not resolve", "requires a JSON source");
         // A reversed line range is malformed, not a range past the end.
-        refused("notes.md#L3-L1", "is outside the source");
+        refused("notes.md#L3-L1", "malformed");
+        // The order check must not depend on whether the cited file exists.
+        refused("missing.txt#L3-L1", "malformed");
         // Every other refusal of the resolver.
         refused("nope:intent.json#/a", "unknown source scope");
         refused("../intent.json#/a", "stay beneath");

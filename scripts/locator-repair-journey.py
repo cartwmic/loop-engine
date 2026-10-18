@@ -174,6 +174,8 @@ def repair(args, root):
     other_defect('non-json-source-named-like-a-message', 'does not resolve.txt#/a', ['requires a JSON source'])
     other_defect('selector-text-like-a-message', 'AGENTS.md#/does not resolve', ['requires a JSON source'])
     other_defect('unknown-source-scope', 'nope:intent.json#/revision', ['unknown source scope'])
+    other_defect('reversed-line-range-on-a-missing-file', 'missing-file.txt#L3-L1', ['malformed'])
+    other_defect('reversed-line-range-on-an-existing-file', 'AGENTS.md#L2-L1', ['malformed'])
     out['AC-2'] = table
     # AC-1: the repair yields ordinary candidates; the reviewer's judgments are identical to the original.
     before_success = EC.snapshot(ctx)
