@@ -4370,6 +4370,37 @@ fn unframed_copy(entry: &Map<String, Value>) -> Map<String, Value> {
     copy
 }
 
+/// SHA-256 of reviewer-protocol.md as it stood (commit 7273cf6) when the zero-framing identities in
+/// FRAMED_ROWS were approved.
+const PROTOCOL_AT_APPROVED_FRAMING_SHA256: &str =
+    "ac36efc3c8d95d3bcb01959dc38164547cd39c962c080e52094fe6b4b7bcde7c";
+
+/// The current protocol minus the two paragraphs added later (carried/fresh combination, locators and
+/// roots with locator repair). Those insertions are the only difference from the approved bytes; the
+/// digest check makes any other drift fail here instead of silently weakening the framing proof.
+fn protocol_as_approved_for_framing() -> Vec<u8> {
+    let mut text = String::from_utf8(read_data("reviewer-protocol.md")).expect("protocol is UTF-8");
+    for marker in [
+        "**Locators and roots.**",
+        "**Combining carried and fresh judgments.**",
+    ] {
+        let start = text
+            .find(marker)
+            .unwrap_or_else(|| panic!("protocol lacks {marker}"));
+        let end = start + text[start..].find("\n\n").expect("paragraph end") + 2;
+        text.replace_range(start..end, "");
+    }
+    let hash: String = Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(
+        hash, PROTOCOL_AT_APPROVED_FRAMING_SHA256,
+        "removing the two added paragraphs must restore the approved protocol bytes"
+    );
+    text.into_bytes()
+}
+
 #[test]
 fn input_framing_marks_exactly_the_approved_rows_and_keeps_their_evidence() {
     let framed = framed_entries();
@@ -4381,6 +4412,7 @@ fn input_framing_marks_exactly_the_approved_rows_and_keeps_their_evidence() {
         .collect();
     assert_eq!(actual, approved);
     let mut versioned_matches = 0usize;
+    let mut versioned_pending = 0usize;
     for entry in &framed {
         let key = row_key_string(entry);
         let (_, approved_hash, framing) = FRAMED_ROWS
@@ -4395,7 +4427,20 @@ fn input_framing_marks_exactly_the_approved_rows_and_keeps_their_evidence() {
         );
         assert!(string_field(entry, "config_version").ends_with(CURRENT_CONFIG_SUFFIX));
         assert!(!is_narrative_gate(string_field(entry, "gate")));
-        if framing == INPUT_FRAMING_V11 {
+        if framing == INPUT_FRAMING_V11 && string_field(entry, "observed") == "pending" {
+            // After a reviewer-protocol edit the packet bytes change, so a retained judgment against the old
+            // bytes no longer matches this row's hash: the row waits, in the existing pending form, for a
+            // genuine fresh judgment under the exact current packet. It is never relabeled or oracle-copied.
+            versioned_pending += 1;
+            assert_eq!(
+                string_field(entry, "invocation"),
+                PENDING_INVOCATION,
+                "{key}"
+            );
+            assert!(string_field(entry, "attested_by").is_empty(), "{key}");
+            assert!(string_field(entry, "model").is_empty(), "{key}");
+            assert!(entry.get("result_ref").is_none(), "{key}");
+        } else if framing == INPUT_FRAMING_V11 {
             // The exact versioned matching result is retained under the exact judged packet hash.
             versioned_matches += 1;
             assert_eq!(
@@ -4426,16 +4471,20 @@ fn input_framing_marks_exactly_the_approved_rows_and_keeps_their_evidence() {
             assert!(string_field(entry, "attested_by").is_empty(), "{key}");
             assert!(entry.get("result_ref").is_none(), "{key}");
         }
-        // Without the framing records the very same row reproduces the approved zero-framing
-        // hash: the evidence bodies and expected answers are unchanged.
-        assert_eq!(
-            digest(&source_records_for_entry(&unframed_copy(entry))),
-            approved_hash,
-            "{key}"
-        );
+        // Without the framing records, and with the reviewer protocol exactly as it was when the zero-framing
+        // identity was approved, the very same row reproduces that hash: the evidence bodies and expected
+        // answers are unchanged.
+        let mut approved_input = source_records_for_entry(&unframed_copy(entry));
+        let protocol = approved_input
+            .source_records
+            .iter_mut()
+            .find(|record| record.label == "reviewer-protocol:data/reviewer-protocol.md")
+            .expect("protocol record");
+        protocol.content = protocol_as_approved_for_framing();
+        assert_eq!(digest(&approved_input), approved_hash, "{key}");
         assert_ne!(string_field(entry, "input_sha256"), approved_hash, "{key}");
     }
-    assert_eq!(versioned_matches, 8);
+    assert_eq!(versioned_matches + versioned_pending, 8);
 }
 
 #[test]
