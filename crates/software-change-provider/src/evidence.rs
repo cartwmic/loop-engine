@@ -738,13 +738,25 @@ pub(crate) fn evaluate_staged_evidence_excluding(
             )
         } else if row.kind == EVIDENCE_APPLICABILITY_KIND {
             let origin_id = row.data.pointer("/origin/id").and_then(Value::as_str);
+            // A carry can be withdrawn on its own; only say the origin is excluded when it is.
+            let origin_excluded = origin_id.is_some_and(|id| excluded.contains(id));
             (
-                context.iter().find(|candidate| Some(candidate.id.as_str()) == origin_id),
-                format!(
-                    "carried record `{}` is invalid: its origin `{}` is excluded (withdrawn or retired author)",
-                    row.id,
-                    origin_id.unwrap_or("?")
-                ),
+                context
+                    .iter()
+                    .find(|candidate| Some(candidate.id.as_str()) == origin_id),
+                if origin_excluded {
+                    format!(
+                        "carried record `{}` is invalid: its origin `{}` is excluded (withdrawn or retired author)",
+                        row.id,
+                        origin_id.unwrap_or("?")
+                    )
+                } else {
+                    format!(
+                        "carried record `{}` is withdrawn, so it does not count; its origin `{}` is not excluded and a new evidence-applicability can reuse it",
+                        row.id,
+                        origin_id.unwrap_or("?")
+                    )
+                },
             )
         } else {
             continue;

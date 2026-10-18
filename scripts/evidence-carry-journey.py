@@ -544,6 +544,24 @@ def review_cases(args, root):
     require('withdrawn' in json.dumps(row['gate_response'].get('details', {})), row)
     rows.append(trim(row))
 
+    ctx = start('withdrawn-carry-only')
+    judged, revision = plan_prefix(ctx)
+    axes = list(judged['reviewer-a'])
+    revise_plan(ctx, '-3')
+    revision = revision_of(ctx, PLAN)
+    carries = {axis: carry(ctx, record, PLAN, revision) for axis, record in judged['reviewer-a'].items()}
+    append(ctx, 'record-withdrawal', {'attesting_driver': {'name': 'scripted-driver', 'kind': 'agent'},
+                                      'reason': 'Scripted withdrawal of one carry; its origin stays valid.',
+                                      'record_ids': [carries[axes[0]]]})
+    ledger(ctx, PLAN_GATE, PLAN)
+    row = compare(ctx, PLAN_CHALLENGE, expect=('unverified', axes[0]),
+                  label='AC-2 invalid source reference (withdrawn carry, origin still valid)')
+    # Only the carry is withdrawn: the output must not claim the origin is excluded.
+    for text in (json.dumps(row['commission_missing_inputs']), json.dumps(row['gate_response'].get('details', {}))):
+        require('is withdrawn, so it does not count' in text, row)
+        require('origin `' + judged['reviewer-a'][axes[0]] + '` is excluded' not in text, row)
+    rows.append(trim(row))
+
     ctx = start('unresolved-finding')
     axes = list(policies(ctx, PLAN_GATE))
     judge(ctx, PLAN_GATE, PLAN, axes, 'reviewer-a', 'A1')
