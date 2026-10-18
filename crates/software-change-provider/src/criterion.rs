@@ -398,15 +398,25 @@ fn resolve_evidence_file(
     primary: Option<&Path>,
     relative: &Path,
 ) -> Result<PathBuf, String> {
+    let mut outside = false;
     for base in std::iter::once(root).chain(primary) {
         let Ok(path) = fs::canonicalize(base.join(relative)) else {
             continue;
         };
-        if path.is_file()
-            && (path.starts_with(root) || primary.is_some_and(|p| path.starts_with(p)))
-        {
-            return Ok(path);
+        if path.is_file() {
+            if path.starts_with(root) || primary.is_some_and(|p| path.starts_with(p)) {
+                return Ok(path);
+            }
+            outside = true;
         }
+    }
+    if outside {
+        // An existing file that resolves (for example through a symlink) outside every
+        // permitted root is a containment refusal, not a missing target: never repairable.
+        return Err(format!(
+            "evidence source `{}` resolves outside the artifact directory and the source root",
+            relative.display()
+        ));
     }
     if primary.is_none() {
         return Err(format!(
@@ -1215,6 +1225,29 @@ mod tests {
                 .len(),
             1
         );
+        // An existing file reached through a symlink that leaves every permitted root is a
+        // containment refusal, never a repairable missing target.
+        #[cfg(unix)]
+        {
+            let outside = std::env::temp_dir().join(format!(
+                "software-change-outside-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = fs::remove_dir_all(&outside);
+            fs::create_dir_all(&outside).unwrap();
+            fs::write(outside.join("secret.json"), br#"{"a":1}"#).unwrap();
+            std::os::unix::fs::symlink(outside.join("secret.json"), root.join("link.json")).unwrap();
+            let error = unresolvable_locators(
+                &grounds(&["intent.json#/revision", "link.json#/a"]),
+                &root,
+                Some(3),
+                &[],
+            )
+            .unwrap_err();
+            assert!(error.contains("resolves outside"), "{error}");
+            let _ = fs::remove_dir_all(outside);
+        }
         // Ordinary validation keeps its behavior and message for the same input.
         let ordinary = validate_grounding_with_context(
             &grounds(&["intent.json#/acceptance/12"]),
