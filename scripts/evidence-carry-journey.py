@@ -613,6 +613,9 @@ def review_cases(args, root):
                     and all(s['standing'] == 'early' for s in standing) and
                     all('challenge-before-ordinary-clearance' in s['reason'] for s in standing),
                     (standing, response['message']))
+            # Nothing was withdrawn or retired: neither output may say so.
+            require('withdrawn' not in json.dumps(response.get('details', {})), response)
+            require('withdrawn' not in json.dumps(packet['missing_inputs']), packet['missing_inputs'])
         rows.append({'scenario': 'AC-3 ' + variant, 'gate_status': response['status'],
                      'standing': [(s['axis'], s['kind'], s['standing']) for s in standing]})
 

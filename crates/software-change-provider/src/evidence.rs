@@ -707,13 +707,19 @@ pub(crate) fn evaluate_staged_evidence_excluding(
     let mut global_unverified = Vec::new();
 
     let mut excluded = excluded_records.clone();
+    // Only records excluded by withdrawal or author retirement are described as such;
+    // the caller's own exclusions (for example challenge chronology) keep their own cause.
+    let mut recovery_excluded = std::collections::BTreeSet::new();
     match software_change_provider::recovery::excluded_record_ids(
         context,
         gate,
         subject,
         artifact_root,
     ) {
-        Ok(ids) => excluded.extend(ids),
+        Ok(ids) => {
+            recovery_excluded = ids.clone();
+            excluded.extend(ids)
+        }
         Err(error) => global_malformed.push(error),
     }
     let active_context: Vec<_> = context
@@ -726,7 +732,7 @@ pub(crate) fn evaluate_staged_evidence_excluding(
     let mut exclusion_notes: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for row in context
         .iter()
-        .filter(|row| excluded.contains(row.id.as_str()))
+        .filter(|row| recovery_excluded.contains(row.id.as_str()))
     {
         let (origin, note) = if row.kind == REVIEW_EVIDENCE_KIND {
             (
@@ -739,7 +745,7 @@ pub(crate) fn evaluate_staged_evidence_excluding(
         } else if row.kind == EVIDENCE_APPLICABILITY_KIND {
             let origin_id = row.data.pointer("/origin/id").and_then(Value::as_str);
             // A carry can be withdrawn on its own; only say the origin is excluded when it is.
-            let origin_excluded = origin_id.is_some_and(|id| excluded.contains(id));
+            let origin_excluded = origin_id.is_some_and(|id| recovery_excluded.contains(id));
             (
                 context
                     .iter()
