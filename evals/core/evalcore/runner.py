@@ -51,7 +51,7 @@ def harness_versions(budget: float | None = None) -> dict:
     return {"inspect_ai": importlib.metadata.version("inspect-ai"),
             "evalcore": importlib.metadata.version("loop-engine-evals"),
             "python": platform.python_version(), "checkout_commit": git("rev-parse", "HEAD"),
-            "checkout_dirty": bool(git("status", "--porcelain"))}
+            "checkout_dirty": None if (status := git("status", "--porcelain")) == "unknown" else bool(status)}
 
 
 def prepare_versions(target, settings: CampaignSettings, guard: CampaignGuard) -> tuple[dict, dict]:

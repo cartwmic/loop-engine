@@ -80,5 +80,5 @@ def test_token_budget_stops_but_is_only_an_extra():
 def test_harness_version_probes_give_up_when_their_budget_is_spent():
     from evalcore.runner import harness_versions
     out = harness_versions(0)
-    assert out["checkout_commit"] == "unknown" and out["checkout_dirty"] is False
+    assert out["checkout_commit"] == "unknown" and out["checkout_dirty"] is None
     assert harness_versions(60)["checkout_commit"] != "unknown"
