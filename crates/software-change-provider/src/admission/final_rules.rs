@@ -54,6 +54,16 @@ pub(super) fn verdict_current(
     ctx: &AdmissionContext<'_>,
     record: &CandidateRecord,
 ) -> Result<(), String> {
+    let report = read(ctx, "validation-report.json")?;
+    let specs = effective_commands(ctx)?;
+    let (_, verified_commands) = validation::verified_command_index(
+        ctx.context,
+        root(ctx)?,
+        &report,
+        &specs,
+        &std::collections::BTreeSet::new(),
+        false, // Admission records negative outcomes; only gates require full success.
+    )?;
     validation::source_for_candidate(
         &record.data,
         &record.kind,
@@ -61,13 +71,13 @@ pub(super) fn verdict_current(
         root(ctx)?,
         "validation-review",
         text(ctx.initial_input, "config_version")?,
+        &verified_commands,
     )?;
     if validation::verify_verdict_origin(&record.data, &record.kind)?
         .is_some_and(|id| id != record.id.as_str())
     {
         return Err("verdict record ID differs from captured prechosen ID".into());
     }
-    let report = read(ctx, "validation-report.json")?;
     if record.data["subject_revision"] != report["revision"] {
         return Err("stale verdict target revision".into());
     }
@@ -81,13 +91,7 @@ pub(super) fn verdict_current(
     let references: Vec<String> =
         serde_json::from_value(record.data["evidence_context_ids"].clone())
             .map_err(|e| e.to_string())?;
-    let indexed = report["command_evidence_ids"]
-        .as_array()
-        .ok_or("report has no command index")?;
-    if references
-        .iter()
-        .any(|id| !indexed.iter().any(|value| value.as_str() == Some(id)))
-    {
+    if references.iter().any(|id| !verified_commands.contains(id)) {
         return Err("fresh verdict must reference current indexed command evidence".into());
     }
     let policy = validation::contract(&ctx.effective_policy)?;

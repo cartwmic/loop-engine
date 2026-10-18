@@ -253,6 +253,14 @@ pub(super) fn applicability(
                     .as_deref()
                     .ok_or("applicability requires artifact_root")?,
             )?;
+            if let Some(root) = ctx.artifact_root.as_deref() {
+                crate::validation::carried_criterion_is_current(
+                    source,
+                    source.data.get("criterion_id").and_then(Value::as_str),
+                    ctx.context,
+                    std::path::Path::new(root),
+                )?;
+            }
         }
         evidence::validate_applicability_target(
             &canonical,

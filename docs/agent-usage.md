@@ -183,6 +183,13 @@ same-run records and pointers must exist. No invented nested IDs or arbitrary ki
 Commission's review_record_sources names real delivered IDs. Applicable non-intent
 steering follows existing target/supersession selection; unrelated/superseded steering
 is excluded. Reviewer truth remains external; citation availability is not support.
+Relative review locators resolve beneath the artifact directory, then the primary source root
+(declared `source_scopes`, else the git top level of the artifact directory), never the
+invoking directory; a refused pointer names the closest existing one. Commission's
+`locator_guidance` gives the accepted forms and each JSON source's keys and array lengths.
+Carried and fresh judgments may cover one review group together (per axis, floors unchanged);
+commission's `parent_review` labels carried challenge-packet parts and names the cause when a
+carried aggregate cannot supply one.
 
 ### Driver intent correction
 

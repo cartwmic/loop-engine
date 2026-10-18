@@ -135,7 +135,10 @@ pub(crate) fn validate_grounding_with_context(
             }
             let stored = serde_json::to_value(record).map_err(|e| e.to_string())?;
             if stored.pointer(selector).is_none() {
-                return Err(format!("record citation `{locator}` does not resolve"));
+                return Err(format!(
+                    "record citation `{locator}` does not resolve; {}",
+                    nearest_pointer_note(&stored, selector, &format!("record:{id}"))
+                ));
             }
             if version != Some(3) {
                 return Err("record citations require review contract v3".into());
@@ -143,8 +146,6 @@ pub(crate) fn validate_grounding_with_context(
             continue;
         }
         let root = fs::canonicalize(artifact_root).map_err(|error| error.to_string())?;
-        let cwd = fs::canonicalize(std::env::current_dir().map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?;
         let relative = Path::new(file.split_once(':').map_or(file, |(_, path)| path));
         if relative.as_os_str().is_empty()
             || relative.is_absolute()
@@ -159,14 +160,16 @@ pub(crate) fn validate_grounding_with_context(
                 "evidence locator `{locator}` must stay beneath a source root"
             ));
         }
+        let roots = crate::source_scopes::locator_roots(&root)?;
         let path = if let Some((scope, _)) = file.split_once(':') {
-            let roots = crate::source_scopes::from_artifacts(&root, &cwd)?;
             let scope_root = crate::source_scopes::resolve(&roots, scope)?;
-            resolve_evidence_file(&scope_root, &scope_root, relative)?
+            resolve_evidence_file(&scope_root, Some(&scope_root), relative)?
         } else {
-            let roots = crate::source_scopes::from_artifacts(&root, &cwd)?;
-            let primary = roots.get("primary").unwrap_or(&root);
-            resolve_evidence_file(&root, primary, relative)?
+            let primary =
+                roots
+                    .get("primary")
+                    .or(if roots.is_empty() { None } else { Some(&root) });
+            resolve_evidence_file(&root, primary.map(PathBuf::as_path), relative)?
         };
         let bytes = fs::read(&path)
             .map_err(|error| format!("evidence source `{locator}` is unreadable: {error}"))?;
@@ -180,7 +183,8 @@ pub(crate) fn validate_grounding_with_context(
                 .map_err(|_| format!("evidence selector `{locator}` requires a JSON source"))?;
             if json.pointer(selector).is_none() {
                 return Err(format!(
-                    "evidence JSON Pointer in `{locator}` does not resolve"
+                    "evidence JSON Pointer in `{locator}` does not resolve; {}",
+                    nearest_pointer_note(&json, selector, file)
                 ));
             }
         } else {
@@ -317,19 +321,128 @@ fn validate_record_locator(id: &str, pointer: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn resolve_evidence_file(root: &Path, cwd: &Path, relative: &Path) -> Result<PathBuf, String> {
-    for candidate in [root.join(relative), cwd.join(relative)] {
-        let Ok(path) = fs::canonicalize(&candidate) else {
+fn resolve_evidence_file(
+    root: &Path,
+    primary: Option<&Path>,
+    relative: &Path,
+) -> Result<PathBuf, String> {
+    for base in std::iter::once(root).chain(primary) {
+        let Ok(path) = fs::canonicalize(base.join(relative)) else {
             continue;
         };
-        if path.is_file() && (path.starts_with(root) || path.starts_with(cwd)) {
+        if path.is_file()
+            && (path.starts_with(root) || primary.is_some_and(|p| path.starts_with(p)))
+        {
             return Ok(path);
         }
     }
+    if primary.is_none() {
+        return Err(format!(
+            "evidence source `{}` was not found beneath the artifact directory; {}",
+            relative.display(),
+            crate::source_scopes::NO_LOCATOR_ROOT
+        ));
+    }
     Err(format!(
-        "evidence source `{}` was not found beneath artifact_root or repository cwd",
+        "evidence source `{}` was not found beneath the artifact directory or the source root",
         relative.display()
     ))
+}
+
+fn pointer_tokens(pointer: &str) -> Vec<String> {
+    pointer
+        .split('/')
+        .skip(1)
+        .map(|token| token.replace("~1", "/").replace("~0", "~"))
+        .collect()
+}
+
+fn pointer_from(tokens: &[String]) -> String {
+    tokens
+        .iter()
+        .map(|token| format!("/{}", token.replace('~', "~0").replace('/', "~1")))
+        .collect()
+}
+
+fn child<'a>(node: &'a Value, token: &str) -> Option<&'a Value> {
+    match node {
+        Value::Object(map) => map.get(token),
+        Value::Array(items) => token.parse::<usize>().ok().and_then(|i| items.get(i)),
+        _ => None,
+    }
+}
+
+/// Closest existing pointer for one that does not resolve, or `None`. Only ever
+/// returns a pointer that exists in `document`; it never repairs or admits a return.
+fn nearest_pointer(document: &Value, pointer: &str) -> Option<String> {
+    let tokens = pointer_tokens(pointer);
+    let mut node = document;
+    let mut depth = 0;
+    while depth < tokens.len() {
+        match child(node, &tokens[depth]) {
+            Some(next) => {
+                node = next;
+                depth += 1;
+            }
+            None => break,
+        }
+    }
+    let prefix = &tokens[..depth];
+    let rest = &tokens[depth..];
+    if rest.is_empty() {
+        return None;
+    }
+    let mut candidates: Vec<Vec<String>> = Vec::new();
+    // An index past the end of an array: offer the last element.
+    if let Value::Array(items) = node {
+        if rest[0].parse::<usize>().is_ok() && !items.is_empty() {
+            let mut near = prefix.to_vec();
+            near.push((items.len() - 1).to_string());
+            candidates.push(near);
+        }
+    }
+    // The cited path exists somewhere deeper beneath the last valid node.
+    let mut queue = std::collections::VecDeque::from([(prefix.to_vec(), node, 0usize)]);
+    while let Some((path, current, level)) = queue.pop_front() {
+        if level > 0 {
+            let mut found = Some(current);
+            for token in rest {
+                found = found.and_then(|n| child(n, token));
+            }
+            if found.is_some() {
+                let mut near = path.clone();
+                near.extend(rest.iter().cloned());
+                candidates.push(near);
+            }
+        }
+        if level < 4 {
+            let children: Vec<(String, &Value)> = match current {
+                Value::Object(map) => map.iter().map(|(k, v)| (k.clone(), v)).collect(),
+                Value::Array(items) => items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| (i.to_string(), v))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            for (key, value) in children {
+                let mut next = path.clone();
+                next.push(key);
+                queue.push_back((next, value, level + 1));
+            }
+        }
+    }
+    candidates
+        .into_iter()
+        .map(|tokens| pointer_from(&tokens))
+        .find(|candidate| document.pointer(candidate).is_some())
+}
+
+fn nearest_pointer_note(document: &Value, pointer: &str, file: &str) -> String {
+    match nearest_pointer(document, pointer) {
+        Some(near) => format!("closest existing pointer: `{file}#{near}`"),
+        None => "no close existing pointer was found".to_owned(),
+    }
 }
 
 fn validate_line_selector(selector: &str, bytes: &[u8], locator: &str) -> Result<(), String> {
@@ -875,6 +988,92 @@ mod tests {
         ]});
         assert!(validate_grounding(&lines, &root).is_ok());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn nearest_pointer_names_only_existing_pointers_or_says_none_is_close() {
+        let document = json!({
+            "acceptance": (0..12).map(|i| json!({"id": format!("AC-{}", i + 1)})).collect::<Vec<_>>(),
+            "operating_context": {"outside_obligations": ["a", "b", "c", "d"]},
+            "outcome": "x"
+        });
+        // Past the end of a 12-entry array: the last real entry.
+        assert_eq!(
+            nearest_pointer(&document, "/acceptance/12").as_deref(),
+            Some("/acceptance/11")
+        );
+        // A section cited at the wrong level: where it actually lives.
+        assert_eq!(
+            nearest_pointer(&document, "/outside_obligations/3").as_deref(),
+            Some("/operating_context/outside_obligations/3")
+        );
+        // Nothing close: say so, never invent.
+        assert_eq!(nearest_pointer(&document, "/nothing_like_this/7"), None);
+        assert_eq!(nearest_pointer(&document, "/outcome"), None);
+        assert!(
+            nearest_pointer_note(&document, "/nothing_like_this/7", "intent.json")
+                .contains("no close existing pointer")
+        );
+        assert!(
+            nearest_pointer_note(&document, "/acceptance/12", "intent.json")
+                .contains("closest existing pointer: `intent.json#/acceptance/11`")
+        );
+        for pointer in [
+            "/acceptance/12",
+            "/outside_obligations/3",
+            "/acceptance/01",
+            "/outcome/0",
+        ] {
+            if let Some(near) = nearest_pointer(&document, pointer) {
+                assert!(document.pointer(&near).is_some(), "{pointer} -> {near}");
+            }
+        }
+    }
+
+    #[test]
+    fn locator_roots_do_not_depend_on_the_process_directory() {
+        use sha2::{Digest, Sha256};
+        let base = std::env::temp_dir().join(format!(
+            "software-change-roots-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        let repo = base.join("repo");
+        fs::create_dir_all(repo.join("run")).unwrap();
+        fs::create_dir_all(repo.join("src")).unwrap();
+        let init = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["init", "-q"])
+            .status()
+            .unwrap();
+        assert!(init.success());
+        fs::write(repo.join("src/a.txt"), b"one\ntwo\n").unwrap();
+        fs::write(repo.join("run/intent.json"), br#"{"revision":"1"}"#).unwrap();
+        let digest = format!("sha256:{:x}", Sha256::digest(b"one\ntwo\n"));
+        let grounds = json!({"reason":"checked","evidence":[
+            {"locator":"src/a.txt#L1-L2","sha256":digest}
+        ]});
+        // The test process runs elsewhere; the repository file still resolves
+        // because the root comes from the artifact directory's git top level.
+        assert!(validate_grounding(&grounds, &repo.join("run")).is_ok());
+        // Without a declaration or a git work tree, repository-relative
+        // locators are refused with a message naming source_scopes.
+        let loose = base.join("loose");
+        fs::create_dir_all(&loose).unwrap();
+        fs::write(loose.join("intent.json"), br#"{"revision":"1"}"#).unwrap();
+        let refusal = validate_grounding(&grounds, &loose).unwrap_err();
+        assert!(refusal.contains("source_scopes"), "{refusal}");
+        // A declared scope wins and works from anywhere.
+        fs::write(
+            loose.join("intent.json"),
+            serde_json::to_vec(&json!({"revision":"1","source_scopes":{"primary":{"root":repo}}}))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(validate_grounding(&grounds, &loose).is_ok());
+        let _ = fs::remove_dir_all(base);
     }
 
     #[test]

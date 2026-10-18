@@ -1082,7 +1082,7 @@ fn missing_parent_claims(
         .or_else(|| packet["initial_input"].get("artifact_root"))
         .and_then(Value::as_str)
         .ok_or("missing artifact_root")?;
-    let (revision, _) = read_review_sources(Path::new(root), subject)?;
+    let (revision, sources) = read_review_sources(Path::new(root), subject)?;
     let records: Vec<ContextRecord> =
         serde_json::from_value(packet["context"].clone()).map_err(|error| error.to_string())?;
     let root_value = Value::String(root.to_owned());
@@ -1108,10 +1108,303 @@ fn missing_parent_claims(
         .collect();
     let available =
         latest_aggregate_by_axis_author(&available_records, parent, subject, &revision)?;
-    Ok(axes.iter().filter_map(|axis| axis["id"].as_str())
-        .filter(|axis| !available.keys().any(|(available_axis, _, _)| available_axis == axis))
-        .map(|axis| format!("challenge `{gate}` is missing current parent aggregate claim `{axis}` for `{subject}`"))
-        .collect())
+    let missing: Vec<&str> = axes
+        .iter()
+        .filter_map(|axis| axis["id"].as_str())
+        .filter(|axis| {
+            !available
+                .keys()
+                .any(|(available_axis, _, _)| available_axis == axis)
+        })
+        .collect();
+    let legacy = |missing: &[&str]| -> Vec<String> {
+        missing
+            .iter()
+            .map(|axis| format!("challenge `{gate}` is missing current parent aggregate claim `{axis}` for `{subject}`"))
+            .collect()
+    };
+    // The parent gate is judged by the resolver the checked event uses, fresh or
+    // carried evidence alike, so commission and the gate name the same cause.
+    let Some(resolution) =
+        parent_resolution(packet, &records, parent, subject, &revision, &sources)
+    else {
+        return Ok(legacy(&missing));
+    };
+    let causes = resolution.causes();
+    if causes.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Speak up only where the plain claim check cannot see the problem: a claim is
+    // missing, carried evidence is in play, or a review group excluded a pass.
+    let group_cause = causes.iter().any(|(category, text)| {
+        matches!(
+            category.as_str(),
+            "assessment_missing"
+                | "assessment_inconsistent"
+                | "mixed_authors"
+                | "unresolved_finding"
+        ) || text.contains("excluded (rule")
+    });
+    if missing.is_empty() && !group_cause && !applicability_in_play(&records, parent, subject) {
+        return Ok(Vec::new());
+    }
+    let mut lines: Vec<String> = causes
+        .iter()
+        .map(|(category, text)| {
+            format!("challenge `{gate}` cannot use parent review `{parent}` for `{subject}` revision {revision} ({category}): {text}")
+        })
+        .collect();
+    // An axis the resolver says nothing about keeps the plain statement.
+    let unexplained: Vec<&str> = missing
+        .iter()
+        .copied()
+        .filter(|axis| {
+            !causes
+                .iter()
+                .any(|(_, text)| text.contains(&format!("axis `{axis}`")))
+        })
+        .filter(|axis| {
+            !resolution
+                .evidence
+                .rows
+                .iter()
+                .any(|row| row.stage == "aggregate" && row.axis == *axis)
+        })
+        .collect();
+    lines.extend(legacy(&unexplained));
+    Ok(lines)
+}
+
+/// Whether each existing challenge row counts, using the checked gate's own
+/// chronology function (the same cutoff, record kinds and group-local parent
+/// axes): an assessment first recorded at or before the latest relevant
+/// ordinary-review record is early, and a raw re-append keeps the assessment's
+/// first position. Absent when the challenge gate has no rows yet or the
+/// policy cannot be read.
+fn challenge_standing(
+    input: &Value,
+    records: &[ContextRecord],
+    gate: &str,
+    parent: &str,
+    subject: &str,
+) -> Option<Value> {
+    let config = crate::config::parse_initial_input(
+        &crate::admission::effective_policy(input, records).effective,
+    )
+    .ok()?;
+    let challenge_axes = config.staged_axes_for_gate(gate)?;
+    let parent_axes = config.staged_axes_for_gate(parent)?;
+    let early: Vec<Value> = crate::evidence::early_challenge_rows(
+        records,
+        gate,
+        parent,
+        subject,
+        challenge_axes,
+        parent_axes,
+    );
+    let early_ids: BTreeSet<&str> = early
+        .iter()
+        .filter_map(|row| row["record_id"].as_str())
+        .collect();
+    let rows: Vec<Value> = records
+        .iter()
+        .filter(|record| {
+            matches!(record.kind.as_str(), "review-evidence" | "evidence-applicability") && {
+                let data = crate::evidence::intake_data(records, record);
+                data["gate"] == gate && data["subject"] == subject
+            }
+        })
+        .map(|record| {
+            let data = crate::evidence::intake_data(records, record);
+            let is_early = early_ids.contains(record.id.as_str());
+            json!({
+                "record_id": record.id,
+                "kind": record.kind,
+                "axis": data.get("policy_id"),
+                "assessment_identity": crate::evidence::challenge_assessment_identity(data),
+                "standing": if is_early { "early" } else { "counts" },
+                "reason": if is_early {
+                    json!("challenge-before-ordinary-clearance: the assessment was first recorded at or before the latest relevant ordinary-review record; obtain a fresh assessment or append evidence-applicability after that record")
+                } else { Value::Null },
+            })
+        })
+        .collect();
+    (!rows.is_empty()).then(|| json!(rows))
+}
+
+/// Any applicability aimed at this subject for a parent review record, whatever
+/// revision it names: carried evidence is in play even when its target went stale.
+fn applicability_in_play(records: &[ContextRecord], gate: &str, subject: &str) -> bool {
+    records.iter().any(|record| {
+        record.kind == "evidence-applicability"
+            && record
+                .data
+                .pointer("/target/subject")
+                .and_then(Value::as_str)
+                == Some(subject)
+            && record
+                .data
+                .pointer("/origin/id")
+                .and_then(Value::as_str)
+                .and_then(|id| records.iter().find(|source| source.id.as_str() == id))
+                .is_some_and(|source| matches_review(source, gate, subject))
+    })
+}
+
+fn parent_resolution(
+    packet: &Value,
+    records: &[ContextRecord],
+    parent: &str,
+    subject: &str,
+    revision: &str,
+    sources: &[ReviewSource],
+) -> Option<crate::evidence::GateResolution> {
+    let author = sources
+        .iter()
+        .find(|source| source.locator == subject)?
+        .value
+        .get("author")?;
+    let author = crate::evidence::AuthorIdentity::new(
+        author.get("name")?.as_str()?,
+        author.get("kind")?.as_str()?,
+    );
+    // The frozen input names the artifact root; fall back to the packet's own.
+    let mut initial_input = packet["initial_input"].clone();
+    if initial_input.get("artifact_root").is_none() {
+        initial_input["artifact_root"] = packet.get("artifact_root")?.clone();
+    }
+    crate::evidence::resolve_gate(&initial_input, records, parent, subject, revision, &author).ok()
+}
+
+/// The parent review as the checked event sees it, with every part labeled:
+/// the original judgment, the current applicability attestation that carried
+/// it, or a fresh review. Absent when nothing was carried, so fresh-only
+/// packets are unchanged.
+fn parent_review_block(
+    resolution: &crate::evidence::GateResolution,
+    records: &[ContextRecord],
+    parent: &str,
+    subject: &str,
+    revision: &str,
+) -> Option<Value> {
+    if !resolution
+        .evidence
+        .rows
+        .iter()
+        .any(|row| row.evidence.carried)
+    {
+        return None;
+    }
+    let author_of = |ev: &crate::evidence::ConformingEvidence| json!({"name": ev.author.name(), "kind": ev.author.kind()});
+    let mut parts = Vec::new();
+    for row in &resolution.evidence.rows {
+        let ev = &row.evidence;
+        let stored = records.iter().find(|r| r.id.as_str() == ev.source_id);
+        let originally_for = stored.and_then(|r| r.data.get("subject_revision")).cloned();
+        let earlier_assessment = !ev.carried
+            && ev.assessment_id.as_ref().is_some_and(|id| {
+                records.iter().any(|other| {
+                    other.kind == "review-evidence"
+                        && other.id.as_str() != ev.source_id
+                        && other.sequence < stored.map_or(other.sequence, |s| s.sequence)
+                        && other.data.get("assessment_id").and_then(Value::as_str) == Some(id)
+                        && other.data.get("policy_id").and_then(Value::as_str)
+                            == Some(ev.policy_id.as_str())
+                        && other.data.get("review_stage")
+                            == stored.and_then(|s| s.data.get("review_stage"))
+                        && other.data.get("author") == stored.and_then(|s| s.data.get("author"))
+                })
+            });
+        parts.push(json!({
+            "label": if ev.carried { "original judgment" }
+                else if earlier_assessment { "re-appended earlier assessment (not a fresh review)" }
+                else { "fresh review" },
+            "record_id": ev.source_id, "gate": ev.gate, "axis": ev.policy_id,
+            "review_stage": ev.review_stage, "result": ev.result.as_str(),
+            "author": author_of(ev), "group": ev.group, "assessment_id": ev.assessment_id,
+            "originally_for_revision": originally_for, "grounds": ev.grounds,
+            "currency_note": ev.currency_note,
+        }));
+        if let Some(carry) = ev
+            .applicability_id
+            .as_ref()
+            .and_then(|id| records.iter().find(|r| r.id.as_str() == id))
+        {
+            parts.push(json!({
+                "label": "current applicability attestation",
+                "record_id": carry.id, "origin_id": ev.source_id, "axis": ev.policy_id,
+                "target": carry.data.get("target"),
+                "attesting_driver": carry.data.get("attesting_driver"),
+                "reason": carry.data.get("reason"),
+            }));
+        }
+    }
+    Some(json!({
+        "gate": parent, "subject": subject, "revision": revision,
+        "eligible": resolution.is_eligible(),
+        "causes": resolution.causes().iter().map(|(category, text)| json!({"cause": category, "detail": text})).collect::<Vec<_>>(),
+        "parts": parts,
+    }))
+}
+
+/// Accepted citation forms, the root each relative form resolves against, and
+/// the real structure of every JSON review source, so a reviewer cites pointers
+/// that exist.
+fn locator_guidance(artifact_root: &Path, sources: &[ReviewSource]) -> Value {
+    fn arrays(value: &Value, pointer: &str, depth: usize, out: &mut Vec<(String, usize)>) {
+        if depth > 4 || out.len() >= 400 {
+            return;
+        }
+        match value {
+            Value::Array(items) => {
+                out.push((pointer.to_owned(), items.len()));
+                for (index, item) in items.iter().enumerate() {
+                    arrays(item, &format!("{pointer}/{index}"), depth + 1, out);
+                }
+            }
+            Value::Object(map) => {
+                for (key, item) in map {
+                    let key = key.replace('~', "~0").replace('/', "~1");
+                    arrays(item, &format!("{pointer}/{key}"), depth + 1, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let roots = crate::source_scopes::locator_roots(artifact_root);
+    let resolution = match &roots {
+        Ok(map) => json!({
+            "artifact_directory": artifact_root,
+            "primary_source_root": map.get("primary"),
+            "scopes": map,
+            "rule": "A path without a scope is tried beneath the artifact directory, then beneath the primary source root. scope:path uses only that scope's root. Resolution never depends on the directory the command runs from.",
+            "note": if map.is_empty() { Some(crate::source_scopes::NO_LOCATOR_ROOT) } else { None },
+        }),
+        Err(error) => json!({"artifact_directory": artifact_root, "error": error}),
+    };
+    let json_sources: Vec<_> = sources
+        .iter()
+        .filter(|source| source.locator.ends_with(".json"))
+        .map(|source| {
+            let mut lengths = Vec::new();
+            arrays(&source.value, "", 0, &mut lengths);
+            json!({
+                "locator": source.locator,
+                "top_level_keys": source.value.as_object().map(|map| map.keys().cloned().collect::<Vec<_>>()),
+                "array_lengths": lengths.into_iter().collect::<BTreeMap<_, _>>(),
+            })
+        })
+        .collect();
+    json!({
+        "accepted_forms": [
+            "file#/json/pointer  (a JSON Pointer that exists in that file; array indices run 0 to length-1)",
+            "file#L<start>-L<end>  (a line range of that file)",
+            "scope:path#selector  (a path beneath a declared source_scopes root, with either selector above)",
+            "record:ID#/pointer  (a pointer into one retained context record; review contract v3)"
+        ],
+        "resolution": resolution,
+        "json_sources": json_sources,
+    })
 }
 
 #[derive(Clone)]
@@ -2245,6 +2538,37 @@ fn inspect_with_budgets(
     }
     output["review_contract_version"] = json!(3);
     output["review_target"] = json!({"subject":subject,"revision":revision});
+    output["locator_guidance"] = locator_guidance(Path::new(root), &sources);
+    if let Some(parent) = parent_gate(slot_id) {
+        if let Some(block) = parent_resolution(
+            packet,
+            &full_context_records,
+            parent,
+            subject.unwrap(),
+            &revision,
+            &sources,
+        )
+        .and_then(|resolution| {
+            parent_review_block(
+                &resolution,
+                &full_context_records,
+                parent,
+                subject.unwrap(),
+                &revision,
+            )
+        }) {
+            output["parent_review"] = block;
+        }
+        if let Some(standing) = challenge_standing(
+            &packet["initial_input"],
+            &full_context_records,
+            slot_id,
+            parent,
+            subject.unwrap(),
+        ) {
+            output["challenge_standing"] = standing;
+        }
+    }
     output["review_sources"] = json!(sources.iter().map(|source|json!({"locator":source.locator,"sha256":source.sha256,"bytes":source.bytes.len()})).collect::<Vec<_>>());
     output["review_budget"] = size_info;
     output["review_record_sources"] = json!(selected_records
@@ -3152,6 +3476,303 @@ mod tests {
         assert_eq!(output["missing_inputs"], json!([]));
         assert_eq!(output["context"].as_array().unwrap().len(), 3);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // ---- AC-1 / AC-2 / AC-8: carried parent aggregates, named causes, locator guidance ----
+
+    struct CarriedParent {
+        root: std::path::PathBuf,
+        input: Value,
+    }
+
+    impl CarriedParent {
+        /// A design-review aggregate for revision 4 (axes a, b, c, one reviewer, one
+        /// assessment) carried by explicit applicability to the unchanged design revision 5.
+        fn new(tag: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "software-change-carried-parent-{tag}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("intent.json"), br#"{"revision":"1"}"#).unwrap();
+            std::fs::write(
+                root.join("design.json"),
+                br#"{"revision":"5","author":{"name":"driver","kind":"agent"},"elements":[{"name":"x"},{"name":"y"}],"decisions":[]}"#,
+            )
+            .unwrap();
+            let mut context = Vec::new();
+            for (n, axis) in ["a", "b", "c"].iter().enumerate() {
+                context.push(typed_record(
+                    &format!("parent-{axis}"),
+                    "review-evidence",
+                    n as u64 + 1,
+                    json!({
+                        "gate":"design-review","subject":"design.json","subject_revision":"4",
+                        "review_stage":"aggregate","policy_id":axis,"group":"design",
+                        "assessment_id":"original-return","config_version":"carry-16",
+                        "author":{"name":"A","kind":"agent"},"result":"pass","findings":"",
+                        "review_contract_version":3,
+                        "grounds":{"reason":"inspected design","evidence":[{"locator":"design.json#/elements"}]}
+                    }),
+                ));
+            }
+            for (n, axis) in ["a", "b", "c"].iter().enumerate() {
+                context.push(typed_record(
+                    &format!("carry-{axis}"),
+                    "evidence-applicability",
+                    n as u64 + 4,
+                    json!({
+                        "origin":{"kind":"context-record","id":format!("parent-{axis}")},
+                        "target":{"subject":"design.json","revision":"5"},
+                        "attesting_driver":{"name":"driver","kind":"agent"},
+                        "reason":"design revision 5 changed only the revision field"
+                    }),
+                ));
+            }
+            context.push(typed_record(
+                "ledger",
+                "finding-ledger",
+                7,
+                json!({"schema_version":"1","gate":"design-review","subject":"design.json",
+                       "subject_revision":"5","author":{"name":"driver","kind":"agent"},"findings":[]}),
+            ));
+            let axes = |_challenge: bool| -> Vec<Value> {
+                ["a", "b", "c"]
+                    .iter()
+                    .map(|axis| {
+                        json!({"id":axis,"description":axis,"group":"design","review_stage":"aggregate"})
+                    })
+                    .collect()
+            };
+            let slot = WorkSlot::new(
+                "design-adversarial-review",
+                "design-adversarial-review",
+                "approved",
+            )
+            .with_stdin_context_kinds(vec![
+                "review-evidence".into(),
+                "evidence-applicability".into(),
+                "finding-ledger".into(),
+            ]);
+            let input = json!({"status":"completed","result":{
+                "artifact_root":root,"work_slots":[slot],"context":context,
+                "initial_input":{
+                    "contract_version":3,
+                    "criterion_policy":{"required_authors":1,"goal_required_authors":1},
+                    "config_version":"carry-16",
+                    "artifact_schemas":{"design.json":{
+                        "type":"object",
+                        "properties":{
+                            "revision":{"type":"string"},
+                            "author":{"type":"object",
+                                "properties":{"name":{"type":"string"},
+                                    "kind":{"type":"string","enum":["human","agent","script"]}},
+                                "required":["name","kind"],"additionalProperties":false}
+                        },
+                        "required":["revision","author"],"additionalProperties":false
+                    }},
+                    "review_policies":{
+                        "design-review":axes(false),
+                        "design-adversarial-review":axes(true)
+                    }
+                }
+            }});
+            Self { root, input }
+        }
+
+        fn commission(&self) -> Value {
+            inspect_with_stage(&self.input, Some("design-adversarial-review"), None, None).unwrap()
+        }
+
+        fn context_mut(&mut self) -> &mut Vec<Value> {
+            self.input["result"]["context"].as_array_mut().unwrap()
+        }
+    }
+
+    impl Drop for CarriedParent {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn carried_complete_parent_aggregate_yields_a_labeled_packet() {
+        let fixture = CarriedParent::new("labeled");
+        let output = fixture.commission();
+        assert_eq!(output["missing_inputs"], json!([]), "{output}");
+        let parent = &output["parent_review"];
+        assert_eq!(parent["eligible"], true, "{parent}");
+        let parts = parent["parts"].as_array().unwrap();
+        let labels = |label: &str| parts.iter().filter(|p| p["label"] == label).count();
+        // Three original judgments and the three attestations that carried them;
+        // nothing carried is presented as a fresh review.
+        assert_eq!(labels("original judgment"), 3);
+        assert_eq!(labels("current applicability attestation"), 3);
+        assert_eq!(labels("fresh review"), 0);
+        let original = parts.iter().find(|p| p["record_id"] == "parent-a").unwrap();
+        assert_eq!(original["author"], json!({"name":"A","kind":"agent"}));
+        assert_eq!(original["group"], "design");
+        assert_eq!(original["assessment_id"], "original-return");
+        assert_eq!(original["originally_for_revision"], "4");
+        assert_eq!(original["grounds"]["reason"], "inspected design");
+        let attestation = parts.iter().find(|p| p["record_id"] == "carry-a").unwrap();
+        assert_eq!(attestation["target"]["revision"], "5");
+        assert_eq!(attestation["origin_id"], "parent-a");
+        assert_eq!(attestation["attesting_driver"]["name"], "driver");
+    }
+
+    #[test]
+    fn carried_parent_that_cannot_supply_a_packet_names_the_unmet_prerequisite() {
+        // One refusing history per cause, each checked for the cause named.
+        type Mutation = fn(&mut CarriedParent);
+        let cases: [(&str, Mutation, &str, &str); 4] = [
+            (
+                "missing-member",
+                |f| f.context_mut().retain(|r| r["id"] != "carry-c"),
+                "missing",
+                "axis @c@",
+            ),
+            (
+                "wrong-target",
+                |f| {
+                    let carry = f
+                        .context_mut()
+                        .iter_mut()
+                        .find(|r| r["id"] == "carry-b")
+                        .unwrap();
+                    carry["data"]["target"]["revision"] = json!("9");
+                },
+                "unverified",
+                "axis @b@",
+            ),
+            (
+                "invalid-source",
+                |f| {
+                    let carry = f
+                        .context_mut()
+                        .iter_mut()
+                        .find(|r| r["id"] == "carry-a")
+                        .unwrap();
+                    carry["data"]["origin"]["id"] = json!("no-such-record");
+                },
+                "unverified",
+                "axis @a@",
+            ),
+            (
+                "assessment-mismatch",
+                |f| {
+                    // Axis a stays carried; b and c are re-judged freshly by one
+                    // reviewer under two different assessments.
+                    f.context_mut()
+                        .retain(|r| r["id"] != "carry-b" && r["id"] != "carry-c");
+                    for (n, (axis, assessment)) in
+                        [("b", "return-1"), ("c", "return-2")].iter().enumerate()
+                    {
+                        let mut fresh = f
+                            .context_mut()
+                            .iter()
+                            .find(|r| r["id"] == "parent-a")
+                            .unwrap()
+                            .clone();
+                        fresh["id"] = json!(format!("fresh-{axis}"));
+                        fresh["sequence"] = json!(20 + n);
+                        fresh["data"]["subject_revision"] = json!("5");
+                        fresh["data"]["policy_id"] = json!(axis);
+                        fresh["data"]["assessment_id"] = json!(assessment);
+                        f.context_mut().push(fresh);
+                    }
+                },
+                "assessment_inconsistent",
+                "different assessments",
+            ),
+        ];
+        for (name, mutate, category, text) in cases {
+            let mut fixture = CarriedParent::new(name);
+            mutate(&mut fixture);
+            let output = fixture.commission();
+            let missing = output["missing_inputs"].to_string();
+            let text = text.replace('@', "\x60");
+            assert!(
+                missing.contains(&format!("({category})")) && missing.contains(&text),
+                "{name}: {missing}"
+            );
+            assert!(
+                !missing.contains(
+                    "is missing current parent aggregate claim @a@"
+                        .replace('@', "\x60")
+                        .as_str()
+                ),
+                "{name}: must not imply a fresh review is always needed: {missing}"
+            );
+        }
+        // An accepted finding that is still unresolved.
+        let mut fixture = CarriedParent::new("unresolved");
+        let mut failing = fixture
+            .context_mut()
+            .iter()
+            .find(|r| r["id"] == "parent-a")
+            .unwrap()
+            .clone();
+        failing["id"] = json!("fail-a");
+        failing["sequence"] = json!(30);
+        failing["data"]["subject_revision"] = json!("5");
+        failing["data"]["result"] = json!("fail");
+        failing["data"]["findings"] = json!("a defect the driver accepted");
+        failing["data"]["author"] = json!({"name":"B","kind":"agent"});
+        failing["data"]["assessment_id"] = json!("second-opinion");
+        fixture.context_mut().push(failing);
+        let ledger = fixture
+            .context_mut()
+            .iter_mut()
+            .find(|r| r["id"] == "ledger")
+            .unwrap();
+        ledger["sequence"] = json!(40);
+        ledger["data"]["findings"] = json!([{
+            "id":"F-1","source":{"kind":"context-record","id":"fail-a"},"policy_id":"a",
+            "summary":"open","disposition":"accepted","reason":"valid","owner_phase":"design",
+            "task_ids":[],"review_axes":["a"],"status":"unresolved"
+        }]);
+        let missing = fixture.commission()["missing_inputs"].to_string();
+        assert!(
+            missing.contains("(unresolved_finding)") && missing.contains("F-1"),
+            "{missing}"
+        );
+    }
+
+    #[test]
+    fn review_packets_state_locator_forms_roots_and_the_real_structure() {
+        let fixture = CarriedParent::new("guidance");
+        let output = fixture.commission();
+        let guidance = &output["locator_guidance"];
+        assert_eq!(guidance["accepted_forms"].as_array().unwrap().len(), 4);
+        assert_eq!(
+            guidance["resolution"]["artifact_directory"],
+            json!(fixture.root)
+        );
+        assert!(guidance["resolution"]["rule"]
+            .as_str()
+            .unwrap()
+            .contains("never depends"));
+        let design = guidance["json_sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|source| source["locator"] == "design.json")
+            .unwrap();
+        // Matches the actual file: keys revision, author, elements (2), decisions (0).
+        let keys: Vec<_> = design["top_level_keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|k| k.as_str().unwrap())
+            .collect();
+        assert_eq!(keys.len(), 4);
+        for key in ["revision", "author", "elements", "decisions"] {
+            assert!(keys.contains(&key), "{key}");
+        }
+        assert_eq!(design["array_lengths"]["/elements"], 2);
+        assert_eq!(design["array_lengths"]["/decisions"], 0);
     }
 
     #[test]

@@ -366,6 +366,385 @@ fn historical_verdict_source_does_not_reopen_old_output_files_or_current_cwd() {
     );
 }
 
+// An explicit current command carry preserves its original execution identity.
+// Synthetic unit evidence only; the outer CLI regression executes a real helper.
+fn carried_command_fixture() -> Fixture {
+    let mut f = Fixture::new();
+    f.context[1].data["external_result"]["source"]["state_sha256"] =
+        json!("sha256:prior-unit-fixture-state");
+    let carry = json!({
+        "origin":{"kind":"context-record","id":"command"},
+        "target":{"subject":"validation-report.json","revision":"1",
+            "checkpoint":{"phase":"validation","report_revision":"1"}},
+        "attesting_driver":{"name":"driver","kind":"script"},
+        "reason":"Only unrelated source changed; the complete proof obligation is unchanged."
+    });
+    f.context
+        .push(row("command-carry", "evidence-applicability", carry, 5));
+    let path = f.root.join("validation-report.json");
+    let mut report: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    report["command_evidence_ids"] = json!(["command-carry"]);
+    std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+    crate::checkpoint::create(
+        crate::checkpoint::CheckpointPhase::Validation,
+        &f.root,
+        &std::env::current_dir().unwrap(),
+    )
+    .unwrap();
+    f
+}
+
+#[test]
+fn fresh_criterion_and_goal_share_gates_verified_current_command_carry() {
+    let f = carried_command_fixture();
+    let before = f.context.clone();
+    for (kind, index) in [("criterion-verdict", 3), ("goal-verdict", 2)] {
+        let result = check(&f.ctx(), &candidate(kind, f.context[index].data.clone()));
+        assert!(result.is_ok(), "{kind}: {result:?}");
+    }
+    let report: Value =
+        serde_json::from_slice(&std::fs::read(f.root.join("validation-report.json")).unwrap())
+            .unwrap();
+    let result = crate::validation::evaluate(
+        &f.input,
+        &f.context,
+        &f.root,
+        &report,
+        true,
+        &f.workflow,
+        &BTreeSet::new(),
+    );
+    assert!(
+        result.is_ok(),
+        "gate must accept the same resolved original command IDs: {result:?}"
+    );
+    assert_eq!(
+        f.context, before,
+        "eligibility never rewrites original records"
+    );
+}
+
+#[test]
+fn fresh_verdict_command_carry_retains_invalid_and_stale_guards() {
+    for kind in ["criterion-verdict", "goal-verdict"] {
+        for defect in [
+            "no-carry",
+            "wrong-target",
+            "wrong-checkpoint",
+            "stale-report-checkpoint",
+            "wrong-spec",
+            "failed-command",
+            "non-ancestor",
+            "duplicate-proof",
+            "unindexed-command",
+            "wrapper-reference",
+            "withdrawn-carry",
+            "wrong-origin",
+            "self-authored",
+        ] {
+            let mut f = carried_command_fixture();
+            let mut data = f.context[if kind == "criterion-verdict" { 3 } else { 2 }]
+                .data
+                .clone();
+            let expected = match defect {
+                "no-carry" => {
+                    let path = f.root.join("validation-report.json");
+                    let mut report: Value =
+                        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                    report["command_evidence_ids"] = json!(["command"]);
+                    std::fs::write(path, serde_json::to_vec(&report).unwrap()).unwrap();
+                    "stale-source"
+                }
+                "wrong-target" => {
+                    f.context[4].data["target"]["revision"] = json!("wrong-target");
+                    "target revision is stale"
+                }
+                "wrong-checkpoint" => {
+                    f.context[4].data["target"]["checkpoint"]["report_revision"] = json!("wrong");
+                    "target checkpoint is not current"
+                }
+                "stale-report-checkpoint" => {
+                    let path = f.root.join("validation-report.json");
+                    let mut report: Value =
+                        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                    report["author"]["name"] = json!("changed-report-driver");
+                    std::fs::write(path, serde_json::to_vec(&report).unwrap()).unwrap();
+                    "checkpoint mismatch: report bytes changed"
+                }
+                "wrong-spec" => {
+                    f.context[1].data["spec"]["obligation"] = json!("a changed proof obligation");
+                    "differs from effective proof obligation"
+                }
+                "failed-command" => {
+                    f.context[1].data["external_result"]["exit_code"] = json!(1);
+                    "failed command"
+                }
+                "non-ancestor" => {
+                    f.context[1].data["external_result"]["source"]["head"] = json!("0".repeat(40));
+                    "ancestor-or-equal source"
+                }
+                "duplicate-proof" => {
+                    let path = f.root.join("validation-report.json");
+                    let mut report: Value =
+                        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                    report["command_evidence_ids"] = json!(["command-carry", "duplicate-carry"]);
+                    std::fs::write(path, serde_json::to_vec(&report).unwrap()).unwrap();
+                    let mut duplicate = f.context[4].clone();
+                    duplicate.id = "duplicate-carry".into();
+                    duplicate.sequence = SemanticSequence::new(6);
+                    f.context.push(duplicate);
+                    "duplicate command proof ID"
+                }
+                "unindexed-command" => {
+                    let mut other = f.context[1].clone();
+                    other.id = "unindexed".into();
+                    other.data["external_result"]["source"] =
+                        crate::source_identity::read(&std::env::current_dir().unwrap()).unwrap();
+                    other.sequence = SemanticSequence::new(6);
+                    f.context.push(other);
+                    data["evidence_context_ids"] = json!(["unindexed"]);
+                    "current indexed command evidence"
+                }
+                "wrapper-reference" => {
+                    data["evidence_context_ids"] = json!(["command-carry"]);
+                    "unsupported evidence reference"
+                }
+                "wrong-origin" => {
+                    f.context[4].data["origin"]["kind"] = json!("selected-assignment-output");
+                    "invalid command applicability declaration"
+                }
+                "self-authored" => {
+                    let path = f.root.join("validation-report.json");
+                    let report: Value =
+                        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                    data["author"] = report["author"].clone();
+                    "self-authorship cannot satisfy criterion policy"
+                }
+                "withdrawn-carry" => {
+                    f.context.push(row(
+                        "withdraw",
+                        "record-withdrawal",
+                        json!({
+                            "attesting_driver":{"name":"driver","kind":"agent"},
+                            "reason":"Withdraw fixture carry","record_ids":["command-carry"]
+                        }),
+                        6,
+                    ));
+                    "excluded record"
+                }
+                _ => unreachable!(),
+            };
+            if matches!(defect, "no-carry" | "duplicate-proof") {
+                // These cases intentionally change the current command index,
+                // not checkpoint validity. Bind those exact report bytes so the
+                // named source/duplicate guard, rather than a stale checkpoint,
+                // is actually reached. The separate stale-report case above
+                // keeps checkpoint invalidity as an explicit refusal control.
+                crate::checkpoint::create(
+                    crate::checkpoint::CheckpointPhase::Validation,
+                    &f.root,
+                    &std::env::current_dir().unwrap(),
+                )
+                .unwrap();
+            }
+            let before = f.context.clone();
+            let result = check(&f.ctx(), &candidate(kind, data));
+            let refusal = result.expect_err(defect);
+            assert!(
+                refusal.message.contains(expected),
+                "{kind}/{defect}: {refusal:?}"
+            );
+            assert_eq!(
+                f.context, before,
+                "refusal must not rewrite history: {defect}"
+            );
+        }
+    }
+}
+
+#[test]
+fn failed_current_commands_admit_negative_verdicts_but_never_clear_validation() {
+    let mut f = Fixture::new();
+    f.context[1].data["external_result"]["exit_code"] = json!(1);
+    for index in [2, 3] {
+        f.context[index].data["result"] = json!("fail");
+        f.context[index].data["findings"] = json!(["The scripted current execution failed."]);
+    }
+    let before = f.context.clone();
+    for (kind, index) in [("criterion-verdict", 3), ("goal-verdict", 2)] {
+        assert!(
+            check(&f.ctx(), &candidate(kind, f.context[index].data.clone())).is_ok(),
+            "{kind}"
+        );
+        let mut pass = f.context[index].data.clone();
+        pass["result"] = json!("pass");
+        pass["findings"] = json!([]);
+        let refusal = check(&f.ctx(), &candidate(kind, pass)).unwrap_err();
+        assert!(
+            refusal
+                .message
+                .contains("passing verdict references a failed command"),
+            "{refusal:?}"
+        );
+    }
+    let report: Value =
+        serde_json::from_slice(&std::fs::read(f.root.join("validation-report.json")).unwrap())
+            .unwrap();
+    let refusal = crate::validation::evaluate(
+        &f.input,
+        &f.context,
+        &f.root,
+        &report,
+        true,
+        &f.workflow,
+        &BTreeSet::new(),
+    )
+    .unwrap_err();
+    assert!(
+        refusal.contains("failed external command result"),
+        "{refusal}"
+    );
+    assert_eq!(
+        f.context, before,
+        "negative admission and gate refusal never rewrite history"
+    );
+}
+
+#[test]
+fn failed_command_carries_are_refused_even_for_negative_verdict_admission() {
+    let mut f = carried_command_fixture();
+    f.context[1].data["external_result"]["exit_code"] = json!(1);
+    for (kind, index) in [("criterion-verdict", 3), ("goal-verdict", 2)] {
+        let mut negative = f.context[index].data.clone();
+        negative["result"] = json!("fail");
+        negative["findings"] = json!(["The original scripted execution failed."]);
+        let refusal = check(&f.ctx(), &candidate(kind, negative)).unwrap_err();
+        assert!(
+            refusal.message.contains(
+                "applicable external result must succeed and name an ancestor-or-equal source"
+            ),
+            "{kind}: {refusal:?}"
+        );
+    }
+}
+
+#[test]
+fn an_unreferenced_failed_current_command_does_not_block_positive_verdict_admission() {
+    let mut f = Fixture::new();
+    let mut failed = f.context[1].clone();
+    failed.id = "failed-current".into();
+    failed.sequence = SemanticSequence::new(5);
+    failed.data["proof_id"] = json!("failed-proof");
+    failed.data["spec"]["id"] = json!("failed-proof");
+    failed.data["external_result"]["id"] = json!("failed-proof");
+    failed.data["external_result"]["exit_code"] = json!(1);
+    let path = f.root.join("plan.json");
+    let mut plan: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    plan["proof_commands"]
+        .as_array_mut()
+        .unwrap()
+        .push(failed.data["spec"].clone());
+    std::fs::write(path, serde_json::to_vec(&plan).unwrap()).unwrap();
+    let path = f.root.join("validation-report.json");
+    let mut report: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    report["command_evidence_ids"] = json!(["command", "failed-current"]);
+    std::fs::write(path, serde_json::to_vec(&report).unwrap()).unwrap();
+    f.context.push(failed);
+    crate::checkpoint::create(
+        crate::checkpoint::CheckpointPhase::Validation,
+        &f.root,
+        &std::env::current_dir().unwrap(),
+    )
+    .unwrap();
+    for (kind, index) in [("criterion-verdict", 3), ("goal-verdict", 2)] {
+        assert!(
+            check(&f.ctx(), &candidate(kind, f.context[index].data.clone())).is_ok(),
+            "{kind}"
+        );
+    }
+}
+
+// A legacy worker can succeed while its captured proof fails. These are
+// explicitly synthetic unit fixtures, not claims of executed native proofs.
+fn legacy_command_fixture(field: &str, value: Value) -> Fixture {
+    let mut f = Fixture::new();
+    let cwd = std::env::current_dir().unwrap();
+    let repository = crate::checkpoint::repository_identity(&cwd).unwrap();
+    let spec = f.context[1].data["spec"].clone();
+    let mut raw = json!({
+        "cwd":cwd, "spec":spec, "stdout":"SCRIPTED UNIT CAPTURE", "stderr":"",
+        "elapsed_ms":1, "timed_out":false, "spawn_error":null, "exit_code":0,
+        "repository_before":repository, "repository_after":repository,
+    });
+    raw[field] = value;
+    let bytes = serde_json::to_vec(&raw).unwrap();
+    std::fs::write(f.root.join("legacy-output.json"), &bytes).unwrap();
+    std::fs::write(f.root.join("legacy-stderr.txt"), b"").unwrap();
+    let summary = json!({"workers":[{
+        "assignment_id":"legacy-proof", "exit_code":0,
+        "stdout_path":f.root.join("legacy-output.json"), "stderr_path":f.root.join("legacy-stderr.txt"),
+        "selected_output_path":f.root.join("legacy-output.json"), "selected_attempt":1,
+        "selected_output_sha256":format!("sha256:{:x}", Sha256::digest(&bytes)),
+        "args":["validation-command",cwd,serde_json::to_string(&spec).unwrap(),"fixture"],
+    }]});
+    std::fs::write(
+        f.root.join("legacy-summary.json"),
+        serde_json::to_vec(&summary).unwrap(),
+    )
+    .unwrap();
+    f.context[1].data = json!({
+        "proof_id":"proof", "capture":{"summary":f.root.join("legacy-summary.json"),"assignment_id":"legacy-proof"}
+    });
+    f
+}
+
+#[test]
+fn cached_legacy_proofs_recheck_pass_success_without_blocking_negative_admission() {
+    for (field, value, expected) in [
+        ("exit_code", json!(1), "command failed"),
+        ("timed_out", json!(true), "command failed"),
+        (
+            "spawn_error",
+            json!("scripted missing executable"),
+            "command failed",
+        ),
+        (
+            "repository_before",
+            json!(format!("sha256:{}", "0".repeat(64))),
+            "repository identity",
+        ),
+    ] {
+        let f = legacy_command_fixture(field, value);
+        let before = f.context.clone();
+        for (kind, index) in [("criterion-verdict", 3), ("goal-verdict", 2)] {
+            let refusal =
+                check(&f.ctx(), &candidate(kind, f.context[index].data.clone())).unwrap_err();
+            assert!(
+                refusal.message.contains(expected),
+                "{kind}/{field}: {refusal:?}"
+            );
+            let mut negative = f.context[index].data.clone();
+            negative["result"] = json!("fail");
+            negative["findings"] = json!(["The actual scripted proof did not succeed unchanged."]);
+            assert!(
+                check(&f.ctx(), &candidate(kind, negative)).is_ok(),
+                "{kind}/{field}"
+            );
+        }
+        assert_eq!(
+            f.context, before,
+            "legacy verification never rewrites original capture evidence"
+        );
+    }
+    let f = legacy_command_fixture("exit_code", json!(0));
+    for (kind, index) in [("criterion-verdict", 3), ("goal-verdict", 2)] {
+        assert!(
+            check(&f.ctx(), &candidate(kind, f.context[index].data.clone())).is_ok(),
+            "{kind}"
+        );
+    }
+}
+
 #[test]
 fn fixture_cleanup_preserves_peer_with_same_timestamp() {
     let first = Fixture::new_at(0);

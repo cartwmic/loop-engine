@@ -7,6 +7,7 @@ mod artifacts;
 mod checkpoint;
 mod config;
 mod criterion;
+mod currency;
 mod evidence;
 #[allow(dead_code)]
 mod finding_ledger;
