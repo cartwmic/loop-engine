@@ -119,9 +119,32 @@ pub(crate) fn validate_grounding_with_context(
     Ok(())
 }
 
-/// Resolve one already shape-checked evidence locator exactly as admission does:
-/// a same-run record citation or a file citation beneath the artifact directory or a
-/// declared source root. Reads sources; never repairs, suggests-and-admits or writes.
+/// Why a well-formed evidence locator was not accepted. `NotFound` means the cited
+/// target genuinely does not exist (the only defect locator repair may fix); every other
+/// refusal is `Refused`. The decision is made where the cause is known, never by
+/// searching message text, which interpolates reviewer-supplied locators.
+#[derive(Debug)]
+enum LocatorError {
+    NotFound(String),
+    Refused(String),
+}
+
+impl LocatorError {
+    fn into_message(self) -> String {
+        match self {
+            Self::NotFound(message) | Self::Refused(message) => message,
+        }
+    }
+}
+
+impl From<String> for LocatorError {
+    fn from(message: String) -> Self {
+        Self::Refused(message)
+    }
+}
+
+/// Resolve one already shape-checked evidence locator exactly as admission does.
+/// The message of any refusal is unchanged from before the typed error existed.
 fn resolve_locator(
     locator: &str,
     digest: Option<&str>,
@@ -129,6 +152,19 @@ fn resolve_locator(
     version: Option<u32>,
     context: &[loop_core::ContextRecord],
 ) -> Result<(), String> {
+    resolve_locator_typed(locator, digest, artifact_root, version, context)
+        .map_err(LocatorError::into_message)
+}
+
+/// A same-run record citation or a file citation beneath the artifact directory or a
+/// declared source root. Reads sources; never repairs, suggests-and-admits or writes.
+fn resolve_locator_typed(
+    locator: &str,
+    digest: Option<&str>,
+    artifact_root: &Path,
+    version: Option<u32>,
+    context: &[loop_core::ContextRecord],
+) -> Result<(), LocatorError> {
     let (file, selector) = locator.split_once('#').ok_or_else(|| {
         format!("evidence locator `{locator}` needs a JSON Pointer or line selector")
     })?;
@@ -139,24 +175,31 @@ fn resolve_locator(
             .filter(|record| record.id.as_str() == id)
             .collect();
         if matches.len() != 1 {
-            return Err(format!("record citation `{id}` is missing or ambiguous"));
+            let message = format!("record citation `{id}` is missing or ambiguous");
+            return Err(if matches.is_empty() {
+                LocatorError::NotFound(message)
+            } else {
+                LocatorError::Refused(message)
+            });
         }
         let record = matches[0];
         if !REVIEW_SOURCE_KINDS.contains(&record.kind.as_str()) {
-            return Err(format!(
+            return Err(LocatorError::Refused(format!(
                 "record citation `{id}` has disallowed kind `{}`",
                 record.kind
-            ));
+            )));
         }
         let stored = serde_json::to_value(record).map_err(|e| e.to_string())?;
         if stored.pointer(selector).is_none() {
-            return Err(format!(
+            return Err(LocatorError::NotFound(format!(
                 "record citation `{locator}` does not resolve; {}",
                 nearest_pointer_note(&stored, selector, &format!("record:{id}"))
-            ));
+            )));
         }
         if version != Some(3) {
-            return Err("record citations require review contract v3".into());
+            return Err(LocatorError::Refused(
+                "record citations require review contract v3".to_owned(),
+            ));
         }
         return Ok(());
     }
@@ -171,9 +214,9 @@ fn resolve_locator(
             )
         })
     {
-        return Err(format!(
+        return Err(LocatorError::Refused(format!(
             "evidence locator `{locator}` must stay beneath a source root"
-        ));
+        )));
     }
     let roots = crate::source_scopes::locator_roots(&root)?;
     let path = if let Some((scope, _)) = file.split_once(':') {
@@ -188,18 +231,18 @@ fn resolve_locator(
     let bytes = fs::read(&path)
         .map_err(|error| format!("evidence source `{locator}` is unreadable: {error}"))?;
     if digest.is_some_and(|digest| format!("sha256:{:x}", Sha256::digest(&bytes)) != digest) {
-        return Err(format!(
+        return Err(LocatorError::Refused(format!(
             "evidence digest does not match exact source bytes for `{file}`"
-        ));
+        )));
     }
     if selector.starts_with('/') {
         let json: Value = serde_json::from_slice(&bytes)
             .map_err(|_| format!("evidence selector `{locator}` requires a JSON source"))?;
         if json.pointer(selector).is_none() {
-            return Err(format!(
+            return Err(LocatorError::NotFound(format!(
                 "evidence JSON Pointer in `{locator}` does not resolve; {}",
                 nearest_pointer_note(&json, selector, file)
-            ));
+            )));
         }
     } else {
         validate_line_selector(selector, &bytes, locator)?;
@@ -242,7 +285,9 @@ pub(crate) fn unresolvable_locators(
         // resolution defect: it is returned as `Err` so a repair cannot hide it.
         if let Some((_, selector)) = locator.split_once('#') {
             if selector.starts_with('L') && !line_selector_syntax_is_valid(selector) {
-                return Err(format!("evidence line selector in `{locator}` is malformed"));
+                return Err(format!(
+                    "evidence line selector in `{locator}` is malformed"
+                ));
             }
         }
         // A JSON Pointer with a malformed `~` escape is a syntax defect too.
@@ -253,14 +298,14 @@ pub(crate) fn unresolvable_locators(
                 ));
             }
         }
-        if let Err(error) = resolve_locator(locator, digest, artifact_root, version, context) {
-            // Only a citation that points at nothing is a resolution defect. Every other
-            // resolver refusal (forbidden record kind, unknown source scope, unreadable
-            // source, contract version, digest) is a different defect and stays a hard error.
-            if !is_resolution_failure(&error) {
-                return Err(error);
+        // Only a citation whose target genuinely does not exist is a resolution defect;
+        // every other refusal is a different defect and stays a hard error.
+        match resolve_locator_typed(locator, digest, artifact_root, version, context) {
+            Ok(()) => {}
+            Err(LocatorError::NotFound(message)) => {
+                failures.push((index, locator.to_owned(), message));
             }
-            failures.push((index, locator.to_owned(), error));
+            Err(LocatorError::Refused(message)) => return Err(message),
         }
     }
     Ok(failures)
@@ -397,38 +442,57 @@ fn resolve_evidence_file(
     root: &Path,
     primary: Option<&Path>,
     relative: &Path,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, LocatorError> {
     let mut outside = false;
+    let mut not_a_file = false;
+    let mut other_error: Option<String> = None;
     for base in std::iter::once(root).chain(primary) {
-        let Ok(path) = fs::canonicalize(base.join(relative)) else {
-            continue;
-        };
-        if path.is_file() {
-            if path.starts_with(root) || primary.is_some_and(|p| path.starts_with(p)) {
-                return Ok(path);
+        let path = match fs::canonicalize(base.join(relative)) {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                other_error.get_or_insert(format!(
+                    "evidence source `{}` could not be resolved: {error}",
+                    relative.display()
+                ));
+                continue;
             }
+        };
+        if !path.is_file() {
+            not_a_file = true;
+        } else if path.starts_with(root) || primary.is_some_and(|p| path.starts_with(p)) {
+            return Ok(path);
+        } else {
             outside = true;
         }
     }
+    // Anything other than "no such file at any base" is a refusal, never a missing target.
     if outside {
-        // An existing file that resolves (for example through a symlink) outside every
-        // permitted root is a containment refusal, not a missing target: never repairable.
-        return Err(format!(
+        return Err(LocatorError::Refused(format!(
             "evidence source `{}` resolves outside the artifact directory and the source root",
             relative.display()
-        ));
+        )));
+    }
+    if let Some(message) = other_error {
+        return Err(LocatorError::Refused(message));
+    }
+    if not_a_file {
+        return Err(LocatorError::Refused(format!(
+            "evidence source `{}` is not a file",
+            relative.display()
+        )));
     }
     if primary.is_none() {
-        return Err(format!(
+        return Err(LocatorError::NotFound(format!(
             "evidence source `{}` was not found beneath the artifact directory; {}",
             relative.display(),
             crate::source_scopes::NO_LOCATOR_ROOT
-        ));
+        )));
     }
-    Err(format!(
+    Err(LocatorError::NotFound(format!(
         "evidence source `{}` was not found beneath the artifact directory or the source root",
         relative.display()
-    ))
+    )))
 }
 
 fn pointer_tokens(pointer: &str) -> Vec<String> {
@@ -527,15 +591,6 @@ fn nearest_pointer_note(document: &Value, pointer: &str, file: &str) -> String {
     }
 }
 
-/// True when the resolver refused a well-formed, permitted citation only because its target
-/// does not exist (pointer, record, file or line range). Matches the resolver's own messages.
-fn is_resolution_failure(error: &str) -> bool {
-    error.contains("does not resolve")
-        || error.contains("is missing or ambiguous")
-        || error.contains("was not found beneath the artifact directory")
-        || error.contains("is outside the source")
-}
-
 /// Syntax only: every `~` in a JSON Pointer is followed by `0` or `1`.
 fn pointer_escapes_are_valid(pointer: &str) -> bool {
     pointer.split('/').skip(1).all(|token| {
@@ -560,9 +615,11 @@ fn line_selector_syntax_is_valid(selector: &str) -> bool {
         .all(|part| part.parse::<usize>().is_ok_and(|line| line > 0))
 }
 
-fn validate_line_selector(selector: &str, bytes: &[u8], locator: &str) -> Result<(), String> {
+fn validate_line_selector(selector: &str, bytes: &[u8], locator: &str) -> Result<(), LocatorError> {
     let raw = selector.strip_prefix('L').ok_or_else(|| {
-        format!("evidence selector in `{locator}` must be a JSON Pointer or `Lstart-Lend`")
+        LocatorError::Refused(format!(
+            "evidence selector in `{locator}` must be a JSON Pointer or `Lstart-Lend`"
+        ))
     })?;
     let (start, end) = match raw.split_once("-L") {
         Some((start, end)) => (start, end),
@@ -571,17 +628,23 @@ fn validate_line_selector(selector: &str, bytes: &[u8], locator: &str) -> Result
     let start = start.parse::<usize>().ok().filter(|line| *line > 0);
     let end = end.parse::<usize>().ok().filter(|line| *line > 0);
     let (Some(start), Some(end)) = (start, end) else {
-        return Err(format!(
+        return Err(LocatorError::Refused(format!(
             "evidence line selector in `{locator}` is malformed"
-        ));
+        )));
     };
-    let text = std::str::from_utf8(bytes)
-        .map_err(|_| format!("evidence line selector in `{locator}` requires UTF-8 source"))?;
+    let text = std::str::from_utf8(bytes).map_err(|_| {
+        LocatorError::Refused(format!(
+            "evidence line selector in `{locator}` requires UTF-8 source"
+        ))
+    })?;
     let line_count = text.lines().count();
-    if start > end || end > line_count {
-        return Err(format!(
-            "evidence line range in `{locator}` is outside the source"
-        ));
+    let message = format!("evidence line range in `{locator}` is outside the source");
+    if start > end {
+        // A reversed range is a malformed citation, not a range past the end.
+        return Err(LocatorError::Refused(message));
+    }
+    if end > line_count {
+        return Err(LocatorError::NotFound(message));
     }
     Ok(())
 }
@@ -1106,6 +1169,103 @@ mod tests {
     }
 
     #[test]
+    fn repair_eligibility_is_decided_by_cause_not_by_message_text() {
+        let root = std::env::temp_dir().join(format!(
+            "software-change-cause-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("intent.json"),
+            br#"{"revision":"1","acceptance":[{"id":"AC-1"}]}"#,
+        )
+        .unwrap();
+        // File names and selectors that contain the phrases of the resolver's own messages.
+        fs::write(root.join("does not resolve.txt"), b"hello\n").unwrap();
+        fs::write(root.join("AGENTS.md"), b"# title\nline two\n").unwrap();
+        fs::write(root.join("notes.md"), b"one\ntwo\nthree\n").unwrap();
+        let grounds = |locator: &str| {
+            json!({"reason":"checked","evidence":[
+                {"locator":"intent.json#/revision"},
+                {"locator": locator}
+            ]})
+        };
+        let refused = |locator: &str, why: &str| {
+            let error = unresolvable_locators(&grounds(locator), &root, Some(3), &[]).unwrap_err();
+            assert!(error.contains(why), "{locator}: {error}");
+        };
+        let repairable = |locator: &str, context: &[loop_core::ContextRecord]| {
+            let found = unresolvable_locators(&grounds(locator), &root, Some(3), context).unwrap();
+            assert_eq!(found.len(), 1, "{locator}");
+            assert_eq!(found[0].1, locator);
+        };
+        // The message text of these refusals contains a repairable phrase through the locator.
+        refused("does not resolve.txt#/a", "requires a JSON source");
+        refused("AGENTS.md#/does not resolve", "requires a JSON source");
+        // A reversed line range is malformed, not a range past the end.
+        refused("notes.md#L3-L1", "is outside the source");
+        // Every other refusal of the resolver.
+        refused("nope:intent.json#/a", "unknown source scope");
+        refused("../intent.json#/a", "stay beneath");
+        refused("intent.json#L1-7", "malformed");
+        refused("intent.json#/revision~2", "escape");
+        // A directory is not a file.
+        fs::create_dir_all(root.join("adir")).unwrap();
+        refused("adir#/a", "is not a file");
+        // Ambiguous record ids are refused; a record id that matches nothing is repairable.
+        let record = |kind: &str| {
+            loop_core::ContextRecord::new(
+                "dup",
+                kind,
+                json!({"x": 1}),
+                loop_core::SemanticSequence::new(1),
+                loop_core::Timestamp::from_unix_millis(0),
+            )
+        };
+        let two = [record("review-evidence"), record("review-evidence")];
+        let error =
+            unresolvable_locators(&grounds("record:dup#/data"), &root, Some(3), &two).unwrap_err();
+        assert!(error.contains("missing or ambiguous"), "{error}");
+        // Files named like the resolver's messages, reached through a symlink out of the roots.
+        #[cfg(unix)]
+        {
+            let outside = std::env::temp_dir().join(format!(
+                "software-change-cause-out-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = fs::remove_dir_all(&outside);
+            fs::create_dir_all(&outside).unwrap();
+            fs::write(outside.join("t.json"), br#"{"a":1}"#).unwrap();
+            std::os::unix::fs::symlink(outside.join("t.json"), root.join("does not resolve.json"))
+                .unwrap();
+            refused("does not resolve.json#/a", "resolves outside");
+            // A directory the process may not search: an OS error other than not-found.
+            use std::os::unix::fs::PermissionsExt;
+            let locked = root.join("locked");
+            fs::create_dir_all(&locked).unwrap();
+            fs::write(locked.join("x.json"), br#"{"a":1}"#).unwrap();
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+            if fs::canonicalize(locked.join("x.json")).is_err() {
+                refused("locked/x.json#/a", "could not be resolved");
+            }
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+            let _ = fs::remove_dir_all(outside);
+        }
+        // Genuine missing targets stay repairable.
+        repairable("intent.json#/acceptance/5", &[]);
+        repairable("intent.json#/missing", &[]);
+        repairable("missing.json#/a", &[]);
+        repairable("notes.md#L1-L99", &[]);
+        repairable("record:absent#/data", &[]);
+        let present = record("review-evidence");
+        repairable("record:dup#/nope", std::slice::from_ref(&present));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn unresolvable_locators_separates_resolution_from_every_other_defect() {
         let root = std::env::temp_dir().join(format!(
             "software-change-unresolvable-{}-{:?}",
@@ -1237,7 +1397,8 @@ mod tests {
             let _ = fs::remove_dir_all(&outside);
             fs::create_dir_all(&outside).unwrap();
             fs::write(outside.join("secret.json"), br#"{"a":1}"#).unwrap();
-            std::os::unix::fs::symlink(outside.join("secret.json"), root.join("link.json")).unwrap();
+            std::os::unix::fs::symlink(outside.join("secret.json"), root.join("link.json"))
+                .unwrap();
             let error = unresolvable_locators(
                 &grounds(&["intent.json#/revision", "link.json#/a"]),
                 &root,

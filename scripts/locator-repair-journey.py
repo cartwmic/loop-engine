@@ -153,6 +153,27 @@ def repair(args, root):
     sibling_fixed['judgments'][3]['grounds']['reason'] = ''
     refused(ctx, packet(ctx, sibling_original, sibling_fixed), ['defect other than unresolvable locators'], 'sibling-with-other-defect', table)
     refused(ctx, packet(ctx, original, good, projection=good), ['cannot be combined'], 'with-projection', table)
+    # Citations the resolver refuses for a reason other than "the target does not exist" are never repaired,
+    # even when an unresolvable locator beside them is: the cause, not the message text, decides.
+    artifacts = ctx['artifacts']
+    outside_dir = Path(tempfile.mkdtemp(prefix='outside-', dir=root))
+    (outside_dir / 'target.json').write_text('{"a": 1}')
+    (artifacts / 'does not resolve.json').symlink_to(outside_dir / 'target.json')
+    (artifacts / 'does not resolve.txt').write_text('plain text\n')
+    (artifacts / 'AGENTS.md').write_text('# title\nline two\n')
+
+    def other_defect(label, locator, fragments):
+        mixed = copy.deepcopy(original)
+        mixed['judgments'][0]['grounds']['evidence'].append({'locator': locator})
+        refused(ctx, packet(ctx, mixed, copy.deepcopy(good)),
+                ['defect other than unresolvable locators'] + fragments, label, table)
+
+    other_defect('malformed-line-selector', 'intent.json#L1-7', ['malformed'])
+    other_defect('malformed-pointer-escape', 'intent.json#/revision~2', ['escape'])
+    other_defect('out-of-root-symlink-named-like-a-message', 'does not resolve.json#/a', ['resolves outside'])
+    other_defect('non-json-source-named-like-a-message', 'does not resolve.txt#/a', ['requires a JSON source'])
+    other_defect('selector-text-like-a-message', 'AGENTS.md#/does not resolve', ['requires a JSON source'])
+    other_defect('unknown-source-scope', 'nope:intent.json#/revision', ['unknown source scope'])
     out['AC-2'] = table
     # AC-1: the repair yields ordinary candidates; the reviewer's judgments are identical to the original.
     before_success = EC.snapshot(ctx)
