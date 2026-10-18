@@ -103,6 +103,11 @@ def repair(args, root):
     require(code == 0 and len(result['records']) == len(axes) - 2 and
             'does not resolve' in json.dumps(result['items']) and
             sum(1 for i in result['items'] if i['diagnostics']) == 2, result)
+    # The surviving candidates of this ordinary intake carry the assessment the original return has; a repair
+    # must reproduce exactly that identity (it is derived from the original bytes, never from the corrected ones).
+    original_assessments = {r['data']['assessment_id'] for r in result['records']}
+    require(len(original_assessments) == 1 and next(iter(original_assessments)).startswith('assessment:sha256:'),
+            original_assessments)
     # Control: v0.26.0 has no repair route; the request is an ordinary intake and the whole return is refused.
     if args.control_provider:
         code, stdout, _ = run_intake(args.control_provider, packet(ctx, original, good), ctx['repository'])
@@ -156,6 +161,15 @@ def repair(args, root):
     sibling_fixed = copy.deepcopy(good)
     sibling_fixed['judgments'][3]['grounds']['reason'] = ''
     refused(ctx, packet(ctx, sibling_original, sibling_fixed), ['defect other than unresolvable locators'], 'sibling-with-other-defect', table)
+    # An invalid verdict present in the original and kept in the correction is not made acceptable: the whole
+    # request is refused and no valid sibling candidate is released.
+    invalid_original = copy.deepcopy(original)
+    invalid_original['judgments'][3]['result'] = 'maybe'
+    invalid_fixed = copy.deepcopy(good)
+    invalid_fixed['judgments'][3]['result'] = 'maybe'
+    refused(ctx, packet(ctx, invalid_original, invalid_fixed),
+            ['all-or-nothing and no candidate was released', 'result must be pass or fail'],
+            'invalid-verdict-in-both', table)
     refused(ctx, packet(ctx, original, good, projection=good), ['cannot be combined'], 'with-projection', table)
     # Citations the resolver refuses for a reason other than "the target does not exist" are never repaired,
     # even when an unresolvable locator beside them is: the cause, not the message text, decides.
@@ -190,6 +204,7 @@ def repair(args, root):
     require(len(result['records']) == len(axes) and all(not i['diagnostics'] for i in result['items']), result)
     assessments = {r['data']['assessment_id'] for r in result['records']}
     require(len(assessments) == 1 and next(iter(assessments)).startswith('assessment:sha256:'), assessments)
+    require(assessments == original_assessments, ('repair changed the assessment identity', assessments, original_assessments))
     original_text = json.dumps(original)
     for record, source, repaired in zip(result['records'], original['judgments'], good['judgments']):
         data = record['data']

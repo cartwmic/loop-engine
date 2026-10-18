@@ -787,7 +787,7 @@ mod tests {
             ),
             row("problem-grounded", &["intent.json#/outcome"])
         ]));
-        let (mut input, root) = repair_input(original.clone(), corrected.clone());
+        let (input, root) = repair_input(original.clone(), corrected.clone());
         // Without the repair request the same original is refused row by row.
         let mut plain = input.clone();
         plain.as_object_mut().unwrap().remove("locator_repair");
@@ -840,9 +840,6 @@ mod tests {
             records[1]["data"]["external_review"]["locator_repair"]["corrections"],
             json!([{"before":"intent.json#/outside_obligations/3","after":null}])
         );
-        // The same original bytes and assignment derive the same assessment as ordinary intake.
-        input.as_object_mut().unwrap().remove("locator_repair");
-        input["original"] = json!({"text":original.to_string()});
         let _ = std::fs::remove_dir_all(root);
     }
 
