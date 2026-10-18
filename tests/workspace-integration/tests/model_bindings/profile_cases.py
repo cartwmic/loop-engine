@@ -10,6 +10,7 @@ from harness import NEVER_BOUND, binding, require
 from capture_support import Capture, sha
 
 REVIEWER = binding('provider/reviewer-model', 'high')
+DRIVER = binding('provider/driver-model', 'high')
 
 
 def setup(log, args, output, *settings, expect_ok=True):
@@ -95,8 +96,57 @@ def run(args):
     broken = json.loads((work / 'bound-run.profile.json').read_bytes())
     broken['model_bindings'] = {'roles': {'driver': binding('provider/driver-model')}}
     (work / 'broken.profile.json').write_text(json.dumps(broken))
-    result = log.execute([*engine, 'start', '--id', 'broken-run', 'software-change',
-                          '@' + str(work / 'broken.profile.json'), 'broken'], cwd=args.source_root, raw=True)
-    require(result.returncode != 0 and 'driver_session' in result.stdout + result.stderr, result)
-    args.trail.append('[profile-identity] start refuses a driver binding without driver_session, naming the cause')
+    def start_driver(name, session):
+        """Start from the bound profile with the driver bound to DRIVER and `session` declared (or not)."""
+        data = json.loads(bound.read_bytes())
+        data['artifact_root'] = str(artifacts)
+        data['model_bindings'] = {'roles': {'driver': DRIVER}}
+        if session is not None:
+            data['model_bindings']['driver_session'] = session
+        path = work / f'{name}.profile.json'
+        path.write_text(json.dumps(data))
+        return data, log.execute([*engine, 'start', '--id', name, 'software-change', '@' + str(path), name],
+                                 cwd=args.source_root, raw=True)
+
+    def no_such_run(name):
+        shown = log.execute([*engine, 'show', '--view', 'status', name], cwd=args.source_root, raw=True)
+        result = json.loads(shown.stdout)['result'] if shown.returncode == 0 else None
+        require(shown.returncode != 0 or (result['uncertainty']['state'] == 'unavailable' and
+                                          'was not found' in result['uncertainty']['reason']), shown)
+
+    expected = 'expected model `provider/driver-model` at thinking `high`'
+    refusals = (
+        ('driver-missing', None, ['driver_session', 'role `driver`', expected,
+                                  'actual: no session declared (statement missing)']),
+        ('driver-model', binding('provider/other-model', 'high'),
+         ['role `driver`', expected, 'actual model `provider/other-model` at thinking `high`',
+          'differs in model only']),
+        ('driver-thinking', binding('provider/driver-model', 'low'),
+         ['role `driver`', expected, 'actual model `provider/driver-model` at thinking `low`',
+          'differs in thinking level only']),
+        ('driver-both', binding('provider/other-model', 'low'),
+         ['role `driver`', expected, 'actual model `provider/other-model` at thinking `low`',
+          'differs in model and thinking level']),
+    )
+    for name, session, needles in refusals:
+        _, result = start_driver(name, session)
+        text = result.stdout + result.stderr
+        require(result.returncode != 0, result)
+        for needle in needles:
+            require(needle in text, (name, needle, text))
+        no_such_run(name)
+    args.trail.append('[profile-identity] start refuses a driver binding with a missing, model-only, thinking-only '
+                      'and model-and-thinking driver_session, naming role, expected, actual and the differing part, '
+                      'and creates no run')
+
+    # A matching driver_session starts the run and is stored with it.
+    data, started = start_driver('driver-run', DRIVER)
+    require(started.returncode == 0, started)
+    run = log.execute([*engine, 'show', '--view', 'full', 'driver-run'], cwd=args.source_root)['result']
+    require(run['initial_input']['model_bindings'] == data['model_bindings'] ==
+            {'roles': {'driver': DRIVER}, 'driver_session': DRIVER}, run['initial_input'])
+    require({row['role']: row['in_force'] for row in run['model_bindings']['roles']}['driver'] == DRIVER and
+            run['model_bindings']['state'] == 'bound', run['model_bindings'])
+    args.trail.append('[profile-identity] start with a driver binding and a matching driver_session succeeds; '
+                      'both are frozen in initial_input and the driver is in force in the view')
     log.finalize()

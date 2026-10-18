@@ -14,10 +14,10 @@ AXIS = 'solution-agnostic'
 SHORTAGE = 'missing'
 
 
-def carry_of(h, origin):
-    revision = json.loads((h.ctx['artifacts'] / SUBJECT).read_bytes())['revision']
+def carry_of(h, origin, subject=SUBJECT):
+    revision = json.loads((h.ctx['artifacts'] / subject).read_bytes())['revision']
     return {'origin': {'kind': 'context-record', 'id': origin['id']},
-            'target': {'subject': SUBJECT, 'revision': revision, 'checkpoint': None},
+            'target': {'subject': subject, 'revision': revision, 'checkpoint': None},
             'attesting_driver': {'name': 'synthetic-driver', 'kind': 'agent'},
             'reason': 'Scripted fixture judgments; no model or human review claim; unchanged bounded scope'}
 
@@ -30,10 +30,10 @@ def stale_cause(amendment_id, origin):
             f"assessment `{data['assessment_id']}`, axis `{data['policy_id']}`")
 
 
-def axis_diagnostics(response):
+def axis_diagnostics(response, axis=AXIS):
     """The evidence diagnostics of the refused checked event, by category."""
     require(response['code'] == 'software-change-review-incomplete', response)
-    axes = [d for d in response['details']['diagnostics'] if d['axis'] == AXIS]
+    axes = [d for d in response['details']['diagnostics'] if d['axis'] == axis]
     require(len(axes) == 1, response)
     return {d['category']: d for d in axes[0]['diagnostics']}
 
@@ -73,6 +73,48 @@ def unmarked(h):
     h.say('S7a the gate clears through the checked event with a pre-amendment and a post-amendment return')
     check_views(h, 'bound', in_force={'ordinary-reviewer': REVIEWER}, history=1)
     h.say('S8 views after the unmarked amendment: original none, in force new, no stale mark')
+
+
+def carried(h):
+    """S7(c): a return made before an amendment is carried to a NEW revision and is what clears the gate.
+
+    Unlike S7(a), the subject moves to a new revision after the amendment, so the earlier return
+    no longer counts directly; only the explicit carry can bring it to the current target.
+    """
+    gate, subject_file, axis = 'design-review', 'design.json', 'intent-faithful'
+    first = h.returned(gate, subject_file, 'elig-carried-0')[0]
+    h.ledger(gate, subject_file)
+    h.append(KIND, amendment('Bind ordinary review to provider/new-reviewer at high; keep earlier returns.',
+                             [change('ordinary-reviewer', None, REVIEWER)]), 'amend-carried')
+    h.say('S7c amendment (unmarked) accepted after one return')
+    path = h.ctx['artifacts'] / subject_file
+    subject = json.loads(path.read_bytes())
+    old_revision = subject['revision']
+    subject['revision'] = old_revision + '-next'
+    path.write_text(json.dumps(subject))
+    # The plan links to the design revision; keep the cross-artifact link valid for the checked event.
+    plan_path = h.ctx['artifacts'] / 'plan.json'
+    plan = json.loads(plan_path.read_bytes())
+    plan['design_revision'] = subject['revision']
+    plan_path.write_text(json.dumps(plan))
+    h.ledger(gate, subject_file)
+    h.say(f'S7c the design moved from revision {old_revision} to {subject["revision"]}')
+    h.returned(gate, subject_file, 'elig-carried-1', session=REVIEWER)
+    alone = axis_diagnostics(h.event('approved', deny=[axis]), axis)
+    require(alone['independence']['distinct_present'] == 1 and 'excluded_by_stale_mark' not in alone, alone)
+    h.say('S7c on the new revision the post-amendment return alone is one distinct author and the gate refuses: '
+          'the pre-amendment return does not count without a carry')
+    carry = h.append('evidence-applicability', carry_of(h, first, subject_file), 'carry-after-amendment')
+    require(carry['data']['target']['revision'] == subject['revision'], carry)
+    commissioned = h.commission(gate, stage='aggregate')
+    delivered = {r['id'] for r in commissioned['context']}
+    require(first['id'] in delivered and carry['id'] in delivered and commissioned['record_diagnostics'] == [],
+            commissioned)
+    h.say('S7c the carry of the pre-amendment return is accepted at the append and delivered by commission '
+          'without a diagnostic')
+    h.event('approved')
+    h.say('S7c the checked event clears the gate: the carried pre-amendment return plus the post-amendment '
+          'return are two distinct authors, so the carry is what the gate counted')
 
 
 def marked(h):

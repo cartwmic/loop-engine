@@ -88,6 +88,11 @@ def unmarked_run(args, journey):
           hooks={'intent-review': eligibility_cases.unmarked}, stop_at='intent-review')
 
 
+def carried_run(args, journey):
+    drive(args, journey, 'carried-after-amendment', keep={'design-review': [('intent-faithful', 'aggregate', 2)]},
+          hooks={'design-review': eligibility_cases.carried}, stop_at='design-review')
+
+
 def marked_run(args, journey):
     drive(args, journey, 'marked-amendment', keep={'intent-review': [('solution-agnostic', 'aggregate', 2)]},
           hooks={'intent-review': eligibility_cases.marked}, stop_at='intent-review')
@@ -117,6 +122,7 @@ def main():
              ('cold-reader-return', cold_reader_run),
              ('review-and-verdict-returns', review_kinds_run),
              ('unmarked-amendment', unmarked_run),
+             ('carried-after-amendment', carried_run),
              ('marked-amendment', marked_run)]
     completed, failed = [], {}
     for name, case in cases:

@@ -8,13 +8,14 @@ mod bounded_process;
 use std::process::Command;
 use std::time::Duration;
 
-const SCENARIOS: [&str; 7] = [
+const SCENARIOS: [&str; 8] = [
     "profile-identity",
     "unbound-amendments",
     "author-implementer-declarations",
     "cold-reader-return",
     "review-and-verdict-returns",
     "unmarked-amendment",
+    "carried-after-amendment",
     "marked-amendment",
 ];
 
