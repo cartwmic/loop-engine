@@ -145,6 +145,11 @@ def trial_solver(target: Target, contexts: dict[str, TrialContext], records: dic
                     guard.fire(reason)
                 record.terminal = execution.terminal
                 scored = await target.score(state, execution, context)
+                # Scoring may have made the final model call (the judge): if it reached a stop, record the stop event.
+                reason = guard.check(role_models, {role: usage.model_dump() for role, usage in sample_role_usage().items()},
+                                     live_spend_usd(context.settings, role_models))
+                if reason:
+                    guard.fire(reason)
                 record.terminal = execution.terminal
                 record.target_metrics = scored.metrics
                 record.outcome = "success" if execution.terminal and scored.success else "failure"

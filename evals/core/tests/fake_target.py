@@ -78,6 +78,8 @@ class FakeTarget:
         metrics = {"judge_model_calls_allowed": context.guard.model_calls_allowed() if context.guard else None,
                    "seen_roles": execution.data, "profile_used": context.settings.profile,
                    "case_version_used": context.case.version}
+        if context.settings.target_options.get("costly_score_call"):
+            await get_model(role="judge").generate("final judge call")  # the last model call, made while scoring
         if "score_text" in context.settings.target_options:
             metrics["scored_field"] = context.settings.target_options["score_text"]
         if context.settings.target_options.get("leak"):

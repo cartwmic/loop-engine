@@ -108,6 +108,18 @@ def allowance(context, own_limit):
     return guard.allowance(own_limit) if guard is not None else own_limit
 
 
+PUBLICATION_HEADROOM_SECONDS = 30  # left for summary preparation and the report after the replay container is removed
+
+
+def cleanup_allowance(context):
+    """Time for the shielded replay-container removal: its own limit, but never the publication reserve."""
+    guard = getattr(context, "guard", None)
+    remaining = None if guard is None else guard.remaining_to_deadline()
+    if remaining is None:
+        return None
+    return min(ReplayContainer.CLEANUP_SECONDS, max(1.0, remaining - PUBLICATION_HEADROOM_SECONDS))
+
+
 def limit_reason(context):
     guard = getattr(context, "guard", None)
     return guard.step_stop_reason() if guard is not None else "campaign_wall_time"
@@ -594,7 +606,7 @@ class SoftwareChangeTarget:
                 "assignment": context.assignment.model_dump(), "role_models": context.combination.role_models(),
                 "evidence": evidence, "driver_stop_kind": stop,
                 "simulated_owner": {"receipt": trial.owner.receipt(), "answers": trial.owner.answers},
-                "harness": harness_versions(), "segments": prior.get("segments", []),
+                "harness": harness_versions(allowance(context, PROBE_SECONDS)), "segments": prior.get("segments", []),
                 "prior_segment_count": len(prior.get("segments", [])),
                 "resumed": bool(prior),
                 "usage_by_role": {role: usage.model_dump() for role, usage in sample_role_usage().items()},
@@ -619,7 +631,8 @@ class SoftwareChangeTarget:
         # Scoring has the time left before the campaign's hard end; a step that outlasts it is abandoned.
         window = allowance(context, None)
         with anyio.move_on_after(window) as scope:
-            async with ReplayContainer(context.settings.target_options.get("image", DEFAULT_IMAGE)) as env:
+            async with ReplayContainer(context.settings.target_options.get("image", DEFAULT_IMAGE),
+                                       cleanup_seconds=cleanup_allowance(context)) as env:
                 delay = context.settings.target_options.get("scripted_scoring_delay_seconds")
                 if delay and getattr(self, "operation", "campaign") != "rescore":
                     await anyio.sleep(delay)  # proof hook: make scoring deliberately slow

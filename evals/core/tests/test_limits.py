@@ -75,3 +75,10 @@ def test_token_budget_stops_but_is_only_an_extra():
     g = guard(campaign_token_budget=100)
     assert g.check({}, {"role-driver": {"input_tokens": 99}}) is None
     assert g.check({}, {"role-driver": {"input_tokens": 60, "output_tokens": 40}}) == "campaign_tokens"
+
+
+def test_harness_version_probes_give_up_when_their_budget_is_spent():
+    from evalcore.runner import harness_versions
+    out = harness_versions(0)
+    assert out["checkout_commit"] == "unknown" and out["checkout_dirty"] is False
+    assert harness_versions(60)["checkout_commit"] != "unknown"

@@ -106,9 +106,21 @@ def test_replay_container_cleanup_is_bounded(monkeypatch, tmp_path):
     shim.write_text("#!/bin/sh\nsleep 600\n")
     shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
-    monkeypatch.setattr(ReplayContainer, "CLEANUP_SECONDS", 1)
-    container = ReplayContainer("image")
+    container = ReplayContainer("image", cleanup_seconds=1)
     container.container = "c"
     begun = time.monotonic()
     anyio.run(container.__aexit__, None, None, None)
     assert time.monotonic() - begun < 10
+
+
+def test_cleanup_allowance_never_spends_the_publication_reserve():
+    from types import SimpleNamespace
+    from scevals.target import cleanup_allowance
+    import time
+    near = SimpleNamespace(guard=SimpleNamespace(remaining_to_deadline=lambda: 35.0))
+    plenty = SimpleNamespace(guard=SimpleNamespace(remaining_to_deadline=lambda: 600.0))
+    spent = SimpleNamespace(guard=SimpleNamespace(remaining_to_deadline=lambda: 0.0))
+    assert cleanup_allowance(near) == 5.0
+    assert cleanup_allowance(plenty) == ReplayContainer.CLEANUP_SECONDS
+    assert cleanup_allowance(spent) == 1.0
+    assert cleanup_allowance(SimpleNamespace(guard=None)) is None

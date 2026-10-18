@@ -60,9 +60,10 @@ async def restore(env, archive):
 
 class ReplayContainer:
     """Small async file/exec surface shared with Inspect sandboxes; no host mounts."""
-    def __init__(self, image):
+    def __init__(self, image, cleanup_seconds=None):
         self.image = image
         self.container = None
+        self.cleanup_seconds = self.CLEANUP_SECONDS if cleanup_seconds is None else cleanup_seconds
 
     async def __aenter__(self):
         result = await anyio.run_process(["docker", "run", "-d", "--platform", "linux/arm64", "--workdir", "/workspace", self.image, "sleep", "infinity"])
@@ -72,7 +73,7 @@ class ReplayContainer:
     CLEANUP_SECONDS = 60  # a stuck removal must not hold the campaign past its cap
 
     async def __aexit__(self, *args):
-        with anyio.CancelScope(shield=True, deadline=anyio.current_time() + self.CLEANUP_SECONDS):
+        with anyio.CancelScope(shield=True, deadline=anyio.current_time() + self.cleanup_seconds):
             await anyio.run_process(["docker", "rm", "-f", self.container], check=False)
 
     async def exec(self, command, *, cwd=None, timeout=120, env=None):

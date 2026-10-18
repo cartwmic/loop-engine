@@ -274,6 +274,17 @@ def test_spend_reached_in_the_trials_last_moments_stops_later_model_calls(campai
     assert (second["outcome"], second["limit_step"]) == ("limit", "not_started")
 
 
+def test_a_final_judge_call_that_reaches_the_dollar_stop_is_recorded(campaign_root):
+    summary = run(campaign_root, models=["fake/a"], simulator_model="fake/a", judge_model="fake/costly", case_count=1, trials_per_case=1,
+                  prices={"fake/a": {"input_per_million": 0, "output_per_million": 0}, "fake/costly": {"input_per_million": 5, "output_per_million": 0}},
+                  guard_poll_seconds=60, campaign_budget_usd=5, dollar_margin_usd=0.5,
+                  target_options={"inject_errors": False, "costly_score_call": True})
+    trial = summary["trials"][0]
+    assert trial["outcome"] == "success"                  # the work finished; only the stop event is added
+    assert [e["reason"] for e in summary["budget"]["stop_events"]] == ["campaign_dollars"]
+    assert summary["budget"]["actual"]["usd"] >= 4.5
+
+
 def test_a_blocked_version_probe_is_cut_off_and_the_command_still_ends_by_the_cap(campaign_root):
     path = settings(campaign_root, models=["fake/a"], case_count=1, trials_per_case=1, campaign_wall_limit_seconds=30,
                     post_trial_reserve_seconds=14, publication_reserve_seconds=10, target_options={"inject_errors": False, "block_versions": True})
