@@ -238,6 +238,13 @@ pub(crate) fn unresolvable_locators(
             .and_then(Value::as_str)
             .ok_or("evidence locator must be a non-empty repository-relative path and selector")?;
         let digest = reference.get("sha256").and_then(Value::as_str);
+        // A malformed line selector (`L3-7`, `Lbogus`) is a syntax defect, never a
+        // resolution defect: it is returned as `Err` so a repair cannot hide it.
+        if let Some((_, selector)) = locator.split_once('#') {
+            if selector.starts_with('L') && !line_selector_syntax_is_valid(selector) {
+                return Err(format!("evidence line selector in `{locator}` is malformed"));
+            }
+        }
         if let Err(error) = resolve_locator(locator, digest, artifact_root, version, context) {
             failures.push((index, locator.to_owned(), error));
         }
@@ -494,6 +501,17 @@ fn nearest_pointer_note(document: &Value, pointer: &str, file: &str) -> String {
         Some(near) => format!("closest existing pointer: `{file}#{near}`"),
         None => "no close existing pointer was found".to_owned(),
     }
+}
+
+/// Syntax only (no source read): `Lstart` or `Lstart-Lend` with positive integers.
+fn line_selector_syntax_is_valid(selector: &str) -> bool {
+    let Some(raw) = selector.strip_prefix('L') else {
+        return false;
+    };
+    let (start, end) = raw.split_once("-L").unwrap_or((raw, raw));
+    [start, end]
+        .iter()
+        .all(|part| part.parse::<usize>().is_ok_and(|line| line > 0))
 }
 
 fn validate_line_selector(selector: &str, bytes: &[u8], locator: &str) -> Result<(), String> {
@@ -1119,6 +1137,15 @@ mod tests {
             (
                 json!({"reason":"x","evidence":[{"locator":"intent.json#/revision"}],"more":1}),
                 "exactly reason and evidence",
+            ),
+            // Malformed line-selector syntax is never a resolution defect.
+            (
+                json!({"reason":"x","evidence":[{"locator":"intent.json#L3-7"}]}),
+                "malformed",
+            ),
+            (
+                json!({"reason":"x","evidence":[{"locator":"intent.json#Lbogus"}]}),
+                "malformed",
             ),
         ] {
             let error = unresolvable_locators(&bad, &root, Some(3), &[]).unwrap_err();
