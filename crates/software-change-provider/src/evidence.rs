@@ -3563,6 +3563,10 @@ impl EvidenceDiagnostic {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            Self::ExcludedByStaleMark { causes } => format!(
+                "judgments for this axis were excluded because a model binding amendment marked their role stale: {}",
+                causes.join("; ")
+            ),
         }
     }
 }
