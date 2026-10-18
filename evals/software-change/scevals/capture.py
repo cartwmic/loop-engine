@@ -63,6 +63,7 @@ class ReplayContainer:
     def __init__(self, image, cleanup_seconds=None):
         self.image = image
         self.container = None
+        # Seconds, or a callable evaluated when the container is removed (so time spent meanwhile is deducted).
         self.cleanup_seconds = self.CLEANUP_SECONDS if cleanup_seconds is None else cleanup_seconds
 
     async def __aenter__(self):
@@ -73,7 +74,10 @@ class ReplayContainer:
     CLEANUP_SECONDS = 60  # a stuck removal must not hold the campaign past its cap
 
     async def __aexit__(self, *args):
-        with anyio.CancelScope(shield=True, deadline=anyio.current_time() + self.cleanup_seconds):
+        seconds = self.cleanup_seconds() if callable(self.cleanup_seconds) else self.cleanup_seconds
+        if seconds is None:
+            seconds = self.CLEANUP_SECONDS
+        with anyio.CancelScope(shield=True, deadline=anyio.current_time() + seconds):
             await anyio.run_process(["docker", "rm", "-f", self.container], check=False)
 
     async def exec(self, command, *, cwd=None, timeout=120, env=None):

@@ -632,7 +632,7 @@ class SoftwareChangeTarget:
         window = allowance(context, None)
         with anyio.move_on_after(window) as scope:
             async with ReplayContainer(context.settings.target_options.get("image", DEFAULT_IMAGE),
-                                       cleanup_seconds=cleanup_allowance(context)) as env:
+                                       cleanup_seconds=lambda: cleanup_allowance(context)) as env:
                 delay = context.settings.target_options.get("scripted_scoring_delay_seconds")
                 if delay and getattr(self, "operation", "campaign") != "rescore":
                     await anyio.sleep(delay)  # proof hook: make scoring deliberately slow

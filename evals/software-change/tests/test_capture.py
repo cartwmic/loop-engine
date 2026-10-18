@@ -124,3 +124,23 @@ def test_cleanup_allowance_never_spends_the_publication_reserve():
     assert cleanup_allowance(plenty) == ReplayContainer.CLEANUP_SECONDS
     assert cleanup_allowance(spent) == 1.0
     assert cleanup_allowance(SimpleNamespace(guard=None)) is None
+
+
+def test_cleanup_deadline_is_computed_when_the_container_is_removed_not_when_it_is_created(monkeypatch, tmp_path):
+    """Time spent in scoring between creation and removal must be deducted from the cleanup allowance."""
+    import stat
+    import time
+    shim = tmp_path / "docker"
+    shim.write_text("#!/bin/sh\nsleep 600\n")
+    shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    calls = []
+    def allowance():
+        calls.append(time.monotonic())
+        return 1.0
+    container = ReplayContainer("image", cleanup_seconds=allowance)
+    container.container = "c"
+    assert calls == []            # not evaluated at construction
+    begun = time.monotonic()
+    anyio.run(container.__aexit__, None, None, None)
+    assert len(calls) == 1 and calls[0] >= begun and time.monotonic() - begun < 10

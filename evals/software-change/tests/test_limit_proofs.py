@@ -179,3 +179,22 @@ def test_slow_scoring_is_abandoned_at_its_allowance_with_the_capture_kept():
     assert (outcome.capture / "workspace.tar").is_file()
     assert outcome.summary["budget"]["cut_off_steps"][0]["step"] == "scoring"
     assert outcome.elapsed < 300 and outcome.summary["budget"]["wall_within_cap"] is True and trial_containers() == []
+
+
+def test_a_stuck_replay_container_removal_cannot_push_publication_past_the_cap(tmp_path):
+    """Scoring runs until the hard end H, then removing the replay container blocks. The shielded removal must be cut at its
+    allowance (time left before D minus headroom), so the report still lands before D."""
+    real = subprocess.run(["which", "docker"], capture_output=True, text=True).stdout.strip()
+    shim = tmp_path / "docker"
+    shim.write_text(f'#!/bin/sh\nif [ "$1" = rm ]; then sleep 600; fi\nexec {real} "$@"\n')
+    shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
+    try:
+        outcome = drive(campaign_wall_limit_seconds=300, post_trial_reserve_seconds=200, publication_reserve_seconds=40,
+                        target_options={"scripted_scoring_delay_seconds": 3000}, extra_env={"PATH": f"{tmp_path}:{os.environ['PATH']}"})
+    finally:  # the shim leaked the replay container; remove it with the real docker
+        leaked = subprocess.run([real, "ps", "-aq", "--filter", f"ancestor={DEFAULT_IMAGE}"], capture_output=True, text=True).stdout.split()
+        if leaked:
+            subprocess.run([real, "rm", "-f", *leaked], capture_output=True)
+    assert outcome.elapsed < 300
+    assert outcome.summary["budget"]["wall_within_cap"] is True
+    assert (outcome.trial["outcome"], outcome.trial["limit_step"]) == ("limit", "scoring")
