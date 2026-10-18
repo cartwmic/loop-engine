@@ -217,7 +217,7 @@ def metadata_case(w):
     w.retain('outside-file-stimulus', {'path': str(outside), 'sha256': sha(outside.read_bytes()),
                                      'bytes': outside.read_text(), 'symlink': str(link), 'target': os.readlink(link)})
     for tag, locator, needle in [('escape', '../outside.txt#L1', 'beneath a source root'),
-                                  ('symlink', 'escaped-link.txt#L1', 'not found beneath'),
+                                  ('symlink', 'escaped-link.txt#L1', 'resolves outside'),
                                   ('missing', 'not-present.json#/x', 'not found beneath'),
                                   ('pointer', 'design.json#/not-present', 'does not resolve')]:
         bad = copy.deepcopy(good); bad['grounds']['evidence'] = [{'locator': locator}]
