@@ -15,6 +15,16 @@ Tier 0 needs the owner's explicit go after reading the previous report.
 The dollar cap is best effort: spend is polled and a campaign can very rarely overshoot by about one model
 call. If it does, the report says so and the cost verdict fails.
 
+## Ceilings
+
+Every tier stays under 20 dollars (API-equivalent) and 1 hour per campaign. Set each campaign's dollar and
+wall-time caps at or below those ceilings; the harness stops the campaign at its own caps.
+
+The one exception is the two Tier 0 full trials (one full Sonnet trial and one full Sol trial, each run as its own
+campaign). The owner removed the 20 dollar / 1 hour ceiling for those two trials only, with caps of 60 dollars and
+4.5 hours, and neither cap was reached. The exception does not carry to any later tier or rerun; each of those needs
+the owner's explicit go and stays under the ceilings above.
+
 ## Build-up
 
 Change one thing per tier, in this order, and stop at the first surprise:
