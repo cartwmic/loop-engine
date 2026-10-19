@@ -19,6 +19,7 @@ this change.
 | Arm descriptor: driver argv, prompt, harness baseline, completion rule, image | `target_options.arm` | Existing preamble, top-level `driver_command` and `image`, existing success rule |
 | Final message, owner word totals, driver-only time | `arm` | Not recorded |
 | Independent grader (`outcome-grade-v1`) | `grade = true` with an arm | No grader call |
+| Visible-test receipt (a harness receipt for the grader, not a success rule) | `visible_test_command` with `grade = true` | Not run; the grader's claim call sees `null` |
 | Driver margin | `driver_margin_seconds` | 300 seconds, the same as before |
 | Workspace snapshots and replay | `snapshot_interval_seconds` | No snapshots |
 | Pi session record | `SC_PI_SESSION_DIR` in the image | Pi runs with `--no-session`; arm trials set it to `/workspace/trial/pi-sessions` (section 9) |
@@ -37,12 +38,14 @@ Set these in the campaign's `[target_options]` table. Other target options are u
 | `arm` | table; absent | nothing | Selects one arm (section 3) and turns on the arm path: rendered prompt, harness baseline commit, the one completion rule, final-message capture, owner word totals and driver-only time. |
 | `driver_margin_seconds` | positive number; 300 | `hard_limit_seconds` for any effect | Seconds kept between the driver's stop and the hard limit, for capture and scoring. The driver budget is `hard_limit_seconds - driver_margin_seconds`, never below 60 seconds. Works with or without an arm. |
 | `snapshot_interval_seconds` | positive number; absent (off) | `idle_limit_seconds` (the progress poll takes the snapshots) | Takes a private workspace snapshot about this often during the driver run (section 7). Works with or without an arm. |
-| `grade` | boolean; `false` | an `arm`, and a judge model from a different provider family than the driver | After scoring, runs the independent grader (section 8) and stores only its verdict fields. |
+| `grade` | boolean; `false` | an `arm`, and a judge model from a different provider family than the driver | After scoring, runs the independent grader (section 8) and stores its verdict fields and the grade detail (section 8). |
+| `visible_test_command` | argv array of nonempty strings; absent (off) | `grade = true`, and so an `arm` | Runs the repository's visible tests once, after the hidden tests, in the restored replay container at `/workspace/public/repo`, with the case test timeout. Exit 0 gives `passed`; any other exit, or a timeout, gives `failed`; exit 126 or 127 (the command cannot run) gives `error`. The status is a harness receipt for the grader's claim call. Only the status is stored, and success does not change. |
 | `block` | table; absent | nothing | Labels a single-trial campaign for `evalctl compare` (section 11). The target records it and does nothing else with it. |
 
 Refused before any trial starts: a margin or snapshot interval that is not a positive number (booleans
-included), a snapshot interval with no idle limit, `grade` that is not a boolean or is set without an arm, and
-`grade` when the judge's provider family is the driver's or cannot be determined.
+included), a snapshot interval with no idle limit, `grade` that is not a boolean or is set without an arm, `grade`
+when the judge's provider family is the driver's or cannot be determined, and a `visible_test_command` that is set
+without `grade = true` or is not a nonempty argv array of nonempty strings.
 
 With an `arm` set, top-level `driver_command` and `image` are refused. Put them inside the arm table.
 
@@ -239,8 +242,8 @@ diff alike. The owner Q&A and workflow artifacts are never inputs.
   it gives `intent_faithful` with a probability.
 - *Claim call.* It runs only when the final message has sentences. It sees numbered sentences and trusted receipts:
   the hidden-test status per requirement. Each claim is `supported`, `contradicted` or `not_checkable`. An honest
-  statement about checks the grader cannot see is `not_checkable`. The visible-test receipt is always `null` in a
-  campaign, because the target runs no visible-test receipt yet.
+  statement about checks the grader cannot see is `not_checkable`. The visible-test receipt is `null` unless
+  `visible_test_command` is set (section 2). When it is set, its status is `passed`, `failed` or `error`.
 
 **Evidence pointers.** The host checks each pointer. The quoted text must appear in the cited lines of the final
 file, or of the diff, after whitespace is normalised. A pointer may be `null` only with a stated reason.
@@ -260,11 +263,16 @@ in the `leakage` field of the grade result.
 family cannot be determined. There is no override. The grader's calls are judge-role usage, so they are evaluation
 overhead, apart from workflow cost.
 
-**What a campaign stores.** Only two target metrics, from the grade result: `outcome_grade`, with `intent_faithful`
-(`true`, `false` or `null`) and `unstable`, and `outcome_grade_status`. The status is one of `graded`,
-`refused-same-family`, `refused-family-unverified`, `grader_error` or `limit`. A grader error or a budget stop
-never fails the trial. Per-requirement verdicts, probabilities, pointer tallies, claim counts and leakage counts
-are returned by `grade()` and are not written to the campaign summary.
+**What a campaign stores.** Three target metrics from the grade result: `outcome_grade`, with `intent_faithful`
+(`true`, `false` or `null`) and `unstable`; `outcome_grade_status`; and `outcome_grade_detail`. The status is one of
+`graded`, `refused-same-family`, `refused-family-unverified`, `grader_error` or `limit`. A grader error or a budget
+stop never fails the trial.
+
+`outcome_grade_detail` is the `grade()` export without its `overhead` entry, because usage is reported as
+evaluation overhead through the judge role. It holds per-requirement verdicts and probabilities, the unrequested
+change flags, pointer tallies, claim counts, leakage counts and the status. It holds no prose, diff text or quote
+text. A grade that is not `graded` stores the same keys with nulls and empty requirements. The detail sits under
+each trial's `target_metrics` in `summary.json` and in `report.md`.
 
 **Calibration: `evalctl grader-calibrate`.** This runs the predeclared controls and, optionally, the owner-label
 acceptance rule, and writes one receipt.
@@ -313,8 +321,9 @@ fidelity calls, and two claim calls when it has a final message.
 Those calls go to a real grader model when run, so they need owner approval. The spec estimates the controls at
 under $1.
 
-Nothing reads the receipt's mode yet. `compare` and the campaign reports do not show it. Until that is wired, the
-owner must apply a `diagnostic-only` result to intent columns by hand, as the spec says.
+`evalctl compare --calibration FILE` reads the receipt's mode and labels every intent verdict `diagnostic-only` unless
+the mode is `normal` (section 11). Campaign reports do not read the receipt. Their `outcome_grade` values are raw, so
+the owner must still apply a `diagnostic-only` result to them by hand, as the spec says.
 
 ## 9. Phase attribution and Pi session records
 
@@ -383,7 +392,7 @@ Flags are refused. Use `arm-native PROMPT` or `arm-native -- PROMPT`, as with `s
 ## 11. `evalctl compare`
 
 ```sh
-uv run --project evals evalctl compare SUMMARY [SUMMARY ...] --out DIR
+uv run --project evals evalctl compare SUMMARY [SUMMARY ...] --out DIR [--calibration RECEIPT]
 ```
 
 It reads each campaign's `summary.json` (schema version 1) and never writes to it. It writes `summary.json` and
@@ -409,9 +418,24 @@ Field sources:
 - Owner words: `target_metrics.owner_interaction`, numbers only. Older summaries show `unavailable`.
 - Intent: `target_metrics.outcome_grade`. An unstable verdict shows as `unstable`. A campaign without a grader
   verdict shows `unavailable`.
+- Calibration: the `mode` of `--calibration`. Every intent verdict is labelled `(diagnostic-only)` unless the mode is
+  `normal`, as in `faithful (diagnostic-only)`. The report states the receipt once, above the tables: `normal`, the
+  `diagnostic-only` reasons, or `not supplied`.
+
+`--calibration` takes a `grader-calibrate` receipt. A missing or unreadable receipt, or one whose mode is neither
+`normal` nor `diagnostic-only`, is diagnostic-only, never an error and never normal. With no receipt the mode is
+`not supplied`, which is also diagnostic-only. `summary.json` records the same `calibration` state.
 
 Missing usage, price or metric shows as `unavailable`, never zero. Workflow cost is the driver, implementer and
 reviewer roles. Overhead is the simulator and judge roles, shown apart.
+
+**Paired deltas vs native.** A block with a native trial shows, after its table, a table titled "Paired deltas vs
+native (arm minus native)". Each non-native attempt appears there as its arm minus the block's native reference, the
+original (lowest) native attempt. The four deltas are workflow cost (USD), workflow tokens, trial wall seconds and
+driver-only seconds. A delta is `unavailable` when either side is unavailable, and null in `summary.json`, never
+zero. Each block's `paired_deltas` in `summary.json` holds the same values. A block without a native trial shows no
+deltas and says so. These are descriptive differences on one block. They make no significance claim. Three
+repetitions are a screen (spec section 7).
 
 Run on the two shipped Tier 0 full summaries, writing to a directory outside the checkout:
 
@@ -553,7 +577,7 @@ is right.
 
 | Command | What it does | Runs a trial or a model? |
 |---|---|---|
-| `evalctl compare SUMMARY... --out DIR` | Paired report over single-trial summaries | No |
+| `evalctl compare SUMMARY... --out DIR [--calibration RECEIPT]` | Paired report over single-trial summaries | No |
 | `evalctl grader-calibrate CASE --grader-model M --driver-model M --case-check-receipt F --near-miss-workspace D --near-miss-requirement R --output F [--owner-labels F]` | Grader controls and owner-label receipt | Calls the grader model when run for real |
 | `evalctl stage-ledger init LEDGER --stage-dollars D --stage-hours H` | Creates a stage ledger | No |
 | `evalctl stage-ledger admit LEDGER --command TEXT --class T1\|T2\|T3 [--reason R]` | Admits a command and prints its handed cap | No |
@@ -574,13 +598,15 @@ bridge. There is no separate host command for them.
   Pi print mode is unverified. The arms image pins Pi 1.2.0, and the frozen pilot used 1.0.0.
 - **Grader quality is unmeasured.** The calibration result depends on owner labels. This repository has none. A
   `normal` receipt from scripted data says nothing about the real grader.
-- **Receipt mode is not enforced.** Reports do not yet apply a `diagnostic-only` mode to intent columns.
+- **Receipt mode is applied by `compare` only.** Campaign reports show raw `outcome_grade` values. Only
+  `evalctl compare --calibration` labels them as diagnostic-only.
 - **Session records are in the raw capture only.** Nothing extracts them from `workspace.tar` for you yet; extract
   `trial/pi-sessions` and point `scevals.phases` at it.
 - **Trajectories are not reported.** Replay needs a Python call, and campaign reports do not show the trajectory.
 - **Workflow adherence is null for every arm.** The `loop-engine` arm's `needed_role_aliases` is the nearest
   diagnostic.
-- **No visible-test receipt.** The claim call sees hidden-test statuses only.
+- **Visible-test receipt is off by default.** The claim call sees hidden-test statuses, and a visible-test status only
+  when `visible_test_command` is set. Its status is not stored as its own metric; only the grader sees it.
 - **Image is not validated against the arm.** An arm without its launcher in the image fails at launch and is scored
   as an ordinary failure. Check the image before the run.
 - **Owner words are proxies.** Counts and words are simulator-side proxies for human attention, not minutes.
@@ -590,13 +616,13 @@ bridge. There is no separate host command for them.
 
 - `tests/test_arms_descriptor.py`: arm validation, prompt rendering, the golden default preamble.
 - `tests/test_scoring_common.py`: the completion and success rule.
-- `tests/test_target_seams.py`: option-gated target behaviour, the margin, the baseline, snapshots, the grade option
-  and the block label.
+- `tests/test_target_seams.py`: option-gated target behaviour, the margin, the baseline, snapshots, the grade option,
+  the grade detail, the visible-test receipt and the block label.
 - `tests/test_grader.py`: grader calls, pointers, unstable verdicts, redaction, the family refusal, the controls and
   the owner-label rule.
 - `tests/test_snapshots.py`: snapshot gating, index and replay.
 - `tests/test_pi_session_and_phases.py`: the session hook, the golden unset command line and phase attribution.
-- `tests/test_compare.py`: the paired report.
+- `tests/test_compare.py`: the paired report, the calibration receipt labels and the paired deltas.
 - `tests/test_ledger.py`: admission, refusal, handed cap and overshoot.
 - `tests/test_findings.py`: the finding schema.
 - `tests/test_arm_commands.py`: each subcommand's help and a real run over fixtures.

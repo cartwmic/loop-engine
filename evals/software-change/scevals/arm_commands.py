@@ -59,7 +59,7 @@ def grader_calibrate(args) -> int:
 
 def compare_summaries(args) -> int:
     try:
-        destination = compare(args.summaries, args.out)
+        destination = compare(args.summaries, args.out, calibration=args.calibration)
     except ValueError as error:
         return _refused(error)
     print(f"Report written: {destination}")
@@ -119,6 +119,7 @@ def register_subcommands(subparsers: argparse._SubParsersAction):
     parser = subparsers.add_parser("compare", help="paired report over single-trial campaign summaries, written to a new timestamped directory")
     parser.add_argument("summaries", type=Path, nargs="+", help="summary.json files of single-trial campaigns; never modified")
     parser.add_argument("--out", type=Path, required=True, help="directory that receives the new report pair")
+    parser.add_argument("--calibration", type=Path, help="grader-calibrate receipt; intent verdicts are diagnostic-only unless its mode is normal")
     parser.set_defaults(handler=compare_summaries)
 
     ledger_parser = subparsers.add_parser(

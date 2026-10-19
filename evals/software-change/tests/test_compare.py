@@ -57,8 +57,18 @@ def campaign(root: Path, name: str, trial: dict, *, block: dict | None = None, t
     return path
 
 
-def run(tmp_path: Path, paths: list[Path]) -> tuple[Path, dict, str]:
-    destination = compare(paths, tmp_path / "out")
+NORMAL_RECEIPT = {"schema_version": 1, "mode": "normal", "reasons": []}
+DIAGNOSTIC_RECEIPT = {"schema_version": 1, "mode": "diagnostic-only", "reasons": ["owner labels not supplied"]}
+
+
+def receipt_file(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "grader-receipt.json"
+    path.write_text(text)
+    return path
+
+
+def run(tmp_path: Path, paths: list[Path], calibration: Path | None = None) -> tuple[Path, dict, str]:
+    destination = compare(paths, tmp_path / "out", calibration=calibration)
     return destination, json.loads((destination / "summary.json").read_text()), (destination / "report.md").read_text()
 
 
@@ -166,8 +176,102 @@ def test_summaries_without_the_new_metrics_render_them_unavailable(tmp_path):
     ({"intent_faithful": None, "unstable": False}, None),
 ])
 def test_intent_verdict_shows_unstable_apart_and_missing_as_unavailable(tmp_path, grade, expected):
-    _, report, _ = run(tmp_path, [campaign(tmp_path, "grade", make_trial(metrics=arm_metrics(grade=grade)), block=label())])
+    campaign_path = campaign(tmp_path, "grade", make_trial(metrics=arm_metrics(grade=grade)), block=label())
+    _, report, _ = run(tmp_path, [campaign_path], calibration=receipt_file(tmp_path, json.dumps(NORMAL_RECEIPT)))
     assert row_by_arm(report, "native")["intent"] == expected
+
+
+@pytest.mark.parametrize(("receipt_for", "intent", "mode", "statement"), [
+    pytest.param(lambda tmp: receipt_file(tmp, json.dumps(NORMAL_RECEIPT)), "faithful", "normal",
+                 "Calibration receipt: normal.", id="normal"),
+    pytest.param(lambda tmp: receipt_file(tmp, json.dumps(DIAGNOSTIC_RECEIPT)), "faithful (diagnostic-only)", "diagnostic-only",
+                 "Calibration receipt: diagnostic-only (reason: owner labels not supplied).", id="diagnostic-only"),
+    pytest.param(lambda tmp: None, "faithful (diagnostic-only)", "not supplied",
+                 "Calibration receipt: not supplied.", id="not-supplied"),
+    pytest.param(lambda tmp: receipt_file(tmp, "{not json"), "faithful (diagnostic-only)", "diagnostic-only",
+                 "Calibration receipt: diagnostic-only (reason: receipt unreadable).", id="unreadable"),
+    pytest.param(lambda tmp: tmp / "absent.json", "faithful (diagnostic-only)", "diagnostic-only",
+                 "Calibration receipt: diagnostic-only (reason: receipt unreadable).", id="missing"),
+])
+def test_calibration_receipt_decides_the_intent_label_and_is_stated_once(tmp_path, receipt_for, intent, mode, statement):
+    grade = {"intent_faithful": True, "unstable": False}
+    campaign_path = campaign(tmp_path, "grade", make_trial(metrics=arm_metrics(grade=grade)), block=label())
+    _, report, markdown = run(tmp_path, [campaign_path], calibration=receipt_for(tmp_path))
+    assert row_by_arm(report, "native")["intent"] == intent
+    assert report["calibration"]["mode"] == mode
+    assert statement in markdown and markdown.count("Calibration receipt:") == 1
+
+
+def test_a_receipt_that_is_not_normal_or_diagnostic_is_unreadable_not_an_error(tmp_path):
+    path = receipt_file(tmp_path, json.dumps({"schema_version": 1, "mode": "maybe"}))
+    _, report, _ = run(tmp_path, [campaign(tmp_path, "plain", make_trial(), block=label())], calibration=path)
+    assert report["calibration"] == {"mode": "diagnostic-only", "reasons": ["receipt unreadable"]}
+
+
+def priced_trial(*, usd: dict, tokens: dict, wall: float, driver: float | None = 300.0) -> dict:
+    """A labelled trial with exact workflow usage: priced dollars and total tokens per role, and both clocks."""
+    trial = make_trial(wall_seconds=wall, priced_usd_by_role=dict(usd),
+                       usage_by_role={role: {"total_tokens": count} for role, count in tokens.items()},
+                       metrics=arm_metrics(driver_seconds=300.0 if driver is None else driver))
+    if driver is None:
+        del trial["target_metrics"]["driver_elapsed_seconds"]
+    return trial
+
+
+def native_and_superpowers(tmp_path: Path, native: dict, superpowers: dict) -> list[Path]:
+    return [campaign(tmp_path, "native", native, block=label(arm="native", order=1)),
+            campaign(tmp_path, "super", superpowers, block=label(arm="superpowers", order=2))]
+
+
+def test_paired_deltas_are_arm_minus_native_for_the_block(tmp_path):
+    native = priced_trial(usd={"role-driver": 0.5, "role-implementer": 0.25, "role-reviewer": 0.25},
+                          tokens={"role-driver": 1000, "role-implementer": 100, "role-reviewer": 50}, wall=1000.0)
+    superpowers = priced_trial(usd={"role-driver": 1.0, "role-implementer": 0.5, "role-reviewer": 0.25},
+                               tokens={"role-driver": 1500, "role-implementer": 100, "role-reviewer": 0}, wall=1200.0,
+                               driver=330.0)
+    _, report, markdown = run(tmp_path, native_and_superpowers(tmp_path, native, superpowers))
+    (block,) = report["blocks"]
+    assert block["paired_deltas"] == {"reference": {"arm": "native", "attempt": 1}, "deltas": [
+        {"arm": "superpowers", "attempt": 1, "workflow_usd": 0.75, "workflow_tokens": 450,
+         "trial_wall_seconds": 200.0, "driver_seconds": 30.0}]}
+    assert "### Paired deltas vs native (arm minus native)" in markdown
+    assert "| superpowers | 1 | +$0.7500 | +450 | +200.0 | +30.0 |" in markdown
+
+
+@pytest.mark.parametrize(("side", "damage", "row"), [
+    pytest.param("native", "price", "| superpowers | 1 | unavailable | +450 | +200.0 | +30.0 |", id="native-price-missing"),
+    pytest.param("superpowers", "price", "| superpowers | 1 | unavailable | +450 | +200.0 | +30.0 |",
+                 id="arm-price-missing"),
+    pytest.param("superpowers", "driver", "| superpowers | 1 | +$0.7500 | +450 | +200.0 | unavailable |",
+                 id="arm-driver-time-missing"),
+])
+def test_a_missing_price_or_clock_makes_its_delta_unavailable_never_zero(tmp_path, side, damage, row):
+    trials = {"native": priced_trial(usd={"role-driver": 0.5, "role-implementer": 0.25, "role-reviewer": 0.25},
+                                    tokens={"role-driver": 1000, "role-implementer": 100, "role-reviewer": 50}, wall=1000.0),
+              "superpowers": priced_trial(usd={"role-driver": 1.0, "role-implementer": 0.5, "role-reviewer": 0.25},
+                                          tokens={"role-driver": 1500, "role-implementer": 100, "role-reviewer": 0},
+                                          wall=1200.0, driver=330.0)}
+    if damage == "price":
+        del trials[side]["priced_usd_by_role"]["role-reviewer"]
+    else:
+        del trials[side]["target_metrics"]["driver_elapsed_seconds"]
+    _, report, markdown = run(tmp_path, native_and_superpowers(tmp_path, trials["native"], trials["superpowers"]))
+    (block,) = report["blocks"]
+    (delta,) = block["paired_deltas"]["deltas"]
+    assert delta["workflow_usd"] == (None if damage == "price" else 0.75)
+    assert delta["driver_seconds"] == (None if damage == "driver" else 30.0)
+    assert delta["workflow_tokens"] == 450 and delta["trial_wall_seconds"] == 200.0
+    assert row in markdown
+
+
+def test_a_block_without_a_native_trial_shows_no_deltas(tmp_path):
+    paths = [campaign(tmp_path, "super", make_trial(metrics=arm_metrics()), block=label(arm="superpowers", order=1)),
+             campaign(tmp_path, "open", make_trial(metrics=arm_metrics()), block=label(arm="openspec", order=2))]
+    _, report, markdown = run(tmp_path, paths)
+    (block,) = report["blocks"]
+    assert block["paired_deltas"] == {"reference": None, "deltas": []}
+    assert "No native trial in this block, so no paired deltas." in markdown
+    assert "### Paired deltas" not in markdown
 
 
 def test_inputs_are_never_modified_and_each_run_writes_a_new_report_pair(tmp_path):

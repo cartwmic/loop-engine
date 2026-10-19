@@ -148,6 +148,23 @@ def test_compare_reads_the_shipped_tier0_summaries_and_leaves_them_unchanged(tmp
     assert {name: sha256(path) for name, path in TIER0.items()} == before
 
 
+@pytest.mark.parametrize(("receipt_text", "reasons"), [
+    pytest.param(json.dumps({"schema_version": 1, "mode": "diagnostic-only", "reasons": ["owner labels not supplied"]}),
+                 ["owner labels not supplied"], id="diagnostic-only-receipt"),
+    pytest.param("{not json", ["receipt unreadable"], id="unreadable-receipt"),
+])
+def test_compare_takes_a_calibration_receipt_and_states_it_in_the_report(tmp_path, receipt_text, reasons):
+    receipt = tmp_path / "grader-receipt.json"
+    receipt.write_text(receipt_text)
+    out = tmp_path / "reports"
+    result = evalctl("compare", *TIER0.values(), "--out", out, "--calibration", receipt)
+    assert result.returncode == 0, result.stderr
+    (destination,) = out.iterdir()
+    summary = json.loads((destination / "summary.json").read_text())
+    assert summary["calibration"] == {"mode": "diagnostic-only", "reasons": reasons}
+    assert f"Calibration receipt: diagnostic-only (reason: {'; '.join(reasons)})." in (destination / "report.md").read_text()
+
+
 def test_grader_calibrate_writes_the_example_controls_receipt_through_evalctl(tmp_path, capsys):
     assert evalctl_main(calibration_args(tmp_path)) == 0
     receipt = json.loads((tmp_path / "calibration.json").read_text())

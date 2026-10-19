@@ -27,7 +27,7 @@ from .cases import RUNTIME, load_case
 from .calibration import calibration_for_report
 from .judge import JUDGE_CONTRACT, judge_intent
 from .arms import is_workflow_owned, load_arm, render_prompt
-from .grader import grade, independence_refusal, provider_family
+from .grader import GRADER_CONTRACT, grade, independence_refusal, provider_family
 from .scoring_common import completion, hidden_tests_passed, intent_is_valid, score_common
 from .snapshots import snapshot_step
 
@@ -253,6 +253,42 @@ def outcome_grade_fields(result):
     return {"intent_faithful": result["intent"]["counted_faithful"], "unstable": result["intent"]["verdict"] == "unstable"}
 
 
+def ungraded_detail(status):
+    """The grade detail shape with nulls and empty objects, for a grade that was refused, errored or stopped."""
+    return {"contract": GRADER_CONTRACT, "status": status, "samples": None, "grader_family": None, "driver_family": None,
+            "intent": {"verdict": None, "probability": None, "counted_faithful": None}, "requirements": {},
+            "unrequested_changes": {"count": None, "material_count": None},
+            "pointers": {"resolved": None, "unresolved": None, "null_with_reason": None},
+            "claims": {"call_made": None, "checked": None, "supported": None, "contradicted": None,
+                       "not_checkable": None, "unstable": None},
+            "leakage": {"redacted_terms": None, "residual_terms": None}}
+
+
+def outcome_grade_detail(result):
+    """The grade() export without its overhead entry: verdicts and counts only, as the export already is.
+
+    Usage is reported as evaluation overhead through the judge role, so it is not repeated here.
+    """
+    if result["status"] != "graded":
+        return ungraded_detail(result["status"])
+    return {key: value for key, value in result.items() if key != "overhead"}
+
+
+async def run_visible_tests(trial, command):
+    """Harness receipt for the grader: the repository's visible test command, run once after the hidden tests.
+
+    "passed" on exit 0, "failed" on any other exit or a timeout, "error" when the command cannot run (exit 126 or
+    127). Only this status leaves the function; the command's output is never stored.
+    """
+    try:
+        result = await trial.env.exec(list(command), cwd="/workspace/public/repo", timeout=trial.case.test_timeout_seconds)
+    except TimeoutError:
+        return "failed"
+    if result.success:
+        return "passed"
+    return "error" if result.returncode in (126, 127) else "failed"
+
+
 def owner_interaction(answers):
     """Sanitized owner-interaction totals: word counts only, never the text of a question or an answer."""
     return {"question_words": sum(len(a["question"].split()) for a in answers),
@@ -425,6 +461,12 @@ class SoftwareChangeTarget:
         grade_on = options.get("grade", False)
         if type(grade_on) is not bool or (grade_on and load_arm(options) is None):
             raise ValueError("grade must be true or false, and needs an arm")
+        if "visible_test_command" in options:
+            visible_command = options["visible_test_command"]
+            if (not grade_on or not isinstance(visible_command, list) or not visible_command
+                    or not all(isinstance(s, str) and s for s in visible_command)):
+                raise ValueError("visible_test_command needs grade = true (and an arm), and must be a nonempty argv array "
+                                 "of strings")
         refusal = (independence_refusal(provider_family(context.settings.judge_model),
                                         provider_family(context.combination.driver)) if grade_on else None)
         if refusal:
@@ -903,10 +945,13 @@ class SoftwareChangeTarget:
             final_path = Path(archive).with_name(FINAL_MESSAGE)
             if not final_path.is_file():
                 raise InfrastructureError("arm capture has no final message to grade")
-            status, verdict = await self.grade_outcome(trial, context, arm, delivered=delivered, tests=tests,
-                                                       final_message=final_path.read_text())
+            visible_command = context.settings.target_options.get("visible_test_command")
+            visible_tests = None if visible_command is None else await run_visible_tests(trial, visible_command)
+            status, verdict, detail = await self.grade_outcome(trial, context, arm, delivered=delivered, tests=tests,
+                                                               visible_tests=visible_tests, final_message=final_path.read_text())
             metrics["outcome_grade"] = verdict
             metrics["outcome_grade_status"] = status
+            metrics["outcome_grade_detail"] = detail
         return TrialScore(success, metrics)
 
     async def engine_diagnostics(self, trial, context, snapshot, history, artifacts, delivered, tests, success):
@@ -924,8 +969,11 @@ class SoftwareChangeTarget:
                 "profile_config_version": (snapshot.get("initial_input") or {}).get("config_version"),
                 "intent_judge": await self.judge(trial, context, intent, intent_valid)}
 
-    async def grade_outcome(self, trial, context, arm, *, delivered, tests, final_message):
-        """Independent grade through the campaign judge role. Like the judge, a grader failure or budget stop never fails the trial."""
+    async def grade_outcome(self, trial, context, arm, *, delivered, tests, visible_tests, final_message):
+        """Independent grade through the campaign judge role: (status, verdict fields, detail).
+
+        Like the judge, a grader failure or budget stop never fails the trial.
+        """
         skip = self.judge_skip_reason(trial, context)
         if skip is None:
             try:
@@ -933,17 +981,17 @@ class SoftwareChangeTarget:
                     result = await grade(brief=trial.case.brief.read_text(), requirement_ids=trial.case.requirement_ids,
                                          baseline=repository_files(trial.case), final=delivered, final_message=final_message,
                                          hidden_tests=requirement_statuses(trial.case, tests),
-                                         visible_tests=None,  # the harness runs no visible-test receipt yet
+                                         visible_tests=visible_tests,
                                          arm=arm, driver_model=context.combination.driver)
                 if not scope.cancelled_caught:
-                    return result["status"], outcome_grade_fields(result)
+                    return result["status"], outcome_grade_fields(result), outcome_grade_detail(result)
                 skip = limit_reason(context)
             except ModelError:
-                return "grader_error", {"intent_faithful": None, "unstable": False}
+                return "grader_error", {"intent_faithful": None, "unstable": False}, ungraded_detail("grader_error")
         guard = getattr(context, "guard", None)
         if guard is not None:
             guard.note_cut_off("judge", skip, context.assignment.sample_id)
-        return "limit", {"intent_faithful": None, "unstable": False}
+        return "limit", {"intent_faithful": None, "unstable": False}, ungraded_detail("limit")
 
     def judge_skip_reason(self, trial, context):
         """Why no judge model call may be made now: any campaign stop, a stopped trial, or a closed post-trial window."""

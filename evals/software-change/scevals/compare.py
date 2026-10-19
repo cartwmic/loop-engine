@@ -1,11 +1,18 @@
 """Paired comparison of single-trial campaign summaries (G7).
 
-`compare(paths, out)` reads each summary.json and never writes to it. A labelled summary
+`compare(paths, out, calibration=None)` reads each summary.json and never writes to it. A labelled summary
 (settings.target_options.block, keys BLOCK_KEYS, optional attempt_reason) holds one trial that
 belongs to the block named by its task and repetition, under the arm, realised order and attempt
 the label records. An unlabelled summary, such as Tier 0, is shown under its case and combination.
 The report pair (summary.json and report.md) is written to a new timestamped directory under `out`.
 A missing usage, price or metric is "unavailable", never zero.
+
+The calibration receipt (grader-calibrate) decides how intent verdicts are shown. Only a receipt whose mode is
+"normal" shows them as the grader gave them; otherwise each is labelled "diagnostic-only". A missing or unreadable
+receipt is diagnostic-only, never an error.
+
+Each block with a native trial also shows paired deltas: each non-native attempt minus the native reference (the
+original native attempt). They are descriptive differences, not significance tests.
 
 Target metrics read here, written by the software-change target when an arm is set:
   target_metrics.driver_elapsed_seconds   driver-only elapsed seconds (monotonic clock at the driver boundary)
@@ -26,6 +33,12 @@ BLOCK_KEYS = ("task", "repetition", "arm", "order", "attempt")
 DRIVER_SECONDS_KEY = "driver_elapsed_seconds"
 OWNER_INTERACTION_KEY = "owner_interaction"
 OUTCOME_GRADE_KEY = "outcome_grade"
+NATIVE_ARM = "native"
+CALIBRATION_NORMAL = "normal"
+CALIBRATION_DIAGNOSTIC = "diagnostic-only"
+CALIBRATION_NOT_SUPPLIED = "not supplied"
+UNREADABLE_RECEIPT = "receipt unreadable"
+DELTA_FIELDS = ("workflow_usd", "workflow_tokens", "trial_wall_seconds", "driver_seconds")
 
 NOTES = (
     "Dollar figures are estimated from each campaign's recorded price table. \"unavailable\" means the value "
@@ -36,8 +49,10 @@ NOTES = (
     "driver, capture and scoring) and is shown beside it, not instead of it.",
     "Limit, infrastructure, resumed and rerun trials stay listed. A rerun is a separate attempt beside the "
     "original and never replaces it.",
-    "Intent is the independent grader's verdict; an unstable verdict counts as not faithful. Campaigns without "
-    "a grader verdict show unavailable.",
+    "Intent is the independent grader's verdict; an unstable verdict counts as not faithful. Intent is labelled "
+    "diagnostic-only unless the calibration receipt is normal. Campaigns without a grader verdict show unavailable.",
+    "Paired deltas are each non-native attempt minus the block's native trial (arm minus native). A delta is "
+    "unavailable when either side is unavailable, never zero. Three repetitions make no significance claim.",
 )
 
 
@@ -118,19 +133,42 @@ def _hidden_tests(value) -> dict | None:
     return {"passed": value["passed"], "passed_tests": passed_tests, "total_tests": total_tests}
 
 
-def _intent(grade) -> str | None:
+def _intent(grade, calibrated: bool) -> str | None:
+    """The grader's verdict; labelled diagnostic-only unless the calibration receipt is normal. No verdict is unavailable."""
     if not isinstance(grade, dict):
         return None
     if grade.get("unstable") is True:
-        return "unstable"
-    if grade.get("intent_faithful") is True:
-        return "faithful"
-    if grade.get("intent_faithful") is False:
-        return "not faithful"
-    return None
+        verdict = "unstable"
+    elif grade.get("intent_faithful") is True:
+        verdict = "faithful"
+    elif grade.get("intent_faithful") is False:
+        verdict = "not faithful"
+    else:
+        return None
+    return verdict if calibrated else f"{verdict} ({CALIBRATION_DIAGNOSTIC})"
 
 
-def trial_row(summary: dict, trial: dict, path: Path, label: dict | None) -> dict:
+def read_calibration(path: Path | str | None) -> dict:
+    """The calibration state the report states: mode normal, diagnostic-only or not supplied, with reasons.
+
+    A missing or unreadable receipt, or one whose mode is neither normal nor diagnostic-only, is diagnostic-only.
+    """
+    if path is None:
+        return {"mode": CALIBRATION_NOT_SUPPLIED, "reasons": []}
+    try:
+        receipt = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return {"mode": CALIBRATION_DIAGNOSTIC, "reasons": [UNREADABLE_RECEIPT]}
+    mode = receipt.get("mode") if isinstance(receipt, dict) else None
+    if mode == CALIBRATION_NORMAL:
+        return {"mode": mode, "reasons": []}
+    if mode == CALIBRATION_DIAGNOSTIC:
+        reasons = receipt.get("reasons")
+        return {"mode": mode, "reasons": [r for r in reasons if isinstance(r, str)] if isinstance(reasons, list) else []}
+    return {"mode": CALIBRATION_DIAGNOSTIC, "reasons": [UNREADABLE_RECEIPT]}
+
+
+def trial_row(summary: dict, trial: dict, path: Path, label: dict | None, calibrated: bool) -> dict:
     metrics = trial.get("target_metrics") or {}
     if label is None:
         identity = {"task": trial["case_id"], "repetition": trial["trial"], "arm": trial["combination_id"],
@@ -157,7 +195,7 @@ def trial_row(summary: dict, trial: dict, path: Path, label: dict | None) -> dic
         "hidden_tests": _hidden_tests(metrics.get("hidden_test_outcome")),
         "delivery": _ratio(metrics.get("delivery_recall")),
         "elicitation": _ratio(metrics.get("elicitation_recall")),
-        "intent": _intent(metrics.get(OUTCOME_GRADE_KEY)),
+        "intent": _intent(metrics.get(OUTCOME_GRADE_KEY), calibrated),
         "workflow_usd": _usd(trial, WORKFLOW_ROLES),
         "workflow_tokens": _tokens(trial, WORKFLOW_ROLES),
         "overhead_usd": _usd(trial, OVERHEAD_ROLES),
@@ -188,8 +226,29 @@ def group_blocks(rows: list[dict]) -> list[dict]:
             entry = {"order": row["order"], "arm": row["arm"]}
             if entry not in realised:
                 realised.append(entry)
-        result.append({"task": task, "repetition": repetition, "realised_order": realised, "attempts": members})
+        result.append({"task": task, "repetition": repetition, "realised_order": realised, "attempts": members,
+                       "paired_deltas": paired_deltas(members)})
     return result
+
+
+def _difference(value, reference):
+    """arm minus native; unavailable (None) when either side is unavailable, never zero."""
+    return None if value is None or reference is None else value - reference
+
+
+def paired_deltas(members: list[dict]) -> dict:
+    """Each non-native attempt minus the block's native reference, the original (lowest) native attempt.
+
+    A block without a native trial has no reference and no deltas. Values are null where unavailable.
+    """
+    natives = [row for row in members if row["arm"] == NATIVE_ARM]
+    if not natives:
+        return {"reference": None, "deltas": []}
+    reference = min(natives, key=lambda row: row["attempt"])
+    deltas = [{"arm": row["arm"], "attempt": row["attempt"]} |
+              {field: _difference(row[field], reference[field]) for field in DELTA_FIELDS}
+              for row in members if row["arm"] != NATIVE_ARM]
+    return {"reference": {"arm": NATIVE_ARM, "attempt": reference["attempt"]}, "deltas": deltas}
 
 
 def _cell(text: str) -> str:
@@ -231,10 +290,47 @@ def _notes(row: dict) -> str:
     return "; ".join(notes)
 
 
+def _signed_usd(value: float) -> str:
+    return f"{'-' if value < 0 else '+'}${abs(value):.4f}"
+
+
+def calibration_statement(calibration: dict) -> str:
+    """One sentence on how intent verdicts are to be read: the receipt's mode, with its reasons when diagnostic-only."""
+    if calibration["mode"] == CALIBRATION_NORMAL:
+        return "Calibration receipt: normal. Intent verdicts are shown as the independent grader gave them."
+    if calibration["mode"] == CALIBRATION_NOT_SUPPLIED:
+        return ("Calibration receipt: not supplied. Every intent verdict is diagnostic-only and is excluded from "
+                "decisions.")
+    reasons = "; ".join(calibration["reasons"]) or "no reason recorded"
+    return (f"Calibration receipt: diagnostic-only (reason: {reasons}). Every intent verdict is diagnostic-only and is "
+            "excluded from decisions.")
+
+
+def delta_lines(block: dict) -> list[str]:
+    """The paired-delta table of one block, or a line saying why it has none."""
+    deltas = block["paired_deltas"]
+    if deltas["reference"] is None:
+        return ["No native trial in this block, so no paired deltas.", ""]
+    lines = ["### Paired deltas vs native (arm minus native)", "",
+             f"Native reference: attempt {deltas['reference']['attempt']}. A delta is unavailable where either side "
+             "is unavailable.", ""]
+    if not deltas["deltas"]:
+        return lines + ["No non-native arm trials in this block.", ""]
+    lines += ["| Arm | Attempt | Workflow cost | Workflow tokens | Trial wall s | Driver wall s |", "|---|---|---|---|---|---|"]
+    for delta in deltas["deltas"]:
+        cells = [delta["arm"], str(delta["attempt"]),
+                 _show(delta["workflow_usd"], _signed_usd),
+                 _show(delta["workflow_tokens"], lambda x: f"{x:+,}"),
+                 _show(delta["trial_wall_seconds"], lambda x: f"{x:+.1f}"),
+                 _show(delta["driver_seconds"], lambda x: f"{x:+.1f}")]
+        lines.append("| " + " | ".join(_cell(cell) for cell in cells) + " |")
+    return lines + [""]
+
+
 def render_markdown(report: dict) -> str:
     lines = ["# Paired comparison", "", "Sources:", ""]
     lines += [f"- {source['campaign']}: {source['summary']}" for source in report["sources"]]
-    lines += ["", *NOTES, ""]
+    lines += ["", *NOTES, "", calibration_statement(report["calibration"]), ""]
     header = ("| Arm | Order | Attempt | Outcome | Hidden tests | Delivery | Elicitation | Intent | Workflow cost "
               "| Workflow tokens | Overhead cost | Overhead tokens | Driver wall s | Trial wall s | Owner questions "
               "| Owner words (questions / answers) | Notes |")
@@ -266,6 +362,7 @@ def render_markdown(report: dict) -> str:
             ]
             lines.append("| " + " | ".join(_cell(cell) for cell in cells) + " |")
         lines.append("")
+        lines += delta_lines(block)
     return "\n".join(lines)
 
 
@@ -283,19 +380,23 @@ def _reserve_directory(out: Path, sources: list[Path]) -> Path:
             continue
 
 
-def compare(paths: Iterable[Path | str], out: Path | str) -> Path:
-    """Write one new paired report pair (summary.json, report.md) under out and return its directory."""
+def compare(paths: Iterable[Path | str], out: Path | str, calibration: Path | str | None = None) -> Path:
+    """Write one new paired report pair (summary.json, report.md) under out and return its directory.
+
+    `calibration` is an optional grader-calibrate receipt. Without a normal one, intent verdicts are diagnostic-only.
+    """
     sources = [Path(path) for path in paths]
     if not sources:
         raise ValueError("compare needs at least one summary.json")
     loaded = [(path, load_summary(path)) for path in sources]
+    state = read_calibration(calibration)
     rows = []
     for path, summary in loaded:
         label = block_label(summary)
-        rows += [trial_row(summary, trial, path, label) for trial in summary["trials"]]
+        rows += [trial_row(summary, trial, path, label, state["mode"] == CALIBRATION_NORMAL) for trial in summary["trials"]]
     report = {"schema_version": 1, "report": "paired-comparison",
               "sources": [{"campaign": summary["campaign"], "summary": str(path)} for path, summary in loaded],
-              "blocks": group_blocks(rows)}
+              "calibration": state, "blocks": group_blocks(rows)}
     json_text = json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
     markdown = render_markdown(report)
     configured = [p for _, summary in loaded for p in (summary.get("settings") or {}).get("provider_config_paths") or []]

@@ -25,7 +25,7 @@ from evalcore.target import TrialContext
 from scevals import grader, target
 from scevals.arms import load_arm, render_prompt
 from scevals.cases import load_case
-from scevals.grader import CLAIM_INSTRUCTION, FIDELITY_INSTRUCTION
+from scevals.grader import CLAIM_INSTRUCTION, FIDELITY_INSTRUCTION, GRADER_CONTRACT
 from scevals.image import DEFAULT_IMAGE
 from scevals.judge import IntentJudgment
 from scevals.target import ARM_BASELINE_COMMAND, FINAL_MESSAGE, PREAMBLE, SoftwareChangeTarget
@@ -44,6 +44,8 @@ NATIVE = {"id": "native", "driver_command": ARM_DRIVER, "prompt_template": "nati
 NATIVE_IN_IMAGE = NATIVE | {"image": ARM_IMAGE}
 LOOP_ENGINE = {"id": "loop-engine", "driver_command": ["sc-driver"], "prompt_template": "loop-engine",
                "workflow_owned_paths": [], "completion_rule": "driver-exit"}
+VISIBLE_COMMAND = ["visible-tests", "--seam"]
+GRADED = {"arm": NATIVE, "grade": True}
 
 
 def engine_show(lifecycle, state="end"):
@@ -62,12 +64,14 @@ def result(returncode=0, stdout=""):
 class FakeSandbox:
     """One container: an in-memory file tree, a log of every exec, and the answers the harness's commands need."""
 
-    def __init__(self, *, engine=None, hidden="passed", driver=None):
+    def __init__(self, *, engine=None, hidden="passed", driver=None, visible=0):
         self.files = {}
         self.calls = []  # (argv, timeout) in order
         self.engine = engine  # {"show": ..., "history": ...} when a Loop Engine ran, else None
         self.hidden = hidden  # status given to every hidden test
         self.driver = driver  # async (sandbox, prompt) -> (returncode, stdout), or raises TimeoutError
+        self.visible = visible  # exit code of the visible test command, or TimeoutError
+        self.visible_cwd = None
         self.services = {}
         self.requirement_tags = load_case(CASE).test_requirements
 
@@ -87,6 +91,11 @@ class FakeSandbox:
 
     async def exec(self, command, *, cwd=None, env=None, timeout=None):
         self.calls.append((list(command), timeout))
+        if list(command) == VISIBLE_COMMAND:
+            self.visible_cwd = cwd
+            if self.visible is TimeoutError:
+                raise TimeoutError
+            return result(self.visible)
         if command[1] == "/opt/sc-evals/driver_process.py":
             self.driver_env = dict(env or {})
             returncode, stdout = await (self.driver or delivering())(self, command[-1])
@@ -229,7 +238,8 @@ class Seams:
         self.target = SoftwareChangeTarget()
         self.target.run_directory = tmp_path / "captures" / "seams"
         self.target.run_directory.mkdir(parents=True)
-        self.engine, self.hidden, self.driver = None, "passed", None
+        self.engine, self.hidden, self.driver, self.visible = None, "passed", None, 0
+        self.replay_envs = []  # every replay container's sandbox, in creation order
         original_run_process = anyio.run_process
 
         async def run_process(command, **kwargs):
@@ -248,7 +258,8 @@ class Seams:
         class ReplayContainer:
             def __init__(sandbox, image, **kwargs):
                 self.replays.append(image)
-                sandbox.env = FakeSandbox(engine=self.engine, hidden=self.hidden)
+                sandbox.env = FakeSandbox(engine=self.engine, hidden=self.hidden, visible=self.visible)
+                self.replay_envs.append(sandbox.env)
 
             async def __aenter__(sandbox):
                 return sandbox.env
@@ -272,8 +283,8 @@ class Seams:
         monkeypatch.setattr(anyio, "run_process", run_process)
 
     def configure(self, *, options=None, engine=None, hidden="passed", driver=None, idle_limit=1800, hard_limit=28800,
-                  driver_model=DRIVER, judge_model=GRADER):
-        self.engine, self.hidden, self.driver = engine, hidden, driver
+                  driver_model=DRIVER, judge_model=GRADER, visible=0):
+        self.engine, self.hidden, self.driver, self.visible = engine, hidden, driver, visible
         settings = CampaignSettings.model_validate({
             "campaign": "seams", "cases_path": str(CASE), "simulator_model": "sc-scripted/simulator",
             "judge_model": judge_model, "idle_limit_seconds": idle_limit, "hard_limit_seconds": hard_limit,
@@ -342,7 +353,7 @@ def test_without_an_arm_the_harness_makes_no_baseline_and_retains_no_arm_evidenc
     assert ["sh", "-c", ARM_BASELINE_COMMAND] not in run.trial.commands()
     assert not (run.capture / FINAL_MESSAGE).exists()
     assert not (run.run_directory / "seam-1-snapshots").exists()
-    assert not {"driver_elapsed_seconds", "owner_interaction", "outcome_grade"} & run.metrics.keys()
+    assert not {"driver_elapsed_seconds", "owner_interaction", "outcome_grade", "outcome_grade_detail"} & run.metrics.keys()
     assert "run_health" in run.metrics and "intent_judge" in run.metrics
 
 
@@ -552,7 +563,8 @@ def test_unstable_grade_counts_as_not_faithful_and_does_not_change_success(seams
 
 def test_grade_is_absent_when_the_option_is_off(seams, scripted_grader):
     run = seams.configure(options={"arm": NATIVE}).run()
-    assert "outcome_grade" not in run.metrics and scripted_grader["recorded"] == []
+    assert "outcome_grade" not in run.metrics and "outcome_grade_detail" not in run.metrics
+    assert scripted_grader["recorded"] == []
 
 
 def test_grade_needs_an_arm_and_a_judge_from_another_family_than_the_driver(seams):
@@ -567,3 +579,123 @@ def test_block_label_is_accepted_and_recorded_without_acting(seams):
     context = seams.configure(options={"arm": NATIVE, "block": block}).context
     seams.prepare()
     assert context.settings.recorded()["target_options"]["block"] == block
+
+
+# Grade detail (the grade() export without its overhead) and the visible-test receipt, with an arm and grade set.
+
+DETAIL_KEYS = {"contract", "status", "samples", "grader_family", "driver_family", "intent", "requirements",
+               "unrequested_changes", "pointers", "claims", "leakage"}
+VERDICT_VALUES = {GRADER_CONTRACT, "graded", "anthropic", "openai", "satisfied", "partial", "violated", "not_addressed",
+                  "faithful", "unfaithful", "unstable", "supported", "contradicted", "not_checkable"}
+
+
+def strings(value):
+    """Every string value of a nested export. Dict keys are requirement ids and are not values."""
+    if isinstance(value, dict):
+        return [s for item in value.values() for s in strings(item)]
+    if isinstance(value, list):
+        return [s for item in value for s in strings(item)]
+    return [value] if isinstance(value, str) else []
+
+
+def record_grade_arguments(monkeypatch):
+    """Keeps the keyword arguments the target passes to grade(), and grades as the seams do."""
+    received = []
+    grade_before = target.grade
+
+    async def recording(**kwargs):
+        received.append(kwargs)
+        return await grade_before(**kwargs)
+
+    monkeypatch.setattr(target, "grade", recording)
+    return received
+
+
+def visible_calls(seams):
+    """(argv, timeout) of each visible test command run in a replay container."""
+    return [(argv, timeout) for env in seams.replay_envs for argv, timeout in env.calls if argv == VISIBLE_COMMAND]
+
+
+def test_grade_detail_keeps_the_export_without_its_overhead(seams, scripted_grader):
+    run = seams.configure(options=GRADED).run()
+    detail = run.metrics["outcome_grade_detail"]
+    requirement_ids = load_case(CASE).requirement_ids
+    assert set(detail) == DETAIL_KEYS and "overhead" not in detail
+    assert run.metrics["outcome_grade"] == {"intent_faithful": True, "unstable": False}
+    assert detail["status"] == "graded"
+    assert detail["intent"] == {"verdict": "faithful", "probability": 0.9, "counted_faithful": True}
+    assert detail["requirements"] == {tag: {"verdict": "satisfied", "probability": 0.9} for tag in requirement_ids}
+    assert detail["pointers"] == {"resolved": 0, "unresolved": 0, "null_with_reason": 2 * len(requirement_ids)}
+    assert detail["claims"]["checked"] == 1 and detail["claims"]["supported"] == 1
+
+
+def test_grade_detail_stores_no_final_message_diff_or_quote_text(seams, scripted_grader):
+    quote = 'return " ".join(label.split()).casefold() or "inbox"'  # line 5 of the reference overlay, which is delivered
+    reply = fidelity_reply()
+    reply["requirements"][0] |= {"pointer": {"source": "final", "file": "labels.py", "start_line": 5, "end_line": 5,
+                                             "quote": quote}, "null_reason": None}
+    scripted_grader["replies"]["fidelity"] = [reply, reply]
+    run = seams.configure(options=GRADED).run()
+    detail = run.metrics["outcome_grade_detail"]
+    stored = json.dumps(detail, ensure_ascii=False)
+    assert detail["pointers"]["resolved"] == 2  # the host did check the quote, and kept only the count
+    assert quote not in stored and FINAL_STDOUT not in stored and "return label" not in stored
+    assert set(strings(detail)) <= VERDICT_VALUES
+
+
+def test_a_grader_error_stores_the_same_detail_shape_with_nulls(seams, scripted_grader):
+    scripted_grader["replies"]["fidelity"] = ["not an object", "not an object"]
+    run = seams.configure(options=GRADED).run()
+    assert run.metrics["outcome_grade_status"] == "grader_error"
+    assert run.metrics["outcome_grade"] == {"intent_faithful": None, "unstable": False}
+    detail = run.metrics["outcome_grade_detail"]
+    assert set(detail) == DETAIL_KEYS
+    assert detail["status"] == "grader_error" and detail["requirements"] == {}
+    assert detail["intent"] == {"verdict": None, "probability": None, "counted_faithful": None}
+    assert detail["claims"]["checked"] is None and detail["pointers"]["resolved"] is None
+    assert run.scored.success is True  # a grader error never fails the trial
+
+
+def test_visible_tests_receipt_is_none_when_the_option_is_absent(seams, scripted_grader, monkeypatch):
+    received = record_grade_arguments(monkeypatch)
+    seams.configure(options=GRADED).run()
+    assert received[0]["visible_tests"] is None
+    assert visible_calls(seams) == []
+
+
+@pytest.mark.parametrize(("visible", "receipt"), [
+    pytest.param(0, "passed", id="exit-zero"),
+    pytest.param(1, "failed", id="exit-nonzero"),
+    pytest.param(127, "error", id="cannot-run"),
+    pytest.param(TimeoutError, "failed", id="timeout"),
+])
+def test_visible_tests_receipt_is_the_command_status_and_reaches_the_grader(seams, scripted_grader, monkeypatch, visible, receipt):
+    received = record_grade_arguments(monkeypatch)
+    run = seams.configure(options=GRADED | {"visible_test_command": VISIBLE_COMMAND}, visible=visible).run()
+    assert received[0]["visible_tests"] == receipt
+    claims = [payload["receipts"]["visible_tests"] for kind, payload in scripted_grader["recorded"] if kind == "claim"]
+    assert claims and set(claims) == {receipt}
+    assert visible_calls(seams) == [(VISIBLE_COMMAND, load_case(CASE).test_timeout_seconds)]
+    assert run.scored.success is True  # the receipt is a grader input; hidden tests still decide success
+
+
+def test_visible_tests_run_once_after_the_hidden_tests_in_the_replay_container(seams, scripted_grader):
+    seams.configure(options=GRADED | {"visible_test_command": VISIBLE_COMMAND}).run()
+    (replay,) = seams.replay_envs
+    argvs = [argv for argv, _ in replay.calls]
+    assert argvs.count(VISIBLE_COMMAND) == 1
+    hidden = next(i for i, argv in enumerate(argvs) if argv[1:2] == ["/opt/scoring/case_runtime.py"])
+    assert hidden < argvs.index(VISIBLE_COMMAND)
+    assert replay.visible_cwd == "/workspace/public/repo"
+
+
+@pytest.mark.parametrize("options", [
+    {"arm": NATIVE, "visible_test_command": VISIBLE_COMMAND},
+    GRADED | {"visible_test_command": []},
+    GRADED | {"visible_test_command": "visible-tests --seam"},
+    GRADED | {"visible_test_command": ["visible-tests", ""]},
+])
+def test_visible_test_command_needs_grade_and_a_nonempty_argv_and_is_refused_before_any_trial(seams, options):
+    with pytest.raises(ValueError, match="visible_test_command"):
+        seams.configure(options=options).prepare()
+    assert seams.trial is None
