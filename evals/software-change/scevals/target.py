@@ -771,7 +771,7 @@ class SoftwareChangeTarget:
 
     async def score(self, state, execution, context):
         archive, meta = execution.data
-        arm = load_arm(context.settings.target_options)
+        arm = load_arm(context.settings.target_options) if context is not None else None
         # An arm completes when its driver exits by itself; the engine lifecycle is only a diagnostic for it.
         execution.terminal = (completion(meta.get("evidence", {}))[0] if arm is not None
                               else captured_lifecycle(archive) in ("final", "terminated"))
