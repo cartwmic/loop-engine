@@ -36,7 +36,7 @@ only in the workflow layer. Claude Code and Codex are out of Stage 1 (section 8,
 | Native | **N** | Pi print mode with its built-in tools (read, bash, edit, write). No skills, extensions or templates beyond Pi's default system prompt. |
 | Established workflow 1 | **S** | N plus **Superpowers v7.0.0** installed as its Pi package (skills plus the bootstrap extension). Inline execution: no subagent tool, which is the documented Pi behavior without the optional `pi-subagents` companion. |
 | Established workflow 2 | **O** | N plus **OpenSpec v1.14.3**, default `core` profile (`propose`, `apply`, `archive`), initialised with `openspec init --tools pi`. |
-| Loop Engine | **L** | N plus the shipped software-change workflow at the pinned release (v0.28.0, current), driven by the existing `sc-driver`/`sc-implement`/`sc-review` commands. Profile `minimal-16` on the trivial task, `standard-16` on the others. |
+| Loop Engine | **L** | N plus the shipped software-change workflow at the pinned release (v0.28.0, current), driven by the existing `sc-driver`/`sc-implement`/`sc-review` commands. Profile `minimal-17` on the trivial task, `standard-17` on the others (the shipped IDs at v0.28.0, read from the tag's `crates/software-change-provider/data/configs/`). |
 
 Why these two workflows, and why not the rest: [appendix A](stage0-research-appendix.md#a-shortlist). Short
 version: both name Pi as a supported harness in their own docs, both are the tools the owner tried,
@@ -96,7 +96,7 @@ Prefer existing cases. Three tasks; a fourth is held in reserve.
 
 | Id | Class | Case (version) | Repo / size | Existing anchors |
 |---|---|---|---|---|
-| T1 | Trivial | `label-keys` (1), public example | 1 file, ref diff 2 lines, 3 REQs (2 hidden), 6 tests | Tier 0 full, Sonnet 5.5, LE minimal-16: success, 6/6 tests, $3.64, 8.26 M tokens, 1189 s, 3 owner questions. Sol: 6/6 tests but workflow terminated early, so scored failure, $12.10, 2162 s |
+| T1 | Trivial | `label-keys` (1), public example | 1 file, ref diff 2 lines, 3 REQs (2 hidden), 6 tests | Tier 0 full, Sonnet 5.5, LE minimal-16 (v0.26.0; its v0.28.0 equivalent is minimal-17): success, 6/6 tests, $3.64, 8.26 M tokens, 1189 s, 3 owner questions. Sol: 6/6 tests but workflow terminated early, so scored failure, $12.10, 2162 s |
 | T2 | Small, hidden requirements | `followup-import` (1), private | 1 file, 3 REQs, 6 tests | Pilot, LE standard-14: Sol success 5498 s, 15.2 M tokens; Opus success 5348 s, 16.4 M tokens |
 | T3 | Complex, high risk | `review-policy` (2), private | Rust, about 7.3k files incl. 143 vendored crates, ref diff +1502/-290 over 20 files, 7 REQs, 16 tests, test timeout 1200 s | Pilot, LE standard-14: both models 15/16 tests; Sol 11438 s, 55 M tokens; Opus a **resumed** continuation (9149 s) after an infrastructure-blocked first segment of about 1953 s |
 | (R) | Reserve | `recap-preview` (1), private | 1 file, 3 REQs | Pilot rows for it show 8-11 s because they come from a recovery/scoring pass whose original execution metadata is unavailable (see the pilot `continuation-outcome.md`); its delivery results are not thereby invalid |
@@ -214,14 +214,14 @@ For #33 itself, a bounded written recommendation, no implementation:
   interface; ambiguity; size; owner availability). Output: a validated configuration of the existing knobs
   (profile, rigor axes, review count and grouping, checkpoints), the same thing small profile
   customization (LE-180) produces today. Example: "one-line doc fix, owner present" gives a profile with
-  one review and no design checkpoint; "touches the release workflow" gives standard-16 plus a mandatory
+  one review and no design checkpoint; "touches the release workflow" gives standard-17 plus a mandatory
   independent validation review.
 - *Guarantees survive tailoring only if* the template can choose only among existing validated profile
   values, cannot remove an evidence, owner-checkpoint or independent-review obligation below the shipped
   floor, and records the chosen profile with its descriptor as provenance. Check: the provider's own
   profile validation, plus a test that every descriptor maps to a valid profile at or above the floor.
-- *Evaluation tasks for it (existing cases):* T1 (trivial: expect a lighter profile than standard-16 with
-  the same hidden-test result), T3 (high risk: expect at least standard-16), and T2 (ambiguous: expect
+- *Evaluation tasks for it (existing cases):* T1 (trivial: expect a lighter profile than standard-17 with
+  the same hidden-test result), T3 (high risk: expect at least standard-17), and T2 (ambiguous: expect
   elicitation preserved). The value test is a Stage 2 arm "L-tailored" (descriptor-chosen profile) against
   the fixed profile, and against N-lite below.
 - *Decision rule:* build only if Stage 1 shows LE's value concentrating by task class (section 10). If one
@@ -379,7 +379,7 @@ upstream release; L already has the pipeline.
 
 **What Stage 1 can decide.** It compares whole configurations (N, S, O, L at one profile per task class) on
 a handful of blocks. It **cannot** attribute value to an individual LE obligation, because every LE
-obligation changes together, and L runs minimal-16 on T1 and standard-16 on T2/T3, which confounds profile
+obligation changes together, and L runs minimal-17 on T1 and standard-17 on T2/T3, which confounds profile
 with task. So Stage 1 produces (a) per-class verdicts on the configurations tested and (b) *candidates* for
 follow-up per obligation. Obligation-level keep/simplify/condition/replace/retire decisions need ablations
 (an L arm with one obligation changed) and are Stage 2 work; the table below names the follow-up each
@@ -461,7 +461,7 @@ Expand only after Michael reads the Stage 1 report. Open Stage 2 when at least o
 - a class shows a decision-relevant gap by the section 10 rule, and one more repetition set (3 more
   blocks of that class) would settle it; or
 - N matches the others on T1 and T2 and the open question is T3-like work: add a second complex case
-  and an L `high-rigor-16` arm; or
+  and an L `high-rigor-17` arm; or
 - results are mixed and the hypothesis arm N-lite (section 5.4) is the cheapest way to separate
   "process helps" from "this much process helps".
 
