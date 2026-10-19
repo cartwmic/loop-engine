@@ -1,0 +1,25 @@
+# Stage 0 arms layered on the pinned trial image. The default Dockerfile and its image are unchanged.
+# Build from this directory: docker build -f Dockerfile.arms -t TAG .
+ARG BASE_IMAGE=loop-engine-sc-evals:v0.26.0
+FROM ${BASE_IMAGE}
+
+# Pi moves from the base image's 1.0.0 to one pinned version for every arm.
+RUN npm install --global @earendil-works/pi-coding-agent@1.2.0 \
+    && npm cache clean --force
+# Superpowers v7.0.0, checked by commit: the tag's commit is bb92a77741419a4ab5f06e711a283343f1ada0c3.
+RUN git clone --quiet --depth 1 --branch v7.0.0 https://github.com/obra/superpowers.git /opt/sc-evals/arms/superpowers \
+    && test "$(git -C /opt/sc-evals/arms/superpowers rev-parse HEAD)" = bb92a77741419a4ab5f06e711a283343f1ada0c3
+RUN npm install --global @fission-ai/openspec@1.14.3 \
+    && npm cache clean --force
+RUN test "$(pi --version)" = 1.2.0 \
+    && test "$(openspec --version)" = 1.14.3 \
+    && printf '%s\n' 'pi @earendil-works/pi-coding-agent 1.2.0' \
+       'superpowers v7.0.0 bb92a77741419a4ab5f06e711a283343f1ada0c3' \
+       'openspec @fission-ai/openspec 1.14.3' > /opt/sc-evals/arms/versions.txt
+
+# The base image's pi-role.py predates the session hook, so the arms image carries the current file.
+COPY pi-role.py pi-arm.py /opt/sc-evals/
+RUN chmod 755 /opt/sc-evals/pi-role.py /opt/sc-evals/pi-arm.py \
+    && ln -s /opt/sc-evals/pi-arm.py /usr/local/bin/arm-native \
+    && ln -s /opt/sc-evals/pi-arm.py /usr/local/bin/arm-superpowers \
+    && ln -s /opt/sc-evals/pi-arm.py /usr/local/bin/arm-openspec

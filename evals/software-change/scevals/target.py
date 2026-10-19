@@ -1,5 +1,4 @@
 """Software-change trial lifecycle; scoring can extend the terminal sandbox hook."""
-from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass
 import io
@@ -27,6 +26,10 @@ from evalcore.target import InfrastructureError, LimitReached, ModelError, Trial
 from .cases import RUNTIME, load_case
 from .calibration import calibration_for_report
 from .judge import JUDGE_CONTRACT, judge_intent
+from .arms import is_workflow_owned, load_arm, render_prompt
+from .grader import grade, independence_refusal, provider_family
+from .scoring_common import completion, hidden_tests_passed, intent_is_valid, score_common
+from .snapshots import snapshot_step
 
 # Inspect limits one sandbox file read to 100 MiB, so captures are read in parts.
 CAPTURE_CHUNK_BYTES = 64 * 1024 * 1024
@@ -95,6 +98,14 @@ CAPTURE_TAR_COMMAND = ("tar --exclude-caches-all --exclude=.cache -cf /tmp/works
 DRIVER_LIMIT_MARGIN_SECONDS = 300
 CAPTURE_SECONDS = 600       # own limit of the capture step; the campaign allowance can only shorten it
 PROBE_SECONDS = 60          # own limit of a synchronous setup probe (Docker image inspection, ref lookup)
+# Harness-owned starting state of an arm, before its driver starts: the baseline commit and the origin remote.
+ARM_BASELINE_COMMAND = ("cd /workspace/public/repo && git init -q && git add -A && "
+                        "git -c user.name=eval-harness -c user.email=eval-harness@invalid commit -q --allow-empty "
+                        "-m 'Starting baseline' && git remote add origin /workspace/local-remote.git")
+# Arm runs only: where Pi keeps its session records; inside /workspace/trial, so the capture tar retains them privately.
+PI_SESSION_DIR = "/workspace/trial/pi-sessions"
+# Private per-trial file beside workspace.tar: the driver's final stdout. It is never exported.
+FINAL_MESSAGE = "final-message.txt"
 
 KILL_DRIVER = ["python3", "-c",
                "import os,signal; from pathlib import Path;"
@@ -164,6 +175,102 @@ Owner request:
 """
 
 
+def driver_command(options):
+    """Driver argv: the arm's own when an arm is set (load_arm refuses a top-level copy), else the option as today."""
+    arm = load_arm(options)
+    return list(arm.driver_command) if arm is not None else options.get("driver_command", ["sc-driver"])
+
+
+def trial_image(options):
+    """Trial image: the arm's own (the default when it names none) when an arm is set, else the option as today."""
+    arm = load_arm(options)
+    if arm is not None:
+        return arm.image or DEFAULT_IMAGE
+    return options.get("image", DEFAULT_IMAGE)
+
+
+def driver_margin(options):
+    """Seconds kept between the driver's stop and the per-trial hard limit for capture and scoring."""
+    margin = options.get("driver_margin_seconds", DRIVER_LIMIT_MARGIN_SECONDS)
+    if isinstance(margin, bool) or not isinstance(margin, (int, float)) or margin <= 0:
+        raise ValueError("driver_margin_seconds must be a positive number")
+    return margin
+
+
+def captured_files(archive):
+    """Workspace, artifact and push-log files of a capture by capture path; .git is left out."""
+    files = {}
+    with tarfile.open(archive) as tar:
+        for member in tar:
+            name = member.name.removeprefix("./")
+            if not (name.startswith("trial/artifacts/") or
+                    name.startswith("public/repo/") and ".git" not in Path(name).parts or
+                    name == "trial/local-push-log"):
+                continue
+            if member.isfile() or member.issym():
+                files[name] = tar.extractfile(member).read() if member.isfile() else member.linkname.encode()
+    return files
+
+
+async def run_hidden_tests(trial):
+    """Hidden tests run in the restored trial container after the driver stopped; only the runner's report is read back."""
+    await trial.copy_scoring_material()
+    result = await trial.env.exec(["python3", "/opt/scoring/case_runtime.py", "--tests", "/opt/scoring/tests",
+                                   "--output", "/workspace/trial/hidden-results.json"],
+                                  cwd="/workspace/public/repo", timeout=trial.case.test_timeout_seconds)
+    if not result.success:
+        raise InfrastructureError("hidden-test runner failed")
+    tests = json.loads(await trial.env.read_file("/workspace/trial/hidden-results.json"))
+    trial.evidence["copy_out_log"].append({"kind": "hidden_test_results", "phase": "after_terminal",
+                                           "elapsed_seconds": time.monotonic() - trial.evidence["started"]})
+    return tests
+
+
+RECEIPT_STATUS_ORDER = ("error", "failed", "skipped", "not_run")
+
+
+def requirement_statuses(case, tests):
+    """Per-requirement receipt for the claim call: passed only when every tagged test passed, else the most serious status."""
+    if tests["collection_error"]:
+        return dict.fromkeys(case.requirement_ids, "error")
+    statuses = {}
+    for requirement in case.requirement_ids:
+        seen = {t["status"] for t in tests["tests"] if t["requirement_id"] == requirement}
+        statuses[requirement] = ("passed" if seen == {"passed"} else
+                                 next((status for status in RECEIPT_STATUS_ORDER if status in seen), "not_run"))
+    return statuses
+
+
+def repository_files(case):
+    """Baseline contents of the case repository, as the grader reads them."""
+    return {p.relative_to(case.repository).as_posix(): p.read_bytes() for p in case.repository.rglob("*") if p.is_file()}
+
+
+def outcome_grade_fields(result):
+    """Verdict fields only. An unstable verdict counts as not faithful and is flagged; no verdict leaves intent null."""
+    if result["status"] != "graded":
+        return {"intent_faithful": None, "unstable": False}
+    return {"intent_faithful": result["intent"]["counted_faithful"], "unstable": result["intent"]["verdict"] == "unstable"}
+
+
+def owner_interaction(answers):
+    """Sanitized owner-interaction totals: word counts only, never the text of a question or an answer."""
+    return {"question_words": sum(len(a["question"].split()) for a in answers),
+            "answer_words": sum(len(a["answer"].split()) for a in answers)}
+
+
+async def read_engine_records(env, run_id):
+    """Loop Engine show and history of the restored run; (None, None) when the engine state cannot be read."""
+    shown_ok, shown = await engine_json(env, ["show", "--view", "full", run_id], "/workspace/trial/show.json")
+    history_ok, history = await engine_json(env, ["history", run_id], "/workspace/trial/history.json")
+    if not (shown_ok and history_ok):
+        return None, None
+    try:
+        return json.loads(shown)["result"], json.loads(history)["result"]
+    except (ValueError, KeyError, TypeError):
+        return None, None
+
+
 @dataclass
 class TerminalTrial:
     """Host-only T5 hook. `env` is still alive during Target.score.
@@ -177,6 +284,8 @@ class TerminalTrial:
     evidence: dict
     terminal: bool
     terminal_time: float | None
+    # Arm runs only: the driver's stdout, written to FINAL_MESSAGE in the private capture.
+    final_message: str = ""
 
     async def copy(self, source, destination, kind, phase):
         await self.env.write_file(destination, Path(source).read_bytes())
@@ -300,12 +409,27 @@ class SoftwareChangeTarget:
         driver = options.get("scripted_driver")
         if driver is not None and driver not in DRIVERS:
             raise ValueError("scripted_driver must be never-asks, asks-and-builds or asks-but-does-not-build")
-        command = options.get("driver_command", ["sc-driver"])
+        command = driver_command(options)
         if not isinstance(command, list) or not command or not all(isinstance(s, str) and s for s in command):
             raise ValueError("driver_command must be a nonempty argv array (prompt is appended)")
         if not re.fullmatch(r"[a-zA-Z0-9-]+", context.settings.profile):
             raise ValueError("profile must be a shipped config_version")
-        image = options.get("image", DEFAULT_IMAGE)
+        driver_margin(options)  # an invalid margin fails before any trial starts
+        interval = options.get("snapshot_interval_seconds")
+        if interval is not None:
+            # Snapshots are taken from the progress poll, which runs only with an idle limit; checked before any driver runs.
+            if isinstance(interval, bool) or not isinstance(interval, (int, float)) or interval <= 0:
+                raise ValueError("snapshot_interval_seconds must be a positive number")
+            if context.settings.idle_limit_seconds is None:
+                raise ValueError("snapshot_interval_seconds needs idle_limit_seconds: the progress poll takes the snapshots")
+        grade_on = options.get("grade", False)
+        if type(grade_on) is not bool or (grade_on and load_arm(options) is None):
+            raise ValueError("grade must be true or false, and needs an arm")
+        refusal = (independence_refusal(provider_family(context.settings.judge_model),
+                                        provider_family(context.combination.driver)) if grade_on else None)
+        if refusal:
+            raise ValueError(f"grader refused before any trial: {refusal}")
+        image = trial_image(options)
         # Synchronous probes: bounded by the campaign's remaining time, so a blocked Docker cannot hold the command.
         probe = allowance(context, PROBE_SECONDS)
         if probe is not None and probe <= 0:
@@ -372,6 +496,12 @@ class SoftwareChangeTarget:
         if not source:
             await env.write_file("/workspace/trial/local-push-log", "")
         options = context.settings.target_options
+        arm = load_arm(options)
+        if arm is not None and not source:
+            # The harness, not the arm, makes the starting commit and the origin remote, so every arm's diff means the same.
+            baseline = await env.exec(["sh", "-c", ARM_BASELINE_COMMAND], timeout=600)
+            if not baseline.success:
+                raise InfrastructureError("arm baseline commit setup failed")
         driver = options.get("scripted_driver")
         inject_infrastructure = False
         if driver and options.get("scripted_infrastructure_trial") == context.assignment.trial and not source:
@@ -386,14 +516,14 @@ class SoftwareChangeTarget:
         await trial.copy(Path(__file__).with_name("driver_process.py"), "/opt/sc-evals/driver_process.py", "driver_launcher", "before_driver")
         if driver:
             await trial.copy(Path(__file__).with_name("scripted_driver.py"), "/opt/sc-evals/scripted_driver.py", "scripted_driver", "before_driver")
-        prompt = PREAMBLE.format(profile=context.settings.profile, run_id=run_id,
-                                  scripted="Scripted driver: " + driver if driver else "",
-                                  request=state.input)
+        prompt = render_prompt(arm, profile=context.settings.profile, run_id=run_id,
+                               scripted="Scripted driver: " + driver if driver else "", request=state.input)
         if source:
             prompt = ("Resume existing run " + run_id + " from its durable run.sqlite and artifacts. "
                       "Inspect show/history first; continue the existing run, do NOT start or initialize a new run.\n" + prompt)
         done, started = anyio.Event(), anyio.Event()
         instance = context.assignment.sample_id
+        snapshot_directory = self.run_directory / f"{instance}-snapshots"  # beside, never inside, the capture directory
 
         async def service():
             await sandbox_service("sc_owner", {"ask_owner": owner.ask_owner}, until=done.is_set,
@@ -409,7 +539,7 @@ class SoftwareChangeTarget:
                 try:
                     async with sandbox_agent_bridge(model_aliases=models, port=13131):
                         # Leave the existing hard-limit margin for capture/scoring.
-                        driver_limit = (max(60, context.settings.hard_limit_seconds - DRIVER_LIMIT_MARGIN_SECONDS)
+                        driver_limit = (max(60, context.settings.hard_limit_seconds - driver_margin(options))
                                         if context.settings.hard_limit_seconds is not None else None)
                         driver_done = anyio.Event()
 
@@ -417,6 +547,7 @@ class SoftwareChangeTarget:
                             last_progress = time.monotonic()
                             previous_engine = None
                             previous_tokens = {}
+                            last_snapshot = driver_clock
                             interval = min(60, context.settings.idle_limit_seconds / 2)
                             while not driver_done.is_set():
                                 with anyio.move_on_after(interval):
@@ -433,6 +564,8 @@ class SoftwareChangeTarget:
                                 if engine is not None:
                                     previous_engine = engine
                                 previous_tokens = tokens
+                                last_snapshot = await snapshot_step(env, options, snapshot_directory, driver_started=driver_clock,
+                                                                    last_taken=last_snapshot, now=time.monotonic())
                                 if time.monotonic() - last_progress >= context.settings.idle_limit_seconds:
                                     evidence["driver_timed_out"] = True
                                     evidence["driver_timeout_kind"] = "idle"
@@ -462,14 +595,17 @@ class SoftwareChangeTarget:
                                 drivers.start_soon(watch_campaign_stop)
                             try:
                                 driver_started = True
+                                driver_clock = time.monotonic()
                                 result = await env.exec(["python3", "/opt/sc-evals/driver_process.py",
-                                                        *options.get("driver_command", ["sc-driver"]), prompt],
+                                                        *driver_command(options), prompt],
                                                         cwd="/workspace/public/repo",
                                                         env={"SC_BRIDGE_URL": "http://localhost:13131/v1", "SC_OWNER_INSTANCE": instance,
                                                              "SC_PROFILE": context.settings.profile,
                                                              "SC_RESUME": "1" if source else "0",
                                                              "SC_SCRIPTED_INFRA": "1" if inject_infrastructure else "0",
-                                                             "SC_SCRIPTED_TERMINATE": "1" if options.get("scripted_terminated") else "0"},
+                                                             "SC_SCRIPTED_TERMINATE": "1" if options.get("scripted_terminated") else "0",
+                                                             # Arm runs keep the Pi session record under the trial area the capture tars.
+                                                             **({"SC_PI_SESSION_DIR": PI_SESSION_DIR} if arm is not None else {})},
                                                         timeout=driver_limit)
                                 driver_finished = True
                             except TimeoutError:
@@ -478,8 +614,12 @@ class SoftwareChangeTarget:
                                 evidence.setdefault("driver_timeout_kind", "hard")
                             finally:
                                 driver_done.set()
+                                if arm is not None:
+                                    evidence["driver_elapsed_seconds"] = time.monotonic() - driver_clock
                         if result is not None:
                             evidence["driver_exit_code"] = result.returncode
+                            if arm is not None:
+                                trial.final_message = result.stdout
                         if result is not None and driver and re.fullmatch(r"routing-marker-[a-z0-9-]+", result.stdout.strip()):
                             evidence["role_observations"] = {"role-driver": result.stdout.strip()}
                         # Model-controlled stdout is not a terminal receipt or an export.
@@ -508,7 +648,8 @@ class SoftwareChangeTarget:
         if inject_infrastructure:
             raise InfrastructureError("scripted infrastructure stop")
         archive, meta = read_capture(self.capture_for(context))
-        if captured_lifecycle(archive) not in ("final", "terminated") and reason:
+        finished = completion(evidence)[0] if arm is not None else captured_lifecycle(archive) in ("final", "terminated")
+        if not finished and reason:
             raise InfrastructureError(reason)
         # A driver stopped by the per-trial hard limit or a campaign stop is a limit, not an ordinary failure.
         kind = evidence.get("driver_timeout_kind")
@@ -567,6 +708,8 @@ class SoftwareChangeTarget:
         capture.mkdir(mode=0o700, parents=True, exist_ok=False)
         # Per-trial isolation evidence goes to disk before the bulk archive, so a capture cut off at the deadline keeps it.
         (capture / "isolation.json").write_text(json.dumps(trial.evidence["container"], indent=2) + "\n")
+        if load_arm(context.settings.target_options) is not None:
+            (capture / FINAL_MESSAGE).write_text(trial.final_message)
         window = allowance(context, CAPTURE_SECONDS)
         with anyio.move_on_after(window) as scope:
             delay = context.settings.target_options.get("scripted_capture_delay_seconds")
@@ -606,6 +749,8 @@ class SoftwareChangeTarget:
         (capture / "workspace.tar.partial").rename(capture / "workspace.tar")
         evidence = trial.metrics()
         evidence["scripted_driver"] = context.settings.target_options.get("scripted_driver")
+        if load_arm(context.settings.target_options) is not None:
+            evidence["owner_interaction"] = owner_interaction(trial.owner.answers)
         stop = trial.evidence.get("driver_timeout_kind") or ("exit" if "driver_exit_code" in evidence else "crash")
         evidence["copy_out_log"] = [{"kind": "workspace", "phase": "after_driver",
                                      "elapsed_seconds": time.monotonic() - trial.evidence["started"]}]
@@ -626,7 +771,10 @@ class SoftwareChangeTarget:
 
     async def score(self, state, execution, context):
         archive, meta = execution.data
-        execution.terminal = captured_lifecycle(archive) in ("final", "terminated")
+        arm = load_arm(context.settings.target_options)
+        # An arm completes when its driver exits by itself; the engine lifecycle is only a diagnostic for it.
+        execution.terminal = (completion(meta.get("evidence", {}))[0] if arm is not None
+                              else captured_lifecycle(archive) in ("final", "terminated"))
         reason = meta.get("evidence", {}).get("provider_route_failure")
         if not execution.terminal and reason in ("provider policy block", "provider rejected bridged request"):
             raise InfrastructureError(reason)
@@ -638,7 +786,7 @@ class SoftwareChangeTarget:
         # Scoring has the time left before the campaign's hard end; a step that outlasts it is abandoned.
         window = allowance(context, None)
         with anyio.move_on_after(window) as scope:
-            async with ReplayContainer(context.settings.target_options.get("image", DEFAULT_IMAGE),
+            async with ReplayContainer(trial_image(context.settings.target_options),
                                        cleanup_seconds=lambda: cleanup_allowance(context),
                                        on_abandon=lambda: note_cleanup_handoff(context)) as env:
                 delay = context.settings.target_options.get("scripted_scoring_delay_seconds")
@@ -659,6 +807,11 @@ class SoftwareChangeTarget:
                 evidence["started"] = time.monotonic() - elapsed
                 trial = TerminalTrial(env, case, owner, evidence, False, None)
                 await self.inspect_capture(trial)
+                if arm is not None:
+                    # The driver has stopped and its capture is durable, so hidden material may be copied whatever the
+                    # completion. Completion, not the engine lifecycle, decides the outcome of an arm.
+                    trial.terminal = True
+                    return await self.score_capture(trial, archive, context)
                 execution.terminal = trial.terminal
                 if not trial.terminal:
                     return TrialScore(False, trial.metrics())
@@ -671,6 +824,9 @@ class SoftwareChangeTarget:
 
     async def score_capture(self, trial, archive, context):
         """All campaign and replay metrics read restored captured state only."""
+        arm = load_arm(context.settings.target_options)
+        if arm is not None:
+            return await self.score_arm_capture(trial, archive, context, arm)
         ok, text = await engine_json(trial.env, ["show", "--view", "full", trial.evidence["run_id"]], "/workspace/trial/show.json")
         if not ok:
             raise InfrastructureError("captured run show failed")
@@ -679,32 +835,13 @@ class SoftwareChangeTarget:
         if not ok:
             raise InfrastructureError("captured run history failed")
         history = json.loads(text)["result"]
-        with tarfile.open(archive) as tar:
-            files = {}
-            for member in tar:
-                name = member.name.removeprefix("./")
-                if not (name.startswith("trial/artifacts/") or
-                        name.startswith("public/repo/") and ".git" not in Path(name).parts or
-                        name == "trial/local-push-log"):
-                    continue
-                if member.isfile() or member.issym():
-                    files[name] = tar.extractfile(member).read() if member.isfile() else member.linkname.encode()
+        files = captured_files(archive)
         artifacts = {k[len("trial/artifacts/"):]: v for k, v in files.items() if k.startswith("trial/artifacts/")}
         delivered = {k[len("public/repo/"):]: v for k, v in files.items()
                      if k.startswith("public/repo/") and ".git" not in Path(k).parts}
         push_events = files.get("trial/local-push-log", b"").decode().splitlines()
-        await trial.copy_scoring_material()
-        result = await trial.env.exec(["python3", "/opt/scoring/case_runtime.py", "--tests", "/opt/scoring/tests",
-                                       "--output", "/workspace/trial/hidden-results.json"],
-                                      cwd="/workspace/public/repo", timeout=trial.case.test_timeout_seconds)
-        if not result.success:
-            raise InfrastructureError("hidden-test runner failed")
-        tests = json.loads(await trial.env.read_file("/workspace/trial/hidden-results.json"))
-        success = (not tests["collection_error"] and
-                   Counter(t["requirement_id"] for t in tests["tests"]) == Counter(trial.case.test_requirements) and
-                   all(t["status"] == "passed" for t in tests["tests"]))
-        trial.evidence["copy_out_log"].append({"kind": "hidden_test_results", "phase": "after_terminal",
-                                               "elapsed_seconds": time.monotonic() - trial.evidence["started"]})
+        tests = await run_hidden_tests(trial)
+        success = hidden_tests_passed(trial.case, tests)
         intent_valid = True
         try:
             intent = json.loads(artifacts["intent.json"])
@@ -738,6 +875,75 @@ class SoftwareChangeTarget:
         if "driver_exit_code" not in trial.evidence:
             metrics["run_health"]["unattended_finish"] = None
         return TrialScore(success and intent_valid and snapshot["lifecycle"] == "final" and not trial.evidence.get("driver_timed_out", False), metrics)
+
+    async def score_arm_capture(self, trial, archive, context, arm):
+        """One rule for every arm: the final workspace is scored whatever the engine state. Engine records are diagnostics."""
+        evidence = trial.evidence
+        loop_engine = arm.id == "loop-engine"
+        files = captured_files(archive)
+        artifacts = {k[len("trial/artifacts/"):]: v for k, v in files.items() if k.startswith("trial/artifacts/")}
+        delivered = {k[len("public/repo/"):]: v for k, v in files.items()
+                     if k.startswith("public/repo/") and ".git" not in Path(k).parts}
+        push_events = files.get("trial/local-push-log", b"").decode().splitlines()
+        tests = await run_hidden_tests(trial)
+        snapshot, history = (await read_engine_records(trial.env, evidence["run_id"])) if loop_engine else (None, None)
+        owner_history = evidence.get("owner_history_available", True)
+        scored = score_common(
+            trial.case, evidence=evidence, delivered=delivered, tests=tests,
+            workflow_owned=lambda path: is_workflow_owned(path, arm),
+            revealed_requirement_ids=trial.owner.receipt()["revealed_requirement_ids"] if owner_history else None,
+            push_events=push_events, owner_question_count=len(trial.owner.answers) if owner_history else None,
+            engine_lifecycle=snapshot["lifecycle"] if snapshot is not None else None,
+            intent_valid=intent_is_valid(artifacts.get("intent.json")) if loop_engine else None)
+        success = scored.pop("success")
+        metrics = trial.metrics() | {"hidden_tests": tests, **scored}
+        if snapshot is not None:
+            metrics |= await self.engine_diagnostics(trial, context, snapshot, history, artifacts, delivered, tests, success)
+        if context.settings.target_options.get("grade"):
+            final_path = Path(archive).with_name(FINAL_MESSAGE)
+            if not final_path.is_file():
+                raise InfrastructureError("arm capture has no final message to grade")
+            status, verdict = await self.grade_outcome(trial, context, arm, delivered=delivered, tests=tests,
+                                                       final_message=final_path.read_text())
+            metrics["outcome_grade"] = verdict
+            metrics["outcome_grade_status"] = status
+        return TrialScore(success, metrics)
+
+    async def engine_diagnostics(self, trial, context, snapshot, history, artifacts, delivered, tests, success):
+        """Loop Engine process diagnostics for the report. They never decide success."""
+        intent_valid = intent_is_valid(artifacts.get("intent.json"))
+        passed_reviews = reviews_passed(snapshot, history)
+        sources = {h["action"]["transition"]["source"] for h in history if h["action"]["kind"] == "transition"}
+        needed = [role for role, required in (("role-implementer", "implement" in sources),
+                                              ("role-reviewer", any(s.endswith("review") for s in sources))) if required]
+        intent = json.loads(artifacts["intent.json"]) if intent_valid else {}
+        return {"run_health": run_health(snapshot, history, snapshot["lifecycle"] == "final", trial.evidence.get("driver_exit_code")),
+                "honesty": honesty(snapshot, artifacts, delivered, tests, trial.case.requirement_ids, hidden_success=success),
+                "all_reviews_passed": passed_reviews, "review_escapes": int(passed_reviews and not success),
+                "needed_role_aliases": needed,
+                "profile_config_version": (snapshot.get("initial_input") or {}).get("config_version"),
+                "intent_judge": await self.judge(trial, context, intent, intent_valid)}
+
+    async def grade_outcome(self, trial, context, arm, *, delivered, tests, final_message):
+        """Independent grade through the campaign judge role. Like the judge, a grader failure or budget stop never fails the trial."""
+        skip = self.judge_skip_reason(trial, context)
+        if skip is None:
+            try:
+                with anyio.move_on_after(allowance(context, None)) as scope:
+                    result = await grade(brief=trial.case.brief.read_text(), requirement_ids=trial.case.requirement_ids,
+                                         baseline=repository_files(trial.case), final=delivered, final_message=final_message,
+                                         hidden_tests=requirement_statuses(trial.case, tests),
+                                         visible_tests=None,  # the harness runs no visible-test receipt yet
+                                         arm=arm, driver_model=context.combination.driver)
+                if not scope.cancelled_caught:
+                    return result["status"], outcome_grade_fields(result)
+                skip = limit_reason(context)
+            except ModelError:
+                return "grader_error", {"intent_faithful": None, "unstable": False}
+        guard = getattr(context, "guard", None)
+        if guard is not None:
+            guard.note_cut_off("judge", skip, context.assignment.sample_id)
+        return "limit", {"intent_faithful": None, "unstable": False}
 
     def judge_skip_reason(self, trial, context):
         """Why no judge model call may be made now: any campaign stop, a stopped trial, or a closed post-trial window."""

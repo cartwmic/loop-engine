@@ -23,6 +23,23 @@ def process(argv, packet=None, cwd=None):
     return json.loads(result.stdout)
 
 
+def prepare_baseline(repository):
+    """Git is owned by this disposable trial driver, never the host checkout.
+
+    A repository that already has a HEAD got its baseline commit and origin remote from the harness (arm runs,
+    ARM_BASELINE_COMMAND), so nothing is created again; without a HEAD the original sequence runs unchanged.
+    """
+    if subprocess.run(['git', '-C', str(repository), 'rev-parse', '--verify', '-q', 'HEAD'],
+                      capture_output=True).returncode == 0:
+        return
+    for args in (['init', '-q'], ['config', 'user.name', 'Scripted eval driver'],
+                 ['config', 'user.email', 'eval@example.invalid'], ['add', '.'],
+                 ['commit', '-qm', 'Public example baseline']):
+        command(['git', '-C', repository, *args])
+    command(['git', 'init', '--bare', '-q', '/workspace/local-remote.git'])
+    command(['git', '-C', repository, 'remote', 'add', 'origin', '/workspace/local-remote.git'])
+
+
 def main():
     mode, profile_id = sys.argv[1:]
     resuming = os.environ.get('SC_RESUME') == '1'
@@ -45,13 +62,7 @@ def main():
     if not resuming:
         for subject in ('intent', 'design', 'plan', 'implementation-report', 'validation-report'):
             shutil.copyfile(fixtures / (subject + '-good.json'), artifacts / (subject + '.json'))
-        # Git is owned by this disposable trial driver, never the host checkout.
-        for args in (['init', '-q'], ['config', 'user.name', 'Scripted eval driver'],
-                     ['config', 'user.email', 'eval@example.invalid'], ['add', '.'],
-                     ['commit', '-qm', 'Public example baseline']):
-            command(['git', '-C', repository, *args])
-        command(['git', 'init', '--bare', '-q', '/workspace/local-remote.git'])
-        command(['git', '-C', repository, 'remote', 'add', 'origin', '/workspace/local-remote.git'])
+        prepare_baseline(repository)
         intent_path = artifacts / 'intent.json'
         intent = json.loads(intent_path.read_text())
         intent['baseline'] = {'kind': 'git', 'repository_scope': 'primary',

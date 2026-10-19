@@ -19,6 +19,7 @@ pi = "evalcore.pi"
 [project.entry-points."loop_engine_evals.commands"]
 software-change-image = "scevals.image:register_subcommands"
 software-change-cases = "scevals.cases:register_subcommands"
+software-change-arm-commands = "scevals.arm_commands:register_subcommands"
 
 [tool.hatch.build.targets.wheel]
 packages = ["core/evalcore", "software-change/scevals"]

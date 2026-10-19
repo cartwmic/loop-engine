@@ -14,6 +14,10 @@ It does not resist a hostile model, judge prose claims or replace owner judgment
 Its intent judge is weakly calibrated (4 of 10 agreement on owner labels), and
 small samples, simulator bias and judge error are accepted risks.
 
+Arm comparison options and commands (the `arm` option, the independent grader, snapshots,
+`evalctl compare`, the stage ledger and the finding check) are opt-in and documented in
+[ARMS.md](ARMS.md). Without an `arm` option, the rules in this README are unchanged.
+
 ## Setup
 
 From the checkout root, with native arm64 Docker, build the pinned trial image
