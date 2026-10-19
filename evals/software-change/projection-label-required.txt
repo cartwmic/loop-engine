@@ -1,0 +1,2 @@
+# Image revisions (org.opencontainers.image.revision) that are F1 projection binaries; label required.
+ac60b738858c92dd5c26b56cac9228525acf634e  # eval-f1-v2.2c (scratch clone tag), owner-approved eval-only 2026-10-17

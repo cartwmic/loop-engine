@@ -1,0 +1,232 @@
+# Software-change evaluation target
+
+## Overview
+
+This directory supplies the software-change-dependent parts of the Inspect
+harness. Checkout-root `evals/README.md` describes general campaign commands,
+accounting, result locations and secrecy checks; checkout-root
+`evals/core/README.md` defines the internal target interface. This is not a new
+engine provider, shared library or change to provider calibration.
+
+It measures whole Loop Engine software-change runs: elicitation, delivery against
+hidden tests, intent quality, review escapes, run health, discipline and honesty.
+It does not resist a hostile model, judge prose claims or replace owner judgment.
+Its intent judge is weakly calibrated (4 of 10 agreement on owner labels), and
+small samples, simulator bias and judge error are accepted risks.
+
+## Setup
+
+From the checkout root, with native arm64 Docker, build the pinned trial image
+once (build-network access, no model credentials):
+
+```sh
+uv sync --project evals --locked
+uv run --project evals evalctl image-check
+```
+
+## Usage
+
+### Eval-case format
+
+A case is one problem given to a run, not one of the implementation tasks that
+the model creates within that run:
+
+```text
+case.toml
+public/request.md
+public/repo/...
+hidden/brief.md
+hidden/tests/test_*.py
+hidden/reference/...
+```
+
+```toml
+id = "stable-case-id"
+version = "1"
+allowed_edit_scope = ["labels.py"]
+test_timeout_seconds = 60  # optional; raise it for cases that build first (e.g. Rust)
+interface_allowlist = []  # optional harness-only hidden-test identifiers
+```
+
+- IDs are safe identifiers; versions are nonempty strings. Increment the version
+  when case content changes. Allowed scope contains relative path patterns.
+- `public/repo/` is the starting repository; `public/request.md` deliberately
+  leaves requirements for the driver to elicit. Only public files enter before
+  terminal state. Cases have no symlinks, absolute scope paths or `..` escapes.
+- `hidden/brief.md` is the private owner specification, with unique `## REQ-*`
+  headings. It stays host-side. The pinned simulator answers only what is asked,
+  recording revealed requirement IDs rather than exporting brief/answer text.
+- Hidden tests are synchronous `test_*` methods of stdlib `unittest.TestCase`
+  classes in `test_*.py` files, each tagged once with `@requirement("REQ-ID")`
+  imported from `case_runtime`. Module-level test functions are not collected
+  (unittest discovery). See [CASE-FORMAT.md](CASE-FORMAT.md) for layout details. Every brief
+  requirement must have a test; unittest assertions are supported by the runner.
+  IDs and statuses, not test source/failure messages, enter public results.
+- `hidden/reference/` is a repository-relative overlay within allowed scope. It
+  is an example solution, not a prescribed model decomposition. It must pass every
+  tagged test. The untouched no-op repository must fail at least one test.
+
+Private cases live in a separate owner-approved repository. A cases path is either
+one case directory or a repository containing immediate case subdirectories.
+Agents may draft cases; the owner approves them before use. The
+[public example](example-case/case.toml) covers label keys with three requirements
+and six tests; it is intentionally public, not a private pilot substitute.
+
+Check a case from the checkout root:
+
+```sh
+uv run --project evals evalctl case-check evals/software-change/example-case
+uv run --project evals evalctl case-check /absolute/private-case-repository/CASE
+uv run --project evals evalctl case-check --expect-invalid evals/software-change/tests/fixtures/broken-case
+```
+
+Before Docker execution, `case-check` statically extracts identifier-like quoted
+literals from hidden Python tests (including dict keys and embedded JSON/json!
+keys, CLI flags and subcommands). It rejects names absent from the starting public
+repository, public request and hidden brief, listing at most 20 names. It never
+consults the reference overlay. Very short names (under four characters), a small
+common-word/runner-plumbing stoplist and `REQ-*` tags are ignored. Use
+`interface_allowlist = ["harness_only_name"]` for harness-only names, not to hide
+feature contracts that the owner must disclose. This conservative heuristic is
+not semantic analysis: computed identifiers can escape detection; fixture values
+that look like identifiers can need an explicit allowlist.
+
+Reference/no-op attempts use separate mount-free containers. Invalid references,
+collection mismatches and skips reject the case. `--expect-invalid` succeeds only
+for an invalid case, not an infrastructure error.
+
+### Image and unattended execution
+
+The [image](image/README.md) contains native arm64 Linux binaries built from the
+campaign's pinned local Git ref, Dagu, Pi, the two shipped skills, and role/owner
+commands. Run `uv run --project evals evalctl image-check` from the checkout root;
+no host mounts or image volumes are permitted. An image's commit identity must
+match the configured engine/provider refs; changing refs requires a matching image
+(selected with `target_options.image`). Credentials stay host-side behind Inspect's
+sandbox agent bridge, including `pi/claude-compat/claude-opus-5-5` via the installed
+host Pi SDK and `codex/gpt-6.1-sol` via the Codex subscription. The approved
+`campaigns/pilot.toml` sets per-model medium/high thinking respectively, with
+Codex high simulator/judge; loading this file does not authorize launching it.
+
+`scevals.target.SoftwareChangeTarget` implements the core interface. Every sample
+gets its own container and records the actual mount/bind configuration and copy
+log. The real driver uses `sc-driver` (Pi print mode); implementation/review use
+`sc-implement` and `sc-review`. Inspect aliases `role-driver`, `role-implementer`
+and `role-reviewer` map to the chosen combination, not model choices made by the
+driver. `ask-owner` reaches host service `sc_owner.ask_owner(question=...)`; only
+its answer, never the hidden brief, returns to the container. Simulator and judge
+roles are host-side evaluation overhead.
+
+`target_options.scripted_driver` accepts `never-asks`, `asks-and-builds` or
+`asks-but-does-not-build`. The shipped scripted campaigns and `ac5-demo` use real
+Pi, Docker, public engine CLI and no-network Inspect backends. They demonstrate
+lifecycle/routing/metric behavior, not semantic reviewer quality. A trusted
+`target_options.driver_command` argv array may replace `sc-driver`; the harness
+appends the fixed prompt. Normal drivers start from the vague request, with no
+prewritten intent and no human input after launch. No new engine/provider code
+is required.
+
+After every driver stop, raw `/workspace` is captured before parsing/scoring to
+`captures/<campaign>/<run timestamp>/<sample>/workspace.tar` plus host `meta.json`.
+The tar includes repo .git and local remote as well as DB/WAL, artifacts and raw
+show/history; cache-tagged directories (e.g. Cargo build target/) and .cache are
+excluded, while source directories merely named target are retained. If no run was
+created, CLI error receipts are retained without inventing DB/artifacts. Private
+captures never pass through the results scan.
+
+Scoring always starts a fresh mount-free trial-image container, restores this
+capture, and observes the captured DB. Only final/terminated runs receive hidden
+tests/reference; reference is never applied to delivered code. Terminated runs
+receive delivery metrics but cannot succeed. `evalctl rescore` uses this exact
+scorer. `campaign --resume` carries clean trials; `--resume-interrupted` or
+`resume-trial` restores an active trial and owner answers for a new driver segment.
+Resumed trials appear separately and do not enter headline success rate/pass^k.
+See "Rescore and continue" in checkout-root `evals/README.md` for exact commands, metadata/accounting and external snapshot recovery.
+Private artifacts and raw Inspect logs must never be selected for publication.
+The reports contain only metrics/IDs and safe evidence, not source or brief prose.
+
+### Target-specific scores and limits
+
+Defaults are idle 1800 seconds and hard 28800 seconds, set by
+`idle_limit_seconds` / `hard_limit_seconds`. While the driver runs, the host polls
+public engine show/history and Inspect sample role usage about every 60 seconds
+(more frequently for small idle limits). Changed history/context sequence or an
+increase in any role's total tokens resets the idle clock. A long progressing
+trial is not idle. An idle stop kills the driver process group; hard stops retain
+`DRIVER_LIMIT_MARGIN_SECONDS = 300` (minimum driver budget 60 seconds) for capture
+and scoring. Idle stops are failures. A hard stop or a campaign stop is a `limit` (see the core README's
+Budgets and stops); `driver_timeout_kind` and `run_health.timeout_kind` are `idle`, `hard` or `limit`, and a
+campaign stop is not counted in `run_health.timeouts`. The target honors campaign stops by killing the driver,
+then captures and scores what exists; capture, scoring and the judge are bounded by the time left before the campaign's
+hard end. The judge model is never called after a stop (`intent_judge.status = "limit"`). Before the bulk archive the
+target writes `isolation.json` (container id, image id, mounts, binds, platform) into the trial's capture, so a
+capture cut off at the deadline still carries its isolation evidence. Docker image inspection and ref lookups have
+timeouts. Scripted proof hooks: `target_options.scripted_capture_delay_seconds` and
+`scripted_scoring_delay_seconds` make those steps deliberately slow (see `tests/test_limit_proofs.py`).
+The Tier 0 campaign is `campaigns/tier0.toml`; see [TIERS.md](TIERS.md). The trial solver enforces the hard limit; Inspect's sample limit is a 10-second backstop. The driver-finally hook captures even bridge/owner/driver exceptions before
+scoring. Docker loss, host disk failure or abrupt host process death during a copy
+can still prevent a complete capture; partial chunks remain private and unknown
+dimensions stay null. `case-check` now verifies/reuses the pinned arm64 image and
+never implicitly rebuilds it; building is explicit `image-check` only.
+
+Metric definitions (computed in `scevals/target.py`):
+
+- Hidden-test outcome and tagged delivery recall, independently from elicitation
+  recall (requirements revealed by owner answers / hidden requirements).
+- Intent quality: the pinned host judge compares final intent against the brief;
+  its pass cannot override hidden-test success. [Calibration](calibration/README.md)
+  supplies owner-labelled agreement/false-pass counts beside scores. Missing
+  calibration is explicitly pending. `target_options.calibration_receipt` selects
+  a receipt with matching judge/prompt identities.
+- Review escapes: final reviews cleared while hidden tests failed.
+- Durable run health: unattended finish, denials, overrides, revise loops, schema
+  failures, overruns, timeouts and cancellations. External pre-intake correction
+  retries are not observable and remain null, not invented zero.
+- Discipline: delivered/reference diff size, outside-scope edits, successful pushes
+  to the sandbox-local bare remote (forbidden), and owner-question count. Rejected
+  pushes and deliberate instrumentation bypass are not measured.
+- Honesty: structured validation claims disagreeing with hidden results, missing
+  local evidence IDs/files/JSON pointers; remote/non-pointer references are
+  unverifiable and are not fetched. This does not judge arbitrary prose claims.
+- Actual Inspect usage per role alias and flags for needed worker roles never used.
+  Unrecovered trial dimensions remain unknown/null; failed trials are not dropped.
+
+The single-owner threat boundary does not claim hostile-model escape resistance.
+Small-sample noise, simulator bias and judge errors remain accepted risks. Only
+owner-gated real private-case campaigns and owner-confirmed labels can establish
+pilot usability and genuine calibration; scripted proofs cannot.
+
+Results are report/summary pairs in timestamped directories documented in the
+harness README. Run `evalctl check-results DIR --cases PATH` against all private
+cases and the runtime credential/config environment before selecting reports for
+Git. Only the owner authorizes staging, commits or pushes.
+
+## Validation
+
+Offline proofs with real Pi, Docker and engine but scripted, no-network models:
+
+```sh
+uv run --project evals pytest -q evals/software-change/tests
+uv run --project evals evalctl ac5-demo
+uv run --project evals evalctl case-check --expect-invalid evals/software-change/tests/fixtures/broken-case
+```
+
+They prove lifecycle, scoring and metric mechanics, not real-model quality.
+
+## Troubleshooting
+
+- **`case-check` rejects names in hidden tests.** The hidden tests rely on an
+  interface the public repo, request and brief never state. Name it in the brief
+  (as an owner answer), or use `interface_allowlist` only for harness-only names.
+- **`case-check` reports the case invalid.** The reference fails a tagged test, the
+  no-op passes every test, tests are untagged or skipped, or the case escapes its
+  directory. A collection mismatch usually means module-level test functions or a
+  test subdirectory without `__init__.py`; use tagged `unittest.TestCase` methods
+  (see [CASE-FORMAT.md](CASE-FORMAT.md)). Fix the case; `--expect-invalid` is only for the broken fixture.
+- **Hidden tests time out in a Rust case.** Raise `test_timeout_seconds` in
+  `case.toml`; building first can exceed the 60-second default.
+- **The image does not match the configured refs.** Rebuild with `image-check
+  --ref REF --tag TAG` and select it with `target_options.image`.
+- **A trial ends as infrastructure after a provider block.** It is excluded from
+  success rate. Recover with `resume-trial` only with owner approval; the resumed
+  result is reported separately.

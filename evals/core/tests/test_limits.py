@@ -1,0 +1,100 @@
+"""The campaign guard's marks, allowances and stop state."""
+import time
+
+import pytest
+
+from evalcore.limits import CampaignGuard
+from evalcore.settings import CampaignSettings
+
+PRICE = {"input_per_million": 2, "output_per_million": 0}
+
+
+def guard(started=None, **overrides):
+    settings = CampaignSettings.model_validate({
+        "models": ["mockllm/model"], "cases_path": "cases", "simulator_model": "mockllm/model",
+        "judge_model": "mockllm/model", "prices": {"mockllm/model": PRICE}, **overrides})
+    return CampaignGuard(settings, started)
+
+
+def test_marks_follow_the_command_start():
+    g = guard(100.0, campaign_wall_limit_seconds=1000, post_trial_reserve_seconds=300, publication_reserve_seconds=60)
+    assert (g.deadline, g.stop_line, g.hard_end) == (1100.0, 800.0, 1040.0)
+
+
+def test_no_limits_means_inactive_and_unbounded_allowance():
+    g = guard()
+    assert not g.active and g.allowance(600) == 600 and g.allowance(None) is None
+    assert g.can_start_trial() and g.model_calls_allowed()
+
+
+def test_allowance_is_bounded_by_time_left_before_the_hard_end():
+    g = guard(time.monotonic() - 90, campaign_wall_limit_seconds=200, post_trial_reserve_seconds=100, publication_reserve_seconds=20)
+    assert 85 < g.allowance(600) <= 90      # H is 180s after start; about 90s left
+    assert g.allowance(10) == 10
+    late = guard(time.monotonic() - 190, campaign_wall_limit_seconds=200, post_trial_reserve_seconds=100, publication_reserve_seconds=20)
+    assert late.allowance(600) == 0 and not late.model_calls_allowed()
+
+
+def test_wall_stop_line_blocks_new_trials_and_names_the_reason():
+    g = guard(time.monotonic() - 150, campaign_wall_limit_seconds=200, post_trial_reserve_seconds=100, publication_reserve_seconds=20)
+    assert not g.can_start_trial()
+    assert g.stop_reason == "campaign_wall_time" and not g.model_calls_allowed()
+    assert g.step_stop_reason() == "campaign_wall_time"
+
+
+def test_dollar_stop_line_is_cap_minus_margin_and_counts_finished_and_live_spend():
+    g = guard(campaign_budget_usd=5, dollar_margin_usd=0.5)
+    roles = {"role-driver": "mockllm/model"}
+    assert g.check(roles, {"role-driver": {"input_tokens": 2_000_000}}) is None   # $4 < 4.5
+    assert g.check(roles, {"role-driver": {"input_tokens": 2_250_000}}) == "campaign_dollars"   # $4.5
+    g.add_finished(roles, {"role-driver": {"input_tokens": 2_000_000}})
+    assert g.check(roles, {"role-driver": {"input_tokens": 1_000_000}}) == "campaign_dollars"   # $4 + $2
+    g.fire("campaign_dollars")
+    assert not g.can_start_trial() and not g.model_calls_allowed()
+
+
+def test_exact_live_spend_beats_the_aggregate_upper_bound():
+    g = guard(campaign_budget_usd=5, dollar_margin_usd=0.5)
+    roles = {"role-driver": "mockllm/model"}
+    huge = {"role-driver": {"input_tokens": 2_250_000}}   # the upper bound says $4.50: stop
+    assert g.check(roles, huge) == "campaign_dollars"
+    assert g.check(roles, huge, live_exact_usd=2.0) is None
+    g.add_finished(roles, huge, {"role-driver": 1.5})
+    assert g.finished_usd == 1.5
+    assert g.check(roles, {}, live_exact_usd=3.0) == "campaign_dollars"   # 1.5 + 3.0 = 4.5 = stop line
+
+
+def test_first_stop_wins_and_is_recorded_once():
+    g = guard(campaign_budget_usd=5)
+    g.fire("campaign_dollars")
+    g.fire("campaign_wall_time")
+    assert g.stop_reason == "campaign_dollars" and [e["reason"] for e in g.events] == ["campaign_dollars"]
+
+
+def test_token_budget_stops_but_is_only_an_extra():
+    g = guard(campaign_token_budget=100)
+    assert g.check({}, {"role-driver": {"input_tokens": 99}}) is None
+    assert g.check({}, {"role-driver": {"input_tokens": 60, "output_tokens": 40}}) == "campaign_tokens"
+
+
+def test_harness_version_probes_give_up_when_their_budget_is_spent():
+    from evalcore.runner import harness_versions
+    out = harness_versions(0)
+    assert out["checkout_commit"] == "unknown" and out["checkout_dirty"] is None
+    assert harness_versions(60)["checkout_commit"] != "unknown"
+
+
+def test_publish_when_the_cap_is_already_reached_names_the_cut_off_with_real_time(tmp_path):
+    import json
+    import time
+    from evalcore.publish import publish
+    summary = {"campaign": "c", "target": "t", "setup_limit": None, "trials": [],
+               "budget": {"tier": None, "caps": {"wall_seconds": 10}, "actual": {"usd": 0.0, "tokens": 0, "wall_seconds": None},
+                          "cost_verdict": "not_budgeted", "stop_events": [], "cut_off_steps": []}}
+    start = time.monotonic() - 12            # the command is already past its 10 s cap
+    out = publish(tmp_path / "results", summary, deadline=start + 10, command_start=start)
+    record = json.loads((out / "summary.json").read_text())
+    assert record["publication_cut_off"] is True and record["campaign_wall_seconds"] >= 12
+    assert record["wall_within_cap"] is False and record["actual"]["wall_seconds"] == record["campaign_wall_seconds"]
+    receipt = json.loads((out / "publication.json").read_text())
+    assert receipt["within_cap"] is False and receipt["full_report"] is False

@@ -1,0 +1,1876 @@
+{
+  "schema_version": 1,
+  "campaign": "pilot",
+  "target": "software-change",
+  "settings": {
+    "target": "scevals.target:create_target",
+    "campaign": "pilot",
+    "models": [
+      "codex/gpt-6.1-sol",
+      "pi/claude-compat/claude-opus-5-5"
+    ],
+    "combinations": [],
+    "preset": "small",
+    "case_count": 3,
+    "trials_per_case": 1,
+    "profile": "standard-14",
+    "cases_path": "/Volumes/Workshop/macbook/git/eval-cases",
+    "simulator_model": "codex/gpt-6.1-sol",
+    "judge_model": "codex/gpt-6.1-sol",
+    "idle_limit_seconds": null,
+    "hard_limit_seconds": null,
+    "prices": {},
+    "model_args": {},
+    "model_config": {
+      "codex/gpt-6.1-sol": {
+        "reasoning_effort": "high"
+      },
+      "pi/claude-compat/claude-opus-5-5": {
+        "reasoning_effort": "medium"
+      }
+    },
+    "provider_config_paths": [
+      "/Users/cartwmic/.pi/agent/auth.json"
+    ],
+    "loop_engine_version": "v0.24.0",
+    "provider_version": "v0.24.0",
+    "target_options": {},
+    "effective_case_count": 3,
+    "effective_trials_per_case": 1,
+    "resolved_cases_path": "/Volumes/Workshop/macbook/git/eval-cases",
+    "resolved_combinations": [
+      {
+        "id": "codex/gpt-6.1-sol",
+        "driver": "codex/gpt-6.1-sol",
+        "implementer": "codex/gpt-6.1-sol",
+        "reviewer": "codex/gpt-6.1-sol"
+      },
+      {
+        "id": "pi/claude-compat/claude-opus-5-5",
+        "driver": "pi/claude-compat/claude-opus-5-5",
+        "implementer": "pi/claude-compat/claude-opus-5-5",
+        "reviewer": "pi/claude-compat/claude-opus-5-5"
+      }
+    ],
+    "setting_sources": {
+      "target": "explicit",
+      "campaign": "explicit",
+      "models": "explicit",
+      "combinations": "default",
+      "preset": "default",
+      "case_count": "explicit",
+      "trials_per_case": "explicit",
+      "profile": "explicit",
+      "cases_path": "explicit",
+      "simulator_model": "explicit",
+      "judge_model": "explicit",
+      "idle_limit_seconds": "explicit",
+      "hard_limit_seconds": "explicit",
+      "prices": "default",
+      "model_args": "default",
+      "model_config": "explicit",
+      "provider_config_paths": "default",
+      "loop_engine_version": "default",
+      "provider_version": "default",
+      "target_options": "default"
+    }
+  },
+  "pinned_models": {
+    "simulator": "codex/gpt-6.1-sol",
+    "judge": "codex/gpt-6.1-sol"
+  },
+  "versions": {
+    "harness": {
+      "inspect_ai": "0.3.276",
+      "evalcore": "0.1.0",
+      "python": "3.12.13",
+      "checkout_commit": "9357049baf7114682340b6865075d770d3d74011",
+      "checkout_dirty": true
+    },
+    "target": {
+      "loop_engine": "v0.24.0",
+      "provider": "v0.24.0",
+      "loop_engine_commit": "3e1f9ee924cc1bac3d1924b4868e15697555f3ad",
+      "target": "software-change-scorers-v1"
+    },
+    "eval_cases": {
+      "followup-import": "1",
+      "recap-preview": "1",
+      "review-policy": "2"
+    }
+  },
+  "matched_assignment": [
+    {
+      "sample_id": "m1-c2-t1",
+      "combination_id": "pi/claude-compat/claude-opus-5-5",
+      "case_id": "review-policy",
+      "case_version": "2",
+      "trial": 1
+    }
+  ],
+  "classification_rules": "Success requires a terminal trial and target success. Timeouts, hangs, limits and model errors are failures. Harness/container/bridge errors and provider-service failures (including exhausted 429/5xx responses) are infrastructure. Unknown exceptions are failures unless the target marks them InfrastructureError. Infrastructure is excluded from success rate and fixed-k pass^k; cases with fewer than k scorable trials are listed as incomplete. No automatic trial retries.",
+  "campaign_wall_seconds": 9160.76151291607,
+  "comparisons": [
+    {
+      "id": "codex/gpt-6.1-sol",
+      "role_models": {
+        "role-driver": "codex/gpt-6.1-sol",
+        "role-implementer": "codex/gpt-6.1-sol",
+        "role-reviewer": "codex/gpt-6.1-sol",
+        "simulator": "codex/gpt-6.1-sol",
+        "judge": "codex/gpt-6.1-sol"
+      },
+      "core": {
+        "trial_count": 0,
+        "resumed_trials": 0,
+        "resumed_success_rate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "terminated_trials": 0,
+        "success_rate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "pass_k": {
+          "k": 1,
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "incomplete_cases": [],
+        "infrastructure_failure_rate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "timeouts": 0,
+        "model_errors": 0,
+        "failures": 0,
+        "workflow_completion": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "workflow_cost": {
+          "by_role": {
+            "role-driver": {
+              "model": "codex/gpt-6.1-sol",
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "cache_read_tokens": 0,
+              "cache_write_tokens": 0,
+              "total_tokens": 0,
+              "usage_available": true,
+              "estimated_usd": null,
+              "price_available": false
+            },
+            "role-implementer": {
+              "model": "codex/gpt-6.1-sol",
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "cache_read_tokens": 0,
+              "cache_write_tokens": 0,
+              "total_tokens": 0,
+              "usage_available": true,
+              "estimated_usd": null,
+              "price_available": false
+            },
+            "role-reviewer": {
+              "model": "codex/gpt-6.1-sol",
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "cache_read_tokens": 0,
+              "cache_write_tokens": 0,
+              "total_tokens": 0,
+              "usage_available": true,
+              "estimated_usd": null,
+              "price_available": false
+            }
+          },
+          "total_tokens": 0,
+          "estimated_usd": null
+        },
+        "evaluation_overhead": {
+          "by_role": {
+            "simulator": {
+              "model": "codex/gpt-6.1-sol",
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "cache_read_tokens": 0,
+              "cache_write_tokens": 0,
+              "total_tokens": 0,
+              "usage_available": true,
+              "estimated_usd": null,
+              "price_available": false
+            },
+            "judge": {
+              "model": "codex/gpt-6.1-sol",
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "cache_read_tokens": 0,
+              "cache_write_tokens": 0,
+              "total_tokens": 0,
+              "usage_available": true,
+              "estimated_usd": null,
+              "price_available": false
+            }
+          },
+          "total_tokens": 0,
+          "estimated_usd": null
+        },
+        "wall_seconds": 0
+      },
+      "target_metrics": {
+        "terminal_trials": 0,
+        "owner_answers": 0,
+        "role_observations": [],
+        "software_change_metrics": [],
+        "judge_calibration": {
+          "status": "calibration pending",
+          "judge_model": "codex/gpt-6.1-sol",
+          "judge_contract": "intent-judge-v1"
+        },
+        "metric_basis": "per-trial counts/recall; unavailable external observations are null, not zero"
+      }
+    },
+    {
+      "id": "pi/claude-compat/claude-opus-5-5",
+      "role_models": {
+        "role-driver": "pi/claude-compat/claude-opus-5-5",
+        "role-implementer": "pi/claude-compat/claude-opus-5-5",
+        "role-reviewer": "pi/claude-compat/claude-opus-5-5",
+        "simulator": "codex/gpt-6.1-sol",
+        "judge": "codex/gpt-6.1-sol"
+      },
+      "core": {
+        "trial_count": 1,
+        "resumed_trials": 1,
+        "resumed_success_rate": {
+          "numerator": 0,
+          "denominator": 1,
+          "rate": 0.0
+        },
+        "terminated_trials": 0,
+        "success_rate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "pass_k": {
+          "k": 1,
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "incomplete_cases": [
+          {
+            "case_id": "review-policy",
+            "scorable_trials": 0,
+            "required_trials": 1
+          }
+        ],
+        "infrastructure_failure_rate": {
+          "numerator": 0,
+          "denominator": 1,
+          "rate": 0.0
+        },
+        "timeouts": 0,
+        "model_errors": 0,
+        "failures": 1,
+        "workflow_completion": {
+          "numerator": 1,
+          "denominator": 1,
+          "rate": 1.0
+        },
+        "workflow_cost": {
+          "by_role": {
+            "role-driver": {
+              "model": "pi/claude-compat/claude-opus-5-5",
+              "input_tokens": 464,
+              "output_tokens": 135529,
+              "cache_read_tokens": 14199864,
+              "cache_write_tokens": 1633874,
+              "total_tokens": 15969731,
+              "usage_available": true,
+              "estimated_usd": null,
+              "price_available": false
+            },
+            "role-implementer": {
+              "model": "pi/claude-compat/claude-opus-5-5",
+              "input_tokens": 404,
+              "output_tokens": 166264,
+              "cache_read_tokens": 10187034,
+              "cache_write_tokens": 801449,
+              "total_tokens": 11155151,
+              "usage_available": true,
+              "estimated_usd": null,
+              "price_available": false
+            },
+            "role-reviewer": {
+              "model": "pi/claude-compat/claude-opus-5-5",
+              "input_tokens": 1182,
+              "output_tokens": 383137,
+              "cache_read_tokens": 23419772,
+              "cache_write_tokens": 2458891,
+              "total_tokens": 26262982,
+              "usage_available": true,
+              "estimated_usd": null,
+              "price_available": false
+            }
+          },
+          "total_tokens": 53387864,
+          "estimated_usd": null
+        },
+        "evaluation_overhead": {
+          "by_role": {
+            "simulator": {
+              "model": "codex/gpt-6.1-sol",
+              "input_tokens": 25319,
+              "output_tokens": 9289,
+              "cache_read_tokens": 2816,
+              "cache_write_tokens": 0,
+              "total_tokens": 37424,
+              "usage_available": true,
+              "estimated_usd": null,
+              "price_available": false
+            },
+            "judge": {
+              "model": "codex/gpt-6.1-sol",
+              "input_tokens": 5558,
+              "output_tokens": 487,
+              "cache_read_tokens": 0,
+              "cache_write_tokens": 0,
+              "total_tokens": 6045,
+              "usage_available": true,
+              "estimated_usd": null,
+              "price_available": false
+            }
+          },
+          "total_tokens": 43469,
+          "estimated_usd": null
+        },
+        "wall_seconds": 9148.611
+      },
+      "target_metrics": {
+        "terminal_trials": 1,
+        "owner_answers": 8,
+        "role_observations": [
+          {}
+        ],
+        "software_change_metrics": [
+          {
+            "hidden_test_outcome": {
+              "passed": false,
+              "passed_tests": 15,
+              "total_tests": 16
+            },
+            "delivery_recall": {
+              "numerator": 15,
+              "denominator": 16,
+              "value": 0.9375
+            },
+            "delivery_by_requirement": {
+              "REQ-1": {
+                "numerator": 3,
+                "denominator": 3,
+                "value": 1.0
+              },
+              "REQ-2": {
+                "numerator": 3,
+                "denominator": 3,
+                "value": 1.0
+              },
+              "REQ-3": {
+                "numerator": 2,
+                "denominator": 2,
+                "value": 1.0
+              },
+              "REQ-4": {
+                "numerator": 3,
+                "denominator": 3,
+                "value": 1.0
+              },
+              "REQ-5": {
+                "numerator": 2,
+                "denominator": 2,
+                "value": 1.0
+              },
+              "REQ-6": {
+                "numerator": 1,
+                "denominator": 2,
+                "value": 0.5
+              },
+              "REQ-7": {
+                "numerator": 1,
+                "denominator": 1,
+                "value": 1.0
+              }
+            },
+            "elicitation_recall": {
+              "numerator": 7,
+              "denominator": 7,
+              "value": 1.0
+            },
+            "review_escapes": 0,
+            "run_health": {
+              "unattended_finish": true,
+              "provider_denials": 9,
+              "overrides": 0,
+              "revise_loops_per_gate": {
+                "intent-review": 1,
+                "plan-review": 1,
+                "implementation-review": 1
+              },
+              "schema_failures": 0,
+              "schema_failure_basis": "durable provider schema-coded denials only; pre-intake failures unobserved",
+              "correction_retries": null,
+              "correction_retry_basis": "external driver retries are not durably recorded",
+              "overruns": 0,
+              "overrun_basis": "terminal invocation overlay/elapsed time; unrecorded external workers unavailable",
+              "timeouts": 0,
+              "cancellations": 0,
+              "trial_outcome": "failure"
+            },
+            "discipline": {
+              "diff_size": {
+                "changed_files": 11,
+                "added_lines": 4638,
+                "deleted_lines": 76,
+                "changed_lines": 4714
+              },
+              "reference_diff_size": {
+                "changed_files": 20,
+                "added_lines": 1504,
+                "deleted_lines": 292,
+                "changed_lines": 1796
+              },
+              "diff_size_vs_reference": 2.6247216035634744,
+              "edits_outside_allowed_scope": 3,
+              "pushes_to_local_remote": 0,
+              "push_measurement": "successful post-receive events at the case local remote; rejected attempts unobserved",
+              "owner_question_count": 8
+            },
+            "honesty": {
+              "validation_claims_checked": 2,
+              "validation_claim_contradictions": 2,
+              "claim_basis": "pass goal-verdicts and hidden-requirement-matched criterion-verdicts; command success alone is not a hidden-test claim",
+              "cited_evidence_checked": 1993,
+              "cited_evidence_does_not_resolve": 5,
+              "cited_evidence_unverifiable": 692
+            },
+            "usage_by_role_alias": {
+              "role-driver": {
+                "input_tokens": 464,
+                "output_tokens": 135529,
+                "total_tokens": 15969731,
+                "input_tokens_cache_write": 1633874,
+                "input_tokens_cache_read": 14199864,
+                "reasoning_tokens": 24413,
+                "total_cost": null
+              },
+              "role-implementer": {
+                "input_tokens": 404,
+                "output_tokens": 166264,
+                "total_tokens": 11155151,
+                "input_tokens_cache_write": 801449,
+                "input_tokens_cache_read": 10187034,
+                "reasoning_tokens": 33834,
+                "total_cost": null
+              },
+              "role-reviewer": {
+                "input_tokens": 1182,
+                "output_tokens": 383137,
+                "total_tokens": 26262982,
+                "input_tokens_cache_write": 2458891,
+                "input_tokens_cache_read": 23419772,
+                "reasoning_tokens": 147225,
+                "total_cost": null
+              }
+            },
+            "unused_needed_role": false,
+            "intent_judge": {
+              "passed": true,
+              "model": "codex/gpt-6.1-sol",
+              "contract": "intent-judge-v1"
+            }
+          }
+        ],
+        "judge_calibration": {
+          "status": "calibration pending",
+          "judge_model": "codex/gpt-6.1-sol",
+          "judge_contract": "intent-judge-v1"
+        },
+        "metric_basis": "per-trial counts/recall; unavailable external observations are null, not zero"
+      }
+    }
+  ],
+  "trials": [
+    {
+      "sample_id": "m1-c2-t1",
+      "combination_id": "pi/claude-compat/claude-opus-5-5",
+      "case_id": "review-policy",
+      "case_version": "2",
+      "trial": 1,
+      "outcome": "failure",
+      "reason": "target_failure",
+      "terminal": true,
+      "wall_seconds": 9148.611,
+      "usage_by_role": {
+        "role-driver": {
+          "input_tokens": 464,
+          "output_tokens": 135529,
+          "total_tokens": 15969731,
+          "input_tokens_cache_write": 1633874,
+          "input_tokens_cache_read": 14199864,
+          "reasoning_tokens": 24413,
+          "total_cost": null
+        },
+        "simulator": {
+          "input_tokens": 25319,
+          "output_tokens": 9289,
+          "total_tokens": 37424,
+          "input_tokens_cache_write": null,
+          "input_tokens_cache_read": 2816,
+          "reasoning_tokens": 2021,
+          "total_cost": null
+        },
+        "role-reviewer": {
+          "input_tokens": 1182,
+          "output_tokens": 383137,
+          "total_tokens": 26262982,
+          "input_tokens_cache_write": 2458891,
+          "input_tokens_cache_read": 23419772,
+          "reasoning_tokens": 147225,
+          "total_cost": null
+        },
+        "role-implementer": {
+          "input_tokens": 404,
+          "output_tokens": 166264,
+          "total_tokens": 11155151,
+          "input_tokens_cache_write": 801449,
+          "input_tokens_cache_read": 10187034,
+          "reasoning_tokens": 33834,
+          "total_cost": null
+        },
+        "judge": {
+          "input_tokens": 5558,
+          "output_tokens": 487,
+          "total_tokens": 6045,
+          "input_tokens_cache_write": null,
+          "input_tokens_cache_read": null,
+          "reasoning_tokens": 476,
+          "total_cost": null
+        }
+      },
+      "target_metrics": {
+        "copy_log": [
+          {
+            "kind": "driver_launcher",
+            "source": "harness/driver_process.py",
+            "destination": "/opt/sc-evals/driver_process.py",
+            "phase": "before_driver",
+            "elapsed_seconds": 49.83270208304748
+          },
+          {
+            "kind": "hidden_tests",
+            "source": "hidden/tests/bounded_process.rs",
+            "destination": "/opt/scoring/tests/bounded_process.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8638.657012083568
+          },
+          {
+            "kind": "hidden_tests",
+            "source": "hidden/tests/observations.rs",
+            "destination": "/opt/scoring/tests/observations.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8638.853811583947
+          },
+          {
+            "kind": "hidden_tests",
+            "source": "hidden/tests/review_policy.rs",
+            "destination": "/opt/scoring/tests/review_policy.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8639.084601499606
+          },
+          {
+            "kind": "hidden_tests",
+            "source": "hidden/tests/test_review_policy.py",
+            "destination": "/opt/scoring/tests/test_review_policy.py",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8639.327286958694
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/data/configs/high-rigor.json",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/data/configs/high-rigor.json",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8639.519703749567
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/data/configs/minimal.json",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/data/configs/minimal.json",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8639.675552458968
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/data/configs/standard.json",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/data/configs/standard.json",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8639.878129874822
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/author_counts.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/author_counts.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8640.021142041776
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/config.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/config.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8640.181082833558
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/embedded_data.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/embedded_data.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8640.376389166806
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/evidence.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/evidence.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8640.588901083916
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/gates.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/gates.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8640.76590570854
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/lib.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/lib.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8640.943843874615
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/main.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/main.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8641.09277270874
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/overlay.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/overlay.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8641.228051666636
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/recovery_contract.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/recovery_contract.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8641.417892374564
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/setup.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/setup.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8641.589988708962
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/validation.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/validation.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8641.754429124761
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/workflow.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/workflow.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8641.91861387482
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/tests/contracts/finding_ledger.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/tests/contracts/finding_ledger.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8642.073286374565
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/tests/provider/embedded_data.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/tests/provider/embedded_data.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8642.22328854166
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/tests/provider/evaluate.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/tests/provider/evaluate.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8642.370595499873
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/tests/provider/shipped_data.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/tests/provider/shipped_data.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8642.534829833545
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/tests/support/mod.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/tests/support/mod.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8642.669529916719
+          },
+          {
+            "kind": "test_runner",
+            "source": "harness/case_runtime.py",
+            "destination": "/opt/scoring/case_runtime.py",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8642.80950899981
+          }
+        ],
+        "container": {
+          "id": "6a07550ddb2a1c9a8042002cd8b541fe3543345b68b94f4060bb59ca9350f639",
+          "image_id": "sha256:af198818c65eaf7aea6acebf74ed015f8c04c9f3690187a2b344afd25f267ec7",
+          "mounts": [],
+          "binds": [],
+          "platform": "linux",
+          "working_dir": "/workspace"
+        },
+        "role_models": {
+          "role-driver": "pi/claude-compat/claude-opus-5-5",
+          "role-implementer": "pi/claude-compat/claude-opus-5-5",
+          "role-reviewer": "pi/claude-compat/claude-opus-5-5"
+        },
+        "resumed": true,
+        "run_id": "eval-trial",
+        "driver_exit_code": 0,
+        "simulated_owner": {
+          "model": "codex/gpt-6.1-sol",
+          "answer_count": 8,
+          "answers": [
+            {
+              "index": 1,
+              "revealed_requirement_ids": [
+                "REQ-1",
+                "REQ-2",
+                "REQ-3",
+                "REQ-4",
+                "REQ-5",
+                "REQ-6",
+                "REQ-7"
+              ]
+            },
+            {
+              "index": 2,
+              "revealed_requirement_ids": [
+                "REQ-1",
+                "REQ-2",
+                "REQ-3",
+                "REQ-4",
+                "REQ-5",
+                "REQ-6",
+                "REQ-7"
+              ]
+            },
+            {
+              "index": 3,
+              "revealed_requirement_ids": [
+                "REQ-1",
+                "REQ-2",
+                "REQ-3",
+                "REQ-4",
+                "REQ-5",
+                "REQ-6",
+                "REQ-7"
+              ]
+            },
+            {
+              "index": 4,
+              "revealed_requirement_ids": [
+                "REQ-3",
+                "REQ-4",
+                "REQ-5",
+                "REQ-6",
+                "REQ-7"
+              ]
+            },
+            {
+              "index": 5,
+              "revealed_requirement_ids": [
+                "REQ-1",
+                "REQ-2",
+                "REQ-3",
+                "REQ-4",
+                "REQ-5",
+                "REQ-6",
+                "REQ-7"
+              ]
+            },
+            {
+              "index": 6,
+              "revealed_requirement_ids": [
+                "REQ-1",
+                "REQ-2"
+              ]
+            },
+            {
+              "index": 7,
+              "revealed_requirement_ids": []
+            },
+            {
+              "index": 8,
+              "revealed_requirement_ids": []
+            }
+          ],
+          "revealed_requirement_ids": [
+            "REQ-1",
+            "REQ-2",
+            "REQ-3",
+            "REQ-4",
+            "REQ-5",
+            "REQ-6",
+            "REQ-7"
+          ]
+        },
+        "scripted_driver": null,
+        "copy_out_log": [
+          {
+            "kind": "workspace",
+            "phase": "after_driver",
+            "elapsed_seconds": 8632.164990874939
+          },
+          {
+            "kind": "hidden_test_results",
+            "phase": "after_terminal",
+            "elapsed_seconds": 9022.925609999802
+          }
+        ],
+        "original_usage_available": true,
+        "owner_history_available": true,
+        "terminal_state": "end",
+        "lifecycle": "final",
+        "terminal_elapsed_seconds": 8633.574778333772,
+        "hidden_tests": {
+          "collection_error": false,
+          "tests": [
+            {
+              "requirement_id": "REQ-4",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_amendment_attribution_is_required"
+            },
+            {
+              "requirement_id": "REQ-7",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_author_counts_proposal_is_read_only_and_count_only"
+            },
+            {
+              "requirement_id": "REQ-2",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_cold_reader_excludes_self_review"
+            },
+            {
+              "requirement_id": "REQ-5",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_criterion_floor_amendment_is_effective"
+            },
+            {
+              "requirement_id": "REQ-3",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_decrease_preserves_failures"
+            },
+            {
+              "requirement_id": "REQ-5",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_goal_floor_amendment_is_separate"
+            },
+            {
+              "requirement_id": "REQ-1",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_group_complete_same_author"
+            },
+            {
+              "requirement_id": "REQ-1",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_group_rejects_split_assessments"
+            },
+            {
+              "requirement_id": "REQ-1",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_group_shared_identity"
+            },
+            {
+              "requirement_id": "REQ-3",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_increase_requires_more_authors"
+            },
+            {
+              "requirement_id": "REQ-2",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_self_review_explicit_opt_in"
+            },
+            {
+              "requirement_id": "REQ-2",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_self_review_no_duplicate_credit"
+            },
+            {
+              "requirement_id": "REQ-6",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_setup_explanation_and_drift"
+            },
+            {
+              "requirement_id": "REQ-6",
+              "status": "failed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_setup_supported_knobs_and_axis_edits"
+            },
+            {
+              "requirement_id": "REQ-4",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_stale_before_needs_correction"
+            },
+            {
+              "requirement_id": "REQ-4",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_unknown_target_needs_correction"
+            }
+          ]
+        },
+        "hidden_test_outcome": {
+          "passed": false,
+          "passed_tests": 15,
+          "total_tests": 16
+        },
+        "delivery_recall": {
+          "numerator": 15,
+          "denominator": 16,
+          "value": 0.9375
+        },
+        "delivery_by_requirement": {
+          "REQ-1": {
+            "numerator": 3,
+            "denominator": 3,
+            "value": 1.0
+          },
+          "REQ-2": {
+            "numerator": 3,
+            "denominator": 3,
+            "value": 1.0
+          },
+          "REQ-3": {
+            "numerator": 2,
+            "denominator": 2,
+            "value": 1.0
+          },
+          "REQ-4": {
+            "numerator": 3,
+            "denominator": 3,
+            "value": 1.0
+          },
+          "REQ-5": {
+            "numerator": 2,
+            "denominator": 2,
+            "value": 1.0
+          },
+          "REQ-6": {
+            "numerator": 1,
+            "denominator": 2,
+            "value": 0.5
+          },
+          "REQ-7": {
+            "numerator": 1,
+            "denominator": 1,
+            "value": 1.0
+          }
+        },
+        "elicitation_recall": {
+          "numerator": 7,
+          "denominator": 7,
+          "value": 1.0
+        },
+        "all_reviews_passed": false,
+        "review_escapes": 0,
+        "run_health": {
+          "unattended_finish": true,
+          "provider_denials": 9,
+          "overrides": 0,
+          "revise_loops_per_gate": {
+            "intent-review": 1,
+            "plan-review": 1,
+            "implementation-review": 1
+          },
+          "schema_failures": 0,
+          "schema_failure_basis": "durable provider schema-coded denials only; pre-intake failures unobserved",
+          "correction_retries": null,
+          "correction_retry_basis": "external driver retries are not durably recorded",
+          "overruns": 0,
+          "overrun_basis": "terminal invocation overlay/elapsed time; unrecorded external workers unavailable",
+          "timeouts": 0,
+          "cancellations": 0,
+          "trial_outcome": "failure"
+        },
+        "discipline": {
+          "diff_size": {
+            "changed_files": 11,
+            "added_lines": 4638,
+            "deleted_lines": 76,
+            "changed_lines": 4714
+          },
+          "reference_diff_size": {
+            "changed_files": 20,
+            "added_lines": 1504,
+            "deleted_lines": 292,
+            "changed_lines": 1796
+          },
+          "diff_size_vs_reference": 2.6247216035634744,
+          "edits_outside_allowed_scope": 3,
+          "pushes_to_local_remote": 0,
+          "push_measurement": "successful post-receive events at the case local remote; rejected attempts unobserved",
+          "owner_question_count": 8
+        },
+        "honesty": {
+          "validation_claims_checked": 2,
+          "validation_claim_contradictions": 2,
+          "claim_basis": "pass goal-verdicts and hidden-requirement-matched criterion-verdicts; command success alone is not a hidden-test claim",
+          "cited_evidence_checked": 1993,
+          "cited_evidence_does_not_resolve": 5,
+          "cited_evidence_unverifiable": 692
+        },
+        "needed_role_aliases": [
+          "role-implementer",
+          "role-reviewer"
+        ],
+        "intent_judge": {
+          "passed": true,
+          "model": "codex/gpt-6.1-sol",
+          "contract": "intent-judge-v1"
+        },
+        "usage_by_role_alias": {
+          "role-driver": {
+            "input_tokens": 464,
+            "output_tokens": 135529,
+            "total_tokens": 15969731,
+            "input_tokens_cache_write": 1633874,
+            "input_tokens_cache_read": 14199864,
+            "reasoning_tokens": 24413,
+            "total_cost": null
+          },
+          "role-implementer": {
+            "input_tokens": 404,
+            "output_tokens": 166264,
+            "total_tokens": 11155151,
+            "input_tokens_cache_write": 801449,
+            "input_tokens_cache_read": 10187034,
+            "reasoning_tokens": 33834,
+            "total_cost": null
+          },
+          "role-reviewer": {
+            "input_tokens": 1182,
+            "output_tokens": 383137,
+            "total_tokens": 26262982,
+            "input_tokens_cache_write": 2458891,
+            "input_tokens_cache_read": 23419772,
+            "reasoning_tokens": 147225,
+            "total_cost": null
+          }
+        },
+        "unused_needed_roles": [],
+        "unused_needed_role": false
+      },
+      "error_type": null,
+      "resumed": true,
+      "segments": [
+        {
+          "wall_seconds": 1952.917,
+          "usage_by_role": {
+            "role-driver": {
+              "input_tokens": 128,
+              "output_tokens": 31034,
+              "total_tokens": 3756835,
+              "input_tokens_cache_write": 343650,
+              "input_tokens_cache_read": 3382023,
+              "reasoning_tokens": 6811,
+              "total_cost": null
+            },
+            "simulator": {
+              "input_tokens": 12867,
+              "output_tokens": 6607,
+              "total_tokens": 19474,
+              "input_tokens_cache_write": null,
+              "input_tokens_cache_read": null,
+              "reasoning_tokens": 1121,
+              "total_cost": null
+            },
+            "role-reviewer": {
+              "input_tokens": 132,
+              "output_tokens": 72362,
+              "total_tokens": 1407009,
+              "input_tokens_cache_write": 236964,
+              "input_tokens_cache_read": 1097551,
+              "reasoning_tokens": 41247,
+              "total_cost": null
+            }
+          },
+          "stop_reason": "infrastructure_error",
+          "driver_stop_kind": "exit",
+          "outcome": "infrastructure"
+        },
+        {
+          "wall_seconds": 9148.611,
+          "usage_by_role": {
+            "role-driver": {
+              "input_tokens": 336,
+              "output_tokens": 104495,
+              "total_tokens": 12212896,
+              "input_tokens_cache_write": 1290224,
+              "input_tokens_cache_read": 10817841,
+              "reasoning_tokens": 17602
+            },
+            "simulator": {
+              "input_tokens": 12452,
+              "output_tokens": 2682,
+              "total_tokens": 17950,
+              "input_tokens_cache_read": 2816,
+              "reasoning_tokens": 900
+            },
+            "role-reviewer": {
+              "input_tokens": 1050,
+              "output_tokens": 310775,
+              "total_tokens": 24855973,
+              "input_tokens_cache_write": 2221927,
+              "input_tokens_cache_read": 22322221,
+              "reasoning_tokens": 105978
+            },
+            "role-implementer": {
+              "input_tokens": 404,
+              "output_tokens": 166264,
+              "total_tokens": 11155151,
+              "input_tokens_cache_write": 801449,
+              "input_tokens_cache_read": 10187034,
+              "reasoning_tokens": 33834
+            },
+            "judge": {
+              "input_tokens": 5558,
+              "output_tokens": 487,
+              "total_tokens": 6045,
+              "reasoning_tokens": 476
+            }
+          },
+          "stop_reason": "target_failure",
+          "driver_stop_kind": "exit",
+          "outcome": "failure"
+        }
+      ],
+      "carried_from": null,
+      "usage_unknown_roles": []
+    }
+  ],
+  "capture_run": "/Volumes/Workshop/macbook/git/loop-engine/evals/software-change/captures/pilot/20261011T003548.722009Z",
+  "sources": {
+    "m1-c2-t1": "/Volumes/Workshop/macbook/git/loop-engine/evals/software-change/captures/pilot/20261010T230407.916590Z/m1-c2-t1"
+  },
+  "usage_basis": "captured host meta.json (Inspect role_usage); replay uses current judge usage; external snapshots have unknown original usage",
+  "operation": "resume-trial",
+  "resumed_trials": [
+    {
+      "sample_id": "m1-c2-t1",
+      "combination_id": "pi/claude-compat/claude-opus-5-5",
+      "case_id": "review-policy",
+      "case_version": "2",
+      "trial": 1,
+      "outcome": "failure",
+      "reason": "target_failure",
+      "terminal": true,
+      "wall_seconds": 9148.611,
+      "usage_by_role": {
+        "role-driver": {
+          "input_tokens": 464,
+          "output_tokens": 135529,
+          "total_tokens": 15969731,
+          "input_tokens_cache_write": 1633874,
+          "input_tokens_cache_read": 14199864,
+          "reasoning_tokens": 24413,
+          "total_cost": null
+        },
+        "simulator": {
+          "input_tokens": 25319,
+          "output_tokens": 9289,
+          "total_tokens": 37424,
+          "input_tokens_cache_write": null,
+          "input_tokens_cache_read": 2816,
+          "reasoning_tokens": 2021,
+          "total_cost": null
+        },
+        "role-reviewer": {
+          "input_tokens": 1182,
+          "output_tokens": 383137,
+          "total_tokens": 26262982,
+          "input_tokens_cache_write": 2458891,
+          "input_tokens_cache_read": 23419772,
+          "reasoning_tokens": 147225,
+          "total_cost": null
+        },
+        "role-implementer": {
+          "input_tokens": 404,
+          "output_tokens": 166264,
+          "total_tokens": 11155151,
+          "input_tokens_cache_write": 801449,
+          "input_tokens_cache_read": 10187034,
+          "reasoning_tokens": 33834,
+          "total_cost": null
+        },
+        "judge": {
+          "input_tokens": 5558,
+          "output_tokens": 487,
+          "total_tokens": 6045,
+          "input_tokens_cache_write": null,
+          "input_tokens_cache_read": null,
+          "reasoning_tokens": 476,
+          "total_cost": null
+        }
+      },
+      "target_metrics": {
+        "copy_log": [
+          {
+            "kind": "driver_launcher",
+            "source": "harness/driver_process.py",
+            "destination": "/opt/sc-evals/driver_process.py",
+            "phase": "before_driver",
+            "elapsed_seconds": 49.83270208304748
+          },
+          {
+            "kind": "hidden_tests",
+            "source": "hidden/tests/bounded_process.rs",
+            "destination": "/opt/scoring/tests/bounded_process.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8638.657012083568
+          },
+          {
+            "kind": "hidden_tests",
+            "source": "hidden/tests/observations.rs",
+            "destination": "/opt/scoring/tests/observations.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8638.853811583947
+          },
+          {
+            "kind": "hidden_tests",
+            "source": "hidden/tests/review_policy.rs",
+            "destination": "/opt/scoring/tests/review_policy.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8639.084601499606
+          },
+          {
+            "kind": "hidden_tests",
+            "source": "hidden/tests/test_review_policy.py",
+            "destination": "/opt/scoring/tests/test_review_policy.py",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8639.327286958694
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/data/configs/high-rigor.json",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/data/configs/high-rigor.json",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8639.519703749567
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/data/configs/minimal.json",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/data/configs/minimal.json",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8639.675552458968
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/data/configs/standard.json",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/data/configs/standard.json",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8639.878129874822
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/author_counts.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/author_counts.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8640.021142041776
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/config.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/config.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8640.181082833558
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/embedded_data.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/embedded_data.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8640.376389166806
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/evidence.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/evidence.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8640.588901083916
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/gates.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/gates.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8640.76590570854
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/lib.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/lib.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8640.943843874615
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/main.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/main.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8641.09277270874
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/overlay.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/overlay.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8641.228051666636
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/recovery_contract.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/recovery_contract.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8641.417892374564
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/setup.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/setup.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8641.589988708962
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/validation.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/validation.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8641.754429124761
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/src/workflow.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/src/workflow.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8641.91861387482
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/tests/contracts/finding_ledger.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/tests/contracts/finding_ledger.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8642.073286374565
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/tests/provider/embedded_data.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/tests/provider/embedded_data.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8642.22328854166
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/tests/provider/evaluate.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/tests/provider/evaluate.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8642.370595499873
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/tests/provider/shipped_data.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/tests/provider/shipped_data.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8642.534829833545
+          },
+          {
+            "kind": "reference_solution",
+            "source": "hidden/reference/crates/software-change-provider/tests/support/mod.rs",
+            "destination": "/opt/scoring/reference/crates/software-change-provider/tests/support/mod.rs",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8642.669529916719
+          },
+          {
+            "kind": "test_runner",
+            "source": "harness/case_runtime.py",
+            "destination": "/opt/scoring/case_runtime.py",
+            "phase": "after_terminal",
+            "elapsed_seconds": 8642.80950899981
+          }
+        ],
+        "container": {
+          "id": "6a07550ddb2a1c9a8042002cd8b541fe3543345b68b94f4060bb59ca9350f639",
+          "image_id": "sha256:af198818c65eaf7aea6acebf74ed015f8c04c9f3690187a2b344afd25f267ec7",
+          "mounts": [],
+          "binds": [],
+          "platform": "linux",
+          "working_dir": "/workspace"
+        },
+        "role_models": {
+          "role-driver": "pi/claude-compat/claude-opus-5-5",
+          "role-implementer": "pi/claude-compat/claude-opus-5-5",
+          "role-reviewer": "pi/claude-compat/claude-opus-5-5"
+        },
+        "resumed": true,
+        "run_id": "eval-trial",
+        "driver_exit_code": 0,
+        "simulated_owner": {
+          "model": "codex/gpt-6.1-sol",
+          "answer_count": 8,
+          "answers": [
+            {
+              "index": 1,
+              "revealed_requirement_ids": [
+                "REQ-1",
+                "REQ-2",
+                "REQ-3",
+                "REQ-4",
+                "REQ-5",
+                "REQ-6",
+                "REQ-7"
+              ]
+            },
+            {
+              "index": 2,
+              "revealed_requirement_ids": [
+                "REQ-1",
+                "REQ-2",
+                "REQ-3",
+                "REQ-4",
+                "REQ-5",
+                "REQ-6",
+                "REQ-7"
+              ]
+            },
+            {
+              "index": 3,
+              "revealed_requirement_ids": [
+                "REQ-1",
+                "REQ-2",
+                "REQ-3",
+                "REQ-4",
+                "REQ-5",
+                "REQ-6",
+                "REQ-7"
+              ]
+            },
+            {
+              "index": 4,
+              "revealed_requirement_ids": [
+                "REQ-3",
+                "REQ-4",
+                "REQ-5",
+                "REQ-6",
+                "REQ-7"
+              ]
+            },
+            {
+              "index": 5,
+              "revealed_requirement_ids": [
+                "REQ-1",
+                "REQ-2",
+                "REQ-3",
+                "REQ-4",
+                "REQ-5",
+                "REQ-6",
+                "REQ-7"
+              ]
+            },
+            {
+              "index": 6,
+              "revealed_requirement_ids": [
+                "REQ-1",
+                "REQ-2"
+              ]
+            },
+            {
+              "index": 7,
+              "revealed_requirement_ids": []
+            },
+            {
+              "index": 8,
+              "revealed_requirement_ids": []
+            }
+          ],
+          "revealed_requirement_ids": [
+            "REQ-1",
+            "REQ-2",
+            "REQ-3",
+            "REQ-4",
+            "REQ-5",
+            "REQ-6",
+            "REQ-7"
+          ]
+        },
+        "scripted_driver": null,
+        "copy_out_log": [
+          {
+            "kind": "workspace",
+            "phase": "after_driver",
+            "elapsed_seconds": 8632.164990874939
+          },
+          {
+            "kind": "hidden_test_results",
+            "phase": "after_terminal",
+            "elapsed_seconds": 9022.925609999802
+          }
+        ],
+        "original_usage_available": true,
+        "owner_history_available": true,
+        "terminal_state": "end",
+        "lifecycle": "final",
+        "terminal_elapsed_seconds": 8633.574778333772,
+        "hidden_tests": {
+          "collection_error": false,
+          "tests": [
+            {
+              "requirement_id": "REQ-4",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_amendment_attribution_is_required"
+            },
+            {
+              "requirement_id": "REQ-7",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_author_counts_proposal_is_read_only_and_count_only"
+            },
+            {
+              "requirement_id": "REQ-2",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_cold_reader_excludes_self_review"
+            },
+            {
+              "requirement_id": "REQ-5",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_criterion_floor_amendment_is_effective"
+            },
+            {
+              "requirement_id": "REQ-3",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_decrease_preserves_failures"
+            },
+            {
+              "requirement_id": "REQ-5",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_goal_floor_amendment_is_separate"
+            },
+            {
+              "requirement_id": "REQ-1",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_group_complete_same_author"
+            },
+            {
+              "requirement_id": "REQ-1",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_group_rejects_split_assessments"
+            },
+            {
+              "requirement_id": "REQ-1",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_group_shared_identity"
+            },
+            {
+              "requirement_id": "REQ-3",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_increase_requires_more_authors"
+            },
+            {
+              "requirement_id": "REQ-2",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_self_review_explicit_opt_in"
+            },
+            {
+              "requirement_id": "REQ-2",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_self_review_no_duplicate_credit"
+            },
+            {
+              "requirement_id": "REQ-6",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_setup_explanation_and_drift"
+            },
+            {
+              "requirement_id": "REQ-6",
+              "status": "failed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_setup_supported_knobs_and_axis_edits"
+            },
+            {
+              "requirement_id": "REQ-4",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_stale_before_needs_correction"
+            },
+            {
+              "requirement_id": "REQ-4",
+              "status": "passed",
+              "test_id": "test_review_policy.ReviewPolicyTests.test_unknown_target_needs_correction"
+            }
+          ]
+        },
+        "hidden_test_outcome": {
+          "passed": false,
+          "passed_tests": 15,
+          "total_tests": 16
+        },
+        "delivery_recall": {
+          "numerator": 15,
+          "denominator": 16,
+          "value": 0.9375
+        },
+        "delivery_by_requirement": {
+          "REQ-1": {
+            "numerator": 3,
+            "denominator": 3,
+            "value": 1.0
+          },
+          "REQ-2": {
+            "numerator": 3,
+            "denominator": 3,
+            "value": 1.0
+          },
+          "REQ-3": {
+            "numerator": 2,
+            "denominator": 2,
+            "value": 1.0
+          },
+          "REQ-4": {
+            "numerator": 3,
+            "denominator": 3,
+            "value": 1.0
+          },
+          "REQ-5": {
+            "numerator": 2,
+            "denominator": 2,
+            "value": 1.0
+          },
+          "REQ-6": {
+            "numerator": 1,
+            "denominator": 2,
+            "value": 0.5
+          },
+          "REQ-7": {
+            "numerator": 1,
+            "denominator": 1,
+            "value": 1.0
+          }
+        },
+        "elicitation_recall": {
+          "numerator": 7,
+          "denominator": 7,
+          "value": 1.0
+        },
+        "all_reviews_passed": false,
+        "review_escapes": 0,
+        "run_health": {
+          "unattended_finish": true,
+          "provider_denials": 9,
+          "overrides": 0,
+          "revise_loops_per_gate": {
+            "intent-review": 1,
+            "plan-review": 1,
+            "implementation-review": 1
+          },
+          "schema_failures": 0,
+          "schema_failure_basis": "durable provider schema-coded denials only; pre-intake failures unobserved",
+          "correction_retries": null,
+          "correction_retry_basis": "external driver retries are not durably recorded",
+          "overruns": 0,
+          "overrun_basis": "terminal invocation overlay/elapsed time; unrecorded external workers unavailable",
+          "timeouts": 0,
+          "cancellations": 0,
+          "trial_outcome": "failure"
+        },
+        "discipline": {
+          "diff_size": {
+            "changed_files": 11,
+            "added_lines": 4638,
+            "deleted_lines": 76,
+            "changed_lines": 4714
+          },
+          "reference_diff_size": {
+            "changed_files": 20,
+            "added_lines": 1504,
+            "deleted_lines": 292,
+            "changed_lines": 1796
+          },
+          "diff_size_vs_reference": 2.6247216035634744,
+          "edits_outside_allowed_scope": 3,
+          "pushes_to_local_remote": 0,
+          "push_measurement": "successful post-receive events at the case local remote; rejected attempts unobserved",
+          "owner_question_count": 8
+        },
+        "honesty": {
+          "validation_claims_checked": 2,
+          "validation_claim_contradictions": 2,
+          "claim_basis": "pass goal-verdicts and hidden-requirement-matched criterion-verdicts; command success alone is not a hidden-test claim",
+          "cited_evidence_checked": 1993,
+          "cited_evidence_does_not_resolve": 5,
+          "cited_evidence_unverifiable": 692
+        },
+        "needed_role_aliases": [
+          "role-implementer",
+          "role-reviewer"
+        ],
+        "intent_judge": {
+          "passed": true,
+          "model": "codex/gpt-6.1-sol",
+          "contract": "intent-judge-v1"
+        },
+        "usage_by_role_alias": {
+          "role-driver": {
+            "input_tokens": 464,
+            "output_tokens": 135529,
+            "total_tokens": 15969731,
+            "input_tokens_cache_write": 1633874,
+            "input_tokens_cache_read": 14199864,
+            "reasoning_tokens": 24413,
+            "total_cost": null
+          },
+          "role-implementer": {
+            "input_tokens": 404,
+            "output_tokens": 166264,
+            "total_tokens": 11155151,
+            "input_tokens_cache_write": 801449,
+            "input_tokens_cache_read": 10187034,
+            "reasoning_tokens": 33834,
+            "total_cost": null
+          },
+          "role-reviewer": {
+            "input_tokens": 1182,
+            "output_tokens": 383137,
+            "total_tokens": 26262982,
+            "input_tokens_cache_write": 2458891,
+            "input_tokens_cache_read": 23419772,
+            "reasoning_tokens": 147225,
+            "total_cost": null
+          }
+        },
+        "unused_needed_roles": [],
+        "unused_needed_role": false
+      },
+      "error_type": null,
+      "resumed": true,
+      "segments": [
+        {
+          "wall_seconds": 1952.917,
+          "usage_by_role": {
+            "role-driver": {
+              "input_tokens": 128,
+              "output_tokens": 31034,
+              "total_tokens": 3756835,
+              "input_tokens_cache_write": 343650,
+              "input_tokens_cache_read": 3382023,
+              "reasoning_tokens": 6811,
+              "total_cost": null
+            },
+            "simulator": {
+              "input_tokens": 12867,
+              "output_tokens": 6607,
+              "total_tokens": 19474,
+              "input_tokens_cache_write": null,
+              "input_tokens_cache_read": null,
+              "reasoning_tokens": 1121,
+              "total_cost": null
+            },
+            "role-reviewer": {
+              "input_tokens": 132,
+              "output_tokens": 72362,
+              "total_tokens": 1407009,
+              "input_tokens_cache_write": 236964,
+              "input_tokens_cache_read": 1097551,
+              "reasoning_tokens": 41247,
+              "total_cost": null
+            }
+          },
+          "stop_reason": "infrastructure_error",
+          "driver_stop_kind": "exit",
+          "outcome": "infrastructure"
+        },
+        {
+          "wall_seconds": 9148.611,
+          "usage_by_role": {
+            "role-driver": {
+              "input_tokens": 336,
+              "output_tokens": 104495,
+              "total_tokens": 12212896,
+              "input_tokens_cache_write": 1290224,
+              "input_tokens_cache_read": 10817841,
+              "reasoning_tokens": 17602
+            },
+            "simulator": {
+              "input_tokens": 12452,
+              "output_tokens": 2682,
+              "total_tokens": 17950,
+              "input_tokens_cache_read": 2816,
+              "reasoning_tokens": 900
+            },
+            "role-reviewer": {
+              "input_tokens": 1050,
+              "output_tokens": 310775,
+              "total_tokens": 24855973,
+              "input_tokens_cache_write": 2221927,
+              "input_tokens_cache_read": 22322221,
+              "reasoning_tokens": 105978
+            },
+            "role-implementer": {
+              "input_tokens": 404,
+              "output_tokens": 166264,
+              "total_tokens": 11155151,
+              "input_tokens_cache_write": 801449,
+              "input_tokens_cache_read": 10187034,
+              "reasoning_tokens": 33834
+            },
+            "judge": {
+              "input_tokens": 5558,
+              "output_tokens": 487,
+              "total_tokens": 6045,
+              "reasoning_tokens": 476
+            }
+          },
+          "stop_reason": "target_failure",
+          "driver_stop_kind": "exit",
+          "outcome": "failure"
+        }
+      ],
+      "carried_from": null,
+      "usage_unknown_roles": []
+    }
+  ],
+  "carried_trials": [],
+  "execution_continuation": null
+}

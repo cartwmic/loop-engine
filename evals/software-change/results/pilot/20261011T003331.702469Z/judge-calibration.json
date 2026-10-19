@@ -1,0 +1,38 @@
+{
+  "judge_model": "codex/gpt-6.1-sol",
+  "judge_contract": "intent-judge-v1",
+  "labels_sha256": "4fc2bf68b1017ed5064e81aa286348e79c97ddc82138e0259d6f72bfa9eb2827",
+  "agreement": {
+    "numerator": 4,
+    "denominator": 10,
+    "rate": 0.4
+  },
+  "false_pass_rate": {
+    "numerator": 0,
+    "denominator": 2,
+    "rate": 0.0
+  },
+  "counts": {
+    "labelled": 10,
+    "owner_good": 8,
+    "owner_deficient": 2,
+    "judge_passed": 2,
+    "judge_failed": 8
+  },
+  "unlabelled_count": 7,
+  "evaluation_overhead": {
+    "role": "judge",
+    "model": "codex/gpt-6.1-sol",
+    "input_tokens": 92071,
+    "output_tokens": 2438,
+    "total_tokens": 94509
+  },
+  "generation": {
+    "reasoning_effort": "high",
+    "temperature": 0,
+    "max_tokens": 4096,
+    "note": "matches pilot judge model_config; bound by driver wrapper",
+    "provider_note": "Provider reported reasoning models ignore temperature (always 1); temperature=0 was requested but not applied."
+  },
+  "scope": "Calibration of the pinned pilot intent judge on ten owner-confirmed past-run pairs. Does not change any trial score."
+}

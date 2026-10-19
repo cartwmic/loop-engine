@@ -1,0 +1,444 @@
+# Campaign real-example
+
+Target: software-change
+
+Dollar figures are estimated from the campaign price table; null means unpriced.
+
+## Classification
+Success requires a terminal trial and target success. Timeouts, hangs, limits and model errors are failures. Harness/container/bridge errors and provider-service failures (including exhausted 429/5xx responses) are infrastructure. Unknown exceptions are failures unless the target marks them InfrastructureError. Infrastructure is excluded from success rate and fixed-k pass^k; cases with fewer than k scorable trials are listed as incomplete. No automatic trial retries.
+
+## Settings
+```json
+{
+  "target": "scevals.target:create_target",
+  "campaign": "real-example",
+  "models": [
+    "openrouter/openai/gpt-6-luna"
+  ],
+  "combinations": [],
+  "preset": "small",
+  "case_count": 1,
+  "trials_per_case": 1,
+  "profile": "standard-14",
+  "cases_path": "evals/software-change/example-case",
+  "simulator_model": "openrouter/openai/gpt-6-luna",
+  "judge_model": "openrouter/openai/gpt-6-luna",
+  "time_limit_seconds": 2400,
+  "prices": {
+    "openrouter/openai/gpt-6-luna": {
+      "input_per_million": 0.1,
+      "output_per_million": 0.5
+    }
+  },
+  "model_args": {
+    "openrouter/openai/gpt-6-luna": {
+      "strict_tools": false
+    }
+  },
+  "provider_config_paths": [],
+  "loop_engine_version": "v0.24.0",
+  "provider_version": "v0.24.0",
+  "target_options": {},
+  "effective_case_count": 1,
+  "effective_trials_per_case": 1,
+  "resolved_combinations": [
+    {
+      "id": "openrouter/openai/gpt-6-luna",
+      "driver": "openrouter/openai/gpt-6-luna",
+      "implementer": "openrouter/openai/gpt-6-luna",
+      "reviewer": "openrouter/openai/gpt-6-luna"
+    }
+  ],
+  "setting_sources": {
+    "target": "explicit",
+    "campaign": "explicit",
+    "models": "explicit",
+    "combinations": "default",
+    "preset": "default",
+    "case_count": "explicit",
+    "trials_per_case": "explicit",
+    "profile": "explicit",
+    "cases_path": "explicit",
+    "simulator_model": "explicit",
+    "judge_model": "explicit",
+    "time_limit_seconds": "explicit",
+    "prices": "explicit",
+    "model_args": "explicit",
+    "provider_config_paths": "default",
+    "loop_engine_version": "default",
+    "provider_version": "default",
+    "target_options": "default"
+  }
+}
+```
+
+## Pinned Models
+```json
+{
+  "simulator": "openrouter/openai/gpt-6-luna",
+  "judge": "openrouter/openai/gpt-6-luna"
+}
+```
+
+## Versions
+```json
+{
+  "harness": {
+    "inspect_ai": "0.3.276",
+    "evalcore": "0.1.0",
+    "python": "3.12.13",
+    "checkout_commit": "b68a534756d8b2131a1b13c8b06a713fb934b6ba",
+    "checkout_dirty": true
+  },
+  "target": {
+    "loop_engine": "v0.24.0",
+    "provider": "v0.24.0",
+    "loop_engine_commit": "3e1f9ee924cc1bac3d1924b4868e15697555f3ad",
+    "target": "software-change-scorers-v1"
+  },
+  "eval_cases": {
+    "label-keys": "1"
+  }
+}
+```
+
+## Matched Assignment
+```json
+[
+  {
+    "sample_id": "m0-c0-t1",
+    "combination_id": "openrouter/openai/gpt-6-luna",
+    "case_id": "label-keys",
+    "case_version": "1",
+    "trial": 1
+  }
+]
+```
+
+## openrouter/openai/gpt-6-luna
+
+### Core metrics
+```json
+{
+  "trial_count": 1,
+  "success_rate": {
+    "numerator": 0,
+    "denominator": 1,
+    "rate": 0.0
+  },
+  "pass_k": {
+    "k": 1,
+    "numerator": 0,
+    "denominator": 1,
+    "rate": 0.0
+  },
+  "incomplete_cases": [],
+  "infrastructure_failure_rate": {
+    "numerator": 0,
+    "denominator": 1,
+    "rate": 0.0
+  },
+  "timeouts": 0,
+  "model_errors": 0,
+  "failures": 1,
+  "workflow_completion": {
+    "numerator": 0,
+    "denominator": 1,
+    "rate": 0.0
+  },
+  "workflow_cost": {
+    "by_role": {
+      "role-driver": {
+        "model": "openrouter/openai/gpt-6-luna",
+        "input_tokens": 696,
+        "output_tokens": 111885,
+        "total_tokens": 112581,
+        "estimated_usd": 0.056012099999999995,
+        "price_available": true
+      },
+      "role-implementer": {
+        "model": "openrouter/openai/gpt-6-luna",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "estimated_usd": 0.0,
+        "price_available": true
+      },
+      "role-reviewer": {
+        "model": "openrouter/openai/gpt-6-luna",
+        "input_tokens": 24,
+        "output_tokens": 11930,
+        "total_tokens": 11954,
+        "estimated_usd": 0.0059673999999999994,
+        "price_available": true
+      }
+    },
+    "total_tokens": 124535,
+    "estimated_usd": 0.06197949999999999
+  },
+  "evaluation_overhead": {
+    "by_role": {
+      "simulator": {
+        "model": "openrouter/openai/gpt-6-luna",
+        "input_tokens": 2121,
+        "output_tokens": 1891,
+        "total_tokens": 4012,
+        "estimated_usd": 0.0011576,
+        "price_available": true
+      },
+      "judge": {
+        "model": "openrouter/openai/gpt-6-luna",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "estimated_usd": 0.0,
+        "price_available": true
+      }
+    },
+    "total_tokens": 4012,
+    "estimated_usd": 0.0011576
+  },
+  "wall_seconds": 1997.414
+}
+```
+
+### Target metrics
+```json
+{
+  "terminal_trials": 0,
+  "owner_answers": 5,
+  "role_observations": [
+    {}
+  ],
+  "software_change_metrics": [
+    {
+      "hidden_test_outcome": null,
+      "delivery_recall": null,
+      "delivery_by_requirement": null,
+      "elicitation_recall": null,
+      "review_escapes": null,
+      "run_health": {
+        "unattended_finish": false,
+        "provider_denials": null,
+        "overrides": null,
+        "revise_loops_per_gate": null,
+        "schema_failures": null,
+        "correction_retries": null,
+        "overruns": null,
+        "timeouts": 0,
+        "cancellations": 0,
+        "trial_outcome": "failure"
+      },
+      "discipline": null,
+      "honesty": null,
+      "usage_by_role_alias": {
+        "role-driver": {
+          "input_tokens": 696,
+          "output_tokens": 111885,
+          "total_tokens": 15092397,
+          "input_tokens_cache_write": 1507824,
+          "input_tokens_cache_read": 13471992,
+          "reasoning_tokens": 74663,
+          "total_cost": null
+        },
+        "role-implementer": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "total_tokens": 0
+        },
+        "role-reviewer": {
+          "input_tokens": 24,
+          "output_tokens": 11930,
+          "total_tokens": 100500,
+          "input_tokens_cache_write": 78529,
+          "input_tokens_cache_read": 10017,
+          "reasoning_tokens": 7145,
+          "total_cost": null
+        }
+      },
+      "unused_needed_role": null,
+      "intent_judge": null
+    }
+  ],
+  "judge_calibration": {
+    "status": "calibration pending",
+    "judge_model": "openrouter/openai/gpt-6-luna",
+    "judge_contract": "intent-judge-v1"
+  },
+  "metric_basis": "per-trial counts/recall; unavailable external observations are null, not zero"
+}
+```
+
+## Trials (including infrastructure and timeouts)
+```json
+[
+  {
+    "sample_id": "m0-c0-t1",
+    "combination_id": "openrouter/openai/gpt-6-luna",
+    "case_id": "label-keys",
+    "case_version": "1",
+    "trial": 1,
+    "outcome": "failure",
+    "reason": "target_failure",
+    "terminal": false,
+    "wall_seconds": 1997.414,
+    "usage_by_role": {
+      "role-driver": {
+        "input_tokens": 696,
+        "output_tokens": 111885,
+        "total_tokens": 15092397,
+        "input_tokens_cache_write": 1507824,
+        "input_tokens_cache_read": 13471992,
+        "reasoning_tokens": 74663,
+        "total_cost": null
+      },
+      "simulator": {
+        "input_tokens": 2121,
+        "output_tokens": 1891,
+        "total_tokens": 5271,
+        "input_tokens_cache_write": 1259,
+        "input_tokens_cache_read": 0,
+        "reasoning_tokens": 1481,
+        "total_cost": null
+      },
+      "role-reviewer": {
+        "input_tokens": 24,
+        "output_tokens": 11930,
+        "total_tokens": 100500,
+        "input_tokens_cache_write": 78529,
+        "input_tokens_cache_read": 10017,
+        "reasoning_tokens": 7145,
+        "total_cost": null
+      }
+    },
+    "target_metrics": {
+      "copy_log": [
+        {
+          "kind": "public",
+          "source": "public/repo/labels.py",
+          "destination": "/workspace/public/repo/labels.py",
+          "phase": "before_driver",
+          "elapsed_seconds": 0.3958204579539597
+        },
+        {
+          "kind": "public",
+          "source": "public/request.md",
+          "destination": "/workspace/public/request.md",
+          "phase": "before_driver",
+          "elapsed_seconds": 0.8026152080856264
+        }
+      ],
+      "container": {
+        "id": "5a8aeba6e1483503ec351efb0ec041567af32388c947ef28e1dc29930038e13b",
+        "image_id": "sha256:a5cf454b8a6e0b12af1e566841a5840ab5bced440acc3460964a57e9cc99cc65",
+        "mounts": [],
+        "binds": [],
+        "platform": "linux",
+        "working_dir": "/workspace"
+      },
+      "role_models": {
+        "role-driver": "openrouter/openai/gpt-6-luna",
+        "role-implementer": "openrouter/openai/gpt-6-luna",
+        "role-reviewer": "openrouter/openai/gpt-6-luna"
+      },
+      "driver_exit_code": 0,
+      "terminal_state": "explore",
+      "lifecycle": "active",
+      "simulated_owner": {
+        "model": "openrouter/openai/gpt-6-luna",
+        "answer_count": 5,
+        "answers": [
+          {
+            "index": 1,
+            "revealed_requirement_ids": [
+              "REQ-1",
+              "REQ-2"
+            ]
+          },
+          {
+            "index": 2,
+            "revealed_requirement_ids": [
+              "REQ-1",
+              "REQ-2"
+            ]
+          },
+          {
+            "index": 3,
+            "revealed_requirement_ids": [
+              "REQ-3"
+            ]
+          },
+          {
+            "index": 4,
+            "revealed_requirement_ids": [
+              "REQ-1",
+              "REQ-2",
+              "REQ-3"
+            ]
+          },
+          {
+            "index": 5,
+            "revealed_requirement_ids": [
+              "REQ-1",
+              "REQ-2",
+              "REQ-3"
+            ]
+          }
+        ],
+        "revealed_requirement_ids": [
+          "REQ-1",
+          "REQ-2",
+          "REQ-3"
+        ]
+      },
+      "hidden_test_outcome": null,
+      "delivery_recall": null,
+      "delivery_by_requirement": null,
+      "elicitation_recall": null,
+      "review_escapes": null,
+      "discipline": null,
+      "honesty": null,
+      "intent_judge": null,
+      "usage_by_role_alias": {
+        "role-driver": {
+          "input_tokens": 696,
+          "output_tokens": 111885,
+          "total_tokens": 15092397,
+          "input_tokens_cache_write": 1507824,
+          "input_tokens_cache_read": 13471992,
+          "reasoning_tokens": 74663,
+          "total_cost": null
+        },
+        "role-implementer": {
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "total_tokens": 0
+        },
+        "role-reviewer": {
+          "input_tokens": 24,
+          "output_tokens": 11930,
+          "total_tokens": 100500,
+          "input_tokens_cache_write": 78529,
+          "input_tokens_cache_read": 10017,
+          "reasoning_tokens": 7145,
+          "total_cost": null
+        }
+      },
+      "unused_needed_roles": null,
+      "unused_needed_role": null,
+      "run_health": {
+        "unattended_finish": false,
+        "provider_denials": null,
+        "overrides": null,
+        "revise_loops_per_gate": null,
+        "schema_failures": null,
+        "correction_retries": null,
+        "overruns": null,
+        "timeouts": 0,
+        "cancellations": 0,
+        "trial_outcome": "failure"
+      }
+    }
+  }
+]
+```

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "loop-engine-evals"
+version = "0.1.0"
+description = "Local Inspect AI evaluation harness for Loop Engine workflows"
+requires-python = ">=3.12"
+dependencies = ["inspect-ai==0.3.276", "openai==3.1.0", "pytest==9.0.2"]
+
+[project.scripts]
+evalctl = "evalcore.cli:main"
+
+[project.entry-points."inspect_ai"]
+codex = "evalcore.codex"
+pi = "evalcore.pi"
+
+[project.entry-points."loop_engine_evals.commands"]
+software-change-image = "scevals.image:register_subcommands"
+software-change-cases = "scevals.cases:register_subcommands"
+
+[tool.hatch.build.targets.wheel]
+packages = ["core/evalcore", "software-change/scevals"]
+
+[tool.pytest.ini_options]
+testpaths = ["core/tests", "software-change/tests"]
+# Hidden case tests run only in containers, never through host pytest collection.
+norecursedirs = [".*", "build", "dist", "node_modules", "venv", "captures", "logs", "example-case", "fixtures"]
