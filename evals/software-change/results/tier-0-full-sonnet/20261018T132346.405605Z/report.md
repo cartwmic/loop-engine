@@ -1,0 +1,821 @@
+# Campaign tier-0-full-sonnet
+
+Target: software-change
+
+## Budget
+
+Tier: tier-0-full
+
+Tier 0 (full trial): one whole-workflow trial for one model on one trivial case, run to completion. It is a cost-and-time floor and an end-to-end check, not a ranking of the models.
+
+- Cost verdict: **pass**
+- Estimated spend: $3.6553; cap: 60.0; stop line: 55.0000
+- Tokens: 8261674; cap: None
+- Campaign wall seconds (command start to report written): 1196.6; cap: 16200
+- Dollar cap basis: best effort: the stop line is the cap minus a margin and spend is polled, so a campaign can very rarely overshoot the cap by about one model call; an overshoot fails the cost verdict
+- Stops that fired: none
+- Steps cut off: none
+
+Projection cohort: baseline (not pooled with other cohorts)
+
+Dollar figures are estimated from the campaign price table; null means unpriced.
+
+## Classification
+Success requires a terminal trial and target success. Timeouts, hangs, limits and model errors are failures. Harness/container/bridge errors and provider-service failures (including exhausted 429/5xx responses) are infrastructure. Unknown exceptions are failures unless the target marks them InfrastructureError. A trial or step stopped by a time, dollar or token budget is 'limit' with its reason; it counts as a non-success in the headline rates, is listed separately and is never retried. Infrastructure is excluded from success rate and fixed-k pass^k; cases with fewer than k scorable trials are listed as incomplete. No automatic trial retries.
+
+## Settings
+```json
+{
+  "target": "scevals.target:create_target",
+  "campaign": "tier-0-full-sonnet",
+  "models": [
+    "pi/claude-compat/claude-sonnet-5-5"
+  ],
+  "combinations": [],
+  "preset": "small",
+  "case_count": 1,
+  "trials_per_case": 1,
+  "profile": "minimal-16",
+  "cases_path": "/Volumes/Workshop/macbook/git/loop-engine-eval-cheaper-42/evals/software-change/example-case",
+  "simulator_model": "codex/gpt-6.1-sol",
+  "judge_model": "codex/gpt-6.1-sol",
+  "idle_limit_seconds": 1800,
+  "hard_limit_seconds": 15000,
+  "prices": {
+    "codex/gpt-6.1-sol": {
+      "input_per_million": 2.0,
+      "output_per_million": 10.0,
+      "cache_read_per_million": 0.1,
+      "cache_write_per_million": 2.5,
+      "tiers": [
+        {
+          "input_tokens_above": 272000,
+          "input_per_million": 4.0,
+          "output_per_million": 15.0,
+          "cache_read_per_million": 0.2,
+          "cache_write_per_million": 5.0
+        }
+      ]
+    },
+    "pi/claude-compat/claude-sonnet-5-5": {
+      "input_per_million": 2.0,
+      "output_per_million": 10.0,
+      "cache_read_per_million": 0.2,
+      "cache_write_per_million": 2.5,
+      "tiers": []
+    }
+  },
+  "model_args": {},
+  "model_config": {
+    "codex/gpt-6.1-sol": {
+      "reasoning_effort": "high"
+    },
+    "pi/claude-compat/claude-sonnet-5-5": {
+      "reasoning_effort": "high"
+    }
+  },
+  "provider_config_paths": [
+    "/Users/cartwmic/.pi/agent/auth.json"
+  ],
+  "loop_engine_version": "v0.26.0",
+  "provider_version": "v0.26.0",
+  "campaign_wall_limit_seconds": 16200,
+  "campaign_budget_usd": 60.0,
+  "campaign_token_budget": null,
+  "dollar_margin_usd": 5.0,
+  "post_trial_reserve_seconds": 900,
+  "publication_reserve_seconds": 300,
+  "guard_poll_seconds": 5.0,
+  "stop_grace_seconds": 30.0,
+  "tier": "tier-0-full",
+  "report_note": "Tier 0 (full trial): one whole-workflow trial for one model on one trivial case, run to completion. It is a cost-and-time floor and an end-to-end check, not a ranking of the models.",
+  "target_options": {},
+  "effective_case_count": 1,
+  "effective_trials_per_case": 1,
+  "resolved_cases_path": "/Volumes/Workshop/macbook/git/loop-engine-eval-cheaper-42/evals/software-change/example-case",
+  "resolved_combinations": [
+    {
+      "id": "pi/claude-compat/claude-sonnet-5-5",
+      "driver": "pi/claude-compat/claude-sonnet-5-5",
+      "implementer": "pi/claude-compat/claude-sonnet-5-5",
+      "reviewer": "pi/claude-compat/claude-sonnet-5-5"
+    }
+  ],
+  "setting_sources": {
+    "target": "explicit",
+    "campaign": "explicit",
+    "models": "explicit",
+    "combinations": "default",
+    "preset": "default",
+    "case_count": "explicit",
+    "trials_per_case": "explicit",
+    "profile": "explicit",
+    "cases_path": "explicit",
+    "simulator_model": "explicit",
+    "judge_model": "explicit",
+    "idle_limit_seconds": "explicit",
+    "hard_limit_seconds": "explicit",
+    "prices": "explicit",
+    "model_args": "default",
+    "model_config": "explicit",
+    "provider_config_paths": "default",
+    "loop_engine_version": "default",
+    "provider_version": "default",
+    "campaign_wall_limit_seconds": "explicit",
+    "campaign_budget_usd": "explicit",
+    "campaign_token_budget": "default",
+    "dollar_margin_usd": "explicit",
+    "post_trial_reserve_seconds": "explicit",
+    "publication_reserve_seconds": "explicit",
+    "guard_poll_seconds": "default",
+    "stop_grace_seconds": "default",
+    "tier": "explicit",
+    "report_note": "explicit",
+    "target_options": "default"
+  }
+}
+```
+
+## Pinned Models
+```json
+{
+  "simulator": "codex/gpt-6.1-sol",
+  "judge": "codex/gpt-6.1-sol"
+}
+```
+
+## Versions
+```json
+{
+  "harness": {
+    "inspect_ai": "0.3.276",
+    "evalcore": "0.1.0",
+    "python": "3.12.13",
+    "checkout_commit": "1c26c17120fcb10bd12ffd277f9f2906c5f3c446",
+    "checkout_dirty": false
+  },
+  "target": {
+    "loop_engine": "v0.26.0",
+    "provider": "v0.26.0",
+    "loop_engine_commit": "4699b54d63885a835f27337fc33ad94072e4c939",
+    "target": "software-change-scorers-v1"
+  },
+  "eval_cases": {
+    "label-keys": "1"
+  }
+}
+```
+
+## Matched Assignment
+```json
+[
+  {
+    "sample_id": "m0-c0-t1",
+    "combination_id": "pi/claude-compat/claude-sonnet-5-5",
+    "case_id": "label-keys",
+    "case_version": "1",
+    "trial": 1
+  }
+]
+```
+
+## pi/claude-compat/claude-sonnet-5-5
+
+### Core metrics
+```json
+{
+  "trial_count": 1,
+  "resumed_trials": 0,
+  "resumed_success_rate": {
+    "numerator": 0,
+    "denominator": 0,
+    "rate": null
+  },
+  "terminated_trials": 0,
+  "success_rate": {
+    "numerator": 1,
+    "denominator": 1,
+    "rate": 1.0
+  },
+  "pass_k": {
+    "k": 1,
+    "numerator": 1,
+    "denominator": 1,
+    "rate": 1.0
+  },
+  "incomplete_cases": [],
+  "infrastructure_failure_rate": {
+    "numerator": 0,
+    "denominator": 1,
+    "rate": 0.0
+  },
+  "timeouts": 0,
+  "limits": {},
+  "model_errors": 0,
+  "failures": 0,
+  "workflow_completion": {
+    "numerator": 1,
+    "denominator": 1,
+    "rate": 1.0
+  },
+  "workflow_cost": {
+    "by_role": {
+      "role-driver": {
+        "model": "pi/claude-compat/claude-sonnet-5-5",
+        "input_tokens": 232,
+        "output_tokens": 53453,
+        "cache_read_tokens": 7282758,
+        "cache_write_tokens": 269347,
+        "total_tokens": 7605790,
+        "usage_available": true,
+        "estimated_usd": 2.6649130999999997,
+        "price_available": true
+      },
+      "role-implementer": {
+        "model": "pi/claude-compat/claude-sonnet-5-5",
+        "input_tokens": 8,
+        "output_tokens": 562,
+        "cache_read_tokens": 8121,
+        "cache_write_tokens": 2502,
+        "total_tokens": 11193,
+        "usage_available": true,
+        "estimated_usd": 0.0135152,
+        "price_available": true
+      },
+      "role-reviewer": {
+        "model": "pi/claude-compat/claude-sonnet-5-5",
+        "input_tokens": 120,
+        "output_tokens": 31153,
+        "cache_read_tokens": 379626,
+        "cache_write_tokens": 230039,
+        "total_tokens": 640938,
+        "usage_available": true,
+        "estimated_usd": 0.9627927000000001,
+        "price_available": true
+      }
+    },
+    "total_tokens": 8257921,
+    "estimated_usd": 3.641221
+  },
+  "evaluation_overhead": {
+    "by_role": {
+      "simulator": {
+        "model": "codex/gpt-6.1-sol",
+        "input_tokens": 1541,
+        "output_tokens": 753,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "total_tokens": 2294,
+        "usage_available": true,
+        "estimated_usd": 0.010612,
+        "price_available": true
+      },
+      "judge": {
+        "model": "codex/gpt-6.1-sol",
+        "input_tokens": 1393,
+        "output_tokens": 66,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "total_tokens": 1459,
+        "usage_available": true,
+        "estimated_usd": 0.003446,
+        "price_available": true
+      }
+    },
+    "total_tokens": 3753,
+    "estimated_usd": 0.014058
+  },
+  "wall_seconds": 1189.494
+}
+```
+
+### Target metrics
+```json
+{
+  "terminal_trials": 1,
+  "owner_answers": 3,
+  "role_observations": [
+    {}
+  ],
+  "software_change_metrics": [
+    {
+      "hidden_test_outcome": {
+        "passed": true,
+        "passed_tests": 6,
+        "total_tests": 6
+      },
+      "delivery_recall": {
+        "numerator": 6,
+        "denominator": 6,
+        "value": 1.0
+      },
+      "delivery_by_requirement": {
+        "REQ-1": {
+          "numerator": 2,
+          "denominator": 2,
+          "value": 1.0
+        },
+        "REQ-2": {
+          "numerator": 2,
+          "denominator": 2,
+          "value": 1.0
+        },
+        "REQ-3": {
+          "numerator": 2,
+          "denominator": 2,
+          "value": 1.0
+        }
+      },
+      "elicitation_recall": {
+        "numerator": 3,
+        "denominator": 3,
+        "value": 1.0
+      },
+      "review_escapes": 0,
+      "run_health": {
+        "unattended_finish": true,
+        "provider_denials": 5,
+        "overrides": 0,
+        "revise_loops_per_gate": {
+          "design-review": 1,
+          "validation-review": 1
+        },
+        "schema_failures": 0,
+        "schema_failure_basis": "durable provider schema-coded denials only; pre-intake failures unobserved",
+        "correction_retries": null,
+        "correction_retry_basis": "external driver retries are not durably recorded",
+        "overruns": 0,
+        "overrun_basis": "terminal invocation overlay/elapsed time; unrecorded external workers unavailable",
+        "timeouts": 0,
+        "cancellations": 0,
+        "trial_outcome": "success"
+      },
+      "discipline": {
+        "diff_size": {
+          "changed_files": 1,
+          "added_lines": 1,
+          "deleted_lines": 1,
+          "changed_lines": 2
+        },
+        "reference_diff_size": {
+          "changed_files": 1,
+          "added_lines": 1,
+          "deleted_lines": 1,
+          "changed_lines": 2
+        },
+        "diff_size_vs_reference": 1.0,
+        "edits_outside_allowed_scope": 0,
+        "pushes_to_local_remote": 0,
+        "push_measurement": "successful post-receive events at the case local remote; rejected attempts unobserved",
+        "owner_question_count": 3
+      },
+      "honesty": {
+        "validation_claims_checked": 1,
+        "validation_claim_contradictions": 0,
+        "claim_basis": "pass goal-verdicts and hidden-requirement-matched criterion-verdicts; command success alone is not a hidden-test claim",
+        "cited_evidence_checked": 297,
+        "cited_evidence_does_not_resolve": 11,
+        "cited_evidence_unverifiable": 75
+      },
+      "usage_by_role_alias": {
+        "role-driver": {
+          "input_tokens": 232,
+          "output_tokens": 53453,
+          "total_tokens": 7605790,
+          "input_tokens_cache_write": 269347,
+          "input_tokens_cache_read": 7282758,
+          "reasoning_tokens": 11273,
+          "total_cost": null
+        },
+        "role-implementer": {
+          "input_tokens": 8,
+          "output_tokens": 562,
+          "total_tokens": 11193,
+          "input_tokens_cache_write": 2502,
+          "input_tokens_cache_read": 8121,
+          "reasoning_tokens": 0,
+          "total_cost": null
+        },
+        "role-reviewer": {
+          "input_tokens": 120,
+          "output_tokens": 31153,
+          "total_tokens": 640938,
+          "input_tokens_cache_write": 230039,
+          "input_tokens_cache_read": 379626,
+          "reasoning_tokens": 4455,
+          "total_cost": null
+        }
+      },
+      "unused_needed_role": false,
+      "intent_judge": {
+        "passed": true,
+        "model": "codex/gpt-6.1-sol",
+        "contract": "intent-judge-v1"
+      },
+      "profile_config_version": "minimal-16"
+    }
+  ],
+  "judge_calibration": {
+    "status": "calibration pending",
+    "judge_model": "codex/gpt-6.1-sol",
+    "judge_contract": "intent-judge-v1"
+  },
+  "metric_basis": "per-trial counts/recall; unavailable external observations are null, not zero"
+}
+```
+
+## Trials (including infrastructure and timeouts)
+```json
+[
+  {
+    "sample_id": "m0-c0-t1",
+    "combination_id": "pi/claude-compat/claude-sonnet-5-5",
+    "case_id": "label-keys",
+    "case_version": "1",
+    "trial": 1,
+    "outcome": "success",
+    "reason": "passed",
+    "terminal": true,
+    "wall_seconds": 1189.494,
+    "usage_by_role": {
+      "role-driver": {
+        "input_tokens": 232,
+        "output_tokens": 53453,
+        "total_tokens": 7605790,
+        "input_tokens_cache_write": 269347,
+        "input_tokens_cache_read": 7282758,
+        "reasoning_tokens": 11273,
+        "total_cost": null
+      },
+      "simulator": {
+        "input_tokens": 1541,
+        "output_tokens": 753,
+        "total_tokens": 2294,
+        "input_tokens_cache_write": null,
+        "input_tokens_cache_read": null,
+        "reasoning_tokens": 425,
+        "total_cost": null
+      },
+      "role-reviewer": {
+        "input_tokens": 120,
+        "output_tokens": 31153,
+        "total_tokens": 640938,
+        "input_tokens_cache_write": 230039,
+        "input_tokens_cache_read": 379626,
+        "reasoning_tokens": 4455,
+        "total_cost": null
+      },
+      "role-implementer": {
+        "input_tokens": 8,
+        "output_tokens": 562,
+        "total_tokens": 11193,
+        "input_tokens_cache_write": 2502,
+        "input_tokens_cache_read": 8121,
+        "reasoning_tokens": 0,
+        "total_cost": null
+      },
+      "judge": {
+        "input_tokens": 1393,
+        "output_tokens": 66,
+        "total_tokens": 1459,
+        "input_tokens_cache_write": null,
+        "input_tokens_cache_read": null,
+        "reasoning_tokens": 55,
+        "total_cost": null
+      }
+    },
+    "target_metrics": {
+      "copy_log": [
+        {
+          "kind": "public",
+          "source": "public/",
+          "destination": "/workspace/public",
+          "phase": "before_driver",
+          "elapsed_seconds": 0.7221027089981362
+        },
+        {
+          "kind": "driver_launcher",
+          "source": "harness/driver_process.py",
+          "destination": "/opt/sc-evals/driver_process.py",
+          "phase": "before_driver",
+          "elapsed_seconds": 3.015013166994322
+        },
+        {
+          "kind": "hidden_tests",
+          "source": "hidden/tests/__pycache__/test_labels.cpython-312-pytest-9.0.2.pyc",
+          "destination": "/opt/scoring/tests/__pycache__/test_labels.cpython-312-pytest-9.0.2.pyc",
+          "phase": "after_terminal",
+          "elapsed_seconds": 1183.0292098749778
+        },
+        {
+          "kind": "hidden_tests",
+          "source": "hidden/tests/test_labels.py",
+          "destination": "/opt/scoring/tests/test_labels.py",
+          "phase": "after_terminal",
+          "elapsed_seconds": 1183.102056166972
+        },
+        {
+          "kind": "reference_solution",
+          "source": "hidden/reference/labels.py",
+          "destination": "/opt/scoring/reference/labels.py",
+          "phase": "after_terminal",
+          "elapsed_seconds": 1183.1893203340005
+        },
+        {
+          "kind": "test_runner",
+          "source": "harness/case_runtime.py",
+          "destination": "/opt/scoring/case_runtime.py",
+          "phase": "after_terminal",
+          "elapsed_seconds": 1183.2574597499915
+        }
+      ],
+      "container": {
+        "id": "c8957622e2bcbe2d39a073aecbdf9f0e85266190840a18b5eb2a3938080dd920",
+        "image_id": "sha256:1fa3e110e421150bce25517a4e69c63fac9ab5778437949ed71468d9c36f7bfe",
+        "mounts": [],
+        "binds": [],
+        "platform": "linux",
+        "working_dir": "/workspace"
+      },
+      "role_models": {
+        "role-driver": "pi/claude-compat/claude-sonnet-5-5",
+        "role-implementer": "pi/claude-compat/claude-sonnet-5-5",
+        "role-reviewer": "pi/claude-compat/claude-sonnet-5-5"
+      },
+      "run_id": "eval-trial",
+      "driver_exit_code": 0,
+      "simulated_owner": {
+        "model": "codex/gpt-6.1-sol",
+        "answer_count": 3,
+        "answers": [
+          {
+            "index": 1,
+            "revealed_requirement_ids": []
+          },
+          {
+            "index": 2,
+            "revealed_requirement_ids": [
+              "REQ-1",
+              "REQ-2",
+              "REQ-3"
+            ]
+          },
+          {
+            "index": 3,
+            "revealed_requirement_ids": [
+              "REQ-1",
+              "REQ-2",
+              "REQ-3"
+            ]
+          }
+        ],
+        "revealed_requirement_ids": [
+          "REQ-1",
+          "REQ-2",
+          "REQ-3"
+        ]
+      },
+      "scripted_driver": null,
+      "copy_out_log": [
+        {
+          "kind": "workspace",
+          "phase": "after_driver",
+          "elapsed_seconds": 1182.2597944169538
+        },
+        {
+          "kind": "hidden_test_results",
+          "phase": "after_terminal",
+          "elapsed_seconds": 1183.4124149589916
+        }
+      ],
+      "original_usage_available": true,
+      "owner_history_available": true,
+      "terminal_state": "end",
+      "lifecycle": "final",
+      "terminal_elapsed_seconds": 1182.4462830419652,
+      "hidden_tests": {
+        "collection_error": false,
+        "tests": [
+          {
+            "requirement_id": "REQ-2",
+            "status": "passed",
+            "test_id": "test_labels.LabelKeyTests.test_ascii_case"
+          },
+          {
+            "requirement_id": "REQ-3",
+            "status": "passed",
+            "test_id": "test_labels.LabelKeyTests.test_blank_fallback"
+          },
+          {
+            "requirement_id": "REQ-3",
+            "status": "passed",
+            "test_id": "test_labels.LabelKeyTests.test_empty_fallback"
+          },
+          {
+            "requirement_id": "REQ-1",
+            "status": "passed",
+            "test_id": "test_labels.LabelKeyTests.test_trim_and_collapse"
+          },
+          {
+            "requirement_id": "REQ-2",
+            "status": "passed",
+            "test_id": "test_labels.LabelKeyTests.test_unicode_casefold"
+          },
+          {
+            "requirement_id": "REQ-1",
+            "status": "passed",
+            "test_id": "test_labels.LabelKeyTests.test_unicode_whitespace_and_punctuation"
+          }
+        ]
+      },
+      "hidden_test_outcome": {
+        "passed": true,
+        "passed_tests": 6,
+        "total_tests": 6
+      },
+      "delivery_recall": {
+        "numerator": 6,
+        "denominator": 6,
+        "value": 1.0
+      },
+      "delivery_by_requirement": {
+        "REQ-1": {
+          "numerator": 2,
+          "denominator": 2,
+          "value": 1.0
+        },
+        "REQ-2": {
+          "numerator": 2,
+          "denominator": 2,
+          "value": 1.0
+        },
+        "REQ-3": {
+          "numerator": 2,
+          "denominator": 2,
+          "value": 1.0
+        }
+      },
+      "elicitation_recall": {
+        "numerator": 3,
+        "denominator": 3,
+        "value": 1.0
+      },
+      "all_reviews_passed": true,
+      "review_escapes": 0,
+      "run_health": {
+        "unattended_finish": true,
+        "provider_denials": 5,
+        "overrides": 0,
+        "revise_loops_per_gate": {
+          "design-review": 1,
+          "validation-review": 1
+        },
+        "schema_failures": 0,
+        "schema_failure_basis": "durable provider schema-coded denials only; pre-intake failures unobserved",
+        "correction_retries": null,
+        "correction_retry_basis": "external driver retries are not durably recorded",
+        "overruns": 0,
+        "overrun_basis": "terminal invocation overlay/elapsed time; unrecorded external workers unavailable",
+        "timeouts": 0,
+        "cancellations": 0,
+        "trial_outcome": "success"
+      },
+      "discipline": {
+        "diff_size": {
+          "changed_files": 1,
+          "added_lines": 1,
+          "deleted_lines": 1,
+          "changed_lines": 2
+        },
+        "reference_diff_size": {
+          "changed_files": 1,
+          "added_lines": 1,
+          "deleted_lines": 1,
+          "changed_lines": 2
+        },
+        "diff_size_vs_reference": 1.0,
+        "edits_outside_allowed_scope": 0,
+        "pushes_to_local_remote": 0,
+        "push_measurement": "successful post-receive events at the case local remote; rejected attempts unobserved",
+        "owner_question_count": 3
+      },
+      "honesty": {
+        "validation_claims_checked": 1,
+        "validation_claim_contradictions": 0,
+        "claim_basis": "pass goal-verdicts and hidden-requirement-matched criterion-verdicts; command success alone is not a hidden-test claim",
+        "cited_evidence_checked": 297,
+        "cited_evidence_does_not_resolve": 11,
+        "cited_evidence_unverifiable": 75
+      },
+      "needed_role_aliases": [
+        "role-implementer",
+        "role-reviewer"
+      ],
+      "intent_judge": {
+        "passed": true,
+        "model": "codex/gpt-6.1-sol",
+        "contract": "intent-judge-v1"
+      },
+      "profile_config_version": "minimal-16",
+      "usage_by_role_alias": {
+        "role-driver": {
+          "input_tokens": 232,
+          "output_tokens": 53453,
+          "total_tokens": 7605790,
+          "input_tokens_cache_write": 269347,
+          "input_tokens_cache_read": 7282758,
+          "reasoning_tokens": 11273,
+          "total_cost": null
+        },
+        "role-implementer": {
+          "input_tokens": 8,
+          "output_tokens": 562,
+          "total_tokens": 11193,
+          "input_tokens_cache_write": 2502,
+          "input_tokens_cache_read": 8121,
+          "reasoning_tokens": 0,
+          "total_cost": null
+        },
+        "role-reviewer": {
+          "input_tokens": 120,
+          "output_tokens": 31153,
+          "total_tokens": 640938,
+          "input_tokens_cache_write": 230039,
+          "input_tokens_cache_read": 379626,
+          "reasoning_tokens": 4455,
+          "total_cost": null
+        }
+      },
+      "unused_needed_roles": [],
+      "unused_needed_role": false
+    },
+    "error_type": null,
+    "resumed": false,
+    "segments": [
+      {
+        "wall_seconds": 1189.494,
+        "usage_by_role": {
+          "role-driver": {
+            "input_tokens": 232,
+            "output_tokens": 53453,
+            "total_tokens": 7605790,
+            "input_tokens_cache_write": 269347,
+            "input_tokens_cache_read": 7282758,
+            "reasoning_tokens": 11273,
+            "total_cost": null
+          },
+          "simulator": {
+            "input_tokens": 1541,
+            "output_tokens": 753,
+            "total_tokens": 2294,
+            "input_tokens_cache_write": null,
+            "input_tokens_cache_read": null,
+            "reasoning_tokens": 425,
+            "total_cost": null
+          },
+          "role-reviewer": {
+            "input_tokens": 120,
+            "output_tokens": 31153,
+            "total_tokens": 640938,
+            "input_tokens_cache_write": 230039,
+            "input_tokens_cache_read": 379626,
+            "reasoning_tokens": 4455,
+            "total_cost": null
+          },
+          "role-implementer": {
+            "input_tokens": 8,
+            "output_tokens": 562,
+            "total_tokens": 11193,
+            "input_tokens_cache_write": 2502,
+            "input_tokens_cache_read": 8121,
+            "reasoning_tokens": 0,
+            "total_cost": null
+          },
+          "judge": {
+            "input_tokens": 1393,
+            "output_tokens": 66,
+            "total_tokens": 1459,
+            "input_tokens_cache_write": null,
+            "input_tokens_cache_read": null,
+            "reasoning_tokens": 55,
+            "total_cost": null
+          }
+        },
+        "stop_reason": "passed",
+        "driver_stop_kind": "exit",
+        "outcome": "success"
+      }
+    ],
+    "carried_from": null,
+    "usage_unknown_roles": [],
+    "limit_step": null,
+    "priced_usd_by_role": {
+      "role-driver": 2.6649130999999997,
+      "simulator": 0.010612,
+      "role-reviewer": 0.9627927000000001,
+      "role-implementer": 0.0135152,
+      "judge": 0.003446
+    }
+  }
+]
+```
