@@ -3,9 +3,18 @@ name: CI
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
+
+# Superseded PR updates are cancelled. Pushes to main always run to completion:
+# release requires a successful push run for the exact commit, and the Bookends
+# range of a cancelled push would otherwise go unchecked.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   checks:
@@ -34,6 +43,8 @@ jobs:
           persist-credentials: false
           submodules: recursive
           fetch-depth: 0
+          # PRs check the PR head commits, not the synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14.6"
@@ -58,8 +69,8 @@ jobs:
       - name: Bookends pushed-range gate
         shell: bash
         env:
-          PUSH_AFTER: ${{ github.event.after }}
-          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.pull_request.head.sha || github.event.after }}
+          PUSH_BEFORE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           set -euo pipefail
           BIN_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"] + "/debug")')"
