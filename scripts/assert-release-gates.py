@@ -68,7 +68,7 @@ def main() -> int:
     workflow = args.workflow.read_text()
     cargo = (ROOT / "Cargo.toml").read_text()
     for entry in ('cargo-dist-version = "0.32.0"', 'pr-run-mode = "skip"',
-                  'github-build-setup = "release-gate-steps.yml"',
+                  'github-build-setup = "../release-gate-steps.yml"',
                   'global-artifacts-jobs = ["./archive-check"]', 'allow-dirty = ["ci"]'):
         if entry not in cargo:
             fail(f"missing dist metadata: {entry}")
