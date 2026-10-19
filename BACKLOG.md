@@ -15,7 +15,6 @@ Complete A11 calibration remains unmet: the owner accepted **548 qualified / 64 
 ## Remaining source-supported gaps
 
 - [Align challenge packets with valid carried aggregate evidence (#30)](https://github.com/cartwmic/loop-engine/issues/30): v0.26.0 already selects applicable original parent aggregates into projected context (`commission.rs`, `project_review_context_with_diagnostics_excluding`). However, `missing_parent_claims` still calls `latest_aggregate_by_axis_author`, whose selector requires the raw current `subject_revision`; a valid carried aggregate can therefore still be reported missing. Keep the remaining readiness/eligibility discrepancy distinct from closed #17/#18. This audit rechecked source, not a new runtime reproduction; pair packet construction and actual gate evaluation before promising a fix.
-- **Steps-only release setup discovered as an invalid standalone workflow:** [run 38488463078](https://github.com/cartwmic/loop-engine/actions/runs/38488463078/workflow) confirms `Invalid workflow file (Line: 1, Col: 1): A sequence was not expected`. Cargo-dist consumes `.github/workflows/release-gate-steps.yml` as a step fragment, but GitHub also discovers it as a workflow. This real configuration defect has no repository issue as of this audit. Its failed zero-job suite is separate from the successful required `ci.yml` and generated Release/native archive gates; do not claim all workflows were green. No workflow or setting change is authorized by this entry.
 
 ## Deferred investigations — not confirmed defects or revalidated priorities
 
