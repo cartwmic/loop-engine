@@ -82,6 +82,8 @@ excluded from headline success rate/pass^k and reported separately.
 All optional; unset means off. One campaign command runs exactly one campaign and starts no other.
 Trials run one at a time, so the guard sees one trial's live spend.
 
+A stop that fires after a trial's work has finished (a dollar stop reached by the final judge call after scoring, a campaign wall-time stop during publication, or any other post-finish stop) leaves the finished trial as `success`. The stop is recorded in the stop events, the cut-off steps and the limit-only record label, and no campaign-level `limit` outcome is emitted. A stop that fires while a trial's work is still running ends the trial as `limit`, as described above.
+
 - `campaign_wall_limit_seconds` (D): measured from the start of the `evalctl` command to the report
   being written. `post_trial_reserve_seconds` (default 600) gives the stop line S = D - reserve, where trial work
   stops. `publication_reserve_seconds` (default 120) gives H = D - reserve, where capture, scoring and the judge

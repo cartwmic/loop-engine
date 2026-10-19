@@ -16,6 +16,7 @@ CLASSIFICATION_RULES = (
     "429/5xx responses) are infrastructure. Unknown exceptions are failures unless the target marks "
     "them InfrastructureError. A trial or step stopped by a time, dollar or token budget is 'limit' with its "
     "reason; it counts as a non-success in the headline rates, is listed separately and is never retried. "
+    "A stop that fires after a trial's work has finished leaves the trial as success, with the stop recorded. "
     "Infrastructure is excluded from success rate and fixed-k pass^k; "
     "cases with fewer than k scorable trials are listed as incomplete. No automatic trial retries."
 )
