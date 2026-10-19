@@ -21,7 +21,7 @@ import pytest
 from inspect_ai.model import ModelAPI, ModelOutput, ModelUsage, modelapi
 
 from evalcore.settings import Assignment, CampaignSettings, Case
-from evalcore.target import TrialContext
+from evalcore.target import InfrastructureError, TrialContext
 from scevals import grader, target
 from scevals.arms import load_arm, render_prompt
 from scevals.cases import load_case
@@ -540,6 +540,58 @@ def test_loop_engine_lifecycle_and_intent_validity_are_diagnostics_only(seams):
     assert diagnostics["engine_lifecycle"] == "terminated" and diagnostics["intent_valid"] is True
     assert run.scored.success is True
     assert run.metrics["run_health"]["unattended_finish"] is False  # a process diagnostic; it decides nothing
+
+
+# A trusted provider route failure is infrastructure for an arm, whatever the driver exit; without an arm the rule is unchanged.
+
+ROUTE_FAILURES = ("provider policy block", "provider rejected bridged request")
+
+
+@pytest.mark.parametrize("returncode", [0, 137])
+@pytest.mark.parametrize("reason", ROUTE_FAILURES)
+def test_arm_route_failure_is_infrastructure_at_finalization_whatever_the_driver_exit(seams, monkeypatch, reason, returncode):
+    monkeypatch.setattr(target, "provider_route_failure", lambda: reason)
+    with pytest.raises(InfrastructureError, match=f"^{reason}$"):
+        seams.configure(options={"arm": NATIVE}, driver=delivering(returncode=returncode)).run()
+
+
+@pytest.mark.parametrize("returncode", [0, 137])
+@pytest.mark.parametrize("reason", ROUTE_FAILURES)
+def test_arm_route_failure_is_infrastructure_at_scoring_whatever_the_driver_exit(seams, monkeypatch, reason, returncode):
+    monkeypatch.setattr(target, "provider_route_failure", lambda: None)
+    run = seams.configure(options={"arm": NATIVE}, driver=delivering(returncode=returncode)).run()
+    run.execution.data[1]["evidence"]["provider_route_failure"] = reason  # the capture as a rescore would read it
+    with pytest.raises(InfrastructureError, match=f"^{reason}$"):
+        asyncio.run(seams.target.score(None, run.execution, seams.context))
+
+
+def test_arm_without_a_route_failure_is_unchanged_by_the_route_rule(seams, monkeypatch):
+    monkeypatch.setattr(target, "provider_route_failure", lambda: None)
+    run = seams.configure(options={"arm": NATIVE}, driver=delivering(returncode=137, intent=True)).run()
+    assert run.scored.success is True and run.execution.terminal is True
+    assert "provider_route_failure" not in run.meta["evidence"]
+
+
+@pytest.mark.parametrize("lifecycle", ["active", "terminated", "final"])
+def test_without_an_arm_a_route_failure_is_infrastructure_only_for_an_unfinished_engine_run(seams, monkeypatch, lifecycle):
+    monkeypatch.setattr(target, "provider_route_failure", lambda: "provider policy block")
+    if lifecycle == "active":
+        with pytest.raises(InfrastructureError, match="^provider policy block$"):
+            seams.configure(engine=engine(lifecycle)).run()
+    else:
+        run = seams.configure(engine=engine(lifecycle), driver=delivering(intent=True)).run()
+        assert run.scored.success is (lifecycle == "final")
+
+
+@pytest.mark.parametrize("lifecycle,raises", [("active", True), ("final", False)])
+def test_without_an_arm_a_recorded_route_failure_is_raised_at_scoring_only_when_not_terminal(seams, lifecycle, raises):
+    run = seams.configure(engine=engine(lifecycle), driver=delivering(intent=True)).run()
+    run.execution.data[1]["evidence"]["provider_route_failure"] = "provider rejected bridged request"
+    if raises:
+        with pytest.raises(InfrastructureError, match="^provider rejected bridged request$"):
+            asyncio.run(seams.target.score(None, run.execution, seams.context))
+    else:
+        assert asyncio.run(seams.target.score(None, run.execution, seams.context)).success is True
 
 
 def test_grading_output_reaches_the_trial_metrics_and_success_is_unchanged(seams, scripted_grader):

@@ -158,6 +158,8 @@ With an arm set, one rule applies to every arm, `loop-engine` included:
   from the owner receipt. Workflow-owned paths are removed from the discipline scope and counted as artifact volume.
 - Engine lifecycle, `intent.json` validity, the exit code and workflow adherence are diagnostics. They never decide
   success. They are `null` for an arm that has no such thing.
+- A trusted provider route failure (`provider policy block` or `provider rejected bridged request`) is infrastructure
+  whatever the driver exit, so the trial is excluded from the success rate rather than scored as a failure.
 
 | Driver ends | Complete | Success, if every hidden test passes | Outcome |
 |---|---|---|---|
@@ -428,6 +430,11 @@ Field sources:
 
 Missing usage, price or metric shows as `unavailable`, never zero. Workflow cost is the driver, implementer and
 reviewer roles. Overhead is the simulator and judge roles, shown apart.
+
+A resumed or rescored trial has no exact per-call dollars, so its role dollars are an upper bound from its recorded
+usage (with input and output counts) at each model's highest-tier price, shown as `<=$`. `summary.json` labels each
+figure with `workflow_cost_basis` or `overhead_cost_basis` (`exact`, `upper-bound` or `unavailable`), and an upper-bound
+delta reads `(upper-bound)`.
 
 **Paired deltas vs native.** A block with a native trial shows, after its table, a table titled "Paired deltas vs
 native (arm minus native)". Each non-native attempt appears there as its arm minus the block's native reference, the

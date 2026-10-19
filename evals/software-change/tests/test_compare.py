@@ -17,6 +17,9 @@ SHIPPED = {
 }
 BASE = json.loads(SHIPPED["tier-0-full-sonnet"].read_text())
 WORKFLOW_USD = {"role-driver": 2.6649131, "role-implementer": 0.0135152, "role-reviewer": 0.9627927}
+WORKFLOW_MODEL = BASE["comparisons"][0]["role_models"]["role-driver"]  # every workflow role of the Tier 0 trial
+OVERHEAD_MODEL = BASE["comparisons"][0]["role_models"]["simulator"]  # simulator and judge
+WITHOUT_WORKFLOW_MODEL = {m: p for m, p in BASE["settings"]["prices"].items() if m != WORKFLOW_MODEL}
 
 
 def sha256(path: Path) -> str:
@@ -45,10 +48,13 @@ def label(*, task="T1", repetition=1, arm="native", order=1, attempt=1, reason=N
     return block
 
 
-def campaign(root: Path, name: str, trial: dict, *, block: dict | None = None, trials: list | None = None) -> Path:
+def campaign(root: Path, name: str, trial: dict, *, block: dict | None = None, trials: list | None = None,
+             prices: dict | None = None) -> Path:
     summary = copy.deepcopy(BASE)
     summary["campaign"] = name
     summary["settings"]["target_options"] = {} if block is None else {"block": block}
+    if prices is not None:
+        summary["settings"]["prices"] = prices
     summary["trials"] = trials if trials is not None else [trial]
     directory = root / "campaigns" / name / "20261019T000000.000000Z"
     directory.mkdir(parents=True)
@@ -125,20 +131,68 @@ def test_limit_infrastructure_and_resumed_trials_stay_visible(tmp_path):
     assert "resumed, 2 segments" in markdown
 
 
-@pytest.mark.parametrize(("damage", "tokens_known"), [
-    pytest.param(lambda t: t.update(priced_usd_by_role=None), True, id="unpriced-model"),
-    pytest.param(lambda t: t["priced_usd_by_role"].pop("role-reviewer"), True, id="price-missing-for-one-role"),
-    pytest.param(lambda t: t.update(usage_unknown_roles=["role-reviewer"]), False, id="usage-unknown-for-one-role"),
+@pytest.mark.parametrize(("damage", "unpriced", "tokens_known"), [
+    pytest.param(lambda t: t.update(priced_usd_by_role=None), True, True, id="unpriced-model-and-no-exact-dollars"),
+    pytest.param(lambda t: t["priced_usd_by_role"].pop("role-reviewer"), True, True,
+                 id="exact-missing-for-one-role-and-unpriced"),
+    pytest.param(lambda t: t.update(usage_unknown_roles=["role-reviewer"]), False, False,
+                 id="usage-unknown-for-one-role"),
 ])
-def test_missing_price_or_usage_renders_unavailable_not_zero(tmp_path, damage, tokens_known):
+def test_missing_price_or_usage_renders_unavailable_not_zero(tmp_path, damage, unpriced, tokens_known):
     trial = make_trial()
     damage(trial)
-    _, report, markdown = run(tmp_path, [campaign(tmp_path, "priced", trial, block=label())])
+    prices = WITHOUT_WORKFLOW_MODEL if unpriced else None
+    _, report, markdown = run(tmp_path, [campaign(tmp_path, "priced", trial, block=label(), prices=prices)])
     row = row_by_arm(report, "native")
-    assert row["workflow_usd"] is None
+    assert row["workflow_usd"] is None and row["workflow_cost_basis"] == "unavailable"
     assert row["workflow_tokens"] == (BASE["comparisons"][0]["core"]["workflow_cost"]["total_tokens"] if tokens_known else None)
     assert "unavailable" in markdown
     assert "$0.0000" not in markdown
+
+
+def test_a_resumed_or_rescored_trial_gets_an_upper_bound_labelled_as_such(tmp_path):
+    trial = make_trial(resumed=True, priced_usd_by_role=None)
+    _, report, markdown = run(tmp_path, [campaign(tmp_path, "rescored", trial, block=label())])
+    row = row_by_arm(report, "native")
+    assert row["workflow_usd"] == pytest.approx(sum(WORKFLOW_USD.values()), abs=1e-9)
+    assert row["workflow_cost_basis"] == "upper-bound"
+    assert row["overhead_usd"] is not None and row["overhead_cost_basis"] == "upper-bound"
+    assert "<=$3.6412" in markdown
+
+
+def test_exact_dollars_win_over_the_upper_bound_when_recorded(tmp_path):
+    _, report, markdown = run(tmp_path, [campaign(tmp_path, "exact", make_trial(), block=label())])
+    row = row_by_arm(report, "native")
+    assert row["workflow_usd"] == pytest.approx(sum(WORKFLOW_USD.values()), abs=1e-9)
+    assert row["workflow_cost_basis"] == "exact" and row["overhead_cost_basis"] == "exact"
+    assert "$3.6412" in markdown and "<=$" not in markdown
+
+
+def test_an_upper_bound_without_a_price_stays_unavailable(tmp_path):
+    trial = make_trial(resumed=True, priced_usd_by_role=None)
+    _, report, markdown = run(tmp_path, [campaign(tmp_path, "unpriced", trial, block=label(), prices=WITHOUT_WORKFLOW_MODEL)])
+    row = row_by_arm(report, "native")
+    assert row["workflow_usd"] is None and row["workflow_cost_basis"] == "unavailable"
+    assert row["overhead_cost_basis"] == "upper-bound"  # the overhead model is still priced, so it is unaffected
+    assert "$0.0000" not in markdown
+
+
+def test_an_unpriced_overhead_model_leaves_the_workflow_dollars_available(tmp_path):
+    trial = make_trial(resumed=True, priced_usd_by_role=None)
+    prices = {m: p for m, p in BASE["settings"]["prices"].items() if m != OVERHEAD_MODEL}
+    _, report, _ = run(tmp_path, [campaign(tmp_path, "no-overhead-price", trial, block=label(), prices=prices)])
+    row = row_by_arm(report, "native")
+    assert row["overhead_usd"] is None and row["overhead_cost_basis"] == "unavailable"
+    assert row["workflow_usd"] == pytest.approx(sum(WORKFLOW_USD.values()), abs=1e-9)
+    assert row["workflow_cost_basis"] == "upper-bound"
+
+
+def test_an_upper_bound_needs_recorded_input_and_output_counts(tmp_path):
+    trial = make_trial(priced_usd_by_role=None)
+    del trial["usage_by_role"]["role-reviewer"]["input_tokens"]
+    _, report, _ = run(tmp_path, [campaign(tmp_path, "no-counts", trial, block=label())])
+    row = row_by_arm(report, "native")
+    assert row["workflow_usd"] is None and row["workflow_cost_basis"] == "unavailable"
 
 
 def test_empty_usage_renders_unavailable_for_tokens_and_dollars(tmp_path):
@@ -218,9 +272,10 @@ def priced_trial(*, usd: dict, tokens: dict, wall: float, driver: float | None =
     return trial
 
 
-def native_and_superpowers(tmp_path: Path, native: dict, superpowers: dict) -> list[Path]:
-    return [campaign(tmp_path, "native", native, block=label(arm="native", order=1)),
-            campaign(tmp_path, "super", superpowers, block=label(arm="superpowers", order=2))]
+def native_and_superpowers(tmp_path: Path, native: dict, superpowers: dict, *, native_prices: dict | None = None,
+                           superpowers_prices: dict | None = None) -> list[Path]:
+    return [campaign(tmp_path, "native", native, block=label(arm="native", order=1), prices=native_prices),
+            campaign(tmp_path, "super", superpowers, block=label(arm="superpowers", order=2), prices=superpowers_prices)]
 
 
 def test_paired_deltas_are_arm_minus_native_for_the_block(tmp_path):
@@ -232,7 +287,7 @@ def test_paired_deltas_are_arm_minus_native_for_the_block(tmp_path):
     _, report, markdown = run(tmp_path, native_and_superpowers(tmp_path, native, superpowers))
     (block,) = report["blocks"]
     assert block["paired_deltas"] == {"reference": {"arm": "native", "attempt": 1}, "deltas": [
-        {"arm": "superpowers", "attempt": 1, "workflow_usd": 0.75, "workflow_tokens": 450,
+        {"arm": "superpowers", "attempt": 1, "workflow_usd": 0.75, "workflow_cost_basis": "exact", "workflow_tokens": 450,
          "trial_wall_seconds": 200.0, "driver_seconds": 30.0}]}
     assert "### Paired deltas vs native (arm minus native)" in markdown
     assert "| superpowers | 1 | +$0.7500 | +450 | +200.0 | +30.0 |" in markdown
@@ -251,17 +306,35 @@ def test_a_missing_price_or_clock_makes_its_delta_unavailable_never_zero(tmp_pat
               "superpowers": priced_trial(usd={"role-driver": 1.0, "role-implementer": 0.5, "role-reviewer": 0.25},
                                           tokens={"role-driver": 1500, "role-implementer": 100, "role-reviewer": 0},
                                           wall=1200.0, driver=330.0)}
+    prices = {"native": None, "superpowers": None}
     if damage == "price":
+        # No exact figure and no price for the workflow model: an upper bound cannot be made either.
         del trials[side]["priced_usd_by_role"]["role-reviewer"]
+        prices[side] = WITHOUT_WORKFLOW_MODEL
     else:
         del trials[side]["target_metrics"]["driver_elapsed_seconds"]
-    _, report, markdown = run(tmp_path, native_and_superpowers(tmp_path, trials["native"], trials["superpowers"]))
+    _, report, markdown = run(tmp_path, native_and_superpowers(
+        tmp_path, trials["native"], trials["superpowers"], native_prices=prices["native"],
+        superpowers_prices=prices["superpowers"]))
     (block,) = report["blocks"]
     (delta,) = block["paired_deltas"]["deltas"]
     assert delta["workflow_usd"] == (None if damage == "price" else 0.75)
+    assert delta["workflow_cost_basis"] == ("unavailable" if damage == "price" else "exact")
     assert delta["driver_seconds"] == (None if damage == "driver" else 30.0)
     assert delta["workflow_tokens"] == 450 and delta["trial_wall_seconds"] == 200.0
     assert row in markdown
+
+
+def test_a_paired_delta_with_an_upper_bound_side_is_labelled_upper_bound(tmp_path):
+    native = make_trial(wall_seconds=1000.0, metrics=arm_metrics())
+    superpowers = make_trial(wall_seconds=1200.0, resumed=True, priced_usd_by_role=None, metrics=arm_metrics())
+    superpowers["usage_by_role"]["role-driver"]["output_tokens"] += 1_000_000  # sonnet output is $10 per million
+    _, report, markdown = run(tmp_path, native_and_superpowers(tmp_path, native, superpowers))
+    (block,) = report["blocks"]
+    (delta,) = block["paired_deltas"]["deltas"]
+    assert delta["workflow_cost_basis"] == "upper-bound"
+    assert delta["workflow_usd"] == pytest.approx(10.0, abs=1e-9)
+    assert "| superpowers | 1 | +$10.0000 (upper-bound) |" in markdown
 
 
 def test_a_block_without_a_native_trial_shows_no_deltas(tmp_path):

@@ -5,7 +5,9 @@
 belongs to the block named by its task and repetition, under the arm, realised order and attempt
 the label records. An unlabelled summary, such as Tier 0, is shown under its case and combination.
 The report pair (summary.json and report.md) is written to a new timestamped directory under `out`.
-A missing usage, price or metric is "unavailable", never zero.
+A missing usage, price or metric is "unavailable", never zero. A resumed or rescored trial has no exact per-call
+dollars, so its dollars are an upper bound from its recorded usage at the highest-tier price, labelled by
+`workflow_cost_basis` and `overhead_cost_basis`.
 
 The calibration receipt (grader-calibrate) decides how intent verdicts are shown. Only a receipt whose mode is
 "normal" shows them as the grader gave them; otherwise each is labelled "diagnostic-only". A missing or unreadable
@@ -25,10 +27,13 @@ import shutil
 from collections.abc import Iterable
 from pathlib import Path
 
+from evalcore.accounting import usage_cost_usd
 from evalcore.report import protected_values, scan_results, utc_timestamp
-from evalcore.settings import OVERHEAD_ROLES, WORKFLOW_ROLES
+from evalcore.settings import OVERHEAD_ROLES, WORKFLOW_ROLES, Price
 
 UNAVAILABLE = "unavailable"
+EXACT = "exact"
+UPPER_BOUND = "upper-bound"
 BLOCK_KEYS = ("task", "repetition", "arm", "order", "attempt")
 DRIVER_SECONDS_KEY = "driver_elapsed_seconds"
 OWNER_INTERACTION_KEY = "owner_interaction"
@@ -43,6 +48,8 @@ DELTA_FIELDS = ("workflow_usd", "workflow_tokens", "trial_wall_seconds", "driver
 NOTES = (
     "Dollar figures are estimated from each campaign's recorded price table. \"unavailable\" means the value "
     "was not recorded, or a role used by the trial is unpriced; it is never zero.",
+    "\"<=\" marks an upper bound: a resumed or rescored trial has no exact per-call dollars, so its recorded usage is "
+    "priced at the model's highest-tier rate. A paired delta with an upper-bound side is labelled upper-bound.",
     "Workflow cost and tokens cover the driver, implementer and reviewer roles. Evaluation overhead (simulator "
     "and judge, which includes the intent grader) is shown apart and is never part of workflow cost.",
     "Driver wall s is the target-recorded driver-only elapsed time. Trial wall s is the whole trial (setup, "
@@ -92,22 +99,65 @@ def block_label(summary: dict) -> dict | None:
     return label
 
 
-def _role_total(trial: dict, roles: tuple[str, ...], value_of) -> float | None:
-    """Sum over the roles the trial used; None when none were used, any is unknown or any value is missing."""
+def _used_roles(trial: dict, roles: tuple[str, ...]) -> list[str] | None:
+    """The roles of a group that the trial used; None when none were used or any used role's usage is unknown."""
     usage = trial.get("usage_by_role") or {}
     used = [role for role in roles if role in usage]
     unknown = set(trial.get("usage_unknown_roles") or [])
     if not used or unknown.intersection(used):
         return None
+    return used
+
+
+def _role_total(trial: dict, roles: tuple[str, ...], value_of) -> float | None:
+    """Sum over the roles the trial used; None when none were used, any is unknown or any value is missing."""
+    used = _used_roles(trial, roles)
+    if used is None:
+        return None
     values = [value_of(role) for role in used]
     return None if any(value is None for value in values) else sum(values)
 
 
-def _usd(trial: dict, roles: tuple[str, ...]) -> float | None:
+def _usd(trial: dict, roles: tuple[str, ...], role_models: dict, prices: dict[str, Price]) -> tuple[float | None, str]:
+    """A role group's dollars and their basis.
+
+    Each used role takes its exact per-call figure when the target recorded one. Otherwise (a resumed or rescored trial)
+    it is an upper bound: its recorded usage at its model's highest-tier price. A role with neither is unavailable,
+    which makes the group unavailable, never zero.
+    """
+    used = _used_roles(trial, roles)
+    if used is None:
+        return None, UNAVAILABLE
     priced = trial.get("priced_usd_by_role")
-    if not isinstance(priced, dict):
-        return None
-    return _role_total(trial, roles, lambda role: _number(priced.get(role)))
+    priced = priced if isinstance(priced, dict) else {}
+    usage = trial.get("usage_by_role") or {}
+    total, basis = 0.0, EXACT
+    for role in used:
+        exact = _number(priced.get(role))
+        if exact is not None:
+            total += exact
+            continue
+        counts, price = usage[role], prices.get(role_models.get(role, ""))
+        # No price, or no recorded input and output counts: an upper bound from them would read as zero.
+        if price is None or _number(counts.get("input_tokens")) is None or _number(counts.get("output_tokens")) is None:
+            return None, UNAVAILABLE
+        total += usage_cost_usd(counts, price)
+        basis = UPPER_BOUND
+    return total, basis
+
+
+def _role_models(summary: dict, combination_id: str) -> dict:
+    """The role-to-model map cost_by_role priced the combination with, as the summary recorded it in comparisons."""
+    for comparison in summary.get("comparisons") or []:
+        if comparison.get("id") == combination_id:
+            return comparison.get("role_models") or {}
+    return {}
+
+
+def _campaign_prices(summary: dict) -> dict[str, Price]:
+    """The campaign's recorded price table, validated as the campaign validated it."""
+    recorded = (summary.get("settings") or {}).get("prices") or {}
+    return {model: Price.model_validate(price) for model, price in recorded.items()}
 
 
 def _tokens(trial: dict, roles: tuple[str, ...]) -> int | None:
@@ -178,6 +228,10 @@ def trial_row(summary: dict, trial: dict, path: Path, label: dict | None, calibr
     owner = metrics.get(OWNER_INTERACTION_KEY)
     owner = owner if isinstance(owner, dict) else {}
     discipline = metrics.get("discipline") or {}
+    models = _role_models(summary, trial["combination_id"])
+    prices = _campaign_prices(summary)
+    workflow_usd, workflow_basis = _usd(trial, WORKFLOW_ROLES, models, prices)
+    overhead_usd, overhead_basis = _usd(trial, OVERHEAD_ROLES, models, prices)
     return identity | {
         "labelled": label is not None,
         "campaign": summary["campaign"],
@@ -196,9 +250,11 @@ def trial_row(summary: dict, trial: dict, path: Path, label: dict | None, calibr
         "delivery": _ratio(metrics.get("delivery_recall")),
         "elicitation": _ratio(metrics.get("elicitation_recall")),
         "intent": _intent(metrics.get(OUTCOME_GRADE_KEY), calibrated),
-        "workflow_usd": _usd(trial, WORKFLOW_ROLES),
+        "workflow_usd": workflow_usd,
+        "workflow_cost_basis": workflow_basis,
         "workflow_tokens": _tokens(trial, WORKFLOW_ROLES),
-        "overhead_usd": _usd(trial, OVERHEAD_ROLES),
+        "overhead_usd": overhead_usd,
+        "overhead_cost_basis": overhead_basis,
         "overhead_tokens": _tokens(trial, OVERHEAD_ROLES),
         "driver_seconds": _number(metrics.get(DRIVER_SECONDS_KEY)),
         "trial_wall_seconds": _number(trial.get("wall_seconds")),
@@ -246,7 +302,8 @@ def paired_deltas(members: list[dict]) -> dict:
         return {"reference": None, "deltas": []}
     reference = min(natives, key=lambda row: row["attempt"])
     deltas = [{"arm": row["arm"], "attempt": row["attempt"]} |
-              {field: _difference(row[field], reference[field]) for field in DELTA_FIELDS}
+              {field: _difference(row[field], reference[field]) for field in DELTA_FIELDS} |
+              {"workflow_cost_basis": _shared_basis(row["workflow_cost_basis"], reference["workflow_cost_basis"])}
               for row in members if row["arm"] != NATIVE_ARM]
     return {"reference": {"arm": NATIVE_ARM, "attempt": reference["attempt"]}, "deltas": deltas}
 
@@ -257,6 +314,20 @@ def _cell(text: str) -> str:
 
 def _show(value, render) -> str:
     return UNAVAILABLE if value is None else render(value)
+
+
+def _shared_basis(*bases: str) -> str:
+    """The weakest basis among the figures a delta is made from: unavailable, then upper-bound, then exact."""
+    if UNAVAILABLE in bases:
+        return UNAVAILABLE
+    return UPPER_BOUND if UPPER_BOUND in bases else EXACT
+
+
+def _usd_text(value: float | None, basis: str, render) -> str:
+    """A dollar figure marked by its basis: "<=" for an upper bound. Unavailable stays unavailable, never zero."""
+    if value is None or basis == UNAVAILABLE:
+        return UNAVAILABLE
+    return f"<={render(value)}" if basis == UPPER_BOUND else render(value)
 
 
 def _tests_text(row: dict) -> str:
@@ -294,6 +365,14 @@ def _signed_usd(value: float) -> str:
     return f"{'-' if value < 0 else '+'}${abs(value):.4f}"
 
 
+def _delta_usd_text(delta: dict) -> str:
+    """A workflow-cost delta; an upper-bound delta is labelled as one, unavailable stays unavailable."""
+    if delta["workflow_usd"] is None:
+        return UNAVAILABLE
+    text = _signed_usd(delta["workflow_usd"])
+    return f"{text} ({UPPER_BOUND})" if delta["workflow_cost_basis"] == UPPER_BOUND else text
+
+
 def calibration_statement(calibration: dict) -> str:
     """One sentence on how intent verdicts are to be read: the receipt's mode, with its reasons when diagnostic-only."""
     if calibration["mode"] == CALIBRATION_NORMAL:
@@ -319,7 +398,7 @@ def delta_lines(block: dict) -> list[str]:
     lines += ["| Arm | Attempt | Workflow cost | Workflow tokens | Trial wall s | Driver wall s |", "|---|---|---|---|---|---|"]
     for delta in deltas["deltas"]:
         cells = [delta["arm"], str(delta["attempt"]),
-                 _show(delta["workflow_usd"], _signed_usd),
+                 _delta_usd_text(delta),
                  _show(delta["workflow_tokens"], lambda x: f"{x:+,}"),
                  _show(delta["trial_wall_seconds"], lambda x: f"{x:+.1f}"),
                  _show(delta["driver_seconds"], lambda x: f"{x:+.1f}")]
@@ -349,9 +428,9 @@ def render_markdown(report: dict) -> str:
                 _ratio_text(row["delivery"]),
                 _ratio_text(row["elicitation"]),
                 _show(row["intent"], str),
-                _show(row["workflow_usd"], lambda x: f"${x:.4f}"),
+                _usd_text(row["workflow_usd"], row["workflow_cost_basis"], lambda x: f"${x:.4f}"),
                 _show(row["workflow_tokens"], lambda x: f"{x:,}"),
-                _show(row["overhead_usd"], lambda x: f"${x:.4f}"),
+                _usd_text(row["overhead_usd"], row["overhead_cost_basis"], lambda x: f"${x:.4f}"),
                 _show(row["overhead_tokens"], lambda x: f"{x:,}"),
                 _show(row["driver_seconds"], lambda x: f"{x:.1f}"),
                 _show(row["trial_wall_seconds"], lambda x: f"{x:.1f}"),

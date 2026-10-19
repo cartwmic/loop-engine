@@ -58,6 +58,10 @@ def provider_connection_failed():
     return bool(calls) and bool(calls[-1].error) and str(calls[-1].error).startswith(CONNECTION_ERRORS)
 
 
+# Trusted provider access-route failures: infrastructure, never a model failure.
+PROVIDER_ROUTE_FAILURES = ("provider policy block", "provider rejected bridged request")
+
+
 def provider_route_failure():
     """Fixed reason from the last workflow call's trusted provider-error channel."""
     from inspect_ai.log import transcript
@@ -66,7 +70,7 @@ def provider_route_failure():
     if not calls or not calls[-1].error:
         return None
     error = str(calls[-1].error)
-    for reason in ("provider policy block", "provider rejected bridged request"):
+    for reason in PROVIDER_ROUTE_FAILURES:
         if error in (f"InfrastructureError('{reason}')", f"InfrastructureError: {reason}",
                      f'InfrastructureError("{reason}")'):
             return reason
@@ -690,8 +694,11 @@ class SoftwareChangeTarget:
         if inject_infrastructure:
             raise InfrastructureError("scripted infrastructure stop")
         archive, meta = read_capture(self.capture_for(context))
-        finished = completion(evidence)[0] if arm is not None else captured_lifecycle(archive) in ("final", "terminated")
-        if not finished and reason:
+        if arm is not None:
+            # With an arm, a trusted route failure is infrastructure whatever the driver exit: completion never excuses it.
+            if reason in PROVIDER_ROUTE_FAILURES:
+                raise InfrastructureError(reason)
+        elif reason and captured_lifecycle(archive) not in ("final", "terminated"):
             raise InfrastructureError(reason)
         # A driver stopped by the per-trial hard limit or a campaign stop is a limit, not an ordinary failure.
         kind = evidence.get("driver_timeout_kind")
@@ -818,7 +825,8 @@ class SoftwareChangeTarget:
         execution.terminal = (completion(meta.get("evidence", {}))[0] if arm is not None
                               else captured_lifecycle(archive) in ("final", "terminated"))
         reason = meta.get("evidence", {}).get("provider_route_failure")
-        if not execution.terminal and reason in ("provider policy block", "provider rejected bridged request"):
+        # With an arm, a trusted route failure is infrastructure whatever the driver exit; without one, only when not terminal.
+        if reason in PROVIDER_ROUTE_FAILURES and (arm is not None or not execution.terminal):
             raise InfrastructureError(reason)
         # Scripted fault injection is deliberately outside score_capture so replay
         # always exercises the exact same scorer as a healthy campaign.
