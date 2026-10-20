@@ -132,9 +132,10 @@ image = "loop-engine-sc-evals:arms-v1"
 With no arm, the prompt is the existing `PREAMBLE` in `scevals/target.py`, byte for byte. A golden test pins it.
 
 With an arm, the prompt is the neutral base prompt, then the arm's addition (section 3), then the scripted-driver
-line when one is set, then `Owner request:` and the request. The base prompt says that the harness has already
-created the starting baseline commit and an empty bare remote, that delivered changes must not be committed or
-pushed, that `ask-owner` is the only way to reach the owner, and that the launch is preapproved. This is a
+line when one is set, then the closing reply instruction, then `Owner request:` and the request. The base prompt says
+that the harness has already created the starting baseline commit and an empty bare remote, that delivered changes must
+not be committed or pushed, that `ask-owner` is the only way to reach the owner, that an open behavior is asked about
+rather than guessed, and that the launch is preapproved. This is a
 different text from `PREAMBLE`, so an arm prompt does not match a pilot prompt, even for `loop-engine`. The
 baseline wording moved from the agent to the harness on purpose.
 
@@ -330,9 +331,10 @@ Those calls go to a real grader model when run, so they need owner approval. The
 under $1.
 
 `evalctl compare --calibration FILE` reads the receipt's mode and labels every intent verdict `diagnostic-only` unless
-the mode is `normal` and the receipt's `grader_model` is the campaign's own grader, its `settings.judge_model`
-(section 11). Campaign reports do not read the receipt. Their `outcome_grade` values are raw, so the owner must still
-apply a `diagnostic-only` result to them by hand, as the spec says.
+the mode is `normal`, the receipt's `grader_model` is the campaign's own grader, its `settings.judge_model`, and the
+receipt's `case_id` is the case of every trial in that campaign (section 11). Campaign reports do not read the receipt.
+Their `outcome_grade` values are raw, so the owner must still apply a `diagnostic-only` result to them by hand, as the
+spec says.
 
 ## 9. Phase attribution and Pi session records
 
@@ -427,17 +429,19 @@ Field sources:
 - Owner words: `target_metrics.owner_interaction`, numbers only. Older summaries show `unavailable`.
 - Intent: `target_metrics.outcome_grade`. An unstable verdict shows as `unstable`. A campaign without a grader
   verdict shows `unavailable`.
-- Calibration: the `mode` of `--calibration` and its `grader_model`. An intent verdict is labelled `(diagnostic-only)`,
-  as in `faithful (diagnostic-only)`, unless the mode is `normal` and the `grader_model` equals the campaign's own
-  `settings.judge_model`. The report states the receipt once, above the tables: `normal`, the `diagnostic-only`
-  reasons, or `not supplied`. Below that it states, for each campaign, which receipt applied, for example `receipt
-  normal for grader X; this campaign's grader is Y: diagnostic-only`.
+- Calibration: the `mode` of `--calibration`, its `grader_model` and its `case_id`. An intent verdict is labelled
+  `(diagnostic-only)`, as in `faithful (diagnostic-only)`, unless the mode is `normal`, the `grader_model` equals the
+  campaign's own `settings.judge_model`, and the `case_id` equals every trial's case. The report states the receipt once,
+  above the tables: `normal`, the `diagnostic-only` reasons, or `not supplied`. Below that it states, for each campaign,
+  which receipt applied, for example `receipt normal for grader X; this campaign's grader is Y: diagnostic-only`, and
+  whether the receipt's case matches the campaign's trials.
 
 `--calibration` takes a `grader-calibrate` receipt. A missing or unreadable receipt, or one whose mode is neither
 `normal` nor `diagnostic-only`, is diagnostic-only, never an error and never normal. With no receipt the mode is
 `not supplied`, which is also diagnostic-only. A `normal` receipt without a `grader_model` is diagnostic-only, with the
-reason `receipt has no grader model`. `summary.json` records the same `calibration` state; a normal one includes its
-`grader_model`.
+reason `receipt has no grader model`; a `normal` receipt without a `case_id` is diagnostic-only, with the reason
+`receipt names no case`. `summary.json` records the same `calibration` state; a normal one includes its `grader_model`
+and `case_id`.
 
 Missing usage, price or metric shows as `unavailable`, never zero. Workflow cost is the driver, implementer and
 reviewer roles. Overhead is the simulator and judge roles, shown apart.

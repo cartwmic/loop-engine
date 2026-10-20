@@ -74,6 +74,7 @@ class FakeSandbox:
         self.runner_returncode = runner_returncode  # exit code of the hidden-test runner
         self.visible_cwd = None
         self.services = {}
+        self.stopped = anyio.Event()  # set when the harness kills the driver process group, as the idle stop does
         self.requirement_tags = load_case(CASE).test_requirements
 
     def commands(self):
@@ -97,6 +98,9 @@ class FakeSandbox:
             if self.visible is TimeoutError:
                 raise TimeoutError
             return result(self.visible)
+        if command[0] == "python3" and command[1] == "-c" and "os.killpg" in command[2]:
+            self.stopped.set()
+            return result(0)
         if command[1] == "/opt/sc-evals/driver_process.py":
             self.driver_env = dict(env or {})
             returncode, stdout = await (self.driver or delivering())(self, command[-1])
@@ -509,6 +513,61 @@ def test_a_driver_that_exits_during_a_snapshot_longer_than_the_idle_limit_is_com
     assert run.meta["driver_stop_kind"] == "exit"
     assert run.metrics["complete"] is True and run.metrics["incomplete_reason"] is None
     assert run.execution.terminal is True and run.scored.success is True
+
+
+def test_role_tokens_that_grow_during_a_snapshot_longer_than_the_idle_limit_keep_the_driver_running(seams, monkeypatch):
+    """The poll reads progress again after a snapshot, so tokens spent during a long snapshot are not missed.
+
+    Real time, about four seconds: the first poll starts a three second snapshot, longer than the two second idle limit,
+    while the driver's role tokens grow every half second. The driver exits once the snapshot ends. Without the re-read
+    the idle clock would stand at the start of the snapshot and stop a driver that was working.
+    """
+    tokens = {"role-driver": 0}
+    monkeypatch.setattr(target, "sample_role_usage",
+                        lambda: {role: ModelUsage(total_tokens=count) for role, count in tokens.items()})
+    snapshot_done = asyncio.Event()
+    real_snapshot_step = target.snapshot_step
+
+    async def snapshot_while_tokens_grow(*args, **kwargs):
+        for _ in range(6):
+            await anyio.sleep(0.5)
+            tokens["role-driver"] += 100
+        snapshot_done.set()
+        return await real_snapshot_step(*args, **kwargs)
+
+    monkeypatch.setattr(target, "snapshot_step", snapshot_while_tokens_grow)
+    run = seams.configure(options={"arm": NATIVE, "snapshot_interval_seconds": 0.5}, idle_limit=2,
+                          driver=delivering(wait_for=snapshot_done)).run()
+    index = json.loads((run.run_directory / "seam-1-snapshots" / "snapshots.json").read_text())
+    assert len(index) == 1
+    assert run.meta["driver_stop_kind"] == "exit"
+    assert run.metrics["complete"] is True and run.metrics["incomplete_reason"] is None
+    assert run.execution.terminal is True and run.scored.success is True
+
+
+def test_a_driver_with_no_progress_during_a_snapshot_is_still_idle_stopped(seams, monkeypatch):
+    """Progress is still required: a driver that moves nothing while a snapshot runs is idle-stopped after it.
+
+    Real time, about three and a half seconds: the snapshot lasts two and a half seconds, longer than the two second
+    idle limit, and the driver runs until the harness kills it.
+    """
+    real_snapshot_step = target.snapshot_step
+
+    async def slow_snapshot_step(*args, **kwargs):
+        await anyio.sleep(2.5)
+        return await real_snapshot_step(*args, **kwargs)
+
+    async def stalled(sandbox, prompt):
+        with anyio.move_on_after(10):
+            await sandbox.stopped.wait()
+        return 137, ""
+
+    monkeypatch.setattr(target, "snapshot_step", slow_snapshot_step)
+    run = seams.configure(options={"arm": NATIVE, "snapshot_interval_seconds": 0.5}, idle_limit=2, driver=stalled).run()
+    index = json.loads((run.run_directory / "seam-1-snapshots" / "snapshots.json").read_text())
+    assert len(index) == 1
+    assert run.meta["driver_stop_kind"] == "idle"
+    assert run.metrics["complete"] is False and run.metrics["incomplete_reason"] == "idle"
 
 
 @pytest.mark.parametrize("options,idle_limit,message", [

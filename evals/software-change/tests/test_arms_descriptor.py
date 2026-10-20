@@ -107,6 +107,8 @@ def test_each_arm_renders_neutral_base_plus_its_addition(arm_id):
     prompt = render(arms.load_arm(arm_options(arm_id)))
     assert prompt.startswith("Run this software-change request unattended and exit by yourself")
     assert "Reach the owner ONLY through ask-owner" in prompt
+    assert "Do not guess where the request leaves a behavior open; ask." in prompt
+    assert "When finished, reply with a short summary of what you changed and what you checked." in prompt
     assert "/workspace/local-remote.git, configured as origin" in prompt
     assert "You may initialize Git" not in prompt
     assert prompt.endswith("\nOwner request:\nAdd retries.\n")
@@ -142,7 +144,8 @@ def test_loop_engine_prompt_carries_profile_run_and_engine_steps():
 
 def test_arm_prompt_passes_scripted_marker_through():
     prompt = render(arms.load_arm(arm_options("superpowers")), scripted="Scripted driver: never-asks")
-    assert "\nScripted driver: never-asks\nOwner request:\n" in prompt
+    assert ("\nScripted driver: never-asks\nWhen finished, reply with a short summary of what you changed and what you checked.\n"
+            "Owner request:\n") in prompt
 
 
 def test_workflow_owned_matcher_for_superpowers_arm():

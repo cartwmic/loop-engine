@@ -600,26 +600,39 @@ class SoftwareChangeTarget:
                             previous_tokens = {}
                             last_snapshot = driver_clock
                             interval = min(60, context.settings.idle_limit_seconds / 2)
-                            while not driver_done.is_set():
-                                with anyio.move_on_after(interval):
-                                    await driver_done.wait()
-                                if driver_done.is_set():
-                                    return
+
+                            async def read_progress():
+                                # Engine state or role tokens that moved since the previous read count as progress.
+                                nonlocal last_progress, previous_engine, previous_tokens
                                 engine = await self.progress_state(env, run_id)
                                 tokens = {role: usage.total_tokens for role, usage in sample_role_usage().items()}
-                                if driver_done.is_set():
-                                    return
                                 if ((engine is not None and engine != previous_engine) or
                                     any(value > previous_tokens.get(role, 0) for role, value in tokens.items())):
                                     last_progress = time.monotonic()
                                 if engine is not None:
                                     previous_engine = engine
                                 previous_tokens = tokens
-                                last_snapshot = await snapshot_step(env, options, snapshot_directory, driver_started=driver_clock,
-                                                                    last_taken=last_snapshot, now=time.monotonic())
+
+                            while not driver_done.is_set():
+                                with anyio.move_on_after(interval):
+                                    await driver_done.wait()
+                                if driver_done.is_set():
+                                    return
+                                await read_progress()
+                                if driver_done.is_set():
+                                    return
+                                taken_at = await snapshot_step(env, options, snapshot_directory, driver_started=driver_clock,
+                                                               last_taken=last_snapshot, now=time.monotonic())
+                                snapshot_ran = taken_at != last_snapshot
+                                last_snapshot = taken_at
                                 # A snapshot can outlast the idle limit; a driver that exited meanwhile is complete, not idle.
                                 if driver_done.is_set():
                                     return
+                                if snapshot_ran:
+                                    # Progress made during the snapshot counts: read again before the idle decision.
+                                    await read_progress()
+                                    if driver_done.is_set():
+                                        return
                                 if time.monotonic() - last_progress >= context.settings.idle_limit_seconds:
                                     evidence["driver_timed_out"] = True
                                     evidence["driver_timeout_kind"] = "idle"

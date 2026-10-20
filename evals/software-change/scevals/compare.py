@@ -10,9 +10,10 @@ dollars, so its dollars are an upper bound from its recorded usage at the highes
 `workflow_cost_basis` and `overhead_cost_basis`.
 
 The calibration receipt (grader-calibrate) decides how intent verdicts are shown. Only a receipt whose mode is
-"normal" and whose grader_model is the campaign's own grader (settings.judge_model) shows them as the grader gave
-them; otherwise each is labelled "diagnostic-only", campaign by campaign. A receipt without a grader_model is not
-normal. A missing or unreadable receipt is diagnostic-only, never an error.
+"normal", whose grader_model is the campaign's own grader (settings.judge_model) and whose case_id is the case of
+every trial in the campaign shows them as the grader gave them; otherwise each is labelled "diagnostic-only", campaign
+by campaign. A receipt without a grader_model or a case_id is not normal. A missing or unreadable receipt is
+diagnostic-only, never an error.
 
 Each block with a native trial also shows paired deltas: each non-native attempt minus the native reference (the
 original native attempt). They are descriptive differences, not significance tests.
@@ -45,6 +46,7 @@ CALIBRATION_DIAGNOSTIC = "diagnostic-only"
 CALIBRATION_NOT_SUPPLIED = "not supplied"
 UNREADABLE_RECEIPT = "receipt unreadable"
 NO_GRADER_RECEIPT = "receipt has no grader model"
+NO_CASE_RECEIPT = "receipt names no case"
 DELTA_FIELDS = ("workflow_tokens", "trial_wall_seconds", "driver_seconds")
 
 NOTES = (
@@ -60,8 +62,8 @@ NOTES = (
     "Limit, infrastructure, resumed and rerun trials stay listed. A rerun is a separate attempt beside the "
     "original and never replaces it.",
     "Intent is the independent grader's verdict; an unstable verdict counts as not faithful. Intent is labelled "
-    "diagnostic-only unless the calibration receipt is normal for that campaign's own grader. Campaigns without a "
-    "grader verdict show unavailable.",
+    "diagnostic-only unless the calibration receipt is normal for that campaign's own grader and case. Campaigns "
+    "without a grader verdict show unavailable.",
     "Paired deltas are each non-native attempt minus the block's native trial (arm minus native). A delta is "
     "unavailable when either side is unavailable, never zero. A workflow-cost delta is also unavailable when the "
     "native side is an upper bound. Three repetitions make no significance claim.",
@@ -209,8 +211,9 @@ def _intent(grade, calibrated: bool) -> str | None:
 def read_calibration(path: Path | str | None) -> dict:
     """The calibration state the report states: mode normal, diagnostic-only or not supplied, with reasons.
 
-    A normal receipt names the grader it calibrated (grader_model); one without a grader model is diagnostic-only.
-    A missing or unreadable receipt, or one whose mode is neither normal nor diagnostic-only, is diagnostic-only.
+    A normal receipt names the grader it calibrated (grader_model) and the case it calibrated (case_id); one without
+    either is diagnostic-only. A missing or unreadable receipt, or one whose mode is neither normal nor diagnostic-only,
+    is diagnostic-only.
     """
     if path is None:
         return {"mode": CALIBRATION_NOT_SUPPLIED, "reasons": []}
@@ -221,9 +224,12 @@ def read_calibration(path: Path | str | None) -> dict:
     mode = receipt.get("mode") if isinstance(receipt, dict) else None
     if mode == CALIBRATION_NORMAL:
         grader = receipt.get("grader_model")
-        if isinstance(grader, str) and grader:
-            return {"mode": mode, "reasons": [], "grader_model": grader}
-        return {"mode": CALIBRATION_DIAGNOSTIC, "reasons": [NO_GRADER_RECEIPT]}
+        if not (isinstance(grader, str) and grader):
+            return {"mode": CALIBRATION_DIAGNOSTIC, "reasons": [NO_GRADER_RECEIPT]}
+        case = receipt.get("case_id")
+        if not (isinstance(case, str) and case):
+            return {"mode": CALIBRATION_DIAGNOSTIC, "reasons": [NO_CASE_RECEIPT]}
+        return {"mode": mode, "reasons": [], "grader_model": grader, "case_id": case}
     if mode == CALIBRATION_DIAGNOSTIC:
         reasons = receipt.get("reasons")
         return {"mode": mode, "reasons": [r for r in reasons if isinstance(r, str)] if isinstance(reasons, list) else []}
@@ -393,9 +399,15 @@ def campaign_grader(summary: dict) -> str | None:
     return (summary.get("settings") or {}).get("judge_model")
 
 
+def receipt_case_matches(calibration: dict, summary: dict) -> bool:
+    """True when the receipt's case is the case of every trial in the campaign."""
+    return all(trial["case_id"] == calibration["case_id"] for trial in summary["trials"])
+
+
 def intent_calibrated(calibration: dict, summary: dict) -> bool:
-    """A campaign's intent verdicts are normal only under a normal receipt for that campaign's own grader."""
-    return calibration["mode"] == CALIBRATION_NORMAL and calibration["grader_model"] == campaign_grader(summary)
+    """A campaign's intent verdicts are normal only under a normal receipt for that campaign's own grader and case."""
+    return (calibration["mode"] == CALIBRATION_NORMAL and calibration["grader_model"] == campaign_grader(summary)
+            and receipt_case_matches(calibration, summary))
 
 
 def intent_calibration(calibration: dict, summary: dict) -> str:
@@ -403,8 +415,14 @@ def intent_calibration(calibration: dict, summary: dict) -> str:
     if calibration["mode"] == CALIBRATION_NORMAL:
         verdict = "intent as graded" if intent_calibrated(calibration, summary) else "diagnostic-only"
         grader = campaign_grader(summary) or "not recorded"
+        if receipt_case_matches(calibration, summary):
+            case = f"Receipt case {calibration['case_id']} matches every trial's case."
+        else:
+            trial_cases = ", ".join(sorted({trial["case_id"] for trial in summary["trials"]}))
+            case = (f"Receipt case {calibration['case_id']} does not match every trial's case "
+                    f"(trial cases: {trial_cases}).")
         return (f"receipt normal for grader {calibration['grader_model']}; this campaign's grader is {grader}: "
-                f"{verdict}.")
+                f"{verdict}. {case}")
     if calibration["mode"] == CALIBRATION_NOT_SUPPLIED:
         return "no calibration receipt supplied: intent is diagnostic-only."
     reasons = "; ".join(calibration["reasons"]) or "no reason recorded"
@@ -414,9 +432,10 @@ def intent_calibration(calibration: dict, summary: dict) -> str:
 def calibration_statement(calibration: dict) -> str:
     """One sentence on how intent verdicts are to be read: the receipt's mode, with its reasons when diagnostic-only."""
     if calibration["mode"] == CALIBRATION_NORMAL:
-        return (f"Calibration receipt: normal. It calibrates grader {calibration['grader_model']} only: intent "
-                "verdicts are shown as the grader gave them in campaigns whose judge model is that grader, and are "
-                "diagnostic-only in the others (see each campaign below).")
+        return (f"Calibration receipt: normal. It calibrates grader {calibration['grader_model']} only, on case "
+                f"{calibration['case_id']} only: intent verdicts are shown as the grader gave them in campaigns whose "
+                "judge model is that grader and whose trials are all that case, and are diagnostic-only in the others "
+                "(see each campaign below).")
     if calibration["mode"] == CALIBRATION_NOT_SUPPLIED:
         return ("Calibration receipt: not supplied. Every intent verdict is diagnostic-only and is excluded from "
                 "decisions.")
@@ -506,7 +525,7 @@ def compare(paths: Iterable[Path | str], out: Path | str, calibration: Path | st
     """Write one new paired report pair (summary.json, report.md) under out and return its directory.
 
     `calibration` is an optional grader-calibrate receipt. Its intent verdicts are normal only for the campaigns whose
-    grader is the receipt's grader_model; the others are diagnostic-only.
+    grader is the receipt's grader_model and whose trials are all the receipt's case_id; the others are diagnostic-only.
     """
     sources = [Path(path) for path in paths]
     if not sources:

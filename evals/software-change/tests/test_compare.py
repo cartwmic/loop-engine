@@ -66,8 +66,11 @@ def campaign(root: Path, name: str, trial: dict, *, block: dict | None = None, t
 
 
 CAMPAIGN_GRADER = BASE["settings"]["judge_model"]  # the grader every Tier 0 campaign ran with
+CASE_ID = BASE["trials"][0]["case_id"]  # the case every Tier 0 trial ran
 OTHER_GRADER = "codex/gpt-6.1-other"
-NORMAL_RECEIPT = {"schema_version": 1, "mode": "normal", "reasons": [], "grader_model": CAMPAIGN_GRADER}
+OTHER_CASE = "other-case"
+NORMAL_RECEIPT = {"schema_version": 1, "mode": "normal", "reasons": [], "grader_model": CAMPAIGN_GRADER,
+                  "case_id": CASE_ID}
 DIAGNOSTIC_RECEIPT = {"schema_version": 1, "mode": "diagnostic-only", "reasons": ["owner labels not supplied"]}
 
 
@@ -303,9 +306,10 @@ def test_a_normal_receipt_for_the_campaigns_own_grader_labels_intent_as_graded(t
     path = campaign(tmp_path, "grade", make_trial(metrics=arm_metrics(grade=grade)), block=label())
     _, report, markdown = run(tmp_path, [path], calibration=receipt_file(tmp_path, json.dumps(NORMAL_RECEIPT)))
     assert row_by_arm(report, "native")["intent"] == "faithful"
-    assert report["calibration"] == {"mode": "normal", "reasons": [], "grader_model": CAMPAIGN_GRADER}
+    assert report["calibration"] == {"mode": "normal", "reasons": [], "grader_model": CAMPAIGN_GRADER,
+                                      "case_id": CASE_ID}
     assert (f"- grade: receipt normal for grader {CAMPAIGN_GRADER}; this campaign's grader is {CAMPAIGN_GRADER}: "
-            "intent as graded.") in markdown
+            f"intent as graded. Receipt case {CASE_ID} matches every trial's case.") in markdown
 
 
 def test_a_normal_receipt_for_another_grader_is_diagnostic_only_and_the_mismatch_is_stated(tmp_path):
@@ -346,6 +350,44 @@ def test_a_normal_receipt_without_a_grader_model_is_diagnostic_only(tmp_path, re
     assert report["calibration"] == {"mode": "diagnostic-only", "reasons": ["receipt has no grader model"]}
     assert row_by_arm(report, "native")["intent"] == "faithful (diagnostic-only)"
     assert "Calibration receipt: diagnostic-only (reason: receipt has no grader model)." in markdown
+
+
+def test_a_normal_receipt_for_another_case_is_diagnostic_only_for_the_campaign(tmp_path):
+    grade = {"intent_faithful": True, "unstable": False}
+    path = campaign(tmp_path, "grade", make_trial(metrics=arm_metrics(grade=grade)), block=label())
+    other = receipt_file(tmp_path, json.dumps(NORMAL_RECEIPT | {"case_id": OTHER_CASE}))
+    _, report, markdown = run(tmp_path, [path], calibration=other)
+    assert row_by_arm(report, "native")["intent"] == "faithful (diagnostic-only)"
+    assert report["calibration"]["mode"] == "normal" and report["calibration"]["case_id"] == OTHER_CASE
+    assert (f"- grade: receipt normal for grader {CAMPAIGN_GRADER}; this campaign's grader is {CAMPAIGN_GRADER}: "
+            f"diagnostic-only. Receipt case {OTHER_CASE} does not match every trial's case "
+            f"(trial cases: {CASE_ID}).") in markdown
+
+
+def test_a_campaign_with_trials_of_two_cases_is_diagnostic_only_under_a_matching_receipt(tmp_path):
+    grade = {"intent_faithful": True, "unstable": False}
+    trials = [make_trial(metrics=arm_metrics(grade=grade)), make_trial(case_id=OTHER_CASE, metrics=arm_metrics(grade=grade))]
+    path = campaign(tmp_path, "mixed", trials[0], trials=trials)
+    _, report, markdown = run(tmp_path, [path], calibration=receipt_file(tmp_path, json.dumps(NORMAL_RECEIPT)))
+    assert sorted(row["intent"] for block in report["blocks"] for row in block["attempts"]) == [
+        "faithful (diagnostic-only)", "faithful (diagnostic-only)"]
+    assert (f"- mixed: receipt normal for grader {CAMPAIGN_GRADER}; this campaign's grader is {CAMPAIGN_GRADER}: "
+            f"diagnostic-only. Receipt case {CASE_ID} does not match every trial's case "
+            f"(trial cases: {CASE_ID}, {OTHER_CASE}).") in markdown
+
+
+@pytest.mark.parametrize("receipt", [
+    pytest.param({key: value for key, value in NORMAL_RECEIPT.items() if key != "case_id"}, id="no-case-id"),
+    pytest.param(NORMAL_RECEIPT | {"case_id": ""}, id="empty-case-id"),
+])
+def test_a_normal_receipt_without_a_case_is_diagnostic_only_and_names_no_case(tmp_path, receipt):
+    grade = {"intent_faithful": True, "unstable": False}
+    path = campaign(tmp_path, "grade", make_trial(metrics=arm_metrics(grade=grade)), block=label())
+    _, report, markdown = run(tmp_path, [path], calibration=receipt_file(tmp_path, json.dumps(receipt)))
+    assert report["calibration"] == {"mode": "diagnostic-only", "reasons": ["receipt names no case"]}
+    assert row_by_arm(report, "native")["intent"] == "faithful (diagnostic-only)"
+    assert "Calibration receipt: diagnostic-only (reason: receipt names no case)." in markdown
+    assert "- grade: receipt diagnostic-only (reason: receipt names no case): intent is diagnostic-only." in markdown
 
 
 def test_a_receipt_that_is_not_normal_or_diagnostic_is_unreadable_not_an_error(tmp_path):
