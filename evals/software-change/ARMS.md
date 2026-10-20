@@ -440,7 +440,8 @@ delta reads `(upper-bound)`.
 native (arm minus native)". Each non-native attempt appears there as its arm minus the block's native reference, the
 original (lowest) native attempt. The four deltas are workflow cost (USD), workflow tokens, trial wall seconds and
 driver-only seconds. A delta is `unavailable` when either side is unavailable, and null in `summary.json`, never
-zero. Each block's `paired_deltas` in `summary.json` holds the same values. A block without a native trial shows no
+zero. The workflow-dollar delta is also unavailable when the native side's dollars are only an upper bound, because
+subtracting an upper bound gives neither a bound nor an exact value. Each block's `paired_deltas` in `summary.json` holds the same values. A block without a native trial shows no
 deltas and says so. These are descriptive differences on one block. They make no significance claim. Three
 repetitions are a screen (spec section 7).
 
