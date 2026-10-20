@@ -8,6 +8,7 @@ a wrong delivery, an idle stop and a hard stop. Assertions read the exported cam
 Mechanics proof only: nothing here is a model's behaviour or a real workflow run. The retained output is
 tests/proofs/arms-parity.txt, with the campaign reports and logs under tests/proofs/campaigns/parity-*/.
 """
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import shutil
@@ -62,7 +63,10 @@ CASES = {
 ENGINE_STATE = {"loop-engine-terminated": "terminated", "loop-engine-active": "active",
                 "loop-engine-crashed": "active", "loop-engine-completed": "final"}
 
-_TRIALS = {}
+# Every case's campaign starts at its first request; each test reads its own case's future. At most four run at once:
+# each sandbox takes a Docker network from a small predefined pool that the other proof units share.
+_CAMPAIGNS = {}
+_POOL = ThreadPoolExecutor(max_workers=4)
 
 
 def run_campaign(label, target_options, **overrides):
@@ -94,10 +98,10 @@ def run_campaign(label, target_options, **overrides):
 
 def trial_for(case_id):
     """Each case runs one campaign per session; every assertion reads that same exported trial."""
-    if case_id not in _TRIALS:
-        options, overrides, _, _ = CASES[case_id]
-        _TRIALS[case_id] = run_campaign(f"parity-{case_id}", options, **overrides)
-    return _TRIALS[case_id]
+    if not _CAMPAIGNS:
+        for case, (options, overrides, _, _) in CASES.items():
+            _CAMPAIGNS[case] = _POOL.submit(run_campaign, f"parity-{case}", options, **overrides)
+    return _CAMPAIGNS[case_id].result()
 
 
 def score_view(trial):

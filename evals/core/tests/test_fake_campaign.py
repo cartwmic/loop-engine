@@ -329,7 +329,9 @@ def test_blocked_rendering_cannot_hold_the_command_past_the_cap(campaign_root):
     path = settings(campaign_root, models=["fake/a"], case_count=1, trials_per_case=1, campaign_wall_limit_seconds=14,
                     post_trial_reserve_seconds=6, publication_reserve_seconds=3, target_options={"inject_errors": False})
     begun = time.monotonic()
-    result = invoke(campaign_root, "campaign", "--settings", str(path), extra_env={"EVALCORE_PROOF_RENDER_DELAY_SECONDS": "3600"})
+    # TMPDIR is this test's own directory: the publish child's argv names it, so the leftover check sees only this test's child.
+    result = invoke(campaign_root, "campaign", "--settings", str(path),
+                    extra_env={"EVALCORE_PROOF_RENDER_DELAY_SECONDS": "3600", "TMPDIR": str(campaign_root)})
     elapsed = time.monotonic() - begun
     assert result.returncode == 0, result.stdout + result.stderr
     assert elapsed < 14 + 6  # process start and teardown allowed; the point is it is nowhere near the blocked hour
@@ -344,7 +346,7 @@ def test_blocked_rendering_cannot_hold_the_command_past_the_cap(campaign_root):
     assert publication["full_report"] is False and publication["within_cap"] is True
     assert {"step": "publication", "reason": "campaign_wall_time", "sample_id": None} in record["cut_off_steps"]
     assert "Cut off: publication" in (only_report(campaign_root) / "report.md").read_text()
-    leftover = subprocess.run(["pgrep", "-f", "evalcore.publish"], capture_output=True, text=True)
+    leftover = subprocess.run(["pgrep", "-f", str(campaign_root)], capture_output=True, text=True)
     assert leftover.stdout.strip() == ""
 
 
@@ -374,5 +376,6 @@ def test_one_command_runs_one_campaign_and_starts_no_second(campaign_root):
     run(campaign_root, case_count=1, trials_per_case=1, target_options={"inject_errors": False})
     assert len(list((campaign_root / "results").iterdir())) == 1 and len(list((campaign_root / "results" / "test").iterdir())) == 1
     assert len(list((campaign_root / "logs").glob("*.eval"))) == 2  # one log per model, nothing more
-    leftover = subprocess.run(["pgrep", "-f", "evalctl campaign"], capture_output=True, text=True)
+    # Matched by this test's own settings path (in the argv of every evalctl process it started), so other campaigns running at the same time are not seen.
+    leftover = subprocess.run(["pgrep", "-f", str(campaign_root)], capture_output=True, text=True)
     assert leftover.stdout.strip() == ""

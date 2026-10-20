@@ -8,6 +8,7 @@ same. No paid model, no network; the scripted models only. Mechanics proof only.
 Retained output: tests/proofs/snapshots-trial.txt and the two campaign reports under tests/proofs/campaigns/.
 """
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import shutil
@@ -32,7 +33,17 @@ PROOFS = ROOT / "tests/proofs"
 OUTPUT = PROOFS / "snapshots-trial.txt"
 CASE = ROOT / "example-case"
 DRIVER_SOURCE = (ROOT / "scevals/scripted_arm_driver.py").read_text()
-ARM = {"id": "native", "driver_command": ["python3", "-c", DRIVER_SOURCE, "--code", "staged", "--seconds", "10",
+# The bridge reports ready before its model proxy listens on port 13131, so the driver's first model call can be refused
+# (the driver then exits 1 at once, under load). This wrapper waits for the port, then runs the scripted driver unchanged.
+BRIDGE_WAIT = ("import socket, subprocess, sys, time\n"
+               "for _ in range(600):\n"
+               "    try:\n"
+               "        socket.create_connection(('localhost', 13131), 1).close()\n"
+               "        break\n"
+               "    except OSError:\n"
+               "        time.sleep(0.1)\n"
+               "sys.exit(subprocess.call([sys.executable, '-c', *sys.argv[1:]]))\n")
+ARM = {"id": "native", "driver_command": ["python3", "-c", BRIDGE_WAIT, DRIVER_SOURCE, "--code", "staged", "--seconds", "10",
                                           "--keepalive"],
        "prompt_template": "native", "workflow_owned_paths": [], "completion_rule": "driver-exit"}
 # Progress comes from model traffic every second. The progress poll runs every idle/2 = 2 s and takes a snapshot
@@ -42,7 +53,9 @@ ARM = {"id": "native", "driver_command": ["python3", "-c", DRIVER_SOURCE, "--cod
 CAMPAIGN_IDLE_SECONDS = 12
 # Wall-clock and location fields differ between any two runs; everything else must match.
 TIMING_OR_LOCATION = {"driver_elapsed_seconds", "copy_log", "copy_out_log", "container"}
+# The on and off campaigns start together at the first request; each test reads its own campaign's future.
 RUNS = {}
+POOL = ThreadPoolExecutor(max_workers=2)
 TRAJECTORIES = {}
 
 
@@ -75,10 +88,11 @@ def run_campaign(label, target_options):
 
 
 def run(label):
-    if label not in RUNS:
-        options = {"arm": ARM} | ({"snapshot_interval_seconds": 1} if label == "on" else {})
-        RUNS[label] = run_campaign(label, options)
-    return RUNS[label]
+    if not RUNS:
+        for name in ("on", "off"):
+            options = {"arm": ARM} | ({"snapshot_interval_seconds": 1} if name == "on" else {})
+            RUNS[name] = POOL.submit(run_campaign, name, options)
+    return RUNS[label].result()
 
 
 def capture_members(capture):
