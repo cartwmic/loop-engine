@@ -150,6 +150,44 @@ def test_missing_price_or_usage_renders_unavailable_not_zero(tmp_path, damage, u
     assert "$0.0000" not in markdown
 
 
+def test_a_rescored_trial_with_unknown_simulator_usage_leaves_the_overhead_unavailable_not_judge_only(tmp_path):
+    """A rescored trial lists the simulator as unknown and omits it from usage_by_role. The judge's usage alone must
+    not stand for the overhead; the workflow figures are unaffected."""
+    trial = make_trial(resumed=True, priced_usd_by_role=None, usage_unknown_roles=["simulator"])
+    del trial["usage_by_role"]["simulator"]
+    _, report, markdown = run(tmp_path, [campaign(tmp_path, "rescored-simulator", trial, block=label())])
+    row = row_by_arm(report, "native")
+    assert row["overhead_usd"] is None and row["overhead_tokens"] is None
+    assert row["overhead_cost_basis"] == "unavailable"
+    assert row["workflow_tokens"] == BASE["comparisons"][0]["core"]["workflow_cost"]["total_tokens"]
+    assert row["workflow_usd"] == pytest.approx(sum(WORKFLOW_USD.values()), abs=1e-9)
+    assert row["workflow_cost_basis"] == "upper-bound"
+    assert "<=$3.6412" in markdown and "$0.0000" not in markdown
+
+
+def test_an_unknown_workflow_role_absent_from_usage_leaves_the_workflow_unavailable(tmp_path):
+    trial = make_trial(usage_unknown_roles=["role-driver"])
+    del trial["usage_by_role"]["role-driver"]
+    _, report, _ = run(tmp_path, [campaign(tmp_path, "unknown-driver", trial, block=label())])
+    row = row_by_arm(report, "native")
+    assert row["workflow_usd"] is None and row["workflow_cost_basis"] == "unavailable"
+    assert row["workflow_tokens"] is None
+    overhead = BASE["comparisons"][0]["core"]["evaluation_overhead"]
+    assert row["overhead_usd"] == pytest.approx(overhead["estimated_usd"], abs=1e-9)
+    assert row["overhead_cost_basis"] == "exact"
+    assert row["overhead_tokens"] == overhead["total_tokens"]
+
+
+def test_a_role_absent_from_usage_and_not_listed_as_unknown_is_simply_unused(tmp_path):
+    trial = make_trial(usage_unknown_roles=[])
+    del trial["usage_by_role"]["simulator"]
+    _, report, _ = run(tmp_path, [campaign(tmp_path, "unused-simulator", trial, block=label())])
+    row = row_by_arm(report, "native")
+    assert row["overhead_tokens"] == BASE["trials"][0]["usage_by_role"]["judge"]["total_tokens"]
+    assert row["overhead_usd"] == pytest.approx(BASE["trials"][0]["priced_usd_by_role"]["judge"], abs=1e-9)
+    assert row["overhead_cost_basis"] == "exact"
+
+
 def test_a_resumed_or_rescored_trial_gets_an_upper_bound_labelled_as_such(tmp_path):
     trial = make_trial(resumed=True, priced_usd_by_role=None)
     _, report, markdown = run(tmp_path, [campaign(tmp_path, "rescored", trial, block=label())])

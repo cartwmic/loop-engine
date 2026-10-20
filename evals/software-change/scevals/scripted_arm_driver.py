@@ -7,6 +7,7 @@ It is harness mechanics only, never a model's behaviour and never a semantic rev
 """
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -35,7 +36,8 @@ def parse(argv):
                         help="labels.py content; staged writes wrong, waits, writes correct, waits")
     parser.add_argument("--seconds", type=float, default=0.0, help="wait after each write")
     parser.add_argument("--keepalive", action="store_true",
-                        help="during each wait, make a scripted model call through the bridge, which the progress poll sees")
+                        help="during each wait, make max(1, ceil(seconds)) scripted model calls through the bridge, "
+                             "spaced across the wait, which the progress poll sees")
     parser.add_argument("--end", choices=("exit", "hang"), default="exit",
                         help="hang sleeps forever after the work, so an idle or hard stop must end it")
     parser.add_argument("prompt", nargs="?", default="", help="the harness prompt; not used by this driver")
@@ -64,15 +66,18 @@ def start_engine():
 
 
 def pause(seconds, keepalive):
-    """Wait; with keepalive, make one call to the driver's scripted model every second of the wait."""
-    deadline = time.monotonic() + seconds
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return
-        if keepalive:
-            model_call()
-        time.sleep(min(1.0, remaining))
+    """Wait. With keepalive, make max(1, ceil(seconds)) scripted model calls, each followed by the rest of its seconds/n
+    slot. The count is fixed: a slow call never drops one and a fast call never adds one, so the driver's token count
+    does not depend on call latency."""
+    if not keepalive:
+        time.sleep(max(0.0, seconds))
+        return
+    calls = max(1, math.ceil(seconds))
+    slot = seconds / calls
+    for _ in range(calls):
+        started = time.monotonic()
+        model_call()
+        time.sleep(max(0.0, slot - (time.monotonic() - started)))
 
 
 def model_call():

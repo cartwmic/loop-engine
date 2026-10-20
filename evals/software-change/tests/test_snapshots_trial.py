@@ -15,8 +15,12 @@ import subprocess
 import tarfile
 import tempfile
 import tomllib
+from types import SimpleNamespace
 import uuid
 
+import pytest
+
+from scevals import scripted_arm_driver
 from scevals.cases import load_case
 from scevals.image import DEFAULT_IMAGE
 from scevals.snapshots import replay_snapshots
@@ -94,12 +98,7 @@ def trajectory_of_the_on_trial():
 
 def comparable(trial):
     metrics = trial["target_metrics"]
-    compared = {key: value for key, value in metrics.items() if key not in TIMING_OR_LOCATION}
-    # The scripted driver's --keepalive makes one bridge call per second of waiting, so the driver's own token count
-    # depends on call latency and differs between any two runs. Every other role's usage is still compared.
-    aliases = dict(compared.get("usage_by_role_alias") or {})
-    aliases.pop("role-driver", None)
-    return {**compared, "usage_by_role_alias": aliases}
+    return {key: value for key, value in metrics.items() if key not in TIMING_OR_LOCATION}
 
 
 def test_snapshots_on_produce_a_per_requirement_trajectory_of_the_same_delivery():
@@ -155,3 +154,36 @@ def test_retained_snapshot_output_records_both_trials():
         "bytes identical to the snapshots-on capture, and metrics identical apart from driver timing and container ids.\n"
         "Baseline note: 'today's' capture is this same trial with the snapshot option absent, run in this worktree;\n"
         "no byte comparison against a pre-change main capture was made.\n")
+
+
+@pytest.mark.parametrize(("seconds", "call_seconds", "calls"), [
+    pytest.param(4, 0.0, 4, id="fast-calls"),
+    pytest.param(4, 2.5, 4, id="slow-calls-none-dropped"),
+    pytest.param(0.5, 0.0, 1, id="short-wait-one-call"),
+    pytest.param(0, 0.0, 1, id="zero-wait-one-call"),
+])
+def test_keepalive_wait_makes_the_same_calls_whatever_their_latency(monkeypatch, seconds, call_seconds, calls):
+    """max(1, ceil(seconds)) calls per wait, so the driver's token count does not depend on call latency."""
+    clock = [0.0]
+    made = []
+
+    def model_call():
+        made.append(clock[0])
+        clock[0] += call_seconds
+
+    def sleep(duration):
+        clock[0] += duration
+
+    monkeypatch.setattr(scripted_arm_driver, "model_call", model_call)
+    monkeypatch.setattr(scripted_arm_driver, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep))
+    scripted_arm_driver.pause(seconds, keepalive=True)
+    assert len(made) == calls
+
+
+def test_a_wait_without_keepalive_only_sleeps(monkeypatch):
+    slept = []
+    monkeypatch.setattr(scripted_arm_driver, "model_call",
+                        lambda: pytest.fail("a wait without keepalive makes no model call"))
+    monkeypatch.setattr(scripted_arm_driver, "time", SimpleNamespace(sleep=slept.append))
+    scripted_arm_driver.pause(4, keepalive=False)
+    assert slept == [4]

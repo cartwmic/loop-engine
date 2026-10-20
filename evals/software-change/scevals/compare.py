@@ -100,11 +100,14 @@ def block_label(summary: dict) -> dict | None:
 
 
 def _used_roles(trial: dict, roles: tuple[str, ...]) -> list[str] | None:
-    """The roles of a group that the trial used; None when none were used or any used role's usage is unknown."""
+    """The roles of a group that the trial used; None when none were used or any role of the group is unknown.
+
+    A role listed in usage_unknown_roles is unknown even when usage_by_role omits it, so its whole group is unavailable.
+    """
     usage = trial.get("usage_by_role") or {}
     used = [role for role in roles if role in usage]
     unknown = set(trial.get("usage_unknown_roles") or [])
-    if not used or unknown.intersection(used):
+    if not used or unknown.intersection(roles):
         return None
     return used
 
