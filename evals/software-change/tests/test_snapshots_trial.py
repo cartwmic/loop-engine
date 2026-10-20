@@ -32,12 +32,14 @@ PROOFS = ROOT / "tests/proofs"
 OUTPUT = PROOFS / "snapshots-trial.txt"
 CASE = ROOT / "example-case"
 DRIVER_SOURCE = (ROOT / "scevals/scripted_arm_driver.py").read_text()
-ARM = {"id": "native", "driver_command": ["python3", "-c", DRIVER_SOURCE, "--code", "staged", "--seconds", "4",
+ARM = {"id": "native", "driver_command": ["python3", "-c", DRIVER_SOURCE, "--code", "staged", "--seconds", "10",
                                           "--keepalive"],
        "prompt_template": "native", "workflow_owned_paths": [], "completion_rule": "driver-exit"}
 # Progress comes from model traffic every second. The progress poll runs every idle/2 = 2 s and takes a snapshot
 # whenever the 1 s snapshot interval has passed since the last one.
-CAMPAIGN_IDLE_SECONDS = 4
+# The progress poll runs every idle/2 seconds (6 s here) and the wrong labels stay in place for the first 10 s wait, so the
+# first snapshot sees them; the idle window is wide enough that a loaded host cannot trip it between keepalive calls.
+CAMPAIGN_IDLE_SECONDS = 12
 # Wall-clock and location fields differ between any two runs; everything else must match.
 TIMING_OR_LOCATION = {"driver_elapsed_seconds", "copy_log", "copy_out_log", "container"}
 RUNS = {}
