@@ -37,10 +37,11 @@ def row(phase, role, seconds, turns=0, input_tokens=0, output_tokens=0):
 
 
 # Derived by hand from the fixture timestamps and usage: the driver's skill phase is the read, then every later
-# gap; the first gap (user prompt to first reply) is unmarked. Totals are per (phase, role).
-DRIVER_SKILL = row("skill:brainstorming", "role-driver", 0.045, turns=3, input_tokens=33, output_tokens=15)
+# gap; the first gap (user prompt to first reply) is unmarked. The final assistant message has no later entry, so its
+# durationMs (5 ms in both fixtures) is added after the last gap, to the phase in effect. Totals are per (phase, role).
+DRIVER_SKILL = row("skill:brainstorming", "role-driver", 0.050, turns=3, input_tokens=33, output_tokens=15)
 DRIVER_UNMARKED = row("unmarked", "role-driver", 0.015)
-WORKER_UNMARKED = row("unmarked", "role-implementer", 0.045, turns=2, input_tokens=22, output_tokens=10)
+WORKER_UNMARKED = row("unmarked", "role-implementer", 0.050, turns=2, input_tokens=22, output_tokens=10)
 EXPECTED_ROWS = [DRIVER_SKILL, DRIVER_UNMARKED, WORKER_UNMARKED]
 
 
@@ -112,7 +113,7 @@ def test_cli_prints_the_attribution_of_the_fixture(capsys):
 
 @pytest.mark.parametrize("prompt, expected", [
     ("/opsx-propose add a thing", [row("command:opsx-propose", "role-driver", 0.015), DRIVER_SKILL]),
-    ("/skill:brainstorming add a thing", [row("skill:brainstorming", "role-driver", 0.060, 3, 33, 15)]),
+    ("/skill:brainstorming add a thing", [row("skill:brainstorming", "role-driver", 0.065, 3, 33, 15)]),
     ("/workspace/public/repo is the repo", [DRIVER_SKILL, DRIVER_UNMARKED]),
 ])
 def test_user_message_marker_starts_its_phase(tmp_path, prompt, expected):
@@ -130,7 +131,36 @@ def test_read_of_a_file_that_is_not_a_skill_starts_no_phase(tmp_path):
                     block["arguments"]["path"] = "/opt/sc-evals/arms/superpowers/skills/brainstorming/README.md"
         set_message(lines, "assistant", point_at_readme)
     record = phases.attribute(edited(tmp_path, "driver.jsonl", read_readme)).to_record()
-    assert_rows_equal(record["phases"], [row("unmarked", "role-driver", 0.060, 3, 33, 15)])
+    assert_rows_equal(record["phases"], [row("unmarked", "role-driver", 0.065, 3, 33, 15)])
+
+
+def test_final_assistant_duration_adds_to_the_phase_in_effect(tmp_path):
+    def slow_final_generation(lines):
+        set_last_message(lines, lambda message: message.__setitem__("durationMs", 250))
+    record = phases.attribute(edited(tmp_path, "driver.jsonl", slow_final_generation)).to_record()
+    # 45 ms of gaps plus the edited 250 ms final generation, in place of the fixture's 5 ms.
+    assert_rows_equal(record["phases"], [row("skill:brainstorming", "role-driver", 0.295, 3, 33, 15), DRIVER_UNMARKED])
+
+
+def test_record_ending_in_a_tool_result_adds_no_final_duration(tmp_path):
+    # Without the final assistant message the last entry is the bash tool result, whose durationMs must add nothing.
+    record = phases.attribute(edited(tmp_path, "driver.jsonl", lambda lines: lines.pop())).to_record()
+    assert_rows_equal(record["phases"], [row("skill:brainstorming", "role-driver", 0.044, 2, 22, 10), DRIVER_UNMARKED])
+
+
+FINAL_DURATIONS_THAT_ADD_NOTHING = {
+    "missing durationMs": lambda message: message.__delitem__("durationMs"),
+    "boolean durationMs": lambda message: message.__setitem__("durationMs", True),
+    "negative durationMs": lambda message: message.__setitem__("durationMs", -5),
+}
+
+
+@pytest.mark.parametrize("case", sorted(FINAL_DURATIONS_THAT_ADD_NOTHING))
+def test_final_assistant_without_a_valid_duration_adds_nothing(tmp_path, case):
+    path = edited(tmp_path, "driver.jsonl",
+                  lambda lines: set_last_message(lines, FINAL_DURATIONS_THAT_ADD_NOTHING[case]))
+    record = phases.attribute(path).to_record()
+    assert_rows_equal(record["phases"], [row("skill:brainstorming", "role-driver", 0.045, 3, 33, 15), DRIVER_UNMARKED])
 
 
 def assert_unavailable(attribution, reason_prefix):
@@ -161,6 +191,13 @@ def edited(tmp_path, name, mutate):
 
 def set_message(lines, role, change):
     index = next(i for i, line in enumerate(lines) if json.loads(line).get("message", {}).get("role") == role)
+    entry = json.loads(lines[index])
+    change(entry["message"])
+    lines[index] = json.dumps(entry)
+
+
+def set_last_message(lines, change):
+    index = max(i for i, line in enumerate(lines) if json.loads(line).get("type") == "message")
     entry = json.loads(lines[index])
     change(entry["message"])
     lines[index] = json.dumps(entry)

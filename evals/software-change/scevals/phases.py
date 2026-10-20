@@ -8,8 +8,9 @@ Work before any marker is `unmarked`. Each assistant message names its model, th
 `role-driver`); work before any model is named is `unknown`.
 
 Tokens are the usage objects in the record (assistant messages, tool results and usage entries); turns count
-assistant messages. Time is the wall time between consecutive message entries, attributed to the phase and role
-in effect at the earlier entry, so model latency and tool execution count toward the phase that issued them.
+assistant messages. Time is the wall time between consecutive message entries, plus the final assistant message's
+`durationMs`, attributed to the phase and role in effect at the earlier entry, so model latency and tool execution
+count toward the phase that issued them.
 
 Attribution is unavailable, never zero, when the record is missing or unreadable, when it has no session header
 or a line that is not a JSON object, or when a message lacks a timestamp, goes back in time, or lacks usage.
@@ -75,6 +76,8 @@ class _Cursor:
     role: str = UNKNOWN_ROLE
     previous_key: tuple[str, str] | None = None
     previous_time: int | None = None
+    # durationMs of the last message when that message is an assistant message; None after any other message.
+    last_assistant_duration_ms: int | None = None
 
     def key(self):
         return (self.phase, self.role)
@@ -125,6 +128,8 @@ def _accumulate(lines, totals):
             _message(entry, number, cursor, totals)
     if not header_seen:
         raise UnparseableRecord("no session header")
+    if cursor.last_assistant_duration_ms is not None:
+        _target(totals, cursor.previous_key).seconds += cursor.last_assistant_duration_ms / 1000
 
 
 def _message(entry, number, cursor, totals):
@@ -163,6 +168,14 @@ def _message(entry, number, cursor, totals):
         _target(totals, key).add_usage(message["usage"])
     cursor.previous_key = key
     cursor.previous_time = timestamp
+    cursor.last_assistant_duration_ms = _duration_ms(message) if role == "assistant" else None
+
+
+def _duration_ms(message):
+    duration = message.get("durationMs")
+    if isinstance(duration, int) and not isinstance(duration, bool) and duration >= 0:
+        return duration
+    return None
 
 
 def _target(totals, key):
