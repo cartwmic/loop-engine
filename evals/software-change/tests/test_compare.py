@@ -375,6 +375,37 @@ def test_a_paired_delta_with_an_upper_bound_side_is_labelled_upper_bound(tmp_pat
     assert "| superpowers | 1 | +$10.0000 (upper-bound) |" in markdown
 
 
+def test_an_upper_bound_native_side_leaves_the_dollar_delta_unavailable_even_against_an_exact_arm(tmp_path):
+    native = make_trial(wall_seconds=1000.0, resumed=True, priced_usd_by_role=None, metrics=arm_metrics())
+    superpowers = priced_trial(usd={"role-driver": 5.0, "role-implementer": 0.5, "role-reviewer": 0.5},
+                               tokens={"role-driver": 1500, "role-implementer": 100, "role-reviewer": 0},
+                               wall=1200.0, driver=330.0)
+    _, report, markdown = run(tmp_path, native_and_superpowers(tmp_path, native, superpowers))
+    (block,) = report["blocks"]
+    (delta,) = block["paired_deltas"]["deltas"]
+    assert row_by_arm(report, "native")["workflow_cost_basis"] == "upper-bound"
+    assert row_by_arm(report, "superpowers")["workflow_cost_basis"] == "exact"
+    assert delta["workflow_usd"] is None and delta["workflow_cost_basis"] == "unavailable"
+    assert delta["workflow_tokens"] == (row_by_arm(report, "superpowers")["workflow_tokens"]
+                                         - row_by_arm(report, "native")["workflow_tokens"])
+    assert delta["trial_wall_seconds"] == 200.0 and delta["driver_seconds"] == 30.0
+    assert "| superpowers | 1 | unavailable | " in markdown
+    assert "+$2.3588" not in markdown
+
+
+def test_an_upper_bound_native_side_leaves_the_dollar_delta_unavailable_even_against_an_upper_bound_arm(tmp_path):
+    native = make_trial(wall_seconds=1000.0, resumed=True, priced_usd_by_role=None, metrics=arm_metrics())
+    superpowers = make_trial(wall_seconds=1200.0, resumed=True, priced_usd_by_role=None, metrics=arm_metrics())
+    superpowers["usage_by_role"]["role-driver"]["output_tokens"] += 1_000_000  # sonnet output is $10 per million
+    _, report, markdown = run(tmp_path, native_and_superpowers(tmp_path, native, superpowers))
+    (block,) = report["blocks"]
+    (delta,) = block["paired_deltas"]["deltas"]
+    assert delta["workflow_usd"] is None and delta["workflow_cost_basis"] == "unavailable"
+    assert delta["trial_wall_seconds"] == 200.0
+    assert "| superpowers | 1 | unavailable | " in markdown
+    assert "+$10.0000" not in markdown
+
+
 def test_a_block_without_a_native_trial_shows_no_deltas(tmp_path):
     paths = [campaign(tmp_path, "super", make_trial(metrics=arm_metrics()), block=label(arm="superpowers", order=1)),
              campaign(tmp_path, "open", make_trial(metrics=arm_metrics()), block=label(arm="openspec", order=2))]

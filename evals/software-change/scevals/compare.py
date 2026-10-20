@@ -43,13 +43,14 @@ CALIBRATION_NORMAL = "normal"
 CALIBRATION_DIAGNOSTIC = "diagnostic-only"
 CALIBRATION_NOT_SUPPLIED = "not supplied"
 UNREADABLE_RECEIPT = "receipt unreadable"
-DELTA_FIELDS = ("workflow_usd", "workflow_tokens", "trial_wall_seconds", "driver_seconds")
+DELTA_FIELDS = ("workflow_tokens", "trial_wall_seconds", "driver_seconds")
 
 NOTES = (
     "Dollar figures are estimated from each campaign's recorded price table. \"unavailable\" means the value "
     "was not recorded, or a role used by the trial is unpriced; it is never zero.",
     "\"<=\" marks an upper bound: a resumed or rescored trial has no exact per-call dollars, so its recorded usage is "
-    "priced at the model's highest-tier rate. A paired delta with an upper-bound side is labelled upper-bound.",
+    "priced at the model's highest-tier rate. A paired delta with an upper-bound arm side over an exact native side is "
+    "labelled upper-bound.",
     "Workflow cost and tokens cover the driver, implementer and reviewer roles. Evaluation overhead (simulator "
     "and judge, which includes the intent grader) is shown apart and is never part of workflow cost.",
     "Driver wall s is the target-recorded driver-only elapsed time. Trial wall s is the whole trial (setup, "
@@ -59,7 +60,8 @@ NOTES = (
     "Intent is the independent grader's verdict; an unstable verdict counts as not faithful. Intent is labelled "
     "diagnostic-only unless the calibration receipt is normal. Campaigns without a grader verdict show unavailable.",
     "Paired deltas are each non-native attempt minus the block's native trial (arm minus native). A delta is "
-    "unavailable when either side is unavailable, never zero. Three repetitions make no significance claim.",
+    "unavailable when either side is unavailable, never zero. A workflow-cost delta is also unavailable when the "
+    "native side is an upper bound. Three repetitions make no significance claim.",
 )
 
 
@@ -306,7 +308,7 @@ def paired_deltas(members: list[dict]) -> dict:
     reference = min(natives, key=lambda row: row["attempt"])
     deltas = [{"arm": row["arm"], "attempt": row["attempt"]} |
               {field: _difference(row[field], reference[field]) for field in DELTA_FIELDS} |
-              {"workflow_cost_basis": _shared_basis(row["workflow_cost_basis"], reference["workflow_cost_basis"])}
+              _usd_delta(row, reference)
               for row in members if row["arm"] != NATIVE_ARM]
     return {"reference": {"arm": NATIVE_ARM, "attempt": reference["attempt"]}, "deltas": deltas}
 
@@ -319,11 +321,14 @@ def _show(value, render) -> str:
     return UNAVAILABLE if value is None else render(value)
 
 
-def _shared_basis(*bases: str) -> str:
-    """The weakest basis among the figures a delta is made from: unavailable, then upper-bound, then exact."""
-    if UNAVAILABLE in bases:
-        return UNAVAILABLE
-    return UPPER_BOUND if UPPER_BOUND in bases else EXACT
+def _usd_delta(row: dict, reference: dict) -> dict:
+    """arm minus native workflow dollars, with their basis. An upper-bound native side may sit above its true cost,
+    so the difference bounds nothing and is unavailable. An upper-bound arm over an exact native side bounds the
+    difference from above."""
+    usd = _difference(row["workflow_usd"], reference["workflow_usd"])
+    if usd is None or reference["workflow_cost_basis"] != EXACT:
+        return {"workflow_usd": None, "workflow_cost_basis": UNAVAILABLE}
+    return {"workflow_usd": usd, "workflow_cost_basis": row["workflow_cost_basis"]}
 
 
 def _usd_text(value: float | None, basis: str, render) -> str:
@@ -395,7 +400,7 @@ def delta_lines(block: dict) -> list[str]:
         return ["No native trial in this block, so no paired deltas.", ""]
     lines = ["### Paired deltas vs native (arm minus native)", "",
              f"Native reference: attempt {deltas['reference']['attempt']}. A delta is unavailable where either side "
-             "is unavailable.", ""]
+             "is unavailable, and a workflow-cost delta where the native side is an upper bound.", ""]
     if not deltas["deltas"]:
         return lines + ["No non-native arm trials in this block.", ""]
     lines += ["| Arm | Attempt | Workflow cost | Workflow tokens | Trial wall s | Driver wall s |", "|---|---|---|---|---|---|"]
