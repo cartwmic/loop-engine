@@ -64,13 +64,14 @@ def result(returncode=0, stdout=""):
 class FakeSandbox:
     """One container: an in-memory file tree, a log of every exec, and the answers the harness's commands need."""
 
-    def __init__(self, *, engine=None, hidden="passed", driver=None, visible=0):
+    def __init__(self, *, engine=None, hidden="passed", driver=None, visible=0, runner_returncode=0):
         self.files = {}
         self.calls = []  # (argv, timeout) in order
         self.engine = engine  # {"show": ..., "history": ...} when a Loop Engine ran, else None
         self.hidden = hidden  # status given to every hidden test
         self.driver = driver  # async (sandbox, prompt) -> (returncode, stdout), or raises TimeoutError
         self.visible = visible  # exit code of the visible test command, or TimeoutError
+        self.runner_returncode = runner_returncode  # exit code of the hidden-test runner
         self.visible_cwd = None
         self.services = {}
         self.requirement_tags = load_case(CASE).test_requirements
@@ -120,6 +121,8 @@ class FakeSandbox:
             self.files["/tmp/snapshot.tar"] = self.pack("/workspace/public/repo", "/workspace")
             return result(0)
         if command[1] == "/opt/scoring/case_runtime.py":
+            if self.runner_returncode:
+                return result(self.runner_returncode)
             tests = [{"test_id": f"t{number}", "requirement_id": tag, "status": self.hidden}
                      for number, tag in enumerate(self.requirement_tags)]
             self.files["/workspace/trial/hidden-results.json"] = json.dumps(
@@ -186,12 +189,18 @@ GRADER_STATE = {}
 
 @modelapi(name="seam-grader")
 class SeamGrader(ModelAPI):
-    """Answers the grader's fidelity and claim calls from GRADER_STATE in call order and keeps each payload."""
+    """Answers the grader's fidelity and claim calls from GRADER_STATE in call order and keeps each payload.
+
+    A reply that is an exception is raised by that call, as a provider failure would be.
+    """
 
     async def generate(self, input, tools, tool_choice, config):
         kind = {FIDELITY_INSTRUCTION: "fidelity", CLAIM_INSTRUCTION: "claim"}[input[0].text]
         GRADER_STATE["recorded"].append((kind, json.loads(input[1].text)))
-        output = ModelOutput.from_content(model=self.model_name, content=json.dumps(GRADER_STATE["replies"][kind].pop(0)))
+        reply = GRADER_STATE["replies"][kind].pop(0)
+        if isinstance(reply, BaseException):
+            raise reply
+        output = ModelOutput.from_content(model=self.model_name, content=json.dumps(reply))
         output.usage = ModelUsage(input_tokens=3, output_tokens=2, total_tokens=5)
         return output
 
@@ -239,6 +248,7 @@ class Seams:
         self.target.run_directory = tmp_path / "captures" / "seams"
         self.target.run_directory.mkdir(parents=True)
         self.engine, self.hidden, self.driver, self.visible = None, "passed", None, 0
+        self.runner_returncode = 0
         self.replay_envs = []  # every replay container's sandbox, in creation order
         original_run_process = anyio.run_process
 
@@ -258,7 +268,8 @@ class Seams:
         class ReplayContainer:
             def __init__(sandbox, image, **kwargs):
                 self.replays.append(image)
-                sandbox.env = FakeSandbox(engine=self.engine, hidden=self.hidden, visible=self.visible)
+                sandbox.env = FakeSandbox(engine=self.engine, hidden=self.hidden, visible=self.visible,
+                                          runner_returncode=self.runner_returncode)
                 self.replay_envs.append(sandbox.env)
 
             async def __aenter__(sandbox):
@@ -283,8 +294,9 @@ class Seams:
         monkeypatch.setattr(anyio, "run_process", run_process)
 
     def configure(self, *, options=None, engine=None, hidden="passed", driver=None, idle_limit=1800, hard_limit=28800,
-                  driver_model=DRIVER, judge_model=GRADER, visible=0):
+                  driver_model=DRIVER, judge_model=GRADER, visible=0, runner_returncode=0):
         self.engine, self.hidden, self.driver, self.visible = engine, hidden, driver, visible
+        self.runner_returncode = runner_returncode
         settings = CampaignSettings.model_validate({
             "campaign": "seams", "cases_path": str(CASE), "simulator_model": "sc-scripted/simulator",
             "judge_model": judge_model, "idle_limit_seconds": idle_limit, "hard_limit_seconds": hard_limit,
@@ -706,6 +718,47 @@ def test_a_grader_error_stores_the_same_detail_shape_with_nulls(seams, scripted_
     assert detail["intent"] == {"verdict": None, "probability": None, "counted_faithful": None}
     assert detail["claims"]["checked"] is None and detail["pointers"]["resolved"] is None
     assert run.scored.success is True  # a grader error never fails the trial
+
+
+# Evaluation-only failures: a failed grader or Loop Engine judge call is unavailable; the hidden tests already scored.
+
+EVALUATION_FAILURES = [
+    pytest.param(lambda: InfrastructureError("provider policy block"), id="infrastructure"),
+    pytest.param(TimeoutError, id="timeout"),
+    pytest.param(lambda: RuntimeError("provider wrapper error"), id="provider-wrapper"),
+]
+
+
+@pytest.mark.parametrize("failure", EVALUATION_FAILURES)
+def test_a_failed_grader_call_is_unavailable_and_never_replaces_the_scored_outcome(seams, scripted_grader, failure):
+    scripted_grader["replies"]["fidelity"] = [failure(), failure()]
+    run = seams.configure(options=GRADED).run()
+    total = len(load_case(CASE).test_requirements)
+    assert run.metrics["outcome_grade_status"] == "grader_error"
+    assert run.metrics["outcome_grade"] == {"intent_faithful": None, "unstable": False}
+    detail = run.metrics["outcome_grade_detail"]
+    assert set(detail) == DETAIL_KEYS and detail["status"] == "grader_error" and detail["requirements"] == {}
+    assert run.metrics["hidden_test_outcome"] == {"passed": True, "passed_tests": total, "total_tests": total}
+    assert run.scored.success is True
+
+
+@pytest.mark.parametrize("failure", EVALUATION_FAILURES)
+def test_a_failed_loop_engine_judge_call_is_unavailable_and_never_replaces_the_scored_outcome(seams, monkeypatch, failure):
+    async def failing_judge(intent, brief, **kwargs):
+        raise failure()
+
+    monkeypatch.setattr(target, "judge_intent", failing_judge)
+    run = seams.configure(options={"arm": LOOP_ENGINE}, engine=engine("final"), driver=delivering(intent=True)).run()
+    total = len(load_case(CASE).test_requirements)
+    assert run.metrics["intent_judge"] == {"status": "judge_error", "model": GRADER}
+    assert run.metrics["hidden_test_outcome"] == {"passed": True, "passed_tests": total, "total_tests": total}
+    assert run.scored.success is True
+
+
+def test_a_failing_hidden_test_run_still_raises_and_the_grader_is_never_called(seams, scripted_grader):
+    with pytest.raises(InfrastructureError, match="^hidden-test runner failed$"):
+        seams.configure(options=GRADED, runner_returncode=1).run()
+    assert scripted_grader["recorded"] == []
 
 
 def test_visible_tests_receipt_is_none_when_the_option_is_absent(seams, scripted_grader, monkeypatch):

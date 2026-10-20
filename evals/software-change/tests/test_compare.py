@@ -49,12 +49,14 @@ def label(*, task="T1", repetition=1, arm="native", order=1, attempt=1, reason=N
 
 
 def campaign(root: Path, name: str, trial: dict, *, block: dict | None = None, trials: list | None = None,
-             prices: dict | None = None) -> Path:
+             prices: dict | None = None, judge_model: str | None = None) -> Path:
     summary = copy.deepcopy(BASE)
     summary["campaign"] = name
     summary["settings"]["target_options"] = {} if block is None else {"block": block}
     if prices is not None:
         summary["settings"]["prices"] = prices
+    if judge_model is not None:
+        summary["settings"]["judge_model"] = judge_model  # the campaign's own grader
     summary["trials"] = trials if trials is not None else [trial]
     directory = root / "campaigns" / name / "20261019T000000.000000Z"
     directory.mkdir(parents=True)
@@ -63,7 +65,9 @@ def campaign(root: Path, name: str, trial: dict, *, block: dict | None = None, t
     return path
 
 
-NORMAL_RECEIPT = {"schema_version": 1, "mode": "normal", "reasons": []}
+CAMPAIGN_GRADER = BASE["settings"]["judge_model"]  # the grader every Tier 0 campaign ran with
+OTHER_GRADER = "codex/gpt-6.1-other"
+NORMAL_RECEIPT = {"schema_version": 1, "mode": "normal", "reasons": [], "grader_model": CAMPAIGN_GRADER}
 DIAGNOSTIC_RECEIPT = {"schema_version": 1, "mode": "diagnostic-only", "reasons": ["owner labels not supplied"]}
 
 
@@ -292,6 +296,56 @@ def test_calibration_receipt_decides_the_intent_label_and_is_stated_once(tmp_pat
     assert row_by_arm(report, "native")["intent"] == intent
     assert report["calibration"]["mode"] == mode
     assert statement in markdown and markdown.count("Calibration receipt:") == 1
+
+
+def test_a_normal_receipt_for_the_campaigns_own_grader_labels_intent_as_graded(tmp_path):
+    grade = {"intent_faithful": True, "unstable": False}
+    path = campaign(tmp_path, "grade", make_trial(metrics=arm_metrics(grade=grade)), block=label())
+    _, report, markdown = run(tmp_path, [path], calibration=receipt_file(tmp_path, json.dumps(NORMAL_RECEIPT)))
+    assert row_by_arm(report, "native")["intent"] == "faithful"
+    assert report["calibration"] == {"mode": "normal", "reasons": [], "grader_model": CAMPAIGN_GRADER}
+    assert (f"- grade: receipt normal for grader {CAMPAIGN_GRADER}; this campaign's grader is {CAMPAIGN_GRADER}: "
+            "intent as graded.") in markdown
+
+
+def test_a_normal_receipt_for_another_grader_is_diagnostic_only_and_the_mismatch_is_stated(tmp_path):
+    grade = {"intent_faithful": True, "unstable": False}
+    path = campaign(tmp_path, "grade", make_trial(metrics=arm_metrics(grade=grade)), block=label())
+    other = receipt_file(tmp_path, json.dumps(NORMAL_RECEIPT | {"grader_model": OTHER_GRADER}))
+    _, report, markdown = run(tmp_path, [path], calibration=other)
+    assert row_by_arm(report, "native")["intent"] == "faithful (diagnostic-only)"
+    assert report["calibration"]["grader_model"] == OTHER_GRADER
+    assert (f"- grade: receipt normal for grader {OTHER_GRADER}; this campaign's grader is {CAMPAIGN_GRADER}: "
+            "diagnostic-only.") in markdown
+    assert f"It calibrates grader {OTHER_GRADER} only" in markdown
+
+
+def test_two_campaigns_with_different_graders_get_their_own_labels_under_one_receipt(tmp_path):
+    grade = {"intent_faithful": True, "unstable": False}
+    paths = [campaign(tmp_path, "sol", make_trial(metrics=arm_metrics(grade=grade)), block=label(arm="native", order=1)),
+             campaign(tmp_path, "other", make_trial(metrics=arm_metrics(grade=grade)),
+                      block=label(arm="superpowers", order=2), judge_model=OTHER_GRADER)]
+    _, report, markdown = run(tmp_path, paths, calibration=receipt_file(tmp_path, json.dumps(NORMAL_RECEIPT)))
+    assert row_by_arm(report, "native")["intent"] == "faithful"
+    assert row_by_arm(report, "superpowers")["intent"] == "faithful (diagnostic-only)"
+    assert (f"- sol: receipt normal for grader {CAMPAIGN_GRADER}; this campaign's grader is {CAMPAIGN_GRADER}: "
+            "intent as graded.") in markdown
+    assert (f"- other: receipt normal for grader {CAMPAIGN_GRADER}; this campaign's grader is {OTHER_GRADER}: "
+            "diagnostic-only.") in markdown
+    assert markdown.count("Calibration receipt:") == 1
+
+
+@pytest.mark.parametrize("receipt", [
+    pytest.param({"schema_version": 1, "mode": "normal", "reasons": []}, id="no-grader-model"),
+    pytest.param({"schema_version": 1, "mode": "normal", "reasons": [], "grader_model": ""}, id="empty-grader-model"),
+])
+def test_a_normal_receipt_without_a_grader_model_is_diagnostic_only(tmp_path, receipt):
+    grade = {"intent_faithful": True, "unstable": False}
+    path = campaign(tmp_path, "grade", make_trial(metrics=arm_metrics(grade=grade)), block=label())
+    _, report, markdown = run(tmp_path, [path], calibration=receipt_file(tmp_path, json.dumps(receipt)))
+    assert report["calibration"] == {"mode": "diagnostic-only", "reasons": ["receipt has no grader model"]}
+    assert row_by_arm(report, "native")["intent"] == "faithful (diagnostic-only)"
+    assert "Calibration receipt: diagnostic-only (reason: receipt has no grader model)." in markdown
 
 
 def test_a_receipt_that_is_not_normal_or_diagnostic_is_unreadable_not_an_error(tmp_path):

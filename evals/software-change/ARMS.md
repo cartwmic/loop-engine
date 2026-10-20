@@ -180,6 +180,8 @@ Metrics written for an arm trial: `complete`, `incomplete_reason`, `hidden_test_
 `loop-engine` arm also gets the existing engine diagnostics: `run_health`, `honesty`, `all_reviews_passed`,
 `review_escapes`, `needed_role_aliases`, `profile_config_version` and `intent_judge`. `intent_judge` is the older
 `intent-judge-v1` diagnostic. It is separate from the grader. It calls the judge model when the intent artifact is valid.
+A failed judge call (a model error, an infrastructure failure or a timeout) is recorded as `judge_error` and never fails
+the trial.
 
 ## 6. Driver margin
 
@@ -267,8 +269,9 @@ overhead, apart from workflow cost.
 
 **What a campaign stores.** Three target metrics from the grade result: `outcome_grade`, with `intent_faithful`
 (`true`, `false` or `null`) and `unstable`; `outcome_grade_status`; and `outcome_grade_detail`. The status is one of
-`graded`, `refused-same-family`, `refused-family-unverified`, `grader_error` or `limit`. A grader error or a budget
-stop never fails the trial.
+`graded`, `refused-same-family`, `refused-family-unverified`, `grader_error` or `limit`. `grader_error` covers an invalid
+grader reply and a failed grader call (an infrastructure failure or a timeout). The hidden tests have already scored
+when the grader runs, so a grader error or a budget stop never changes the trial's success.
 
 `outcome_grade_detail` is the `grade()` export without its `overhead` entry, because usage is reported as
 evaluation overhead through the judge role. It holds per-requirement verdicts and probabilities, the unrequested
@@ -324,8 +327,9 @@ Those calls go to a real grader model when run, so they need owner approval. The
 under $1.
 
 `evalctl compare --calibration FILE` reads the receipt's mode and labels every intent verdict `diagnostic-only` unless
-the mode is `normal` (section 11). Campaign reports do not read the receipt. Their `outcome_grade` values are raw, so
-the owner must still apply a `diagnostic-only` result to them by hand, as the spec says.
+the mode is `normal` and the receipt's `grader_model` is the campaign's own grader, its `settings.judge_model`
+(section 11). Campaign reports do not read the receipt. Their `outcome_grade` values are raw, so the owner must still
+apply a `diagnostic-only` result to them by hand, as the spec says.
 
 ## 9. Phase attribution and Pi session records
 
@@ -420,13 +424,17 @@ Field sources:
 - Owner words: `target_metrics.owner_interaction`, numbers only. Older summaries show `unavailable`.
 - Intent: `target_metrics.outcome_grade`. An unstable verdict shows as `unstable`. A campaign without a grader
   verdict shows `unavailable`.
-- Calibration: the `mode` of `--calibration`. Every intent verdict is labelled `(diagnostic-only)` unless the mode is
-  `normal`, as in `faithful (diagnostic-only)`. The report states the receipt once, above the tables: `normal`, the
-  `diagnostic-only` reasons, or `not supplied`.
+- Calibration: the `mode` of `--calibration` and its `grader_model`. An intent verdict is labelled `(diagnostic-only)`,
+  as in `faithful (diagnostic-only)`, unless the mode is `normal` and the `grader_model` equals the campaign's own
+  `settings.judge_model`. The report states the receipt once, above the tables: `normal`, the `diagnostic-only`
+  reasons, or `not supplied`. Below that it states, for each campaign, which receipt applied, for example `receipt
+  normal for grader X; this campaign's grader is Y: diagnostic-only`.
 
 `--calibration` takes a `grader-calibrate` receipt. A missing or unreadable receipt, or one whose mode is neither
 `normal` nor `diagnostic-only`, is diagnostic-only, never an error and never normal. With no receipt the mode is
-`not supplied`, which is also diagnostic-only. `summary.json` records the same `calibration` state.
+`not supplied`, which is also diagnostic-only. A `normal` receipt without a `grader_model` is diagnostic-only, with the
+reason `receipt has no grader model`. `summary.json` records the same `calibration` state; a normal one includes its
+`grader_model`.
 
 Missing usage, price or metric shows as `unavailable`, never zero. Workflow cost is the driver, implementer and
 reviewer roles. Overhead is the simulator and judge roles, shown apart.

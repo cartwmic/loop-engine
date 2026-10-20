@@ -17,7 +17,8 @@ Why the waves are shaped this way (the constraints come from the tests, not from
   may run together in the last wave.
 
 Exit status is nonzero when a group fails, when a group's executed IDs differ from its collected IDs, when a
-collected test is in no group or in two groups, or when the collected total differs from EXPECTED_TESTS.
+collected test is in no group or in two groups, or when a --baseline-ids test is no longer collected (a removed test).
+Collected tests that the baseline does not list are new: they are counted as extra, reported, and must run too.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -31,7 +32,6 @@ import sys
 import time
 
 REPO = Path(__file__).resolve().parents[3]
-EXPECTED_TESTS = 699  # collect-only count at the baseline commit (perf/ids-before.txt)
 OUTCOME = re.compile(r"^(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS) (\S.*)$")
 
 
@@ -146,6 +146,17 @@ def partition(collected: list[str], waves) -> dict[str, list[str]]:
     return members
 
 
+def new_test_ids(collected: list[str], baseline: list[str]) -> list[str]:
+    """Collected IDs that the baseline does not list (new tests).
+
+    A baseline ID that is no longer collected is a removed test, and is refused.
+    """
+    removed = sorted(set(baseline) - set(collected))
+    if removed:
+        raise SystemExit(f"{len(removed)} baseline test(s) are no longer collected, e.g. {removed[0]}")
+    return sorted(set(collected) - set(baseline))
+
+
 def run_group(group: Group, expected: list[str], log_dir: Path) -> dict:
     env = {**os.environ, **group.env}
     if not group.env:
@@ -191,7 +202,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--log-dir", required=True, type=Path, help="driver-owned directory outside the checkout")
     parser.add_argument("--baseline-ids", type=Path,
-                        help="collect-only ID list at the baseline (ids-before.txt); the collected list must equal it")
+                        help="collect-only ID list at the baseline (ids-before.txt); every baseline ID must still "
+                             "be collected")
     args = parser.parse_args(argv)
     log_dir = args.log_dir.resolve()
     if REPO in log_dir.parents or log_dir == REPO:
@@ -205,22 +217,21 @@ def main(argv=None) -> int:
         raise SystemExit("uv sync --locked failed:\n" + sync.stdout + sync.stderr)
 
     collected = collect_all()
-    if len(collected) != EXPECTED_TESTS:
-        raise SystemExit(f"collected {len(collected)} tests, expected {EXPECTED_TESTS}")
     if len(set(collected)) != len(collected):
         raise SystemExit("collect-only lists a test ID twice")
+    baseline_count = None
+    new_ids: list[str] = []
     if args.baseline_ids:
         baseline = [line.strip() for line in args.baseline_ids.read_text().splitlines() if "::" in line]
-        if sorted(baseline) != sorted(collected):
-            raise SystemExit("collect-only differs from the baseline ID list")
-        print(f"collect-only equals the baseline list ({len(baseline)} IDs)", flush=True)
+        new_ids = new_test_ids(collected, baseline)
+        baseline_count = len(baseline)
+        print(f"baseline: {baseline_count} IDs, all still collected; {len(new_ids)} new", flush=True)
     members = partition(collected, WAVES)
     print(f"partition: {len(collected)} collected IDs in {sum(len(v) for v in members.values())} group slots, "
           f"each in exactly one group", flush=True)
 
     started = time.monotonic()
-    report = {"head": head, "checkout_changes_before": dirty, "expected_tests": EXPECTED_TESTS,
-              "waves": [], "groups": []}
+    report = {"head": head, "checkout_changes_before": dirty, "waves": [], "groups": []}
     all_ok = True
     for wave in WAVES:
         print(f"\nwave {wave.name}: {wave.reason}", flush=True)
@@ -247,13 +258,16 @@ def main(argv=None) -> int:
     total_wall = time.monotonic() - started
     executed = sum(g["executed"] for g in report["groups"])
     serial = sum(g["wall_seconds"] for g in report["groups"])
-    partition_ok = executed == len(collected) == EXPECTED_TESTS
+    partition_ok = executed == len(collected)
     if not partition_ok:
         all_ok = False
-    report.update({"collected": len(collected), "executed": executed, "total_wall_seconds": round(total_wall, 1),
+    report.update({"collected": len(collected), "baseline": baseline_count,
+                   "extra": None if baseline_count is None else len(new_ids), "extra_ids": new_ids,
+                   "executed": executed, "total_wall_seconds": round(total_wall, 1),
                    "sum_of_group_wall_seconds": round(serial, 1), "ok": all_ok and partition_ok})
     (log_dir / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
-    print(f"\ntotal: collected={len(collected)} executed={executed} expected={EXPECTED_TESTS} "
+    baseline_text, extra_text = ("n/a", "n/a") if baseline_count is None else (baseline_count, len(new_ids))
+    print(f"\ntotal: collected={len(collected)} baseline={baseline_text} extra={extra_text} executed={executed} "
           f"wall={total_wall:.0f}s (sum of group walls {serial:.0f}s) -> {'PASS' if report['ok'] else 'FAIL'}", flush=True)
     print(f"logs and summary: {log_dir}", flush=True)
     return 0 if report["ok"] else 1

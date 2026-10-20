@@ -10,8 +10,9 @@ dollars, so its dollars are an upper bound from its recorded usage at the highes
 `workflow_cost_basis` and `overhead_cost_basis`.
 
 The calibration receipt (grader-calibrate) decides how intent verdicts are shown. Only a receipt whose mode is
-"normal" shows them as the grader gave them; otherwise each is labelled "diagnostic-only". A missing or unreadable
-receipt is diagnostic-only, never an error.
+"normal" and whose grader_model is the campaign's own grader (settings.judge_model) shows them as the grader gave
+them; otherwise each is labelled "diagnostic-only", campaign by campaign. A receipt without a grader_model is not
+normal. A missing or unreadable receipt is diagnostic-only, never an error.
 
 Each block with a native trial also shows paired deltas: each non-native attempt minus the native reference (the
 original native attempt). They are descriptive differences, not significance tests.
@@ -43,6 +44,7 @@ CALIBRATION_NORMAL = "normal"
 CALIBRATION_DIAGNOSTIC = "diagnostic-only"
 CALIBRATION_NOT_SUPPLIED = "not supplied"
 UNREADABLE_RECEIPT = "receipt unreadable"
+NO_GRADER_RECEIPT = "receipt has no grader model"
 DELTA_FIELDS = ("workflow_tokens", "trial_wall_seconds", "driver_seconds")
 
 NOTES = (
@@ -58,7 +60,8 @@ NOTES = (
     "Limit, infrastructure, resumed and rerun trials stay listed. A rerun is a separate attempt beside the "
     "original and never replaces it.",
     "Intent is the independent grader's verdict; an unstable verdict counts as not faithful. Intent is labelled "
-    "diagnostic-only unless the calibration receipt is normal. Campaigns without a grader verdict show unavailable.",
+    "diagnostic-only unless the calibration receipt is normal for that campaign's own grader. Campaigns without a "
+    "grader verdict show unavailable.",
     "Paired deltas are each non-native attempt minus the block's native trial (arm minus native). A delta is "
     "unavailable when either side is unavailable, never zero. A workflow-cost delta is also unavailable when the "
     "native side is an upper bound. Three repetitions make no significance claim.",
@@ -206,6 +209,7 @@ def _intent(grade, calibrated: bool) -> str | None:
 def read_calibration(path: Path | str | None) -> dict:
     """The calibration state the report states: mode normal, diagnostic-only or not supplied, with reasons.
 
+    A normal receipt names the grader it calibrated (grader_model); one without a grader model is diagnostic-only.
     A missing or unreadable receipt, or one whose mode is neither normal nor diagnostic-only, is diagnostic-only.
     """
     if path is None:
@@ -216,7 +220,10 @@ def read_calibration(path: Path | str | None) -> dict:
         return {"mode": CALIBRATION_DIAGNOSTIC, "reasons": [UNREADABLE_RECEIPT]}
     mode = receipt.get("mode") if isinstance(receipt, dict) else None
     if mode == CALIBRATION_NORMAL:
-        return {"mode": mode, "reasons": []}
+        grader = receipt.get("grader_model")
+        if isinstance(grader, str) and grader:
+            return {"mode": mode, "reasons": [], "grader_model": grader}
+        return {"mode": CALIBRATION_DIAGNOSTIC, "reasons": [NO_GRADER_RECEIPT]}
     if mode == CALIBRATION_DIAGNOSTIC:
         reasons = receipt.get("reasons")
         return {"mode": mode, "reasons": [r for r in reasons if isinstance(r, str)] if isinstance(reasons, list) else []}
@@ -381,10 +388,35 @@ def _delta_usd_text(delta: dict) -> str:
     return f"{text} ({UPPER_BOUND})" if delta["workflow_cost_basis"] == UPPER_BOUND else text
 
 
+def campaign_grader(summary: dict) -> str | None:
+    """The judge model the campaign's grader ran with, as its summary records it."""
+    return (summary.get("settings") or {}).get("judge_model")
+
+
+def intent_calibrated(calibration: dict, summary: dict) -> bool:
+    """A campaign's intent verdicts are normal only under a normal receipt for that campaign's own grader."""
+    return calibration["mode"] == CALIBRATION_NORMAL and calibration["grader_model"] == campaign_grader(summary)
+
+
+def intent_calibration(calibration: dict, summary: dict) -> str:
+    """One line for a campaign: which receipt applies to its intent verdicts, and why they are diagnostic-only."""
+    if calibration["mode"] == CALIBRATION_NORMAL:
+        verdict = "intent as graded" if intent_calibrated(calibration, summary) else "diagnostic-only"
+        grader = campaign_grader(summary) or "not recorded"
+        return (f"receipt normal for grader {calibration['grader_model']}; this campaign's grader is {grader}: "
+                f"{verdict}.")
+    if calibration["mode"] == CALIBRATION_NOT_SUPPLIED:
+        return "no calibration receipt supplied: intent is diagnostic-only."
+    reasons = "; ".join(calibration["reasons"]) or "no reason recorded"
+    return f"receipt diagnostic-only (reason: {reasons}): intent is diagnostic-only."
+
+
 def calibration_statement(calibration: dict) -> str:
     """One sentence on how intent verdicts are to be read: the receipt's mode, with its reasons when diagnostic-only."""
     if calibration["mode"] == CALIBRATION_NORMAL:
-        return "Calibration receipt: normal. Intent verdicts are shown as the independent grader gave them."
+        return (f"Calibration receipt: normal. It calibrates grader {calibration['grader_model']} only: intent "
+                "verdicts are shown as the grader gave them in campaigns whose judge model is that grader, and are "
+                "diagnostic-only in the others (see each campaign below).")
     if calibration["mode"] == CALIBRATION_NOT_SUPPLIED:
         return ("Calibration receipt: not supplied. Every intent verdict is diagnostic-only and is excluded from "
                 "decisions.")
@@ -418,6 +450,9 @@ def render_markdown(report: dict) -> str:
     lines = ["# Paired comparison", "", "Sources:", ""]
     lines += [f"- {source['campaign']}: {source['summary']}" for source in report["sources"]]
     lines += ["", *NOTES, "", calibration_statement(report["calibration"]), ""]
+    lines += ["Intent calibration by campaign:", ""]
+    lines += [f"- {source['campaign']}: {source['intent_calibration']}" for source in report["sources"]]
+    lines += [""]
     header = ("| Arm | Order | Attempt | Outcome | Hidden tests | Delivery | Elicitation | Intent | Workflow cost "
               "| Workflow tokens | Overhead cost | Overhead tokens | Driver wall s | Trial wall s | Owner questions "
               "| Owner words (questions / answers) | Notes |")
@@ -470,19 +505,22 @@ def _reserve_directory(out: Path, sources: list[Path]) -> Path:
 def compare(paths: Iterable[Path | str], out: Path | str, calibration: Path | str | None = None) -> Path:
     """Write one new paired report pair (summary.json, report.md) under out and return its directory.
 
-    `calibration` is an optional grader-calibrate receipt. Without a normal one, intent verdicts are diagnostic-only.
+    `calibration` is an optional grader-calibrate receipt. Its intent verdicts are normal only for the campaigns whose
+    grader is the receipt's grader_model; the others are diagnostic-only.
     """
     sources = [Path(path) for path in paths]
     if not sources:
         raise ValueError("compare needs at least one summary.json")
     loaded = [(path, load_summary(path)) for path in sources]
     state = read_calibration(calibration)
-    rows = []
+    rows, source_records = [], []
     for path, summary in loaded:
         label = block_label(summary)
-        rows += [trial_row(summary, trial, path, label, state["mode"] == CALIBRATION_NORMAL) for trial in summary["trials"]]
-    report = {"schema_version": 1, "report": "paired-comparison",
-              "sources": [{"campaign": summary["campaign"], "summary": str(path)} for path, summary in loaded],
+        calibrated = intent_calibrated(state, summary)
+        rows += [trial_row(summary, trial, path, label, calibrated) for trial in summary["trials"]]
+        source_records.append({"campaign": summary["campaign"], "summary": str(path),
+                               "intent_calibration": intent_calibration(state, summary)})
+    report = {"schema_version": 1, "report": "paired-comparison", "sources": source_records,
               "calibration": state, "blocks": group_blocks(rows)}
     json_text = json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
     markdown = render_markdown(report)

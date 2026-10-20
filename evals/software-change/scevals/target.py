@@ -110,6 +110,11 @@ ARM_BASELINE_COMMAND = ("cd /workspace/public/repo && git init -q && git add -A 
 PI_SESSION_DIR = "/workspace/trial/pi-sessions"
 # Private per-trial file beside workspace.tar: the driver's final stdout. It is never exported.
 FINAL_MESSAGE = "final-message.txt"
+# A failed call to an evaluation-only model (the grader or the Loop Engine intent judge). It is recorded as unavailable;
+# the hidden-test outcome already scored never changes because of it.
+# Any Exception: provider wrappers (for example Inspect's RuntimeError subclasses) are not ModelError. Cancellation is a
+# BaseException and still propagates, so a campaign stop is never swallowed.
+EVALUATION_CALL_ERRORS = (Exception,)
 
 KILL_DRIVER = ["python3", "-c",
                "import os,signal; from pathlib import Path;"
@@ -975,12 +980,13 @@ class SoftwareChangeTarget:
                 "all_reviews_passed": passed_reviews, "review_escapes": int(passed_reviews and not success),
                 "needed_role_aliases": needed,
                 "profile_config_version": (snapshot.get("initial_input") or {}).get("config_version"),
-                "intent_judge": await self.judge(trial, context, intent, intent_valid)}
+                "intent_judge": await self.arm_judge(trial, context, intent, intent_valid)}
 
     async def grade_outcome(self, trial, context, arm, *, delivered, tests, visible_tests, final_message):
         """Independent grade through the campaign judge role: (status, verdict fields, detail).
 
-        Like the judge, a grader failure or budget stop never fails the trial.
+        Like the judge, a grader failure or budget stop never fails the trial. The hidden tests have already scored when
+        this runs, so a failed grader call (infrastructure, timeout or model error) is recorded as grader_error.
         """
         skip = self.judge_skip_reason(trial, context)
         if skip is None:
@@ -994,7 +1000,7 @@ class SoftwareChangeTarget:
                 if not scope.cancelled_caught:
                     return result["status"], outcome_grade_fields(result), outcome_grade_detail(result)
                 skip = limit_reason(context)
-            except ModelError:
+            except EVALUATION_CALL_ERRORS:
                 return "grader_error", {"intent_faithful": None, "unstable": False}, ungraded_detail("grader_error")
         guard = getattr(context, "guard", None)
         if guard is not None:
@@ -1031,6 +1037,16 @@ class SoftwareChangeTarget:
         if guard is not None:
             guard.note_cut_off("judge", skip, context.assignment.sample_id)
         return {"status": "limit", "reason": skip, "model": context.settings.judge_model}
+
+    async def arm_judge(self, trial, context, intent, intent_valid):
+        """The arm's Loop Engine intent judge, as evaluation only: a failed call is unavailable, never a failed trial.
+
+        The option-off path calls judge() directly, so its behaviour does not change.
+        """
+        try:
+            return await self.judge(trial, context, intent, intent_valid)
+        except EVALUATION_CALL_ERRORS:
+            return {"status": "judge_error", "model": context.settings.judge_model}
 
     def finalize_metrics(self, metrics, *, usage_by_role, terminal, outcome, reason):
         """Core calls after Inspect has finalized authoritative alias accounting."""
