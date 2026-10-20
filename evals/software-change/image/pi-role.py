@@ -22,6 +22,12 @@ def configuration(role):
     }}}
 
 
+def session_arguments():
+    """Keep the session record in SC_PI_SESSION_DIR when it is set; unset or empty keeps the ephemeral session."""
+    directory = os.environ.get("SC_PI_SESSION_DIR")
+    return ["--session-dir", directory] if directory else ["--no-session"]
+
+
 def main():
     if sys.argv[1:] == ["--write-templates"] and Path(sys.argv[0]).name == "pi-role.py":
         for role in ROLES.values():
@@ -40,7 +46,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix=f"pi-{role}-") as directory:
         Path(directory, "models.json").write_text(json.dumps(configuration(role)))
         env = dict(os.environ, PI_CODING_AGENT_DIR=directory)
-        command = ["pi", "--print", "--no-session", "--no-extensions", "--no-skills",
+        command = ["pi", "--print", *session_arguments(), "--no-extensions", "--no-skills",
                    "--no-prompt-templates", "--no-themes", "--provider", "inspect",
                    "--model", role, "--models", role,
                    "--skill", str(ROOT / "skills/using-loop-engine"),

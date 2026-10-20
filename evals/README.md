@@ -36,6 +36,10 @@ software-change workflow on their own private cases. Do not use it when you need
 - [software-change/](software-change/README.md): case format, mount-free image,
   Pi driver/worker commands, host simulated owner, hidden-test scoring, intent judge,
   calibration and software-change-specific health, discipline and honesty metrics.
+- [software-change/ARMS.md](software-change/ARMS.md): opt-in Stage 0 arm comparison (native,
+  Superpowers, OpenSpec and Loop Engine arms under one completion rule), the independent grader,
+  snapshots, paired `compare` reports, the stage ledger and the finding check. Nothing changes
+  unless those options or commands are used.
 
 Every compared model/role combination receives the same case IDs, versions and
 trial counts; exploration and task decomposition within a trial are unconstrained.

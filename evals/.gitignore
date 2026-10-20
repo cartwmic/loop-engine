@@ -6,3 +6,5 @@ captures/
 *.pyc
 # Private past-run owner requests/intents; never publish these labelling files.
 software-change/calibration/labels.json
+# Local proof receipts written by the arm proof tests (machine paths); regenerate by running them.
+software-change/tests/proofs/
