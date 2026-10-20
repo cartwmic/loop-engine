@@ -154,8 +154,11 @@ class FakeSandbox:
                     self.files[f"{destination}/{member.name}"] = archive.extractfile(member).read()
 
 
-def delivering(*, stdout=FINAL_STDOUT, returncode=0, sleep=0.0, timeout=False, intent=False):
-    """A driver that asks the owner once, delivers the case's reference overlay, then exits by itself or times out."""
+def delivering(*, stdout=FINAL_STDOUT, returncode=0, sleep=0.0, timeout=False, intent=False, wait_for=None):
+    """A driver that asks the owner once, delivers the case's reference overlay, then exits by itself or times out.
+
+    With wait_for (an asyncio.Event), it exits only after that event is set.
+    """
     async def driver(sandbox, prompt):
         await sandbox.services["ask_owner"](QUESTION)
         for file in sorted(REFERENCE.rglob("*")):
@@ -163,6 +166,8 @@ def delivering(*, stdout=FINAL_STDOUT, returncode=0, sleep=0.0, timeout=False, i
                 sandbox.files["/workspace/public/repo/" + file.relative_to(REFERENCE).as_posix()] = file.read_bytes()
         if intent:
             sandbox.files["/workspace/trial/artifacts/intent.json"] = b"{}"
+        if wait_for is not None:
+            await wait_for.wait()
         await anyio.sleep(sleep)
         if timeout:
             raise TimeoutError
@@ -478,6 +483,32 @@ def test_snapshots_are_taken_from_the_progress_poll_beside_the_capture(seams):
     assert index[0]["elapsed_seconds"] >= 1.0
     assert not any(path.name.startswith("snapshot") for path in run.capture.iterdir())
     assert run.scored.success is True
+
+
+def test_a_driver_that_exits_during_a_snapshot_longer_than_the_idle_limit_is_complete_not_idle_stopped(seams, monkeypatch):
+    """The snapshot runs in the progress poll; a driver that exits during it is complete, never idle-stopped.
+
+    Real time, about four seconds: the poll wakes after its idle/2 interval, the snapshot starts, the driver exits at
+    once, and the snapshot then lasts longer than the idle limit. The idle clock counts from the last progress, so
+    without the exit check the poll would stop a driver that had already finished.
+    """
+    idle_limit = 2
+    snapshot_started = asyncio.Event()
+    real_snapshot_step = target.snapshot_step
+
+    async def slow_snapshot_step(*args, **kwargs):
+        snapshot_started.set()
+        await anyio.sleep(idle_limit + 1)
+        return await real_snapshot_step(*args, **kwargs)
+
+    monkeypatch.setattr(target, "snapshot_step", slow_snapshot_step)
+    run = seams.configure(options={"arm": NATIVE, "snapshot_interval_seconds": 0.5}, idle_limit=idle_limit,
+                          driver=delivering(wait_for=snapshot_started)).run()
+    index = json.loads((run.run_directory / "seam-1-snapshots" / "snapshots.json").read_text())
+    assert len(index) == 1
+    assert run.meta["driver_stop_kind"] == "exit"
+    assert run.metrics["complete"] is True and run.metrics["incomplete_reason"] is None
+    assert run.execution.terminal is True and run.scored.success is True
 
 
 @pytest.mark.parametrize("options,idle_limit,message", [

@@ -84,14 +84,14 @@ and optional `image`. Validation enforces:
 - `workflow_owned_paths` is a list of repo-relative glob strings. Absolute paths, `..` and backslashes are refused.
   It must be nonempty for `superpowers` and `openspec`, and empty for `native` and `loop-engine`.
 - `completion_rule` is `driver-exit`, the only rule.
-- `image` is an optional nonempty tag. Without it, the default trial image is used.
+- `image` is an optional nonempty tag. Without it, the default trial image is used, which is for campaigns without an arm (see the note under the table).
 
 | Arm | `driver_command` | Prompt addition | `workflow_owned_paths` | `image` |
 |---|---|---|---|---|
 | `native` | `["arm-native"]` | none | `[]` | the arms image (section 10) |
 | `superpowers` | `["arm-superpowers"]` | "Use the Superpowers workflow installed in this Pi session for this request." | required, for example the four globs below | the arms image |
 | `openspec` | `["arm-openspec"]` | "Use the OpenSpec workflow initialised in this repository for this request." | required, for example the four globs below | the arms image |
-| `loop-engine` | `["sc-driver"]` | Loop Engine addition: profile, the two installed skills, `sc-implement` and `sc-review`, run ID and artifact paths | `[]` | omit: the default image |
+| `loop-engine` | `["sc-driver"]` | Loop Engine addition: profile, the two installed skills, `sc-implement` and `sc-review`, run ID and artifact paths | `[]` | the arms image (section 10) |
 
 The design's four workflow-owned globs are `openspec/**`, `.pi/**`, `docs/superpowers/**` and `.superpowers/**`.
 Any declared workflow-owned path leaves the grader's file inputs and the discipline scope, and is counted as artifact volume.
@@ -100,6 +100,8 @@ Omitting `image` for `native`, `superpowers` or `openspec` passes validation, bu
 `arm-*` launchers. The driver command then fails inside the container, and that exit is scored like any other
 driver exit. Check the image before a paid run. The launcher must exist in the image named by the arm, for
 example with `docker run --rm TAG sh -c 'command -v arm-native'`. That command was not run while writing this page.
+
+The default image is for campaigns without an arm: an omitted `image` on `loop-engine` also passes validation, but it runs Pi 1.0.0 beside the other arms' Pi 1.2.0, so every arm in one comparison, Loop Engine included, names the arms image.
 
 Superpowers arm:
 
@@ -113,7 +115,7 @@ completion_rule = "driver-exit"
 image = "loop-engine-sc-evals:arms-v1"
 ```
 
-Loop Engine arm, on the default image:
+Loop Engine arm, on the arms image:
 
 ```toml
 [target_options.arm]
@@ -122,6 +124,7 @@ driver_command = ["sc-driver"]
 prompt_template = "loop-engine"
 workflow_owned_paths = []
 completion_rule = "driver-exit"
+image = "loop-engine-sc-evals:arms-v1"
 ```
 
 ## 4. Prompt and starting state

@@ -617,6 +617,9 @@ class SoftwareChangeTarget:
                                 previous_tokens = tokens
                                 last_snapshot = await snapshot_step(env, options, snapshot_directory, driver_started=driver_clock,
                                                                     last_taken=last_snapshot, now=time.monotonic())
+                                # A snapshot can outlast the idle limit; a driver that exited meanwhile is complete, not idle.
+                                if driver_done.is_set():
+                                    return
                                 if time.monotonic() - last_progress >= context.settings.idle_limit_seconds:
                                     evidence["driver_timed_out"] = True
                                     evidence["driver_timeout_kind"] = "idle"
