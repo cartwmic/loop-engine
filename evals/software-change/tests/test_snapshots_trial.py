@@ -94,7 +94,12 @@ def trajectory_of_the_on_trial():
 
 def comparable(trial):
     metrics = trial["target_metrics"]
-    return {key: value for key, value in metrics.items() if key not in TIMING_OR_LOCATION}
+    compared = {key: value for key, value in metrics.items() if key not in TIMING_OR_LOCATION}
+    # The scripted driver's --keepalive makes one bridge call per second of waiting, so the driver's own token count
+    # depends on call latency and differs between any two runs. Every other role's usage is still compared.
+    aliases = dict(compared.get("usage_by_role_alias") or {})
+    aliases.pop("role-driver", None)
+    return {**compared, "usage_by_role_alias": aliases}
 
 
 def test_snapshots_on_produce_a_per_requirement_trajectory_of_the_same_delivery():
