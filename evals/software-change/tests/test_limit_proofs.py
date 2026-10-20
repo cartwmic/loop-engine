@@ -2,6 +2,9 @@
 
 No network and no paid call: scripted Inspect backends, real Pi, real Docker. Each proof drives
 `evalctl campaign` to a completed outcome and reads the report, the capture and Docker afterwards.
+
+TIME_SCALE (default 1.0 = full size) scales only the proofs that keep their production branch when scaled; the
+others run at full size whatever TIME_SCALE is. perf/limit-test-notes.md names the production code behind each choice.
 """
 import json
 import os
@@ -21,6 +24,18 @@ ROOT = REPO / "evals/software-change"
 PROOFS = ROOT / "captures/limit-proofs"
 SCRIPTED = {"sc-scripted/driver": None, "sc-scripted/simulator": None, "sc-scripted/judge": None}
 HANG_AFTER_TERMINAL = ["sh", "-c", 'sc-driver "$@"; sleep 1000', "sh"]
+TIME_SCALE = float(os.environ.get("TIME_SCALE", "1.0"))
+if not 0 < TIME_SCALE <= 1:
+    raise ValueError("TIME_SCALE must be greater than 0 and at most 1")
+
+
+def scaled(seconds):
+    return seconds * TIME_SCALE
+
+
+def scaled_int(seconds):
+    """A campaign cap or reserve, which must be whole seconds."""
+    return max(1, round(scaled(seconds)))
 
 
 class Outcome:
@@ -75,7 +90,8 @@ def tokens(trial):
 @pytest.fixture(scope="module")
 def baseline():
     """A normal scripted trial under generous caps: runs to a captured, scoreable result and reports in time."""
-    outcome = drive(campaign_wall_limit_seconds=900, post_trial_reserve_seconds=300, publication_reserve_seconds=60)
+    outcome = drive(campaign_wall_limit_seconds=scaled_int(900), post_trial_reserve_seconds=scaled_int(300),
+                    publication_reserve_seconds=scaled_int(60))
     return outcome
 
 
@@ -86,7 +102,7 @@ def test_normal_scripted_trial_runs_to_a_scoreable_capture_and_reports_inside_th
     assert (baseline.capture / "workspace.tar").is_file() and (baseline.capture / "isolation.json").is_file()
     budget = baseline.summary["budget"]
     assert budget["wall_within_cap"] is True and budget["cost_verdict"] == "not_budgeted"
-    assert baseline.summary["campaign_wall_seconds"] <= 900 and trial_containers() == []
+    assert baseline.summary["campaign_wall_seconds"] <= scaled(900) and trial_containers() == []
     assert baseline.summary["versions"]["target"]["loop_engine"] == "v0.26.0"
 
 
@@ -97,6 +113,7 @@ def test_unpriced_model_with_a_dollar_budget_is_refused_before_any_container_or_
     assert set(trial_containers()) == before and "Captures retained" not in outcome.result.stdout
 
 
+# Full size under every TIME_SCALE: the driver limit is max(60, hard - 300), so a 120 s trial's driver floor and margin are production constants.
 def test_per_trial_stop_is_a_limit_with_kept_capture_and_no_leftovers():
     outcome = drive(hard_limit_seconds=120, target_options={"driver_command": ["sh", "-c", "sleep 1000", "sh"]})
     trial = outcome.trial
@@ -107,15 +124,16 @@ def test_per_trial_stop_is_a_limit_with_kept_capture_and_no_leftovers():
 
 def test_campaign_wall_time_stop_still_captures_scores_judges_nothing_and_reports_inside_the_cap():
     """Trial work reaches a terminal state, then hangs until the campaign stop at S. Everything after still completes by D."""
-    outcome = drive(campaign_wall_limit_seconds=300, post_trial_reserve_seconds=150, publication_reserve_seconds=30,
-                    guard_poll_seconds=2, target_options={"driver_command": HANG_AFTER_TERMINAL})
+    outcome = drive(campaign_wall_limit_seconds=scaled_int(300), post_trial_reserve_seconds=scaled_int(150),
+                    publication_reserve_seconds=scaled_int(30), guard_poll_seconds=scaled(2),
+                    target_options={"driver_command": HANG_AFTER_TERMINAL})
     trial = outcome.trial
     assert (trial["outcome"], trial["reason"]) == ("limit", "campaign_wall_time")
     metrics = trial["target_metrics"]
     assert metrics["hidden_test_outcome"]["passed"] is True            # scoring (no model call) still ran
     assert metrics["intent_judge"]["status"] == "limit"                # the judge model was never called
     assert trial["usage_by_role"].get("judge", {}).get("total_tokens", 0) == 0
-    assert outcome.elapsed < 300 and outcome.summary["budget"]["wall_within_cap"] is True
+    assert outcome.elapsed < scaled(300) and outcome.summary["budget"]["wall_within_cap"] is True
     assert (outcome.capture / "workspace.tar").is_file() and trial_containers() == []
 
 
@@ -123,9 +141,10 @@ def test_dollar_stop_fires_below_the_cap_during_the_trial_and_the_judge_is_never
     """Price so the normal pre-terminal spend is small; after the terminal state the driver keeps buying review calls."""
     per_token = 2.0e6 / tokens(baseline.trial)           # about 2 dollars for the whole baseline trial
     prices = {"input_per_million": per_token, "output_per_million": per_token}
-    outcome = drive(prices=prices, campaign_budget_usd=10, dollar_margin_usd=1, guard_poll_seconds=1,
-                    campaign_wall_limit_seconds=900, post_trial_reserve_seconds=300, publication_reserve_seconds=60,
-                    target_options={"driver_command": ["sh", "-c", 'sc-driver "$@"; for i in $(seq 300); do sc-review "buy"; sleep 1; done', "sh"]})
+    outcome = drive(prices=prices, campaign_budget_usd=10, dollar_margin_usd=1, guard_poll_seconds=scaled(1),
+                    campaign_wall_limit_seconds=scaled_int(900), post_trial_reserve_seconds=scaled_int(300),
+                    publication_reserve_seconds=scaled_int(60),
+                    target_options={"driver_command": ["sh", "-c", f'sc-driver "$@"; for i in $(seq 300); do sc-review "buy"; sleep {scaled(1):g}; done', "sh"]})
     trial = outcome.trial
     assert (trial["outcome"], trial["reason"]) == ("limit", "campaign_dollars")
     assert trial["target_metrics"]["intent_judge"]["status"] == "limit"
@@ -136,19 +155,20 @@ def test_dollar_stop_fires_below_the_cap_during_the_trial_and_the_judge_is_never
 
 
 def test_blocking_render_leaves_the_limit_only_record_and_the_command_still_ends_by_the_cap():
-    outcome = drive(campaign_wall_limit_seconds=240, post_trial_reserve_seconds=100, publication_reserve_seconds=30,
-                    extra_env={"EVALCORE_PROOF_RENDER_DELAY_SECONDS": "3600"})
-    assert outcome.elapsed < 240 + 30
+    outcome = drive(campaign_wall_limit_seconds=scaled_int(240), post_trial_reserve_seconds=scaled_int(100),
+                    publication_reserve_seconds=scaled_int(30), extra_env={"EVALCORE_PROOF_RENDER_DELAY_SECONDS": "3600"})
+    assert outcome.elapsed < scaled(240 + 30)
     assert outcome.summary["record"] == "limit-only" and outcome.summary["trials"][0]["outcome"] == "success"
     assert outcome.summary["publication_cut_off"] is True and outcome.summary["cut_off_steps"][-1]["step"] == "publication"
     # The fallback is the result, so it must report the real command-to-written time (the renderer was waited on until the cap).
-    assert 240 - 10 <= outcome.summary["campaign_wall_seconds"] <= 240 and outcome.summary["wall_within_cap"] is True
+    assert scaled(240 - 10) <= outcome.summary["campaign_wall_seconds"] <= scaled(240) and outcome.summary["wall_within_cap"] is True
     publication = json.loads((outcome.directory / "publication.json").read_text())
     assert publication["full_report"] is False and publication["within_cap"] is True
     assert abs(publication["command_start_to_report_written_seconds"] - outcome.summary["campaign_wall_seconds"]) < 1
     assert subprocess.run(["pgrep", "-f", "evalcore.publish"], capture_output=True, text=True).stdout.strip() == ""
 
 
+# Full size under every TIME_SCALE: the image-inspection probe is PROBE_SECONDS = 60, a production constant that must stay below the cap.
 def test_blocked_docker_inspection_ends_by_the_cap_with_a_limit_before_any_trial(tmp_path):
     real = subprocess.run(["which", "docker"], capture_output=True, text=True).stdout.strip()
     shim = tmp_path / "docker"
@@ -165,27 +185,29 @@ def test_blocked_docker_inspection_ends_by_the_cap_with_a_limit_before_any_trial
 
 
 def test_cut_off_capture_still_leaves_the_isolation_evidence():
-    outcome = drive(campaign_wall_limit_seconds=300, post_trial_reserve_seconds=200, publication_reserve_seconds=30,
-                    target_options={"scripted_capture_delay_seconds": 3000})
+    outcome = drive(campaign_wall_limit_seconds=scaled_int(300), post_trial_reserve_seconds=scaled_int(200),
+                    publication_reserve_seconds=scaled_int(30), target_options={"scripted_capture_delay_seconds": 3000})
     trial = outcome.trial
     assert (trial["outcome"], trial["limit_step"]) == ("limit", "capture")
     capture = Path(outcome.summary["capture_run"]) / trial["sample_id"]
     isolation = json.loads((capture / "isolation.json").read_text())
     assert isolation["mounts"] == [] and isolation["binds"] == [] and isolation["id"] and isolation["image_id"]
     assert not (capture / "workspace.tar").exists()
-    assert outcome.elapsed < 300 and trial_containers() == []
+    assert outcome.elapsed < scaled(300) and trial_containers() == []
 
 
 def test_slow_scoring_is_abandoned_at_its_allowance_with_the_capture_kept():
-    outcome = drive(campaign_wall_limit_seconds=300, post_trial_reserve_seconds=200, publication_reserve_seconds=30,
-                    target_options={"scripted_scoring_delay_seconds": 3000})
+    outcome = drive(campaign_wall_limit_seconds=scaled_int(300), post_trial_reserve_seconds=scaled_int(200),
+                    publication_reserve_seconds=scaled_int(30), target_options={"scripted_scoring_delay_seconds": 3000})
     trial = outcome.trial
     assert (trial["outcome"], trial["limit_step"]) == ("limit", "scoring")
     assert (outcome.capture / "workspace.tar").is_file()
     assert outcome.summary["budget"]["cut_off_steps"][0]["step"] == "scoring"
-    assert outcome.elapsed < 300 and outcome.summary["budget"]["wall_within_cap"] is True and trial_containers() == []
+    assert outcome.elapsed < scaled(300) and outcome.summary["budget"]["wall_within_cap"] is True and trial_containers() == []
 
 
+# Full size under every TIME_SCALE: the removal allowance is publication reserve - 30 s (PUBLICATION_HEADROOM_SECONDS), so
+# scaling the reserve would move the allowance off its 10 s value and change the branch this proof reaches.
 def test_a_stuck_replay_container_removal_cannot_push_publication_past_the_cap(tmp_path):
     """Scoring runs until the hard end H, then removing the replay container blocks. The shielded removal must be cut at its
     allowance (time left before D minus headroom), so the report still lands before D."""
