@@ -137,6 +137,8 @@ def _message(entry, number, cursor, totals):
     timestamp = message.get("timestamp") if isinstance(message, dict) else None
     if not isinstance(message, dict) or not isinstance(timestamp, int) or isinstance(timestamp, bool):
         raise UnparseableRecord(f"line {number} has no message timestamp")
+    if message.get("role") == "system":
+        return  # a real Pi record stamps the system message a millisecond after the user message; it is not work
     if cursor.previous_time is not None:
         gap = timestamp - cursor.previous_time
         if gap < 0:

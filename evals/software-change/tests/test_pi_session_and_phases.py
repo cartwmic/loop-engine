@@ -234,3 +234,16 @@ def test_one_unparseable_file_makes_the_directory_unavailable(tmp_path):
     (tmp_path / "worker.jsonl").write_text(WORKER.read_text())
     (tmp_path / "driver.jsonl").write_text("not a session\n")
     assert_unavailable(phases.attribute(tmp_path), "unparseable session record driver.jsonl")
+
+
+def test_a_system_message_stamped_after_the_user_message_is_not_a_backwards_timestamp(tmp_path):
+    # Real Pi records stamp the system message one millisecond after the user message that follows it.
+    lines = DRIVER.read_text().splitlines()
+    user_ts = next(json.loads(line)["message"]["timestamp"] for line in lines
+                   if json.loads(line).get("message", {}).get("role") == "user")
+    set_message(lines, "system", lambda message: message.update(timestamp=user_ts + 1))
+    record = tmp_path / "real.jsonl"
+    record.write_text("\n".join(lines) + "\n")
+    result = phases.attribute(record).to_record()
+    assert result["available"] is True and result["reason"] is None
+    assert_rows_equal(result["phases"], [DRIVER_SKILL, DRIVER_UNMARKED])
