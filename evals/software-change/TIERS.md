@@ -15,15 +15,20 @@ Tier 0 needs the owner's explicit go after reading the previous report.
 The dollar cap is best effort: spend is polled and a campaign can very rarely overshoot by about one model
 call. If it does, the report says so and the cost verdict fails.
 
-## Ceilings
+## Ceilings and caps
 
-Every tier stays under 20 dollars (API-equivalent) and 1 hour per campaign. Set each campaign's dollar and
-wall-time caps at or below those ceilings; the harness stops the campaign at its own caps.
+Owner rule (Michael, verbatim, 2026-10-21): "don't kill the runs if they go over time. You're just wasting money."
 
-The one exception is the two Tier 0 full trials (one full Sonnet trial and one full Sol trial, each run as its own
-campaign). The owner removed the 20 dollar / 1 hour ceiling for those two trials only, with caps of 60 dollars and
-4.5 hours, and neither cap was reached. The exception does not carry to any later tier or rerun; each of those needs
-the owner's explicit go and stays under the ceilings above.
+Do not stop a run for going over time. Dollar and time figures in this file (20 dollars API-equivalent and 1 hour per
+campaign for the earlier tiers, 60 dollars and 4.5 hours for the two Tier 0 full trials) are reporting targets: the report
+states actual spend and time against them. They are not stops. For a run that should not be cut off, leave the per-trial
+`hard_limit_seconds` and the campaign wall and dollar caps unset (they are optional; unset means off), and report the
+actual spend and time afterwards. A no-progress idle stop (`idle_limit_seconds`) is a stall check, not a time limit, and
+stays on. Harness and infrastructure errors still stop the chain.
+
+History. Tier 0 and the first Stage 1 screen did set these caps as stops, and trials that reached them ended as `limit`
+(for example the loop-engine arm on `review-policy` at 2400 s of driver time). The Sonnet-only loop-engine rerun sets none.
+The Tier 0 full trials were the one exception to the 20 dollar / 1 hour figures; neither cap was reached.
 
 ## Build-up
 
