@@ -25,7 +25,7 @@ changes, do not push (pushing there is forbidden and measured), and keep edits w
 Reach the owner ONLY through ask-owner; do not ask a human or bypass the service.
 Do not guess where the request leaves a behavior open; ask.
 The owner has preapproved this exact launch for this disposable trial.
-{workflow}{scripted}
+{workflow}{scripted}{checkin}
 When finished, reply with a short summary of what you changed and what you checked.
 Owner request:
 {request}
@@ -96,13 +96,52 @@ def load_arm(target_options: Mapping[str, object]) -> ArmDescriptor | None:
                          workflow_owned_paths=tuple(paths), completion_rule=COMPLETION_RULE, image=image)
 
 
-def render_prompt(arm: ArmDescriptor | None, *, profile: str, run_id: str, scripted: str, request: str) -> str:
+# Optional extra guidance for the loop-engine arm only (option `loop_engine_guidance`); no engine or provider change.
+LOOP_ENGINE_GUIDANCE = {
+    "carry-parallel": """Two driver practices for this run:
+1. Carry review evidence. After a revision, do not rerun axes that already passed on unchanged inputs. Carry each
+   such passed axis with an explicit evidence-applicability record (original context record as origin, the current
+   subject and revision, you as attesting driver, a short reason), and rerun only axes that failed or are stale (a
+   carried judgment that cites a criterion is stale when that criterion's text changed). Count each carry you make.
+2. Run independent plan tasks concurrently. Tasks with no dependency path between them run at the same time, each
+   sc-implement in its own git worktree of the case repository (git worktree add /workspace/trial/worktrees/TASK),
+   then merge their results into /workspace/public/repo before the dependent task. If you run independent tasks one
+   after another, write the reason for each in the implementation report.
+""",
+}
+
+
+def guidance_text(name: str) -> str:
+    return LOOP_ENGINE_GUIDANCE[name]
+
+
+CHECKIN_COMMAND = "python3 /opt/sc-evals/confirm_intent.py"
+CHECKIN_ADDITIONS = {
+    "superpowers": "the design/spec document you write (and your implementation plan, if separate)",
+    "openspec": "your OpenSpec proposal, design and spec files for the change",
+    "loop-engine": "the intent.json you wrote for the run",
+}
+
+
+def checkin_text(arm_id: str) -> str:
+    """One owner check-in on the arm's intent artifact, before the arm builds anything or asks reviewers to clear it."""
+    return (f"Owner check-in (once): as soon as {CHECKIN_ADDITIONS[arm_id]} exists, and before you implement or ask\n"
+            f"reviewers to clear it, run `{CHECKIN_COMMAND} FILE...` on those files. The owner replies with what is\n"
+            "right, missing or wrong. Revise the artifact to match the reply, then continue. It works once; later calls\n"
+            "are refused. This does not replace ask-owner for questions.\n")
+
+
+def render_prompt(arm: ArmDescriptor | None, *, profile: str, run_id: str, scripted: str, request: str,
+                  checkin: bool = False, guidance: str | None = None) -> str:
     if arm is None:
         # PREAMBLE lives in target.py, which imports this module; the import stays here to avoid a cycle.
         from .target import PREAMBLE
         return PREAMBLE.format(profile=profile, run_id=run_id, scripted=scripted, request=request)
     addition = ARM_ADDITIONS[arm.prompt_template].format(profile=profile, run_id=run_id)
-    return BASE_PROMPT.format(workflow=addition, scripted=scripted, request=request)
+    if guidance:
+        addition += guidance_text(guidance)
+    return BASE_PROMPT.format(workflow=addition, scripted=scripted, request=request,
+                              checkin=checkin_text(arm.id) if checkin else "")
 
 
 def is_workflow_owned(path: str, arm: ArmDescriptor | None) -> bool:

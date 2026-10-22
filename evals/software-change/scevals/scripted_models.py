@@ -23,6 +23,11 @@ class ScriptedModel(ModelAPI):
     async def generate(self, input, tools, tool_choice, config):
         if self.model_name == "simulator":
             question = input[-1].text.lower()
+            if "intent, proposal or plan" in input[0].text:  # the owner check-in
+                content = json.dumps({"answer": "Scripted check-in: also handle empty labels.", "revealed_requirement_ids": ["REQ-3"]})
+                output = ModelOutput.from_content(model=self.model_name, content=content)
+                output.usage = ModelUsage(input_tokens=20, output_tokens=10, total_tokens=30)
+                return output
             answers = []
             ids = []
             for words, requirement, answer in (

@@ -116,7 +116,7 @@ def test_each_arm_renders_neutral_base_plus_its_addition(arm_id):
 
 def test_native_prompt_is_the_base_alone_and_names_no_workflow():
     prompt = render(arms.load_arm(arm_options("native")))
-    assert prompt == arms.BASE_PROMPT.format(workflow="", scripted="", request="Add retries.")
+    assert prompt == arms.BASE_PROMPT.format(workflow="", scripted="", checkin="", request="Add retries.")
     for name in ("Superpowers", "OpenSpec", "Loop Engine", "sc-implement", "intent.json", "Profile:"):
         assert name not in prompt
 
