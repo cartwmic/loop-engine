@@ -72,7 +72,7 @@ never delete history, bypass storage rules or overwrite the frozen runtime.
 ## Ending a run the owner has decided to stop
 
 `terminate` takes only the run ID and records one history entry. It carries no reason and
-verifies nothing, so put the decision on the run first:
+does not verify the decision or any cited proof, so put the decision on the run first:
 
 1. Observe with `show`. Confirm no owned work is live; cancel and verify cleanup first if any.
 2. Append the owner's decision as `user-steering` (shape above), with the owner's exact

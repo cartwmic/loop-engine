@@ -85,7 +85,7 @@ Use the same resolved database for every operation; pass --database explicitly w
 isolation is authorized. terminate changes workflow state, never cancels external work.
 
 Ending a run the owner has decided to stop: `terminate` takes only the run ID and records
-one history entry. It carries no reason and verifies nothing, so put the decision on the
+one history entry. It carries no reason and does not verify the decision or any cited proof, so put the decision on the
 run first.
 1. Observe with show. Confirm no owned work is live; cancel and verify cleanup first if any.
 2. Append the owner's decision as the provider's steering record (for software-change,
