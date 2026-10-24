@@ -2324,6 +2324,16 @@ def passive_views(ctx):
     assert len(page['items']) == 2 and page['truncated'] and page['total'] > 2, page
     following = ctx['call']('read',ctx['run_id'],'--kind','history','--cursor',str(page['next_cursor']),'--limit','2')['result']
     assert following['items'][0]['sequence'] > page['items'][-1]['sequence'], following
+    # Header, exact-record and list reads find retained detail without the whole-run payload.
+    headers = ctx['call']('read',ctx['run_id'],'--kind','context','--record-kind','retained-detail')['result']
+    assert [h['id'] for h in headers['items']] == ['large-retained-detail'] and headers['items'][0]['data_bytes'] > 70000, headers
+    assert len(json.dumps(headers)) * 20 < len(json.dumps(full)), 'context headers must be far smaller than full show'
+    stored = next(row for row in full['result']['context'] if row['id'] == 'large-retained-detail')
+    assert ctx['call']('read',ctx['run_id'],'--kind','record','--id','large-retained-detail')['result']['value'] == stored
+    assert ctx['call']('read',ctx['run_id'],'--kind','record','--id','large-retained-detail','--pointer','/kind')['result']['value'] == 'retained-detail'
+    assert any(e.get('context_kind') == 'retained-detail' for e in ctx['call']('history',ctx['run_id'])['result'])
+    assert any(r['id'] == ctx['run_id'] for r in ctx['call']('list','--lifecycle','active')['result'])
+    assert not any(r['id'] == ctx['run_id'] for r in ctx['call']('list','--lifecycle','terminated')['result'])
     assert ctx['call']('history',ctx['run_id']) == before
     try:
         subprocess.run([ctx['engine'],'monitor','--run',ctx['run_id'],'--database',ctx['database'],'--json',
