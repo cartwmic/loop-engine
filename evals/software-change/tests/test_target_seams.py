@@ -983,8 +983,7 @@ def test_container_caps_reach_the_compose_the_replay_and_the_isolation_record(se
 def test_without_caps_nothing_is_added(seams):
     run = seams.configure(options={"arm": NATIVE_IN_IMAGE}).run()
     assert "cpus" not in run.compose and "mem_limit" not in run.compose
-    assert run.compose.endswith("    init: true
-")
+    assert run.compose.endswith("    init: true\n")
     assert seams.replay_limits == [[]]
     isolation = json.loads((run.capture / "isolation.json").read_text())
     assert "cpus" not in isolation and "memory_bytes" not in isolation
@@ -992,9 +991,7 @@ def test_without_caps_nothing_is_added(seams):
 
 def test_fractional_cpus_and_megabyte_memory_are_accepted(seams):
     run = seams.configure(options={"arm": NATIVE_IN_IMAGE, "container_cpus": 1.5, "container_memory": "6144m"}).run()
-    assert "    cpus: 1.5
-    mem_limit: 6144m
-" in run.compose
+    assert "    cpus: 1.5\n    mem_limit: 6144m\n" in run.compose
     assert seams.replay_limits == [["--cpus", "1.5", "--memory", "6144m"]]
 
 
