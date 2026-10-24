@@ -361,7 +361,9 @@ fn resolve_pointer<'a>(root: &'a Value, pointer: &str) -> Result<&'a Value, Stri
         return Ok(root);
     }
     let Some(path) = pointer.strip_prefix('/') else {
-        return Err("a pointer is empty or starts with `/`, for example `/data/findings`".to_owned());
+        return Err(
+            "a pointer is empty or starts with `/`, for example `/data/findings`".to_owned(),
+        );
     };
     let mut current = root;
     let mut walked = String::new();

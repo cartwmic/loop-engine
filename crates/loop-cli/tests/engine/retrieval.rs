@@ -130,7 +130,14 @@ fn context_headers_page_filter_and_stay_small() {
 
     let (_, filtered, _) = cli(
         &database,
-        &["read", "ctx-run", "--kind", "context", "--record-kind", "review-evidence"],
+        &[
+            "read",
+            "ctx-run",
+            "--kind",
+            "context",
+            "--record-kind",
+            "review-evidence",
+        ],
     );
     assert_eq!(filtered["result"]["total"], 2);
 
@@ -166,7 +173,13 @@ fn record_read_matches_full_show_and_pointer_slices_it() {
     let (_, slice, _) = cli(
         &database,
         &[
-            "read", "ctx-run", "--kind", "record", "--id", "evidence-1", "--pointer",
+            "read",
+            "ctx-run",
+            "--kind",
+            "record",
+            "--id",
+            "evidence-1",
+            "--pointer",
             "/data/nested/findings/1",
         ],
     );
@@ -175,7 +188,13 @@ fn record_read_matches_full_show_and_pointer_slices_it() {
     let (code, bad, _) = cli(
         &database,
         &[
-            "read", "ctx-run", "--kind", "record", "--id", "evidence-1", "--pointer",
+            "read",
+            "ctx-run",
+            "--kind",
+            "record",
+            "--id",
+            "evidence-1",
+            "--pointer",
             "/data/nested/missing",
         ],
     );
@@ -256,7 +275,15 @@ fn list_filters_narrow_and_unfiltered_list_is_unchanged() {
     assert_eq!(ids(&["list", "--provider", "provider-b"]), ["other-run"]);
     assert!(ids(&["list", "--provider", "provider"]).is_empty());
     assert_eq!(
-        ids(&["list", "--lifecycle", "active", "--label", "alpha", "--provider", "provider-a"]),
+        ids(&[
+            "list",
+            "--lifecycle",
+            "active",
+            "--label",
+            "alpha",
+            "--provider",
+            "provider-a"
+        ]),
         ["ctx-run"]
     );
 

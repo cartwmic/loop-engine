@@ -117,9 +117,12 @@ pub struct ListFilter {
 
 impl ListFilter {
     fn matches(&self, run: &core::RunSummary) -> bool {
-        self.lifecycle.is_none_or(|lifecycle| lifecycle == run.lifecycle)
+        self.lifecycle
+            .is_none_or(|lifecycle| lifecycle == run.lifecycle)
             && self.label.as_deref().is_none_or(|needle| {
-                run.label.as_deref().is_some_and(|label| label.contains(needle))
+                run.label
+                    .as_deref()
+                    .is_some_and(|label| label.contains(needle))
             })
             && self
                 .provider
@@ -758,7 +761,10 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     )?;
 
     if let PrimaryCommand::List(filter) = &mut command {
-        filter.lifecycle = lifecycle.as_deref().map(parse_lifecycle_filter).transpose()?;
+        filter.lifecycle = lifecycle
+            .as_deref()
+            .map(parse_lifecycle_filter)
+            .transpose()?;
     }
     if let PrimaryCommand::Event {
         override_attestation,
