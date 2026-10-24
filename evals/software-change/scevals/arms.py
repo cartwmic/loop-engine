@@ -42,6 +42,12 @@ sc-implement and sc-review. Use /workspace/trial/run.sqlite, providers.toml at
 /workspace/trial/providers.toml, run ID {run_id}, artifacts /workspace/trial/artifacts. The owner has
 preapproved this exact profile. Leave final intent.json and reports under the artifact directory. Finish by
 reaching a terminal engine state; merely saying you are done does not count.
+Owner's standing instructions for Loop Engine runs (the same ones the owner gives a real driver):
+- Run independent plan tasks concurrently; if you run tasks serially, say why.
+- Carry forward review evidence as needed: after a revision, reuse earlier review evidence that still applies
+  (an explicit evidence-applicability with a reason) and rerun only the axes the change affected. Do not rerun all
+  reviews by default.
+- If a carry is refused, rerun only the review that is needed and say which rule refused the carry.
 """,
 }
 
@@ -96,25 +102,6 @@ def load_arm(target_options: Mapping[str, object]) -> ArmDescriptor | None:
                          workflow_owned_paths=tuple(paths), completion_rule=COMPLETION_RULE, image=image)
 
 
-# Optional extra guidance for the loop-engine arm only (option `loop_engine_guidance`); no engine or provider change.
-LOOP_ENGINE_GUIDANCE = {
-    "carry-parallel": """Two driver practices for this run:
-1. Carry review evidence. After a revision, do not rerun axes that already passed on unchanged inputs. Carry each
-   such passed axis with an explicit evidence-applicability record (original context record as origin, the current
-   subject and revision, you as attesting driver, a short reason), and rerun only axes that failed or are stale (a
-   carried judgment that cites a criterion is stale when that criterion's text changed). Count each carry you make.
-2. Run independent plan tasks concurrently. Tasks with no dependency path between them run at the same time, each
-   sc-implement in its own git worktree of the case repository (git worktree add /workspace/trial/worktrees/TASK),
-   then merge their results into /workspace/public/repo before the dependent task. If you run independent tasks one
-   after another, write the reason for each in the implementation report.
-""",
-}
-
-
-def guidance_text(name: str) -> str:
-    return LOOP_ENGINE_GUIDANCE[name]
-
-
 CHECKIN_COMMAND = "python3 /opt/sc-evals/confirm_intent.py"
 CHECKIN_ADDITIONS = {
     "superpowers": "the design/spec document you write (and your implementation plan, if separate)",
@@ -132,14 +119,12 @@ def checkin_text(arm_id: str) -> str:
 
 
 def render_prompt(arm: ArmDescriptor | None, *, profile: str, run_id: str, scripted: str, request: str,
-                  checkin: bool = False, guidance: str | None = None) -> str:
+                  checkin: bool = False) -> str:
     if arm is None:
         # PREAMBLE lives in target.py, which imports this module; the import stays here to avoid a cycle.
         from .target import PREAMBLE
         return PREAMBLE.format(profile=profile, run_id=run_id, scripted=scripted, request=request)
     addition = ARM_ADDITIONS[arm.prompt_template].format(profile=profile, run_id=run_id)
-    if guidance:
-        addition += guidance_text(guidance)
     return BASE_PROMPT.format(workflow=addition, scripted=scripted, request=request,
                               checkin=checkin_text(arm.id) if checkin else "")
 

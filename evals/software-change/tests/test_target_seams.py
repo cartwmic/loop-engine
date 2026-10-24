@@ -23,7 +23,6 @@ from inspect_ai.model import ModelAPI, ModelOutput, ModelUsage, modelapi
 from evalcore.settings import Assignment, CampaignSettings, Case
 from evalcore.target import InfrastructureError, TrialContext
 from scevals import grader, target
-from scevals import arms
 from scevals.arms import load_arm, render_prompt
 from scevals.cases import load_case
 from scevals.grader import CLAIM_INSTRUCTION, FIDELITY_INSTRUCTION, GRADER_CONTRACT
@@ -958,25 +957,12 @@ def test_intent_checkin_works_once_is_recorded_apart_from_questions_and_keeps_th
     assert "trim and casefold" not in json.dumps(run.metrics) and "empty labels" not in json.dumps(run.metrics)
 
 
-# Optional loop-engine arm guidance (carry and parallel practices): prompt text only.
+# The owner's standing instructions are part of the loop-engine arm's base prompt, not an option.
 
-GUIDED = {"arm": LOOP_ENGINE, "intent_checkin": True, "loop_engine_guidance": "carry-parallel"}
-
-
-@pytest.mark.parametrize("options", [
-    {"arm": SUPERPOWERS, "loop_engine_guidance": "carry-parallel"},
-    {"loop_engine_guidance": "carry-parallel"},
-    {"arm": LOOP_ENGINE, "loop_engine_guidance": "other"},
-])
-def test_loop_engine_guidance_needs_the_loop_engine_arm_and_a_known_name(seams, options):
-    with pytest.raises(ValueError, match="loop_engine_guidance"):
-        seams.configure(options=options).prepare()
-
-
-def test_loop_engine_guidance_adds_only_its_text_to_the_prompt(seams):
-    guided = seams.configure(options=GUIDED).run().driver_exec()[0][-1]
-    plain = render_prompt(load_arm({"arm": LOOP_ENGINE}), profile="standard-16", run_id="eval-trial", scripted="",
-                          request=REQUEST, checkin=True)
-    assert "evidence-applicability" not in plain and "git worktree add" not in plain
-    assert "evidence-applicability" in guided and "git worktree add" in guided and "reason for each" in guided
-    assert guided.replace(arms.LOOP_ENGINE_GUIDANCE["carry-parallel"], "") == plain
+def test_loop_engine_arm_prompt_carries_the_owner_standing_instructions_and_other_arms_do_not(seams):
+    prompt = seams.configure(options={"arm": LOOP_ENGINE}).run().driver_exec()[0][-1]
+    assert "Owner's standing instructions" in prompt
+    assert "Run independent plan tasks concurrently" in prompt and "Carry forward review evidence" in prompt
+    assert "worktree" not in prompt
+    native = render_prompt(load_arm({"arm": NATIVE}), profile="standard-16", run_id="eval-trial", scripted="", request=REQUEST)
+    assert "standing instructions" not in native

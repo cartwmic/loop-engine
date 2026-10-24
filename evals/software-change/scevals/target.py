@@ -26,7 +26,7 @@ from evalcore.target import InfrastructureError, LimitReached, ModelError, Trial
 from .cases import RUNTIME, load_case
 from .calibration import calibration_for_report
 from .judge import JUDGE_CONTRACT, judge_intent
-from .arms import LOOP_ENGINE_GUIDANCE, is_workflow_owned, load_arm, render_prompt
+from .arms import is_workflow_owned, load_arm, render_prompt
 from .grader import GRADER_CONTRACT, grade, independence_refusal, provider_family
 from .scoring_common import completion, hidden_tests_passed, intent_is_valid, score_common
 from .snapshots import snapshot_step
@@ -479,10 +479,6 @@ class SoftwareChangeTarget:
         checkin = options.get("intent_checkin", False)
         if type(checkin) is not bool or (checkin and (load_arm(options) is None or load_arm(options).id == "native")):
             raise ValueError("intent_checkin must be true or false, and needs a workflow arm (not native)")
-        guidance = options.get("loop_engine_guidance")
-        if guidance is not None and (guidance not in LOOP_ENGINE_GUIDANCE or load_arm(options) is None
-                                     or load_arm(options).id != "loop-engine"):
-            raise ValueError(f"loop_engine_guidance must be one of {sorted(LOOP_ENGINE_GUIDANCE)} and needs the loop-engine arm")
         grade_on = options.get("grade", False)
         if type(grade_on) is not bool or (grade_on and load_arm(options) is None):
             raise ValueError("grade must be true or false, and needs an arm")
@@ -587,8 +583,7 @@ class SoftwareChangeTarget:
         if checkin:
             await trial.copy(Path(__file__).with_name("confirm_intent.py"), "/opt/sc-evals/confirm_intent.py", "intent_checkin_client", "before_driver")
         prompt = render_prompt(arm, profile=context.settings.profile, run_id=run_id,
-                               scripted="Scripted driver: " + driver if driver else "", request=state.input, checkin=checkin,
-                               guidance=options.get("loop_engine_guidance"))
+                               scripted="Scripted driver: " + driver if driver else "", request=state.input, checkin=checkin)
         if source:
             prompt = ("Resume existing run " + run_id + " from its durable run.sqlite and artifacts. "
                       "Inspect show/history first; continue the existing run, do NOT start or initialize a new run.\n" + prompt)
