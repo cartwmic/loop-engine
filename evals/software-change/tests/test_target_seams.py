@@ -252,6 +252,7 @@ class Seams:
         self.tmp_path = tmp_path
         self.inspected = []  # trial images the harness asked Docker to inspect
         self.replays = []  # images of replay containers created for scoring
+        self.replay_limits = []  # docker run limit arguments of each replay container
         self.trial = None
         self.target = SoftwareChangeTarget()
         self.target.run_directory = tmp_path / "captures" / "seams"
@@ -264,7 +265,7 @@ class Seams:
         async def run_process(command, **kwargs):
             if command[:2] == ["docker", "inspect"]:
                 config = {"Id": "fake-trial-container", "Image": "sha256:trial", "Mounts": [], "Platform": "linux/arm64",
-                          "HostConfig": {"Binds": None}, "Config": {"WorkingDir": "/workspace"}}
+                          "HostConfig": {"Binds": None, "NanoCpus": 2_000_000_000, "Memory": 8 * 1024 ** 3}, "Config": {"WorkingDir": "/workspace"}}
                 return SimpleNamespace(stdout=json.dumps([config]).encode())
             return await original_run_process(command, **kwargs)
 
@@ -277,6 +278,7 @@ class Seams:
         class ReplayContainer:
             def __init__(sandbox, image, **kwargs):
                 self.replays.append(image)
+                self.replay_limits.append(kwargs.get("limits"))
                 sandbox.env = FakeSandbox(engine=self.engine, hidden=self.hidden, visible=self.visible,
                                           runner_returncode=self.runner_returncode)
                 self.replay_envs.append(sandbox.env)
@@ -966,3 +968,30 @@ def test_loop_engine_arm_prompt_carries_the_owner_standing_instructions_and_othe
     assert "worktree" not in prompt
     native = render_prompt(load_arm({"arm": NATIVE}), profile="standard-16", run_id="eval-trial", scripted="", request=REQUEST)
     assert "standing instructions" not in native
+
+
+# Container caps: one setting for the trial container and the scoring replay.
+
+def test_container_caps_reach_the_compose_the_replay_and_the_isolation_record(seams):
+    run = seams.configure(options={"arm": NATIVE_IN_IMAGE, "container_cpus": 2, "container_memory": "8g"}).run()
+    assert "    cpus: 2\n    mem_limit: 8g\n" in run.compose
+    assert seams.replay_limits == [["--cpus", "2", "--memory", "8g"]]
+    isolation = json.loads((run.capture / "isolation.json").read_text())
+    assert isolation["cpus"] == 2.0 and isolation["memory_bytes"] == 8 * 1024 ** 3
+
+
+def test_without_caps_nothing_is_added(seams):
+    run = seams.configure(options={"arm": NATIVE_IN_IMAGE}).run()
+    assert "cpus" not in run.compose and "mem_limit" not in run.compose
+    assert seams.replay_limits == [[]]
+    assert "cpus" not in json.loads((run.capture / "isolation.json").read_text())
+
+
+@pytest.mark.parametrize("options", [{"container_cpus": 2}, {"container_memory": "8g"},
+                                     {"container_cpus": 0, "container_memory": "8g"},
+                                     {"container_cpus": True, "container_memory": "8g"},
+                                     {"container_cpus": 2, "container_memory": "8"},
+                                     {"container_cpus": 2, "container_memory": "0g"}])
+def test_invalid_caps_are_refused_before_any_trial(seams, options):
+    with pytest.raises(ValueError, match="container_cpus"):
+        seams.configure(options={"arm": NATIVE_IN_IMAGE, **options}).prepare()

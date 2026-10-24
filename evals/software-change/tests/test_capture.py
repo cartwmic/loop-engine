@@ -161,3 +161,18 @@ def test_abandoned_removal_is_handed_off_detached_and_named(monkeypatch, tmp_pat
     assert time.monotonic() - begun < 4 and named == [True]
     time.sleep(1)  # the detached second attempt has started
     assert (tmp_path / "docker-calls").read_text().count("rm -f c1") == 2
+
+
+def test_replay_container_passes_its_limits_to_docker_run(monkeypatch, tmp_path):
+    import stat
+    shim = tmp_path / "docker"
+    shim.write_text(f"#!/bin/sh\necho \"$@\" >> {tmp_path}/docker-calls\necho cid\n")
+    shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    async def enter():
+        async with ReplayContainer("image", limits=["--cpus", "2", "--memory", "8g"]):
+            pass
+    anyio.run(enter)
+    first = (tmp_path / "docker-calls").read_text().splitlines()[0]
+    assert first == "run -d --platform linux/arm64 --workdir /workspace --cpus 2 --memory 8g image sleep infinity"

@@ -190,6 +190,27 @@ def driver_command(options):
     return list(arm.driver_command) if arm is not None else options.get("driver_command", ["sc-driver"])
 
 
+def container_caps(options):
+    """Optional per-container caps from container_cpus and container_memory, set together; None when unset.
+
+    One setting for every container of a trial (the trial sandbox and the scoring replay), so a capped campaign runs
+    all its arms under the same caps. Wall times depend on the caps and the report note says so.
+    """
+    cpus, memory = options.get("container_cpus"), options.get("container_memory")
+    if cpus is None and memory is None:
+        return None
+    if isinstance(cpus, bool) or not isinstance(cpus, (int, float)) or cpus <= 0 or \
+            not isinstance(memory, str) or not re.fullmatch(r"[1-9][0-9]*[mg]", memory):
+        raise ValueError("container_cpus (positive number) and container_memory (such as 8g) are set together")
+    return cpus, memory
+
+
+def container_limits(options):
+    """docker run arguments for the caps (empty when unset)."""
+    caps = container_caps(options)
+    return ["--cpus", str(caps[0]), "--memory", caps[1]] if caps else []
+
+
 def trial_image(options):
     """Trial image: the arm's own (the default when it names none) when an arm is set, else the option as today."""
     arm = load_arm(options)
@@ -469,6 +490,7 @@ class SoftwareChangeTarget:
         if not re.fullmatch(r"[a-zA-Z0-9-]+", context.settings.profile):
             raise ValueError("profile must be a shipped config_version")
         driver_margin(options)  # an invalid margin fails before any trial starts
+        container_caps(options)  # invalid caps fail before any trial starts
         interval = options.get("snapshot_interval_seconds")
         if interval is not None:
             # Snapshots are taken from the progress poll, which runs only with an idle limit; checked before any driver runs.
@@ -515,8 +537,10 @@ class SoftwareChangeTarget:
         compose_dir = self.run_directory
         compose_dir.mkdir(parents=True, exist_ok=True)
         compose = compose_dir / (context.assignment.sample_id + ".yaml")
+        caps = container_caps(context.settings.target_options)
         compose.write_text("services:\n  default:\n    image: " + json.dumps(image) + "\n    platform: linux/arm64\n"
-                           "    working_dir: /workspace\n    command: [sleep, infinity]\n    init: true\n")
+                           "    working_dir: /workspace\n    command: [sleep, infinity]\n    init: true\n"
+                           + (f"    cpus: {caps[0]}\n    mem_limit: {caps[1]}\n" if caps else ""))
         return Sample(input=load_case(context.case.path).request.read_text(), sandbox=("docker", str(compose)))
 
     async def run_trial(self, state, context):
@@ -536,7 +560,10 @@ class SoftwareChangeTarget:
         evidence = {"started": time.monotonic(), "copy_log": [],
                     "container": {"id": config["Id"], "image_id": config["Image"], "mounts": mounts,
                                   "binds": config["HostConfig"].get("Binds") or [],
-                                  "platform": config["Platform"], "working_dir": config["Config"]["WorkingDir"]},
+                                  "platform": config["Platform"], "working_dir": config["Config"]["WorkingDir"],
+                                  **({"cpus": config["HostConfig"].get("NanoCpus", 0) / 1e9,
+                                      "memory_bytes": config["HostConfig"].get("Memory", 0)}
+                                     if container_caps(context.settings.target_options) else {})},
                     "role_models": context.combination.role_models()}
         trial = TerminalTrial(env, case, owner, evidence, False, None)
         prior = {}
@@ -874,6 +901,7 @@ class SoftwareChangeTarget:
         window = allowance(context, None)
         with anyio.move_on_after(window) as scope:
             async with ReplayContainer(trial_image(context.settings.target_options),
+                                       limits=container_limits(context.settings.target_options),
                                        cleanup_seconds=lambda: cleanup_allowance(context),
                                        on_abandon=lambda: note_cleanup_handoff(context)) as env:
                 delay = context.settings.target_options.get("scripted_scoring_delay_seconds")
