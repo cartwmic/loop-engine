@@ -1421,8 +1421,13 @@ fn locator_guidance(artifact_root: &Path, sources: &[ReviewSource]) -> Value {
 /// evidence_context_ids, read from the fixed report's command index. The index
 /// may list an evidence-applicability wrapper for carried evidence; a verdict
 /// cannot cite that wrapper, so the packet names the original command evidence
-/// to cite instead (#48).
-fn citable_command_evidence(root: &Path, context: &[ContextRecord]) -> Value {
+/// to cite instead (#48). An owner instruction delivered to this commission
+/// (an unsuperseded `user-steering` record) is also citable (LE-201).
+fn citable_command_evidence(
+    root: &Path,
+    context: &[ContextRecord],
+    steering_ids: &[String],
+) -> Value {
     let report = std::fs::read(root.join("validation-report.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
@@ -1457,7 +1462,8 @@ fn citable_command_evidence(root: &Path, context: &[ContextRecord]) -> Value {
     json!({
         "command_evidence_ids": citable,
         "indexed_but_not_citable": wrappers,
-        "rule": "A criterion or goal verdict's evidence_context_ids may name only the command_evidence_ids listed here. An evidence-applicability record is never citable, even when the report's command index lists it; cite the original command evidence named in cite_instead.",
+        "user_steering_ids": steering_ids,
+        "rule": "A criterion or goal verdict's evidence_context_ids may name only the command_evidence_ids and user_steering_ids listed here. An evidence-applicability record is never citable, even when the report's command index lists it; cite the original command evidence named in cite_instead. A user_steering_ids entry is the owner's words; cite it when they establish the verdict's result, for example when they withdraw, relax or defer the requirement, and judge the requirement as those words state it.",
     })
 }
 
@@ -2647,8 +2653,14 @@ fn inspect_with_budgets(
         slot_id,
         "validation-review" | "validation-adversarial-review"
     ) {
+        let steering_ids: Vec<String> = output["commission"]["steering_ids"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|id| id.as_str().map(str::to_owned))
+            .collect();
         output["citable_evidence"] =
-            citable_command_evidence(Path::new(root), &full_context_records);
+            citable_command_evidence(Path::new(root), &full_context_records, &steering_ids);
     }
     if let Some(parent) = parent_gate(slot_id) {
         if let Some(block) = parent_resolution(
@@ -3534,7 +3546,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    // bookends:LE-149 bookends:LE-171 bookends:LE-183
+    // bookends:LE-149 bookends:LE-171 bookends:LE-183 bookends:LE-201
     #[test]
     fn validation_commission_lists_citable_command_evidence_and_names_originals_for_wrappers() {
         let root = std::env::temp_dir().join(format!(
@@ -3608,6 +3620,18 @@ mod tests {
                 json!({"result":"pass"}),
             ),
             wrapper("carry-verdict", "old-verdict", 5),
+            typed_record(
+                "old-note",
+                "user-steering",
+                6,
+                json!({"target":{"kind":"all"},"instruction":"old owner words"}),
+            ),
+            typed_record(
+                "note",
+                "user-steering",
+                7,
+                json!({"target":{"kind":"all"},"instruction":"withdraw the requirement","supersedes":["old-note"]}),
+            ),
         ];
         let packet = json!({"operation":"show","status":"completed","result":{"workflow_id":"software-change","artifact_root":root,"initial_input":initial,"context":records,"workflow_graph":graph,"work_slots":graph.work_slots}});
         for gate in ["validation-review", "validation-adversarial-review"] {
@@ -3623,6 +3647,8 @@ mod tests {
                 json!([{"indexed_id":"carry-cmd","cite_instead":"cmd-old"}]),
                 "{gate}: {citable}"
             );
+            // LE-201: the delivered, unsuperseded owner steering is citable too.
+            assert_eq!(citable["user_steering_ids"], json!(["note"]), "{gate}");
             assert!(citable["rule"]
                 .as_str()
                 .unwrap()

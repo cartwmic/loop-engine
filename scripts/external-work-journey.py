@@ -1476,6 +1476,69 @@ def override_strands_validation(args, root):
     print('external-work software-change override into validation strands validation with a clear message passed')
 
 
+# bookends:LE-116 bookends:LE-201 — replay of the two v1 owner decisions (a withdrawn gate, a requirement accepted as written with its negative test deferred): the owner's words are ordinary user-steering, nothing upstream is revised, verdicts cite the words, and the run completes normally.
+def owner_steering_relaxes_requirement(args, root):
+    withdraw = ('Remove the merge gate for AC-1: it is withdrawn and no longer required to merge.')
+    defer = ('Accept AC-2 as written; the negative test for it is deferred to a later change.')
+    seen = {}
+    def verdict(report, index, evidence, criterion=None):
+        data = {'subject': 'validation-report.json', 'subject_revision': report['revision'],
+                'checkpoint': 'validation-checkpoint.json', 'author': {'name': f'external-judge-{index}', 'kind': 'agent'},
+                'result': 'pass', 'findings': [],
+                'reason': 'SCRIPTED: judged against the requirement as the owner steering states it.',
+                'evidence_context_ids': evidence}
+        if criterion:
+            data['criterion_id'] = criterion
+        return data
+    def hook(phase, ctx):
+        if phase != 'validation-judgments':
+            return False
+        call, run_id, report = ctx['call'], ctx['run_id'], ctx['report']
+        commands = list(report['command_evidence_ids'])
+        def steer(record_id, words, supersedes=None):
+            data = {'target': {'kind': 'all'}, 'instruction': words}
+            if supersedes:
+                data['supersedes'] = supersedes
+            response = call('append', '--record-id', record_id, run_id, 'user-steering', json.dumps(data))
+            assert response['status'] == 'completed', response
+        steer('owner-withdraw-ac1-v1', 'Draft: ' + withdraw)
+        steer('owner-withdraw-ac1', withdraw, supersedes=['owner-withdraw-ac1-v1'])
+        steer('owner-defer-ac2', defer)
+        batches = ctx['prepared']['judgment_batches']
+        for index, batch in enumerate(batches):
+            criterion = batch.get('criterion_id')
+            evidence = {'AC-1': ['owner-withdraw-ac1'], 'AC-2': commands + ['owner-defer-ac2'],
+                        None: commands + ['owner-withdraw-ac1', 'owner-defer-ac2']}.get(criterion, commands)
+            data = verdict(report, index, evidence, criterion)
+            if criterion == 'AC-1':
+                # The superseded draft is no longer citable; unknown and non-evidence records still are not.
+                for bad, needle in (('owner-withdraw-ac1-v1', 'superseded user-steering'),
+                                    ('missing-record', 'missing or duplicate context ID')):
+                    stale = dict(data, evidence_context_ids=[bad])
+                    response = call('append', '--record-id', batch['record_id'], run_id, batch['kind'], json.dumps(stale))
+                    assert response['status'] == 'rejected' and needle in json.dumps(response), response
+            response = call('append', '--record-id', batch['record_id'], run_id, batch['kind'], json.dumps(data))
+            assert response['status'] == 'completed', response
+        seen['artifacts'] = {name: (ctx['artifacts'] / name).read_bytes() for name in ('intent.json', 'design.json', 'plan.json')}
+        seen['work'] = ctx['work']
+        return True
+    work = software_module().run(SimpleNamespace(engine=args.engine, provider=args.software, mode='source', data_root=None),
+                                 ROOT / 'crates/software-change-provider/data/configs/minimal.json', root,
+                                 configure=_empty_review_policies, exercise=hook)
+    assert work == seen['work']
+    visited = json.loads((work / 'states.json').read_text())
+    for state in ('explore', 'design', 'plan'):
+        assert visited.count(state) == 1, ('an owner relaxation must not revise reviewed artifacts', visited)
+    for name, saved in seen['artifacts'].items():
+        assert (work / 'artifacts' / name).read_bytes() == saved, name
+    terminal = json.loads((work / 'terminal.json').read_text())['result']
+    assert terminal['current_state'] == 'end' and terminal['lifecycle'] == 'final' and not terminal['has_overrides'], terminal
+    cited = {record['id'] for record in terminal['context'] if record['kind'].endswith('-verdict')
+             and 'owner-withdraw-ac1' in record['data']['evidence_context_ids']}
+    assert cited, 'the withdrawn criterion verdict must cite the owner steering'
+    print('external-work software-change owner steering relaxes a reviewed requirement with no revision passed')
+
+
 # bookends:LE-186 — a shipped minimal profile with review states retains each phase exactly once at its real exit.
 def retention_minimal_profile(args, work):
     from external_work_driver import engine_call
@@ -3596,6 +3659,7 @@ def main():
     retained_work = retention_software_revisions(args,root)
     retention_software_overrides(args,root)
     override_strands_validation(args,root)
+    owner_steering_relaxes_requirement(args,root)
     retention_software_approval_exits(args,root)
     reclaim_legacy_catalog(args,root,retained_work)
     early_review_briefs(args,root)

@@ -69,6 +69,28 @@ These runs gain no new recovery by editing profiles or replacing executables.
 Preserve the failure and obtain owner authorization for any termination/replacement;
 never delete history, bypass storage rules or overwrite the frozen runtime.
 
+### Relaxing a reviewed requirement (LE-201)
+
+When the owner withdraws, relaxes, defers or clarifies a requirement or obligation of
+the accepted intent and adds or strengthens nothing, append the owner's exact words as
+`user-steering` (target `all` is enough). Intent, design and plan need not be revised
+for it: unchanged artifacts keep their revisions and the judgments that cite them stay
+current. In a Bookends-enabled run, an instruction that changes enduring meaning is an
+ordinary revision that reaches reconciliation (LE-142).
+Tell reviewers the steering is the effective requirement; a validation commission lists
+the deliverable steering under `citable_evidence.user_steering_ids`.
+
+A criterion or goal verdict may then cite that steering record in `evidence_context_ids`,
+with or instead of command evidence, when the owner's words establish its result. The
+provider checks only that the record exists, is `user-steering` and no later steering
+`supersedes` it; whether the words support the verdict is the reviewer's judgment. Every
+criterion keeps its verdict in the validation index (a withdrawn criterion's verdict
+cites the steering). A failure that follows from the changed requirement still needs an
+exact-source disposition that names the steering. The steering waives no review
+coverage, author floor, command proof or unresolved finding. Anything that adds or
+strengthens an obligation is an ordinary revision. Runs started on earlier releases keep
+their behavior.
+
 ## Ending a run the owner has decided to stop
 
 `terminate` takes only the run ID and records one history entry. It carries no reason and

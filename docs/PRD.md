@@ -1760,6 +1760,8 @@ Supporting software-change contracts use current frozen AC-N identities and inde
 
 **External-work successor qualification:** LE-168/171/178/181/183 qualify engine-capture-only and one-repository command acquisition, unconditional subject/report/implementation-author exclusion, fixed floors and categorical fresh aggregate/whole-goal replay. Retain the complete fixed AC/goal index, actual required command obligations, genuine output/assertions, current report/checkpoint, explicit affected checks and independent defaults. Eligible self counts only where explicitly permitted; floors resolve from authorized amendments. Complete-scope applicable goal/aggregate evidence may stand; materially affected judging meaning requires fresh assessment. Missing, failed, unresolved or wrong-source evidence never passes.
 
+**Owner-instruction qualification (LE-201):** a criterion or goal verdict may cite an earlier, unsuperseded `user-steering` record in place of command evidence when the owner's words establish its result; the "unsupported evidence refuse" and "fresh verdict must cite indexed command evidence" rules above otherwise stand.
+
 ### LE-117: Focused workers and bounded isolated proof jobs preserve complete final proof without duplicated suite ownership.
 - Status: live
 - Coverage: e2e/journey
@@ -2429,7 +2431,7 @@ Existing source/evidence may be retained where genuinely applicable under LE-171
 - Status: live
 - Coverage: e2e/journey
 
-For a review group, ordinary review finds issues first. The driver triages them, makes required corrections and obtains affected ordinary confirmation. Repeat that ordinary sequence until no accepted material finding remains unresolved. The corresponding challenge then tries to falsify the cleared conclusion by finding an actual remaining material defect; it does not adjudicate open ordinary failures. It may examine prior findings, corrections and dismissals as evidence against that clean conclusion. Disputed ordinary findings use separate reconsideration during triage. Challenge findings return through the normal triage, correction and affected ordinary-confirmation path before the revised clean conclusion is challenged. Confirmation may focus on affected obligations and regressions; unchanged judging meaning may use the explicit applicability in LE-171 rather than restarting a broad search each time. This ordering governs challenge fulfillment, not inert early preparation in LE-174 or qualification independent of unrelated groups in LE-177.
+For a review group, ordinary review finds issues first. The driver triages them, makes required corrections and obtains affected ordinary confirmation. Repeat that ordinary sequence until no accepted material finding remains unresolved. The corresponding challenge then tries to falsify the cleared conclusion by finding an actual remaining material defect; it does not adjudicate open ordinary failures. It may examine prior findings, corrections and dismissals as evidence against that clean conclusion. Disputed ordinary findings use separate reconsideration during triage. Challenge findings return through the normal triage, correction and affected ordinary-confirmation path before the revised clean conclusion is challenged. Confirmation may focus on affected obligations and regressions; unchanged judging meaning may use the explicit applicability in LE-171 rather than restarting a broad search each time. This ordering governs challenge fulfillment, not inert early preparation in LE-174 or qualification independent of unrelated groups in LE-177. The first challenge of a phase covers that phase's configured challenge axes in full, and after a revision the next challenge of the revised clean conclusion judges the axes and criteria the revision's delta affects, with challenge judgments on unaffected axes remaining applicable by explicit applicability (LE-171) recorded after the latest ordinary-review record; the challenge reviewer may widen the scope, profile challenge lists and author floors are unchanged (LE-130), and a challenge never adjudicates open ordinary failures.
 
 ### LE-183: Externally executed command results fulfill normal proof obligations
 - Status: live
@@ -2563,3 +2565,13 @@ Accepted limits for LE-195 to LE-200:
 - Superseded-binding evidence stays usable unless the owner's amendment marks it stale.
 - Interaction with the unmerged evidence-carry fix (#30, #31, #40, #41) is rechecked at
   integration.
+
+### LE-201: An owner can relax, defer, withdraw or clarify a reviewed requirement without a revision
+- Status: live
+- Coverage: e2e/journey
+
+When the owner's instruction withdraws, relaxes, defers or clarifies a requirement or obligation of an accepted intent, and adds or strengthens no obligation, the driver records it as an ordinary `user-steering` record holding the owner's exact words and need not revise the reviewed artifacts. Unchanged artifacts keep their revisions, and stored judgments that cite them stay current (LE-171). Criterion and whole-goal commissions carry the steering words, and reviews, criterion verdicts and the goal verdict judge delivery against the requirement as those words state it.
+
+A criterion or goal verdict may cite an earlier `user-steering` record, with or instead of command evidence, when the owner's words establish its result. The provider checks only that the cited record exists, is an earlier `user-steering` record and has not been superseded; it does not judge whether the words support the verdict. Every criterion keeps its verdict in the validation index. A failure that results from the changed requirement still needs an exact-source disposition (LE-115) that names the steering.
+
+The instruction does not waive review coverage, author floors, command proof (LE-178) or any unresolved finding. An instruction that adds or strengthens an obligation, or changes enduring meaning in a Bookends-enabled run, is an ordinary revision (LE-142). Runs started on earlier releases keep their behavior.

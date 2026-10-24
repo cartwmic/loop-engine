@@ -7,7 +7,7 @@ programs run against private catalogs in a driver-owned output root. The install
 v0.26.0 programs are the control only: they must still show the defects this change fixes.
 --self-test checks collection and interface mechanics only; it proves no behavior.
 """
-# bookends:LE-171 bookends:LE-183 — carried command and review evidence stays usable, and admission and the checked gate share one eligibility answer.
+# bookends:LE-171 bookends:LE-183 bookends:LE-201 — carried command and review evidence stays usable, and admission and the checked gate share one eligibility answer.
 # bookends:LE-149 bookends:LE-177 — parent context is faithful, and qualifying early evidence still counts in a mixed review group.
 # bookends:LE-44 bookends:LE-47 — intake supplies durable rows; it never grants progression.
 import argparse
@@ -198,9 +198,12 @@ def command_carry(args, root, engine, provider, control):
         # #48(a): the validation-review commission lists the command-evidence IDs a verdict may cite.
         # The indexed wrapper is named as not citable, with the original to cite instead; the refusal
         # just below and the accepted appends later in this journey use exactly these IDs.
+        append(ctx, 'user-steering', {'target': {'kind': 'all'},
+               'instruction': 'SCRIPTED owner words: the helper note requirement is relaxed.'}, 'owner-note')
         citable = commission(ctx, 'validation-review')['citable_evidence']
         require(citable['command_evidence_ids'] == [command['record_id']]
-                and citable['indexed_but_not_citable'] == [{'indexed_id': 'carry-A-B', 'cite_instead': command['record_id']}],
+                and citable['indexed_but_not_citable'] == [{'indexed_id': 'carry-A-B', 'cite_instead': command['record_id']}]
+                and citable['user_steering_ids'] == ['owner-note'],  # LE-201
                 citable)
         require('evidence-applicability' in citable['rule'], citable)
     # AC-5 controls that must refuse the same way before and after this change.
