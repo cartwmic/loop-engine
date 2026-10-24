@@ -55,7 +55,7 @@ loop-engine --json --config /absolute/providers.toml start software-change @/abs
 ```
 
 `setup` edits policy only. Tools prepare or evaluate data, not external execution.
-Setup starts no run or worker. Current shipped source IDs are `minimal-17`, `standard-17` and `high-rigor-17`; setup refuses historical shipped IDs through -16 and reports these supported IDs. An identity bump is not semantic calibration or applicability. Preserve frozen older runtime/profile bytes. Inspect output/explanation and effective policy;
+Setup starts no run or worker. Current shipped source IDs are `minimal-17`, `standard-17` and `high-rigor-17`; setup refuses historical shipped IDs through -16 and reports these supported IDs. An identity bump is not semantic calibration or applicability. Shipped IDs change with releases and setup accepts no alias: a handoff or earlier confirmation that names an older ID (for example `minimal-15`) does not carry over. Confirm with the owner the ID that setup resolves, not the ID in the handoff. Preserve frozen older runtime/profile bytes. Inspect output/explanation and effective policy;
 --set, --add-axis and --remove-axis are explicit policy edits, not executor controls.
 Confirm every changed obligation, author floor and advice/Bookends state before start.
 Use --bookends only for an explicit opt-in. Read the resulting exact config/contract
@@ -447,7 +447,10 @@ context-record IDs. Accepted findings retain unresolved/resolved/stale status an
 owning phase; rejected/advisory entries use recorded/stale, null owner and empty routes.
 For implementation findings, task_ids name honest frozen task owners; empty means no
 honest task owner, not permission to dodge work. External driver routes that repair.
-Revise the plan when decomposition is materially wrong.
+Revise the plan when decomposition is materially wrong. Each task_id of a current
+unresolved finding must name a task in the current plan when the snapshot is appended;
+a finding that needs a task the plan does not have yet keeps task_ids empty until the plan
+is revised, then update the snapshot.
 
 Omit ledger `statement` to derive exact immutable review/criterion/goal findings.
 If supplied, it must match exactly; arrays retain the existing literal two-character
@@ -474,8 +477,16 @@ result and source; do not copy stale identities into new evidence or invent a pa
 Carried and fresh judgments may cover one review group together: a group whose counted
 evidence includes a carried row is judged per axis (every axis covered, each axis at its
 configured floor, carried rows keep their original author and assessment, one author's fresh
-rows share one assessment); a group with no carried row is judged whole as before. A carry
+rows share one assessment); a group with no carried row is judged whole as before. A
+same-author, single-axis top-up at a revision where that author already has fresh rows in
+the group is a different assessment and is refused as assessment_inconsistent; commission
+a return that covers all of that author's axes, or carry the older-revision rows by
+applicability and judge only the changed axes fresh. A carry
 that cites a criterion stays current only while that criterion's text is unchanged. A
+citation of the whole acceptance array, or of a range over several entries, counts as citing
+every criterion in it, so any criterion edit stales the carry. When commissioning, ask
+reviewers to cite the specific `/acceptance/N` entries a judgment rests on, where the axis
+allows, so edits to other criteria leave it current. A
 challenge packet labels carried parts `original judgment` / `current applicability
 attestation` and names the unmet prerequisite when a carried aggregate cannot supply it.
 Respect declared source scopes. Inspect `software-change author-counts` with full show.

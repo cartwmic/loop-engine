@@ -84,6 +84,20 @@ start returns result.run.id. Initial input and append data accept inline JSON,
 Use the same resolved database for every operation; pass --database explicitly when
 isolation is authorized. terminate changes workflow state, never cancels external work.
 
+Ending a run the owner has decided to stop: `terminate` takes only the run ID and records
+one history entry. It carries no reason and does not verify the decision or any cited proof, so put the decision on the
+run first.
+1. Observe with show. Confirm no owned work is live; cancel and verify cleanup first if any.
+2. Append the owner's decision as the provider's steering record (for software-change,
+   `user-steering`, see docs/agent-usage.md), holding the owner's exact words.
+3. Append one driver-attributed record of an opaque kind (for example `external-close-note`)
+   naming what the driver checked and citing it (merge commits, review verdicts, gate
+   output, owner proofs), and listing what was not proven. It is not owner words.
+4. Observe again, then `terminate`.
+The run ends `terminated`, never `final`, and nothing claims completion. The engine does
+not check the cited records. Use `event --override` along the remaining edges only if the
+owner wants a completed-with-overrides outcome instead.
+
 Capturing providers retain each artifact's exact bytes when a new run leaves its owning
 phase (approval or override) as a `retained-artifacts` context record; read them from
 full show (`content` utf-8/base64, `same_as` reference, or `absent`), not from files.
