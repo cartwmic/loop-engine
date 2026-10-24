@@ -194,6 +194,15 @@ def command_carry(args, root, engine, provider, control):
     append(ctx, 'evidence-applicability', declaration, 'carry-A-B')
     ctx['event']('validation-ready')
     require(ctx['show']()['result']['current_state'] == 'validation-review', 'current index refused')
+    if not control:
+        # #48(a): the validation-review commission lists the command-evidence IDs a verdict may cite.
+        # The indexed wrapper is named as not citable, with the original to cite instead; the refusal
+        # just below and the accepted appends later in this journey use exactly these IDs.
+        citable = commission(ctx, 'validation-review')['citable_evidence']
+        require(citable['command_evidence_ids'] == [command['record_id']]
+                and citable['indexed_but_not_citable'] == [{'indexed_id': 'carry-A-B', 'cite_instead': command['record_id']}],
+                citable)
+        require('evidence-applicability' in citable['rule'], citable)
     # AC-5 controls that must refuse the same way before and after this change.
     criterion = report['criteria'][0]['criterion_id']
     refuse(ctx, 'criterion-verdict', verdict(report, 'carry-A-B', criterion), 'negative-wrapper',

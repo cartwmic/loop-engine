@@ -1437,6 +1437,45 @@ def retention_software_overrides(args, root):
     print('external-work software-change override retention and absent artifact passed')
 
 
+# bookends:LE-95 bookends:LE-113 — an owner override of the hop that admits implementation to validation writes no accepted proof history, so validation is refused with a message that says why and how to recover; nothing is fabricated.
+def override_strands_validation(args, root):
+    captured = {}
+    def hook(phase, ctx):
+        if phase == 'reconciliation':
+            # The checked reconciliation-ready hop enters validation and is what records accepted proof.
+            shown = ctx['show']()
+            attestation = json.dumps({'state_visit': shown['result']['state_visit'], 'owner': 'journey-owner',
+                                      'reason': 'Journey override of the hop that admits implementation to validation.'})
+            response = ctx['call']('event', '--override', attestation, ctx['run_id'], 'reconciliation-ready')
+            assert response['status'] == 'completed', response
+            return True
+        if phase == 'validation-prepared':
+            history = ctx['artifacts'] / 'implementation-proof-history'
+            assert not history.exists(), 'an override must not fabricate accepted implementation proof'
+            before = ctx['show']()['result']
+            exit_event = 'validation-ready' if any(e['event'] == 'validation-ready' for e in before['requestable_events']) else 'passed'
+            response = ctx['call']('event', ctx['run_id'], exit_event)
+            assert response['status'] == 'rejected', response
+            text = json.dumps(response)
+            assert 'implementation-proof-history' in text and 'owner override' in text \
+                and 'revise-implementation' in text, text
+            after = ctx['show']()['result']
+            assert after['current_state'] == before['current_state'] == 'validation', (before['current_state'], after)
+            assert not history.exists(), 'a refused validation exit must not write proof history either'
+            captured['ctx'] = ctx
+            raise _StopRun()
+        return False
+    try:
+        software_module().run(SimpleNamespace(engine=args.engine, provider=args.software, mode='source', data_root=None),
+                              ROOT / 'crates/software-change-provider/data/configs/minimal.json', root,
+                              configure=_empty_review_policies, exercise=hook)
+    except _StopRun:
+        pass
+    assert 'ctx' in captured, 'journey never reached the refused validation exit'
+    assert captured['ctx']['show']()['result']['has_overrides']
+    print('external-work software-change override into validation strands validation with a clear message passed')
+
+
 # bookends:LE-186 — a shipped minimal profile with review states retains each phase exactly once at its real exit.
 def retention_minimal_profile(args, work):
     from external_work_driver import engine_call
@@ -3556,6 +3595,7 @@ def main():
     retention_provider_runs(args,root)
     retained_work = retention_software_revisions(args,root)
     retention_software_overrides(args,root)
+    override_strands_validation(args,root)
     retention_software_approval_exits(args,root)
     reclaim_legacy_catalog(args,root,retained_work)
     early_review_briefs(args,root)
