@@ -69,6 +69,25 @@ These runs gain no new recovery by editing profiles or replacing executables.
 Preserve the failure and obtain owner authorization for any termination/replacement;
 never delete history, bypass storage rules or overwrite the frozen runtime.
 
+## Ending a run the owner has decided to stop
+
+`terminate` takes only the run ID and records one history entry. It carries no reason and
+verifies nothing, so put the decision on the run first:
+
+1. Observe with `show`. Confirm no owned work is live; cancel and verify cleanup first if any.
+2. Append the owner's decision as `user-steering` (shape above), with the owner's exact
+   words in `instruction`:
+   `{"target":{"kind":"all"},"instruction":"<the owner's exact words>"}`
+3. Append one record of an opaque kind (for example `external-close-note`) authored by the
+   driver. It names what the driver checked and cites it (merge commits, review verdicts,
+   gate output, owner proofs), and lists what was not proven. It is driver provenance,
+   not owner words, and grants no authority.
+4. Observe again, then `terminate`.
+
+The run ends `terminated`, never `final`, and nothing claims completion. The engine does
+not check the cited records. Walk the remaining edges with `event --override` only if the
+owner wants a completed-with-overrides outcome instead.
+
 ## Running advice and append-only recovery
 
 Use a release implementing these record kinds on new runs. Do not apply current

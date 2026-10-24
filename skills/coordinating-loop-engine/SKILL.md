@@ -14,7 +14,7 @@ Outcome: each driver finishes or returns a durable blocker independently of chat
    skill at its crate-local skills directory. Generate-PRD additionally requires
    using-generate-prd beside the research skill. The coordinator does not replace policy.
 3. Confirm exact profile bytes/hash and separate external role/model commands,
-   owner-set spend/resource limits (none by default) and proof owner. Verify model availability before each launch; no fallback.
+   owner-set spend/resource limits (none by default) and proof owner. Verify model availability once per launch, with one probe, and use no fallback; do not re-audit earlier launches' metadata.
 4. Give each driver a durable handoff: outcome, provider/skill, working directory,
    source references, write ownership, confirmations, serial dependency closure,
    escalation owner, catalog/run identity, artifact locators, next observation and
