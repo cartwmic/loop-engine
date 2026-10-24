@@ -2205,7 +2205,7 @@ fn project_review_context_with_diagnostics_excluding(
     for record in records {
         if record.kind == "review-evidence" {
             if selected_review_ids.contains(record.id.as_str()) {
-                selected.push(record.clone());
+                selected.push(compact_review_evidence(record, revision));
             }
             continue;
         }
@@ -2348,6 +2348,35 @@ fn project_review_context_with_diagnostics_excluding(
     Ok((selected, diagnostics))
 }
 
+/// Deliver a retained review exchange by reference. The stored record keeps the
+/// full request and the reviewer's original response; a commission carries the
+/// verdict, findings and grounds, and replaces each exchange body with its size,
+/// digest and `record:ID#/pointer` locator. Evidence of the target revision is
+/// delivered whole; only other revisions' evidence (carried or ledger-cited) is
+/// compacted.
+fn compact_review_evidence(record: &ContextRecord, revision: &str) -> ContextRecord {
+    if record.data.get("subject_revision").and_then(Value::as_str) == Some(revision) {
+        return record.clone();
+    }
+    let mut compact = record.clone();
+    if let Some(exchange) = compact
+        .data
+        .get_mut("external_review")
+        .and_then(Value::as_object_mut)
+    {
+        for part in ["request", "original"] {
+            if let Some(body) = exchange.get(part) {
+                let bytes = serde_json::to_vec(body).unwrap_or_default();
+                let stub = json!({"omitted_from_commission":true,"bytes":bytes.len(),
+                    "sha256":format!("sha256:{:x}",Sha256::digest(&bytes)),
+                    "locator":format!("record:{}#/data/external_review/{part}",record.id)});
+                exchange.insert(part.to_owned(), stub);
+            }
+        }
+    }
+    compact
+}
+
 fn commission_size_info(
     records: &[ContextRecord],
     sources: &[ReviewSource],
@@ -2371,9 +2400,18 @@ fn commission_size_info(
         .iter()
         .map(|source| source.bytes.len())
         .sum::<usize>();
+    let mut context_bytes_by_kind = BTreeMap::<String, usize>::new();
+    for record in &delivered {
+        *context_bytes_by_kind
+            .entry(record.kind.clone())
+            .or_default() += serde_json::to_vec(record)
+            .map_err(|error| error.to_string())?
+            .len();
+    }
     Ok(
         json!({"status":"informational only; driver selects relevant context; no content quota",
-        "context_bytes":context_bytes,"retrieved_original_bytes":original_bytes,"total_evidence_bytes":context_bytes.saturating_add(original_bytes)}),
+        "context_bytes":context_bytes,"context_bytes_by_kind":context_bytes_by_kind,
+        "retrieved_original_bytes":original_bytes,"total_evidence_bytes":context_bytes.saturating_add(original_bytes)}),
     )
 }
 
@@ -3092,6 +3130,88 @@ mod tests {
             ledger.data["findings"][0]["statement"],
             "retain this accepted failure"
         );
+    }
+
+    fn bulky_exchange(tag: &str) -> Value {
+        json!({"request":{"text":format!("request {tag} {}", "r".repeat(20_000))},
+            "original":{"text":format!("original {tag} {}", "o".repeat(20_000))}})
+    }
+
+    #[test]
+    fn delivered_review_evidence_size_tracks_applicable_records_not_history() {
+        let evidence = |id: &str, n: u64, revision: &str, stage: &str| {
+            typed_record(
+                id,
+                "review-evidence",
+                n,
+                json!({
+                    "gate":"design-review","subject":"design.json","subject_revision":revision,
+                    "review_stage":stage,"policy_id":"axis","author":{"name":"A","kind":"agent"},
+                    "result":"fail","findings":format!("finding of {id}"),
+                    "external_review":bulky_exchange(id)
+                }),
+            )
+        };
+        let project = |old_reviews: u64| {
+            let mut records = vec![evidence("carried", 1, "1", "individual")];
+            // Unrelated history: other revisions' reviews that nothing carries or cites.
+            records.extend(
+                (0..old_reviews).map(|n| evidence(&format!("old-{n}"), 10 + n, "1", "aggregate")),
+            );
+            let base = 100 + old_reviews;
+            records.push(evidence("current", base, "2", "aggregate"));
+            records.push(typed_record(
+                "ledger",
+                "finding-ledger",
+                base + 1,
+                json!({"gate":"design-review","subject":"design.json","subject_revision":"2",
+                    "findings":[{"source":{"kind":"context-record","id":"carried"},"statement":"x","disposition":"accepted","status":"unresolved"}]}),
+            ));
+            records.push(typed_record(
+                "carry",
+                "evidence-applicability",
+                base + 2,
+                json!({"origin":{"kind":"context-record","id":"carried"},
+                    "target":{"subject":"design.json","revision":"2"},"reason":"unaffected"}),
+            ));
+            project_review_context(
+                &records,
+                "design-review",
+                "design.json",
+                "2",
+                Some("aggregate"),
+                Path::new("/unused-for-design"),
+            )
+            .unwrap()
+        };
+        let few = project(1);
+        let many = project(12);
+        let size = |records: &[ContextRecord]| serde_json::to_vec(records).unwrap().len();
+        assert_eq!(
+            size(&few),
+            size(&many),
+            "unrelated history must not be delivered"
+        );
+        let carried = many.iter().find(|r| r.id.as_str() == "carried").unwrap();
+        assert!(carried.data["findings"]
+            .as_str()
+            .unwrap()
+            .contains("finding of carried"));
+        for part in ["request", "original"] {
+            let stub = &carried.data["external_review"][part];
+            assert_eq!(stub["omitted_from_commission"], true);
+            assert_eq!(
+                stub["locator"],
+                format!("record:carried#/data/external_review/{part}")
+            );
+            assert!(stub["bytes"].as_u64().unwrap() > 20_000);
+        }
+        // Target-revision evidence is delivered whole.
+        let current = many.iter().find(|r| r.id.as_str() == "current").unwrap();
+        assert!(current.data["external_review"]["request"]["text"].is_string());
+        assert!(current.data["external_review"]["original"]["text"].is_string());
+        // One whole record (~40 KB); uncompacted, the carried one would add another ~40 KB.
+        assert!(size(&many) < 45_000, "{}", size(&many));
     }
 
     #[test]

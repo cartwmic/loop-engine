@@ -1,4 +1,4 @@
-//! Public scripted journeys: bookends:LE-182 bookends:LE-171 bookends:LE-177 bookends:LE-185.
+//! Public scripted journeys: bookends:LE-182 bookends:LE-171 bookends:LE-177 bookends:LE-185 bookends:LE-149.
 //! Synthetic judgments prove mechanics only; joined AC-5 proof: bookends:LE-194 bookends:LE-98.
 use serde_json::{json, Value};
 use std::fs;
@@ -554,6 +554,38 @@ fn ordinary(run: &RunFixture, gate: &str, subject: &str, revision: &str, aggrega
         gate,
     );
 }
+// #59: target-revision evidence is delivered whole; another revision's retained
+// exchange arrives as a size, digest and locator stub. Returns the stub count.
+fn delivered_by_reference(packet: &Value, revision: &str) -> usize {
+    let mut by_reference = 0;
+    for record in packet["context"].as_array().expect("commission context") {
+        let Some(exchange) = record["data"].get("external_review") else {
+            continue;
+        };
+        if record["data"]["subject_revision"] == revision {
+            for part in ["request", "original"] {
+                assert!(
+                    exchange[part]["omitted_from_commission"].is_null(),
+                    "{record}"
+                );
+            }
+        } else {
+            for part in ["request", "original"] {
+                assert_eq!(exchange[part]["omitted_from_commission"], true, "{record}");
+                assert_eq!(
+                    exchange[part]["locator"],
+                    format!(
+                        "record:{}#/data/external_review/{part}",
+                        record["id"].as_str().unwrap()
+                    )
+                );
+            }
+            by_reference += 1;
+        }
+    }
+    by_reference
+}
+
 fn challenge(
     run: &RunFixture,
     gate: &str,
@@ -570,6 +602,7 @@ fn challenge(
     let text = packet["commission"]["guidance"]
         .as_str()
         .expect("public challenge guidance");
+    delivered_by_reference(&packet, revision);
     for part in [
         "passing or sufficiency conclusion",
         "individual findings to rebut",
@@ -857,6 +890,19 @@ fn challenge_clearance_issue_18_carry_and_fresh_after_carry_before_challenge() {
             );
         }
         ledger(&run, "intent-review", "intent.json", "r15", "ordinary");
+        // The r14 evidence carried to r15 reaches the commission by reference.
+        let packet = provider(
+            &run,
+            &[
+                "commission",
+                "--slot",
+                "intent-review",
+                "--stage",
+                "aggregate",
+            ],
+            &show(&run, "carried ordinary commission"),
+        );
+        assert!(delivered_by_reference(&packet, "r15") > 0, "{packet}");
         assert_completed(
             &event(&run, "approved", "ordinary carried approval"),
             "intent-adversarial-review",
