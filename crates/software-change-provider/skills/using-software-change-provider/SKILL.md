@@ -260,9 +260,10 @@ preserve them and seek authorized replacement, not history edits or runtime migr
 ## Owner relaxes a reviewed requirement
 
 If the owner withdraws, relaxes, defers or clarifies a requirement and adds or strengthens
-nothing, append the exact words as `user-steering` and do not revise intent, design or plan.
-Tell reviewers those words are the effective requirement. Criterion and goal verdicts may
-cite an unsuperseded steering record (commission `citable_evidence.user_steering_ids`)
+nothing, append the exact words as `user-steering`; intent, design and plan need not be
+revised. (In a Bookends-enabled run, an instruction that changes enduring meaning is an
+ordinary revision that reaches reconciliation, LE-142.) Tell reviewers those words are the
+effective requirement. Criterion and goal verdicts may cite an unsuperseded steering record (commission `citable_evidence.user_steering_ids`)
 with or instead of command evidence; every criterion keeps its verdict, and a failure
 that follows from the changed requirement still needs an exact-source disposition naming
 the steering. It waives no review coverage, author floor, command proof or finding.

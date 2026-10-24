@@ -73,8 +73,10 @@ never delete history, bypass storage rules or overwrite the frozen runtime.
 
 When the owner withdraws, relaxes, defers or clarifies a requirement or obligation of
 the accepted intent and adds or strengthens nothing, append the owner's exact words as
-`user-steering` (target `all` is enough). Do not revise intent, design or plan for it:
-unchanged artifacts keep their revisions and the judgments that cite them stay current.
+`user-steering` (target `all` is enough). Intent, design and plan need not be revised
+for it: unchanged artifacts keep their revisions and the judgments that cite them stay
+current. In a Bookends-enabled run, an instruction that changes enduring meaning is an
+ordinary revision that reaches reconciliation (LE-142).
 Tell reviewers the steering is the effective requirement; a validation commission lists
 the deliverable steering under `citable_evidence.user_steering_ids`.
 
