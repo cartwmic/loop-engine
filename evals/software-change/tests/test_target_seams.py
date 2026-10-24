@@ -983,15 +983,32 @@ def test_container_caps_reach_the_compose_the_replay_and_the_isolation_record(se
 def test_without_caps_nothing_is_added(seams):
     run = seams.configure(options={"arm": NATIVE_IN_IMAGE}).run()
     assert "cpus" not in run.compose and "mem_limit" not in run.compose
+    assert run.compose.endswith("    init: true
+")
     assert seams.replay_limits == [[]]
-    assert "cpus" not in json.loads((run.capture / "isolation.json").read_text())
+    isolation = json.loads((run.capture / "isolation.json").read_text())
+    assert "cpus" not in isolation and "memory_bytes" not in isolation
+
+
+def test_fractional_cpus_and_megabyte_memory_are_accepted(seams):
+    run = seams.configure(options={"arm": NATIVE_IN_IMAGE, "container_cpus": 1.5, "container_memory": "6144m"}).run()
+    assert "    cpus: 1.5
+    mem_limit: 6144m
+" in run.compose
+    assert seams.replay_limits == [["--cpus", "1.5", "--memory", "6144m"]]
 
 
 @pytest.mark.parametrize("options", [{"container_cpus": 2}, {"container_memory": "8g"},
                                      {"container_cpus": 0, "container_memory": "8g"},
                                      {"container_cpus": True, "container_memory": "8g"},
                                      {"container_cpus": 2, "container_memory": "8"},
-                                     {"container_cpus": 2, "container_memory": "0g"}])
+                                     {"container_cpus": 2, "container_memory": "0g"},
+                                     {"container_cpus": float("nan"), "container_memory": "8g"},
+                                     {"container_cpus": float("inf"), "container_memory": "8g"},
+                                     {"container_cpus": -1, "container_memory": "8g"},
+                                     {"container_cpus": "2", "container_memory": "8g"},
+                                     {"container_cpus": 2, "container_memory": "1.5g"},
+                                     {"container_cpus": 2, "container_memory": 8}])
 def test_invalid_caps_are_refused_before_any_trial(seams, options):
     with pytest.raises(ValueError, match="container_cpus"):
         seams.configure(options={"arm": NATIVE_IN_IMAGE, **options}).prepare()

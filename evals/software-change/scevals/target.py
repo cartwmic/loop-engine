@@ -3,6 +3,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import io
 import json
+import math
 import tarfile
 from pathlib import Path
 import re
@@ -199,7 +200,7 @@ def container_caps(options):
     cpus, memory = options.get("container_cpus"), options.get("container_memory")
     if cpus is None and memory is None:
         return None
-    if isinstance(cpus, bool) or not isinstance(cpus, (int, float)) or cpus <= 0 or \
+    if isinstance(cpus, bool) or not isinstance(cpus, (int, float)) or not math.isfinite(cpus) or cpus <= 0 or \
             not isinstance(memory, str) or not re.fullmatch(r"[1-9][0-9]*[mg]", memory):
         raise ValueError("container_cpus (positive number) and container_memory (such as 8g) are set together")
     return cpus, memory
