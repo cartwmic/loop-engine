@@ -61,15 +61,16 @@ async def restore(env, archive):
 
 class ReplayContainer:
     """Small async file/exec surface shared with Inspect sandboxes; no host mounts."""
-    def __init__(self, image, cleanup_seconds=None, on_abandon=None):
+    def __init__(self, image, cleanup_seconds=None, on_abandon=None, limits=()):
         self.image = image
+        self.limits = list(limits)  # extra docker run arguments, such as the --cpus and --memory caps
         self.container = None
         self.on_abandon = on_abandon  # called when removal ran out of time and was handed off
         # Seconds, or a callable evaluated when the container is removed (so time spent meanwhile is deducted).
         self.cleanup_seconds = self.CLEANUP_SECONDS if cleanup_seconds is None else cleanup_seconds
 
     async def __aenter__(self):
-        result = await anyio.run_process(["docker", "run", "-d", "--platform", "linux/arm64", "--workdir", "/workspace", self.image, "sleep", "infinity"])
+        result = await anyio.run_process(["docker", "run", "-d", "--platform", "linux/arm64", "--workdir", "/workspace", *self.limits, self.image, "sleep", "infinity"])
         self.container = result.stdout.decode().strip()
         return self
 
