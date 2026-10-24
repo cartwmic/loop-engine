@@ -423,7 +423,7 @@ fn implementation_proof_history(artifact_root: &Path, create: bool) -> Result<Pa
             })?,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return Err(format!(
-                "{} is missing; validation requires accepted implementation proof",
+                "{} is missing; validation requires accepted implementation proof. Only the checked transition that admits implementation to validation writes it; an owner override of that transition does not, and no later override can supply it. Take `revise-implementation`, clear the implementation checks genuinely, then retry",
                 path.display()
             ))
         }
@@ -1703,5 +1703,12 @@ mod tests {
         assert!(implementation_proof_history(&temp.path, false)
             .expect_err("missing history directory must fail")
             .contains("validation requires accepted implementation proof"));
+        // The refusal tells a stranded driver why the history is absent and how to recover (#51).
+        let message = implementation_proof_history(&temp.path, false).unwrap_err();
+        assert!(
+            message.contains("an owner override of that transition does not")
+                && message.contains("revise-implementation"),
+            "{message}"
+        );
     }
 }

@@ -1417,6 +1417,50 @@ fn locator_guidance(artifact_root: &Path, sources: &[ReviewSource]) -> Value {
     })
 }
 
+/// The command-evidence IDs a criterion or goal verdict may cite in
+/// evidence_context_ids, read from the fixed report's command index. The index
+/// may list an evidence-applicability wrapper for carried evidence; a verdict
+/// cannot cite that wrapper, so the packet names the original command evidence
+/// to cite instead (#48).
+fn citable_command_evidence(root: &Path, context: &[ContextRecord]) -> Value {
+    let report = std::fs::read(root.join("validation-report.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .unwrap_or(Value::Null);
+    let find = |id: &str| context.iter().find(|record| record.id.as_str() == id);
+    let mut citable: Vec<&str> = Vec::new();
+    let mut wrappers = Vec::new();
+    for id in report["command_evidence_ids"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        let Some(record) = find(id) else { continue };
+        let target = match record.kind.as_str() {
+            "command-evidence" => Some(id),
+            "evidence-applicability" => record
+                .data
+                .pointer("/origin/id")
+                .and_then(Value::as_str)
+                .filter(|origin| find(origin).is_some_and(|r| r.kind == "command-evidence")),
+            _ => None,
+        };
+        let Some(target) = target else { continue };
+        if target != id {
+            wrappers.push(json!({"indexed_id": id, "cite_instead": target}));
+        }
+        if !citable.contains(&target) {
+            citable.push(target);
+        }
+    }
+    json!({
+        "command_evidence_ids": citable,
+        "indexed_but_not_citable": wrappers,
+        "rule": "A criterion or goal verdict's evidence_context_ids may name only the command_evidence_ids listed here. An evidence-applicability record is never citable, even when the report's command index lists it; cite the original command evidence named in cite_instead.",
+    })
+}
+
 #[derive(Clone)]
 struct ReviewSource {
     locator: String,
@@ -2599,6 +2643,13 @@ fn inspect_with_budgets(
     output["review_contract_version"] = json!(3);
     output["review_target"] = json!({"subject":subject,"revision":revision});
     output["locator_guidance"] = locator_guidance(Path::new(root), &sources);
+    if matches!(
+        slot_id,
+        "validation-review" | "validation-adversarial-review"
+    ) {
+        output["citable_evidence"] =
+            citable_command_evidence(Path::new(root), &full_context_records);
+    }
     if let Some(parent) = parent_gate(slot_id) {
         if let Some(block) = parent_resolution(
             packet,
@@ -3480,6 +3531,107 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("does not reference a validation verdict")));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // bookends:LE-149 bookends:LE-171 bookends:LE-183
+    #[test]
+    fn validation_commission_lists_citable_command_evidence_and_names_originals_for_wrappers() {
+        let root = std::env::temp_dir().join(format!(
+            "commission-citable-evidence-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        for name in [
+            "intent",
+            "design",
+            "plan",
+            "implementation-report",
+            "validation-report",
+        ] {
+            std::fs::write(
+                root.join(format!("{name}.json")),
+                std::fs::read(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join(format!("data/calibration/fixtures/{name}-good.json")),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let mut report: Value =
+            serde_json::from_slice(&std::fs::read(root.join("validation-report.json")).unwrap())
+                .unwrap();
+        // One direct command, one carried command (wrapper), one wrapper around a
+        // verdict, and one ID that is not in the context at all.
+        report["command_evidence_ids"] =
+            json!(["cmd-direct", "carry-cmd", "carry-verdict", "unknown"]);
+        std::fs::write(
+            root.join("validation-report.json"),
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        let mut initial: Value =
+            serde_json::from_str(include_str!("../data/configs/minimal.json")).unwrap();
+        initial["artifact_root"] = json!(root);
+        let graph = crate::workflow::describe_workflow(Some(&initial)).unwrap();
+        let wrapper = |id: &str, origin: &str, n| {
+            typed_record(
+                id,
+                "evidence-applicability",
+                n,
+                json!({
+                    "origin":{"kind":"context-record","id":origin},
+                    "target":{"subject":"validation-report.json","revision":report["revision"],
+                              "checkpoint":{"phase":"validation","report_revision":report["revision"]}},
+                    "reason":"unchanged command obligation"
+                }),
+            )
+        };
+        let records = vec![
+            typed_record(
+                "cmd-direct",
+                "command-evidence",
+                1,
+                json!({"proof_id":"p1"}),
+            ),
+            typed_record("cmd-old", "command-evidence", 2, json!({"proof_id":"p2"})),
+            wrapper("carry-cmd", "cmd-old", 3),
+            typed_record(
+                "old-verdict",
+                "criterion-verdict",
+                4,
+                json!({"result":"pass"}),
+            ),
+            wrapper("carry-verdict", "old-verdict", 5),
+        ];
+        let packet = json!({"operation":"show","status":"completed","result":{"workflow_id":"software-change","artifact_root":root,"initial_input":initial,"context":records,"workflow_graph":graph,"work_slots":graph.work_slots}});
+        for gate in ["validation-review", "validation-adversarial-review"] {
+            let output = inspect_with_stage(&packet, Some(gate), None, Some("aggregate")).unwrap();
+            let citable = &output["citable_evidence"];
+            assert_eq!(
+                citable["command_evidence_ids"],
+                json!(["cmd-direct", "cmd-old"]),
+                "{gate}: {citable}"
+            );
+            assert_eq!(
+                citable["indexed_but_not_citable"],
+                json!([{"indexed_id":"carry-cmd","cite_instead":"cmd-old"}]),
+                "{gate}: {citable}"
+            );
+            assert!(citable["rule"]
+                .as_str()
+                .unwrap()
+                .contains("evidence-applicability record is never citable"));
+        }
+        // Reviews of other subjects cite no command evidence, so carry no such list.
+        let design =
+            inspect_with_stage(&packet, Some("design-review"), None, Some("aggregate")).unwrap();
+        assert!(design.get("citable_evidence").is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 
