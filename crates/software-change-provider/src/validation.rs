@@ -735,6 +735,17 @@ fn source_mode(
     let evidence_ids = ids(&data["evidence_context_ids"])?;
     for id in evidence_ids {
         let evidence = record(context, &id)?;
+        if evidence.kind == OWNER_INSTRUCTION_KIND {
+            // LE-201: the owner's words may stand as evidence. Only existence, kind
+            // and supersession are checked; whether the words support the result is
+            // the reviewer's judgment. History is not re-judged for later supersession.
+            if !historical && superseded_steering(context, &id) {
+                return Err(format!(
+                    "evidence reference `{id}` is a superseded user-steering record; cite the steering that replaced it or retained command evidence"
+                ));
+            }
+            continue;
+        }
         if evidence.kind != "command-evidence" {
             return Err(unsupported_evidence_reference(&id, evidence, context));
         }
@@ -768,6 +779,27 @@ fn source_mode(
     Ok(())
 }
 
+/// The kind of an owner instruction a criterion or goal verdict may cite (LE-201).
+pub(crate) const OWNER_INSTRUCTION_KIND: &str = "user-steering";
+
+/// Whether the ID names an owner-instruction record, which verdicts may cite instead of
+/// command evidence and which is not part of the command index.
+pub(crate) fn is_owner_instruction(context: &[ContextRecord], id: &str) -> bool {
+    context
+        .iter()
+        .any(|record| record.id.as_str() == id && record.kind == OWNER_INSTRUCTION_KIND)
+}
+
+/// Whether a steering record names the ID in its supersedes list.
+pub(crate) fn superseded_steering(context: &[ContextRecord], id: &str) -> bool {
+    context.iter().any(|record| {
+        record.kind == OWNER_INSTRUCTION_KIND
+            && record.data["supersedes"]
+                .as_array()
+                .is_some_and(|ids| ids.iter().any(|other| other.as_str() == Some(id)))
+    })
+}
+
 /// Refusal text for a verdict evidence reference that is not retained command evidence.
 /// An applicability wrapper around command evidence names the original ID to cite instead,
 /// so a reviewer need not guess which form a verdict may cite (#48).
@@ -776,7 +808,7 @@ fn unsupported_evidence_reference(
     evidence: &ContextRecord,
     context: &[ContextRecord],
 ) -> String {
-    let base = format!("unsupported evidence reference `{id}`; name retained command evidence");
+    let base = format!("unsupported evidence reference `{id}`; name retained command evidence or an earlier unsuperseded user-steering record");
     let origin = (evidence.kind == "evidence-applicability")
         .then(|| evidence.data["origin"]["id"].as_str())
         .flatten()
@@ -1317,9 +1349,10 @@ pub(crate) fn evaluate(
                 return Err("duplicate criterion author".into());
             }
             if !carried
-                && ids(&d["evidence_context_ids"])?
-                    .iter()
-                    .any(|id| !verified_command_evidence_ids.contains(id))
+                && ids(&d["evidence_context_ids"])?.iter().any(|id| {
+                    !verified_command_evidence_ids.contains(id)
+                        && !is_owner_instruction(context, id)
+                })
             {
                 return Err("fresh verdict must reference current indexed command evidence".into());
             }

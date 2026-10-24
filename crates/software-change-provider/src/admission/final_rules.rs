@@ -91,7 +91,9 @@ pub(super) fn verdict_current(
     let references: Vec<String> =
         serde_json::from_value(record.data["evidence_context_ids"].clone())
             .map_err(|e| e.to_string())?;
-    if references.iter().any(|id| !verified_commands.contains(id)) {
+    if references.iter().any(|id| {
+        !verified_commands.contains(id) && !validation::is_owner_instruction(ctx.context, id)
+    }) {
         return Err("fresh verdict must reference current indexed command evidence".into());
     }
     let policy = validation::contract(&ctx.effective_policy)?;

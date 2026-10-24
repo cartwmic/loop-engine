@@ -187,7 +187,7 @@ fn verdict_result_references_coverage_and_current_target_controls() {
         ("author", json!({"name":"","kind":"agent"})),
         ("criterion_id", json!("unknown")),
         ("checkpoint", json!("wrong")),
-        ("evidence_context_ids", json!(["owner"])),
+        ("evidence_context_ids", json!(["goal"])),
         ("subject_revision", json!("old")),
     ] {
         let mut data = good.clone();
@@ -208,6 +208,90 @@ fn verdict_result_references_coverage_and_current_target_controls() {
     partial["findings"] = json!(["actual unit finding"]);
     assert!(check(&f.ctx(), &candidate("goal-verdict", partial)).is_ok()); // no gate clearance requirement
 }
+// bookends:LE-116 bookends:LE-201
+// Replays of the two v1 owner decisions: the removed real-model-replay gate and the
+// accepted requirement whose negative test was deferred. A verdict cites the owner's
+// words, with or instead of command evidence, and no artifact is revised.
+#[test]
+fn verdicts_may_cite_unsuperseded_owner_steering_with_or_instead_of_command_evidence() {
+    let mut f = Fixture::new();
+    for (kind, index) in [("criterion-verdict", 3), ("goal-verdict", 2)] {
+        for cited in [json!(["owner"]), json!(["owner", "command"])] {
+            for (result, findings) in [("pass", json!([])), ("fail", json!(["deferred"]))] {
+                let mut data = f.context[index].data.clone();
+                data["evidence_context_ids"] = cited.clone();
+                data["result"] = json!(result);
+                data["findings"] = findings;
+                let accepted = check(&f.ctx(), &candidate(kind, data));
+                assert!(accepted.is_ok(), "{kind} {cited} {result}: {accepted:?}");
+            }
+        }
+        // The record must exist, and no other kind becomes citable.
+        for refused in [json!(["missing"]), json!(["goal"]), json!(["criterion"])] {
+            let mut data = f.context[index].data.clone();
+            data["evidence_context_ids"] = refused.clone();
+            assert!(
+                check(&f.ctx(), &candidate(kind, data)).is_err(),
+                "{kind} {refused}"
+            );
+        }
+    }
+    // Only a later steering record's supersedes edge retires a record from citation.
+    f.context.push(row(
+        "owner-2",
+        "user-steering",
+        json!({"target":{"kind":"all"},"instruction":"Replacement words","supersedes":["owner"]}),
+        5,
+    ));
+    for (kind, index) in [("criterion-verdict", 3), ("goal-verdict", 2)] {
+        let mut old = f.context[index].data.clone();
+        old["evidence_context_ids"] = json!(["owner"]);
+        let refusal = check(&f.ctx(), &candidate(kind, old)).unwrap_err();
+        assert!(
+            refusal.message.contains("superseded user-steering"),
+            "{kind}: {refusal:?}"
+        );
+        let mut current = f.context[index].data.clone();
+        current["evidence_context_ids"] = json!(["owner-2"]);
+        assert!(check(&f.ctx(), &candidate(kind, current)).is_ok(), "{kind}");
+    }
+}
+
+// bookends:LE-116 bookends:LE-201
+#[test]
+fn the_checked_gate_accepts_stored_verdicts_that_cite_owner_steering_and_refuses_superseded_ones() {
+    let mut f = Fixture::new();
+    f.context[2].data["evidence_context_ids"] = json!(["owner", "command"]);
+    f.context[3].data["evidence_context_ids"] = json!(["owner"]);
+    let before = f.context.clone();
+    let report: Value =
+        serde_json::from_slice(&std::fs::read(f.root.join("validation-report.json")).unwrap())
+            .unwrap();
+    let gate = |f: &Fixture| {
+        crate::validation::evaluate(
+            &f.input,
+            &f.context,
+            &f.root,
+            &report,
+            true,
+            &f.workflow,
+            &BTreeSet::new(),
+        )
+    };
+    let accepted = gate(&f);
+    assert!(accepted.is_ok(), "{accepted:?}");
+    assert_eq!(f.context, before, "citation never rewrites history");
+    // The owner then replaces the instruction: verdicts resting on the old words are stale.
+    f.context.push(row(
+        "owner-2",
+        "user-steering",
+        json!({"target":{"kind":"all"},"instruction":"Replacement words","supersedes":["owner"]}),
+        5,
+    ));
+    let refusal = gate(&f).unwrap_err();
+    assert!(refusal.contains("superseded user-steering"), "{refusal}");
+}
+
 #[test]
 fn bound_criterion_author_verdicts_carry_and_are_checked_on_a_declared_session() {
     let declared = json!({"model":"p/criterion","thinking":"medium"});
