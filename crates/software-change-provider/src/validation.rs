@@ -736,9 +736,7 @@ fn source_mode(
     for id in evidence_ids {
         let evidence = record(context, &id)?;
         if evidence.kind != "command-evidence" {
-            return Err(format!(
-                "unsupported evidence reference `{id}`; name retained command evidence"
-            ));
+            return Err(unsupported_evidence_reference(&id, evidence, context));
         }
         if data["result"] == "pass"
             && evidence
@@ -768,6 +766,29 @@ fn source_mode(
         }
     }
     Ok(())
+}
+
+/// Refusal text for a verdict evidence reference that is not retained command evidence.
+/// An applicability wrapper around command evidence names the original ID to cite instead,
+/// so a reviewer need not guess which form a verdict may cite (#48).
+fn unsupported_evidence_reference(
+    id: &str,
+    evidence: &ContextRecord,
+    context: &[ContextRecord],
+) -> String {
+    let base = format!("unsupported evidence reference `{id}`; name retained command evidence");
+    let origin = (evidence.kind == "evidence-applicability")
+        .then(|| evidence.data["origin"]["id"].as_str())
+        .flatten()
+        .and_then(|origin| record(context, origin).ok())
+        .filter(|origin| origin.kind == "command-evidence");
+    match origin {
+        Some(origin) => format!(
+            "{base}: `{id}` carries command evidence, so cite its original ID `{}`",
+            origin.id.as_str()
+        ),
+        None => base,
+    }
 }
 
 pub(crate) fn verdict_origin_shape(data: &Value) -> Result<(), String> {
