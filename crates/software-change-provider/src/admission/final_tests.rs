@@ -606,6 +606,31 @@ fn fresh_verdict_command_carry_retains_invalid_and_stale_guards() {
 }
 
 #[test]
+fn wrapper_reference_refusal_names_the_original_command_id_to_cite() {
+    for kind in ["criterion-verdict", "goal-verdict"] {
+        let f = carried_command_fixture();
+        let index = if kind == "criterion-verdict" { 3 } else { 2 };
+        let mut data = f.context[index].data.clone();
+        data["evidence_context_ids"] = json!(["command-carry"]);
+        let refusal = check(&f.ctx(), &candidate(kind, data)).unwrap_err();
+        assert!(
+            refusal
+                .message
+                .contains("unsupported evidence reference `command-carry`")
+                && refusal.message.contains("cite its original ID `command`"),
+            "{kind}: {refusal:?}"
+        );
+        // The original ID the message names is accepted (the verified current carry).
+        let accepted = f.context[index].data.clone();
+        assert_eq!(accepted["evidence_context_ids"], json!(["command"]));
+        assert!(
+            check(&f.ctx(), &candidate(kind, accepted)).is_ok(),
+            "{kind}"
+        );
+    }
+}
+
+#[test]
 fn failed_current_commands_admit_negative_verdicts_but_never_clear_validation() {
     let mut f = Fixture::new();
     f.context[1].data["external_result"]["exit_code"] = json!(1);
