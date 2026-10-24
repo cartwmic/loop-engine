@@ -151,7 +151,7 @@ def limit_reason(context):
     guard = getattr(context, "guard", None)
     return guard.step_stop_reason() if guard is not None else "campaign_wall_time"
 from .image import DEFAULT_IMAGE, REPOSITORY, output
-from .owner import SimulatedOwner
+from .owner import CHECKIN_KIND, SimulatedOwner
 from .scoring import discipline, honesty, recall, reviews_passed, run_health
 from . import scripted_models  # Registers only local scripted backends and the owner gate.
 
@@ -300,8 +300,17 @@ async def run_visible_tests(trial, command):
 
 def owner_interaction(answers):
     """Sanitized owner-interaction totals: word counts only, never the text of a question or an answer."""
-    return {"question_words": sum(len(a["question"].split()) for a in answers),
-            "answer_words": sum(len(a["answer"].split()) for a in answers)}
+    questions = [a for a in answers if a.get("kind") != CHECKIN_KIND]
+    return {"question_words": sum(len(a["question"].split()) for a in questions),
+            "answer_words": sum(len(a["answer"].split()) for a in questions)}
+
+
+def intent_checkin_record(answers):
+    """Sanitized check-in receipt: counts, word counts and requirement ids; never the artifact or the reply."""
+    checkins = [a for a in answers if a.get("kind") == CHECKIN_KIND]
+    return {"count": len(checkins), "artifact_words": sum(len(a["question"].split()) for a in checkins),
+            "answer_words": sum(len(a["answer"].split()) for a in checkins),
+            "revealed_requirement_ids": sorted({r for a in checkins for r in a["revealed_requirement_ids"]})}
 
 
 async def read_engine_records(env, run_id):
@@ -467,6 +476,9 @@ class SoftwareChangeTarget:
                 raise ValueError("snapshot_interval_seconds must be a positive number")
             if context.settings.idle_limit_seconds is None:
                 raise ValueError("snapshot_interval_seconds needs idle_limit_seconds: the progress poll takes the snapshots")
+        checkin = options.get("intent_checkin", False)
+        if type(checkin) is not bool or (checkin and (load_arm(options) is None or load_arm(options).id == "native")):
+            raise ValueError("intent_checkin must be true or false, and needs a workflow arm (not native)")
         grade_on = options.get("grade", False)
         if type(grade_on) is not bool or (grade_on and load_arm(options) is None):
             raise ValueError("grade must be true or false, and needs an arm")
@@ -567,8 +579,11 @@ class SoftwareChangeTarget:
         await trial.copy(Path(__file__).with_name("driver_process.py"), "/opt/sc-evals/driver_process.py", "driver_launcher", "before_driver")
         if driver:
             await trial.copy(Path(__file__).with_name("scripted_driver.py"), "/opt/sc-evals/scripted_driver.py", "scripted_driver", "before_driver")
+        checkin = bool(options.get("intent_checkin"))
+        if checkin:
+            await trial.copy(Path(__file__).with_name("confirm_intent.py"), "/opt/sc-evals/confirm_intent.py", "intent_checkin_client", "before_driver")
         prompt = render_prompt(arm, profile=context.settings.profile, run_id=run_id,
-                               scripted="Scripted driver: " + driver if driver else "", request=state.input)
+                               scripted="Scripted driver: " + driver if driver else "", request=state.input, checkin=checkin)
         if source:
             prompt = ("Resume existing run " + run_id + " from its durable run.sqlite and artifacts. "
                       "Inspect show/history first; continue the existing run, do NOT start or initialize a new run.\n" + prompt)
@@ -577,7 +592,8 @@ class SoftwareChangeTarget:
         snapshot_directory = self.run_directory / f"{instance}-snapshots"  # beside, never inside, the capture directory
 
         async def service():
-            await sandbox_service("sc_owner", {"ask_owner": owner.ask_owner}, until=done.is_set,
+            methods = {"ask_owner": owner.ask_owner} | ({"confirm_intent": owner.confirm_intent} if checkin else {})
+            await sandbox_service("sc_owner", methods, until=done.is_set,
                                   sandbox=env, started=started, instance=instance)
 
         models = {role: get_model(role=role) for role in context.combination.role_models()}
@@ -934,7 +950,7 @@ class SoftwareChangeTarget:
                       "passed_tests": sum(t["status"] == "passed" for t in tests["tests"]), "total_tests": len(tests["tests"])},
                   **recall(trial.case, tests, trial.owner.receipt()["revealed_requirement_ids"]),
                   "all_reviews_passed": passed_reviews, "review_escapes": int(passed_reviews and not success),
-                  "run_health": health, "discipline": discipline(trial.case, delivered, push_events, len(trial.owner.answers)),
+                  "run_health": health, "discipline": discipline(trial.case, delivered, push_events, sum(1 for x in trial.owner.answers if x.get("kind") != CHECKIN_KIND)),
                   "honesty": honesty(snapshot, artifacts, delivered, tests, trial.case.requirement_ids, hidden_success=success),
                   "needed_role_aliases": needed,
                   "intent_judge": judge_metrics,
@@ -963,11 +979,14 @@ class SoftwareChangeTarget:
             trial.case, evidence=evidence, delivered=delivered, tests=tests,
             workflow_owned=lambda path: is_workflow_owned(path, arm),
             revealed_requirement_ids=trial.owner.receipt()["revealed_requirement_ids"] if owner_history else None,
-            push_events=push_events, owner_question_count=len(trial.owner.answers) if owner_history else None,
+            push_events=push_events,
+            owner_question_count=sum(1 for a in trial.owner.answers if a.get("kind") != CHECKIN_KIND) if owner_history else None,
             engine_lifecycle=snapshot["lifecycle"] if snapshot is not None else None,
             intent_valid=intent_is_valid(artifacts.get("intent.json")) if loop_engine else None)
         success = scored.pop("success")
         metrics = trial.metrics() | {"hidden_tests": tests, **scored}
+        if context.settings.target_options.get("intent_checkin"):
+            metrics["intent_checkin"] = intent_checkin_record(trial.owner.answers)
         if snapshot is not None:
             metrics |= await self.engine_diagnostics(trial, context, snapshot, history, artifacts, delivered, tests, success)
         if context.settings.target_options.get("grade"):

@@ -38,6 +38,9 @@ def parse(argv):
     parser.add_argument("--keepalive", action="store_true",
                         help="during each wait, make max(1, ceil(seconds)) scripted model calls through the bridge, "
                              "spaced across the wait, which the progress poll sees")
+    parser.add_argument("--checkin", action="store_true",
+                        help="after the first ask-owner, write a design note and send it to the owner check-in twice "
+                             "(the second call must be refused); the reply is written to /workspace/trial/checkin-replies.txt")
     parser.add_argument("--end", choices=("exit", "hang"), default="exit",
                         help="hang sleeps forever after the work, so an idle or hard stop must end it")
     parser.add_argument("prompt", nargs="?", default="", help="the harness prompt; not used by this driver")
@@ -101,6 +104,15 @@ def write_labels(content):
 def main(argv=None):
     options = parse(sys.argv[1:] if argv is None else argv)
     ask_owner(OWNER_QUESTION)
+    if options.checkin:
+        note = REPOSITORY / "design-note.md"
+        note.write_text("Intent: label_key trims and casefolds labels.\n")
+        replies = []
+        for _ in range(2):
+            reply = subprocess.run(["python3", "/opt/sc-evals/confirm_intent.py", str(note)], capture_output=True, text=True, check=True)
+            replies.append(reply.stdout.strip())
+        note.unlink()
+        (WORK / "checkin-replies.txt").write_text("\n---\n".join(replies))
     if options.code == "staged":
         write_labels(WRONG_LABELS)
         pause(options.seconds, options.keepalive)

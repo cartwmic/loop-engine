@@ -894,3 +894,75 @@ def test_visible_test_command_needs_grade_and_a_nonempty_argv_and_is_refused_bef
     with pytest.raises(ValueError, match="visible_test_command"):
         seams.configure(options=options).prepare()
     assert seams.trial is None
+
+
+# Simulated owner intent check-in: one confirm_intent call per trial, only for a workflow arm.
+
+SUPERPOWERS = {"id": "superpowers", "driver_command": ["arm-superpowers"], "prompt_template": "superpowers",
+               "workflow_owned_paths": ["docs/superpowers/**"], "completion_rule": "driver-exit"}
+CHECKIN = {"arm": SUPERPOWERS, "intent_checkin": True}
+
+
+def checking_in(calls=2):
+    base = delivering()
+
+    async def driver(sandbox, prompt):
+        sandbox.replies = [await sandbox.services["confirm_intent"]("Intent: trim and casefold labels.") for _ in range(calls)]
+        return await base(sandbox, prompt)
+    return driver
+
+
+@pytest.mark.parametrize("options", [
+    {"arm": NATIVE, "intent_checkin": True},
+    {"intent_checkin": True},
+    {"arm": SUPERPOWERS, "intent_checkin": "yes"},
+])
+def test_intent_checkin_needs_a_workflow_arm_and_is_refused_before_any_trial(seams, options):
+    with pytest.raises(ValueError, match="intent_checkin"):
+        seams.configure(options=options).prepare()
+    assert seams.trial is None
+
+
+def test_intent_checkin_is_off_by_default_no_client_no_service_method_no_prompt_text(seams):
+    run = seams.configure(options={"arm": SUPERPOWERS}).run()
+    assert "/opt/sc-evals/confirm_intent.py" not in run.trial.files
+    assert "confirm_intent" not in run.trial.services
+    assert "Owner check-in" not in run.driver_exec()[0][-1]
+    assert "intent_checkin" not in run.metrics
+
+
+def test_intent_checkin_on_installs_the_client_the_service_method_and_the_prompt_text(seams):
+    run = seams.configure(options=CHECKIN).run()
+    assert run.trial.files["/opt/sc-evals/confirm_intent.py"].startswith(b"#!/usr/bin/env python3")
+    assert "confirm_intent" in run.trial.services
+    prompt = run.driver_exec()[0][-1]
+    assert prompt == render_prompt(load_arm({"arm": SUPERPOWERS}), profile="standard-16", run_id="eval-trial",
+                                   scripted="", request=REQUEST, checkin=True)
+    assert "python3 /opt/sc-evals/confirm_intent.py" in prompt and "once" in prompt
+    assert any(row["kind"] == "intent_checkin_client" for row in run.meta["evidence"]["copy_log"])
+
+
+def test_intent_checkin_works_once_is_recorded_apart_from_questions_and_keeps_the_text_private(seams):
+    run = seams.configure(options=CHECKIN, driver=checking_in()).run()
+    first, second = run.trial.replies
+    assert first == "Scripted check-in: also handle empty labels."
+    assert second.startswith("The owner has already confirmed")
+    answers = run.meta["simulated_owner"]["answers"]
+    assert [a.get("kind") for a in answers] == ["intent_checkin", None]  # the check-in, then the ask-owner question
+    assert run.metrics["intent_checkin"] == {"count": 1, "artifact_words": len("[intent check-in] Intent: trim and casefold labels.".split()),
+                                              "answer_words": len("Scripted check-in: also handle empty labels.".split()),
+                                              "revealed_requirement_ids": ["REQ-3"]}
+    assert run.metrics["discipline"]["owner_question_count"] == 1
+    assert run.metrics["owner_interaction"]["question_words"] == len(QUESTION.split())
+    assert "trim and casefold" not in json.dumps(run.metrics) and "empty labels" not in json.dumps(run.metrics)
+
+
+# The owner's standing instructions are part of the loop-engine arm's base prompt, not an option.
+
+def test_loop_engine_arm_prompt_carries_the_owner_standing_instructions_and_other_arms_do_not(seams):
+    prompt = seams.configure(options={"arm": LOOP_ENGINE}).run().driver_exec()[0][-1]
+    assert "Owner's standing instructions" in prompt
+    assert "Run independent plan tasks concurrently" in prompt and "Carry forward review evidence" in prompt
+    assert "worktree" not in prompt
+    native = render_prompt(load_arm({"arm": NATIVE}), profile="standard-16", run_id="eval-trial", scripted="", request=REQUEST)
+    assert "standing instructions" not in native
