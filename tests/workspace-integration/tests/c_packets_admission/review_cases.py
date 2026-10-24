@@ -120,8 +120,22 @@ def commission(ctx, gate, stage):
             and subject_sources[0]['bytes'] == len(subject_bytes), result)
     actual = {r['id']: r for r in show['result']['context']}
     delivered = {r['id']: r for r in result['context']}
+    def by_reference(key, record):
+        # A commission delivers retained exchange bodies by reference (#59): each stub
+        # must name the stored body's exact size, digest and locator.
+        stored = copy.deepcopy(actual.get(key))
+        exchange = (stored or {}).get('data', {}).get('external_review') or {}
+        for part, body in (record.get('data', {}).get('external_review') or {}).items():
+            if isinstance(body, dict) and body.get('omitted_from_commission') is True:
+                blob = json.dumps(exchange[part], separators=(',', ':'), sort_keys=True,
+                                  ensure_ascii=False).encode()
+                require(part in ('request', 'original') and body['locator'] ==
+                        f'record:{key}#/data/external_review/{part}' and
+                        body['bytes'] == len(blob) and body['sha256'] == 'sha256:' + sha(blob), body)
+                exchange[part] = body
+        return stored == record
     require(len(delivered) == len(result['context']) and
-            all(actual.get(key) == record for key, record in delivered.items()), result)
+            all(by_reference(key, record) for key, record in delivered.items()), result)
     require(set(result['commission']['record_ids']) == set(delivered) and
             len(result['commission']['record_ids']) == len(delivered), result)
     sources = result['review_record_sources']
