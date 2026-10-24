@@ -139,6 +139,15 @@ rather than guessed, and that the launch is preapproved. This is a
 different text from `PREAMBLE`, so an arm prompt does not match a pilot prompt, even for `loop-engine`. The
 baseline wording moved from the agent to the harness on purpose.
 
+Owner context is not part of the prompt. The arms image carries `/opt/sc-evals/owner-context/design-principles.md`
+(the owner's design principles at chezmoi commit `3517fd6`, sha256 pinned in `Dockerfile.arms` and listed in
+`/opt/sc-evals/arms/versions.txt`). Every launcher (`arm-native`, `arm-superpowers`, `arm-openspec`, `sc-driver`,
+`sc-implement`, `sc-review`) copies it as `AGENTS.md` into its per-call Pi agent directory, so each Pi process
+loads it as the global context file. An image without the file (the base image) gets none. Prove delivery in a built
+image with `SC_OWNER_CONTEXT_IMAGE=TAG uv run --project evals pytest evals/software-change/tests/test_owner_context.py`
+(real Pi against a stub model, no network, no paid call); set `SC_OWNER_CONTEXT_EXPECT=absent` for an image built
+before the change. State the hash in any report.
+
 Every trial gets the bare remote `/workspace/local-remote.git`, with a post-receive hook that counts successful
 pushes. That is existing behaviour. For an arm trial that is not a resume, the harness also runs, before the
 driver starts:

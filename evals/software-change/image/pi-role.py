@@ -3,12 +3,22 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 
 ROLES = {"sc-driver": "role-driver", "sc-implement": "role-implementer", "sc-review": "role-reviewer"}
 ROOT = Path("/opt/sc-evals")
+# The owner's design principles, the same bytes for every arm and role. Beside this script in the arms image and in
+# this checkout; an image without the file (the base image) gets no owner context.
+OWNER_CONTEXT = Path(__file__).resolve().parent / "owner-context" / "design-principles.md"
+
+
+def write_owner_context(directory):
+    """Pi loads <agent dir>/AGENTS.md as the global context file; give each per-call agent dir the owner's text."""
+    if OWNER_CONTEXT.is_file():
+        shutil.copyfile(OWNER_CONTEXT, Path(directory) / "AGENTS.md")
 
 
 def configuration(role):
@@ -45,6 +55,7 @@ def main():
     # Separate per-invocation state prevents simultaneous reviewers sharing sessions.
     with tempfile.TemporaryDirectory(prefix=f"pi-{role}-") as directory:
         Path(directory, "models.json").write_text(json.dumps(configuration(role)))
+        write_owner_context(directory)
         env = dict(os.environ, PI_CODING_AGENT_DIR=directory)
         command = ["pi", "--print", *session_arguments(), "--no-extensions", "--no-skills",
                    "--no-prompt-templates", "--no-themes", "--provider", "inspect",
