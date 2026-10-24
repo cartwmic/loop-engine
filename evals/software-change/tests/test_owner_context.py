@@ -32,7 +32,7 @@ def test_the_context_file_is_the_pinned_bytes_and_the_image_pins_the_same_hash()
     assert PINNED_SHA256 in (IMAGE_DIR / "Dockerfile.arms").read_text()
 
 
-def run_launcher(tmp_path, name, scripts_dir):
+def run_launcher(tmp_path, name, scripts_dir, extra_env=None):
     """Run the launcher under its installed name with stub pi and openspec; return the AGENTS.md pi saw (or None)."""
     bin_dir, stub_dir = tmp_path / "bin", tmp_path / "stub"
     bin_dir.mkdir()
@@ -45,7 +45,7 @@ def run_launcher(tmp_path, name, scripts_dir):
     (stub_dir / "openspec").write_text("#!/bin/sh\nexit 0\n")
     for stub in stub_dir.iterdir():
         stub.chmod(0o755)
-    env = {"PATH": f"{stub_dir}{os.pathsep}{os.environ['PATH']}", "SC_TEST_RECORD": str(record)}
+    env = {"PATH": f"{stub_dir}{os.pathsep}{os.environ['PATH']}", "SC_TEST_RECORD": str(record), **(extra_env or {})}
     result = subprocess.run([sys.executable, str(bin_dir / name), "do it"], env=env, capture_output=True, text=True,
                             timeout=60, cwd=tmp_path)
     assert result.returncode == 0, result.stderr
@@ -55,6 +55,14 @@ def run_launcher(tmp_path, name, scripts_dir):
 @pytest.mark.parametrize("name", sorted(LAUNCHERS))
 def test_every_launcher_gives_pi_the_owner_context_byte_for_byte(tmp_path, name):
     assert run_launcher(tmp_path, name, IMAGE_DIR) == CONTEXT.read_bytes()
+
+
+@pytest.mark.parametrize("name", sorted(LAUNCHERS))
+def test_owner_context_off_is_the_only_switch_and_leaves_no_file(tmp_path, name):
+    (tmp_path / "off").mkdir()
+    (tmp_path / "on").mkdir()
+    assert run_launcher(tmp_path / "off", name, IMAGE_DIR, {"SC_OWNER_CONTEXT": "off"}) is None
+    assert run_launcher(tmp_path / "on", name, IMAGE_DIR, {"SC_OWNER_CONTEXT": "on"}) == CONTEXT.read_bytes()
 
 
 @pytest.mark.parametrize("name", sorted(LAUNCHERS))

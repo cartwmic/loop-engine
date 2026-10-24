@@ -16,8 +16,11 @@ OWNER_CONTEXT = Path(__file__).resolve().parent / "owner-context" / "design-prin
 
 
 def write_owner_context(directory):
-    """Pi loads <agent dir>/AGENTS.md as the global context file; give each per-call agent dir the owner's text."""
-    if OWNER_CONTEXT.is_file():
+    """Pi loads <agent dir>/AGENTS.md as the global context file; give each per-call agent dir the owner's text.
+
+    SC_OWNER_CONTEXT=off skips it: the labelled no-principles control (a native arm whose driver_command is
+    `env SC_OWNER_CONTEXT=off arm-native`), same image, nothing else different."""
+    if os.environ.get("SC_OWNER_CONTEXT") != "off" and OWNER_CONTEXT.is_file():
         shutil.copyfile(OWNER_CONTEXT, Path(directory) / "AGENTS.md")
 
 

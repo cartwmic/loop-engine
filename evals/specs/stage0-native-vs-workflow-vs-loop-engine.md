@@ -93,8 +93,9 @@ For every (task, repetition) block, all arms get:
   OpenSpec, and the Loop Engine driver and its `sc-implement` and `sc-review` children). It is written inline
   into each per-call Pi agent directory, so it is always in context and does not depend on the model choosing to
   read a path. It is not in the case repository, and the base prompt (appendix B) is unchanged. The arms image
-  pins its hash. Delivery is proved without a model call (G11); every report states the hash. The principles
-  shape design and review, so rows run without the file are not comparable with rows run with it.
+  pins its hash. Delivery is proved without a live or paid model call (G11); every report states the hash. A labelled control,
+  native without the principles (`SC_OWNER_CONTEXT=off` on the same image), measures the file's own effect. The
+  principles shape design and review, so rows run without the file are not comparable with rows run with it.
 - The same caps per task class (section 7) and the same price table for API-equivalent dollars.
 - The same hidden tests and the same grader (section 5). Arms never see tests, brief or grader.
 
