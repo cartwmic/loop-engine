@@ -2,7 +2,9 @@
 
 ## Public surface
 
-Primary commands: `start`, `list`, `show`, `append`, `event`, `history`, `terminate`. Additional commands: targeted `read`, terminal `explore`, passive `monitor`, explicit `reclaim`. Monitoring observes durable state, not external execution. Providers use `describe` and `evaluate` transport, plus optional `capture` and `admit`.
+Primary commands: `start`, `list`, `show`, `append`, `event`, `history`, `terminate`. Additional commands: targeted `read`, terminal `explore`, passive `monitor`, explicit `reclaim`. Monitoring observes durable state, not external execution.
+
+`list` accepts optional `--lifecycle active|final|terminated`, `--label SUBSTRING` and `--provider NAME` filters; with none, every run is listed. `read` kinds are `history`, `delta`, `context`, `record`, `assignment`, `error`, `attempt`, `stdout` and `stderr`. `read RUN --kind context [--record-kind KIND] [--cursor N] [--limit N]` pages headers of the run's context records (`id`, `kind`, `sequence`, `data_bytes` and top-level scalar fields, strings cut at 80 characters) without transcripts; `read RUN --kind record --id ID [--pointer POINTER]` returns that record exactly as full show lists it, or a JSON Pointer slice of it (for example `/data/findings`). `history` entries that add context carry `context_kind`. None of these reads arm mutation, and a closed pipe (`| head`) ends output quietly. Providers use `describe` and `evaluate` transport, plus optional `capture` and `admit`.
 
 Providers that opt in (software-change, research and policy-document) also answer an optional `capture` operation: when a new run leaves an artifact's owning phase forward, by checked approval or owner override, the engine commits a `retained-artifacts` context record with that artifact's exact bytes in the same transaction. Full `show` and `history` expose these records after the run's files are gone; each entry has `name`, `sha256`, `size` and either `content` (`encoding` `utf-8` or `base64`), `same_as` (the record holding identical earlier content) or `absent: true`. Drafts between exits are not retained, and runs started before this capability have none.
 

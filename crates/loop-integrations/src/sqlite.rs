@@ -183,6 +183,12 @@ pub struct TargetedReadRequest {
     /// Original-stream byte offset.
     pub offset: u64,
     pub limit: u32,
+    /// `context` reads: only records of this kind.
+    pub record_kind: Option<String>,
+    /// `record` reads: the context record to return.
+    pub record_id: Option<String>,
+    /// `record` reads: JSON Pointer into the complete context record.
+    pub pointer: Option<String>,
 }
 
 impl SqlitePersistence {
@@ -265,6 +271,24 @@ impl SqlitePersistence {
         let _ = connection.progress_handler(0, None::<fn() -> bool>);
         let _ = connection.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS));
         result
+    }
+
+    /// Context record kinds by ID, read without decoding record data.
+    pub fn context_record_kinds(
+        &self,
+        run_id: &RunId,
+    ) -> Result<std::collections::BTreeMap<String, String>, PersistenceError> {
+        let connection = self.lock()?;
+        let _ = load_required_run(&connection, run_id)?;
+        let mut statement = connection
+            .prepare("SELECT record_id, kind FROM context_records WHERE run_id = ?1")
+            .map_err(sqlite_failure)?;
+        let rows = statement
+            .query_map(params![run_id.as_str()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(sqlite_failure)?;
+        rows.map(|row| row.map_err(sqlite_failure)).collect()
     }
 
     pub fn read_bounded_observation(

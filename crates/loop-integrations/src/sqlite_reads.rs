@@ -1,5 +1,7 @@
 use super::{load_required_run, sqlite_failure, TargetedReadRequest};
-use loop_core::{AssignmentLabel, PersistenceError, PersistenceFailure, RunId};
+use loop_core::{
+    AssignmentLabel, ContextRecord, PersistenceError, PersistenceFailure, RunId, Timestamp,
+};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -72,9 +74,23 @@ pub(super) fn read_targeted(
                 let (sequence, occurred_at, action) = row.map_err(sqlite_failure)?;
                 let action: Value = serde_json::from_str(&action)
                     .map_err(|error| issue("history-decode-failed", error.to_string()))?;
-                items.push(
-                    json!({"sequence":sequence,"occurred_at_ms":occurred_at,"action":action}),
-                );
+                let mut item =
+                    json!({"sequence":sequence,"occurred_at_ms":occurred_at,"action":action});
+                // Projection of the stored record's kind; the stored action is unchanged.
+                if let Some(id) = item["action"]["context_record_id"].as_str() {
+                    let context_kind = transaction
+                        .query_row(
+                            "SELECT kind FROM context_records WHERE run_id = ?1 AND record_id = ?2",
+                            params![run_id.as_str(), id],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .optional()
+                        .map_err(sqlite_failure)?;
+                    if let Some(context_kind) = context_kind {
+                        item["context_kind"] = Value::String(context_kind);
+                    }
+                }
+                items.push(item);
             }
             drop(statement);
             let changed_invocations = items
@@ -168,12 +184,212 @@ pub(super) fn read_targeted(
             )?;
             read_attempt_page(transaction, run_id, request, delta_sequence, unindexed)
         }
+        "context" => read_context_headers(&transaction, run_id, request, delta_sequence),
+        "record" => read_record(&transaction, run_id, request, delta_sequence),
         "stdout" | "stderr" => read_stream(transaction, run_id, request, deadline, delta_sequence),
         other => Err(issue(
             "invalid-read-kind",
             format!("unsupported read kind `{other}`"),
         )),
     }
+}
+
+/// Paged headers of context records: ID, kind, sequence, stored data size and
+/// the record's top-level scalar fields. No field is interpreted.
+fn read_context_headers(
+    connection: &Connection,
+    run_id: &RunId,
+    request: &TargetedReadRequest,
+    delta_sequence: u64,
+) -> Result<Value, PersistenceError> {
+    let after = parse_cursor(request.cursor.as_deref(), 0)?;
+    let filter = request.record_kind.as_deref();
+    let total = connection
+        .query_row(
+            "SELECT COUNT(*) FROM context_records WHERE run_id = ?1 AND (?2 IS NULL OR kind = ?2)",
+            params![run_id.as_str(), filter],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sqlite_failure)? as u64;
+    let remaining = connection
+        .query_row(
+            "SELECT COUNT(*) FROM context_records
+             WHERE run_id = ?1 AND (?2 IS NULL OR kind = ?2) AND sequence > ?3",
+            params![run_id.as_str(), filter, to_sql_i64(after)?],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sqlite_failure)? as u64;
+    let mut statement = connection
+        .prepare(
+            "SELECT record_id, sequence, kind, data_json FROM context_records
+             WHERE run_id = ?1 AND (?2 IS NULL OR kind = ?2) AND sequence > ?3
+             ORDER BY sequence ASC LIMIT ?4",
+        )
+        .map_err(sqlite_failure)?;
+    let rows = statement
+        .query_map(
+            params![
+                run_id.as_str(),
+                filter,
+                to_sql_i64(after)?,
+                i64::from(request.limit)
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .map_err(sqlite_failure)?;
+    let mut items = Vec::new();
+    for row in rows {
+        let (id, sequence, kind, data_json) = row.map_err(sqlite_failure)?;
+        let data: Value = serde_json::from_str(&data_json)
+            .map_err(|error| issue("context-decode-failed", error.to_string()))?;
+        items.push(json!({
+            "id":id,"kind":kind,"sequence":sequence,
+            "data_bytes":data_json.len(),"scalars":scalar_preview(&data)
+        }));
+    }
+    let next = items.last().and_then(|item| item["sequence"].as_u64());
+    let truncated = remaining > items.len() as u64;
+    Ok(json!({
+        "schema_version":1,"kind":"context","state":"available","total":total,
+        "remaining":remaining,"limit":request.limit,"cursor":after,
+        "next_cursor":if truncated {next} else {None},
+        "truncated":truncated,"delta_sequence":delta_sequence,"items":items
+    }))
+}
+
+/// Top-level string, number, boolean and null fields; strings cut at 80 characters.
+fn scalar_preview(data: &Value) -> Value {
+    let mut preview = serde_json::Map::new();
+    for (key, value) in data.as_object().into_iter().flatten() {
+        match value {
+            Value::String(text) if text.chars().count() > 80 => {
+                let cut = text.chars().take(80).collect::<String>();
+                preview.insert(key.clone(), Value::String(format!("{cut}…")));
+            }
+            Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null => {
+                preview.insert(key.clone(), value.clone());
+            }
+            Value::Array(_) | Value::Object(_) => {}
+        }
+    }
+    Value::Object(preview)
+}
+
+/// One stored context record exactly as `show --view full` lists it, or a JSON
+/// Pointer slice of that complete record.
+fn read_record(
+    connection: &Connection,
+    run_id: &RunId,
+    request: &TargetedReadRequest,
+    delta_sequence: u64,
+) -> Result<Value, PersistenceError> {
+    let id = request
+        .record_id
+        .as_deref()
+        .ok_or_else(|| issue("invalid-read-request", "record reads require an ID"))?;
+    let row = connection
+        .query_row(
+            "SELECT sequence, kind, data_json, created_at FROM context_records
+             WHERE run_id = ?1 AND record_id = ?2",
+            params![run_id.as_str(), id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sqlite_failure)?;
+    let Some((sequence, kind, data_json, created_at)) = row else {
+        let mut statement = connection
+            .prepare(
+                "SELECT record_id FROM context_records
+                 WHERE run_id = ?1 AND instr(record_id, ?2) > 0 ORDER BY sequence LIMIT 5",
+            )
+            .map_err(sqlite_failure)?;
+        let similar = statement
+            .query_map(params![run_id.as_str(), id], |row| row.get::<_, String>(0))
+            .map_err(sqlite_failure)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_failure)?;
+        let hint = if similar.is_empty() {
+            "list IDs with `read --kind context`".to_owned()
+        } else {
+            format!("IDs containing that text: {}", similar.join(", "))
+        };
+        return Err(issue(
+            "record-not-found",
+            format!("run has no context record `{id}`; {hint}"),
+        ));
+    };
+    let sequence = u64::try_from(sequence)
+        .map_err(|_| issue("record-decode-failed", "negative record sequence"))?;
+    let record = serde_json::to_value(ContextRecord::new(
+        id.to_owned(),
+        kind,
+        serde_json::from_str::<Value>(&data_json)
+            .map_err(|error| issue("context-decode-failed", error.to_string()))?,
+        sequence.into(),
+        Timestamp::from_unix_millis(created_at),
+    ))
+    .map_err(|error| issue("record-decode-failed", error.to_string()))?;
+    let pointer = request.pointer.as_deref();
+    let value = match pointer {
+        None => &record,
+        Some(pointer) => resolve_pointer(&record, pointer)
+            .map_err(|message| issue("record-pointer-not-found", message))?,
+    };
+    Ok(json!({
+        "schema_version":1,"kind":"record","state":"available",
+        "delta_sequence":delta_sequence,"record_id":id,"pointer":pointer,"value":value
+    }))
+}
+
+/// RFC 6901 lookup that names the valid children where the pointer stops.
+fn resolve_pointer<'a>(root: &'a Value, pointer: &str) -> Result<&'a Value, String> {
+    if pointer.is_empty() {
+        return Ok(root);
+    }
+    let Some(path) = pointer.strip_prefix('/') else {
+        return Err("a pointer is empty or starts with `/`, for example `/data/findings`".to_owned());
+    };
+    let mut current = root;
+    let mut walked = String::new();
+    for raw in path.split('/') {
+        let token = raw.replace("~1", "/").replace("~0", "~");
+        let next = match current {
+            Value::Object(map) => map.get(&token),
+            Value::Array(items) => token.parse::<usize>().ok().and_then(|i| items.get(i)),
+            _ => None,
+        };
+        let Some(next) = next else {
+            let valid = match current {
+                Value::Object(map) => {
+                    let keys = map.keys().take(40).cloned().collect::<Vec<_>>();
+                    format!("keys {}", keys.join(", "))
+                }
+                Value::Array(items) => format!("indexes 0 to {}", items.len().saturating_sub(1)),
+                _ => "none, it is a scalar".to_owned(),
+            };
+            return Err(format!(
+                "pointer segment `{raw}` not found after `{walked}`; valid next: {valid}"
+            ));
+        };
+        walked.push('/');
+        walked.push_str(raw);
+        current = next;
+    }
+    Ok(current)
 }
 
 fn read_assignment_page(
