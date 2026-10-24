@@ -14,7 +14,7 @@ ROLE = "role-driver"
 
 def load_pi_role():
     """pi-role.py owns the model configuration and the session hook; the arm launchers reuse them unchanged."""
-    spec = importlib.util.spec_from_file_location("pi_role", ROOT / "pi-role.py")
+    spec = importlib.util.spec_from_file_location("pi_role", Path(__file__).resolve().parent / "pi-role.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -59,6 +59,7 @@ def main():
             return status
     with tempfile.TemporaryDirectory(prefix="pi-arm-") as directory:
         Path(directory, "models.json").write_text(json.dumps(PI_ROLE.configuration(ROLE)))
+        PI_ROLE.write_owner_context(directory)
         env = dict(os.environ, PI_CODING_AGENT_DIR=directory)
         command = ["pi", "--print", *PI_ROLE.session_arguments(), "--no-extensions", "--no-skills",
                    "--no-prompt-templates", "--no-themes", "--provider", "inspect",

@@ -60,7 +60,7 @@ its installer and is optional for Stage 2.
 
 The following are **not** differences and must be identical: model, thinking level, Pi version, container
 image base, tool set, case version, starting repository bytes and baseline commit, request text,
-simulated owner, hidden tests, grader, caps. See section 3.
+simulated owner, owner context file (bytes), hidden tests, grader, caps. See section 3.
 
 Limits we state up front. (1) Defining behavior is not disabled: S runs without subagents because Pi
 ships none; if the owner wants S with `pi-subagents`, that is a labelled variant (S+), not S. (2) L
@@ -87,6 +87,15 @@ For every (task, repetition) block, all arms get:
 - The same neutral base prompt (appendix B). It states the request, the repo path, that the owner
   is reachable only through `ask-owner` (messages are not read), no commits or pushes, stay in the
   request's scope, and "finish with a short summary of what changed and what you checked".
+- The same **owner context**: the owner's design principles (`design-principles.md` at chezmoi commit `3517fd6`,
+  8734 bytes, sha256 `82062f0e68be91969f2b6557e20557fc6407ec5d0ba9d0a314624d31e5b770bf`) as one global Pi
+  `AGENTS.md`, byte-identical in every arm and in every Pi process an arm starts (native, Superpowers,
+  OpenSpec, and the Loop Engine driver and its `sc-implement` and `sc-review` children). It is written inline
+  into each per-call Pi agent directory, so it is always in context and does not depend on the model choosing to
+  read a path. It is not in the case repository, and the base prompt (appendix B) is unchanged. The arms image
+  pins its hash. Delivery is proved without a live or paid model call (G11); every report states the hash. A labelled control,
+  native without the principles (`SC_OWNER_CONTEXT=off` on the same image), measures the file's own effect. The
+  principles shape design and review, so rows run without the file are not comparable with rows run with it.
 - The same caps per task class (section 7) and the same price table for API-equivalent dollars.
 - The same hidden tests and the same grader (section 5). Arms never see tests, brief or grader.
 
@@ -350,6 +359,7 @@ execution harness**; neither needs Claude Code, Codex or a new sandbox.
 | G7 | Paired report | `evalctl` reports per campaign and per combination; arms are not models. One campaign per trial means a small `compare` command that reads the trial summaries and renders the paired tables, ordering log and attempt history. | 1.5 days |
 | G9 | Margin as option | `DRIVER_LIMIT_MARGIN_SECONDS` is a code constant (300 s) while the hard limit also covers scoring and T3's hidden-test timeout is 1200 s. Make it a target option; no default change. | 0.5 day |
 | G10 | Stage ledger and finding ledger | Ledger script that admits commands against the remaining stage allowance (section 7) and a finding-ledger format with verification fields (section 6). | 1 day |
+| G11 | Owner context file | One helper in `pi-role.py`, reused by `pi-arm.py`, writes the pinned `design-principles.md` text as `AGENTS.md` into each per-call agent directory (all six launchers); `Dockerfile.arms` pins its sha256. Free proof: real Pi in the image against a stub OpenAI-compatible server, system prompt read back for each launcher, with a negative control on an image built before the change (`tests/test_owner_context.py`). | 0.5 day |
 | G8 | Adapter smoke tests (free) | Scripted-model proof per arm in the real container (existing scripted-backend pattern): arm starts, asks the owner, edits, exits, is scored. Proves mechanics only. | 1 day |
 
 Total about **14-17 agent-days** before the first paid trial, no model spend (scripted backends and
@@ -483,6 +493,11 @@ exceed one third. Fix and re-run Stage 1 instead.
 - **Pi version.** The image pins Pi 1.0.0, the owner's installed Pi is 1.2.0. One version for all arms.
 - **Contamination.** T1 is public. Models may know it. Capability claims use T2 and T3.
 - **Ceiling and floor effects.** T1 is probably solved by every arm; T3 may be solved by none.
+- **Owner context.** Every arm gets the same design principles (section 3), so they are not a variable between
+  arms, but they are a variable against earlier rows: Stage 1 and check-in rows ran without them. They push
+  toward the smallest design (§4, §13) and change what reviewers block on (§12), so they also act on the Loop Engine
+  reviewers. The Loop Engine arm's standing instructions (concurrent tasks, carry-forward of review evidence) are
+  workflow guidance and are given to that arm only; report them as such.
 - **Small n.** Stage 1 is a screen. Effect size and consistency, not significance.
 - **Workflow versions drift.** S, O, L pins are recorded; upstream releases (S shipped 7.0.0 on
   2026-10-10) can invalidate the arm.
