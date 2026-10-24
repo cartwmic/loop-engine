@@ -17,6 +17,12 @@ RUN test "$(pi --version)" = 1.2.0 \
        'superpowers v7.0.0 bb92a77741419a4ab5f06e711a283343f1ada0c3' \
        'openspec @fission-ai/openspec 1.14.3' > /opt/sc-evals/arms/versions.txt
 
+# Owner context: one global AGENTS.md text for every arm and role (spec section 3), pinned by hash. Source: Michael's
+# design-principles.md at chezmoi commit 3517fd6 (dot_local/share/agent-harness/design-principles.md), not edited.
+COPY owner-context/design-principles.md /opt/sc-evals/owner-context/design-principles.md
+RUN echo '82062f0e68be91969f2b6557e20557fc6407ec5d0ba9d0a314624d31e5b770bf  /opt/sc-evals/owner-context/design-principles.md' | sha256sum -c - \
+    && printf '%s\n' 'owner-context design-principles.md 82062f0e68be91969f2b6557e20557fc6407ec5d0ba9d0a314624d31e5b770bf' >> /opt/sc-evals/arms/versions.txt
+
 # The base image's pi-role.py predates the session hook, so the arms image carries the current file.
 COPY pi-role.py pi-arm.py /opt/sc-evals/
 RUN chmod 755 /opt/sc-evals/pi-role.py /opt/sc-evals/pi-arm.py \
