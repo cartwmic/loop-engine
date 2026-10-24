@@ -229,9 +229,9 @@ bytes to disguise a rewrite or use an override to supply missing review.
 An owner override of the checked hop that admits implementation to validation (the
 `reconciliation-ready` hop, or an implementation review or challenge approval that routes
 there) records no accepted implementation proof history: only the checked transition
-writes it. The run reaches validation, but the validation exit (`validation-ready`, or
-`passed` without review) is then refused with `implementation-proof-history is missing`,
-and no later override supplies it. Warn the owner before overriding there. To recover, take
+writes it. If no accepted history exists for the current report revision, the run reaches
+validation but the validation exit (`validation-ready`, or `passed` without review) is then
+refused with `implementation-proof-history is missing`, and no later override supplies it. Warn the owner before overriding there. To recover, take
 `revise-implementation`, clear the implementation checks genuinely, then validate.
 
 The final `passed` into end still checks the complete validation-report index,
