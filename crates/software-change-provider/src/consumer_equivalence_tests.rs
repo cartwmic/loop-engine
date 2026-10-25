@@ -120,6 +120,8 @@ fn ledger(findings: Vec<Value>) -> Rec {
 struct Resolved {
     eligible: bool,
     causes: BTreeSet<String>,
+    /// A review group excluded a pass (commission also speaks for this).
+    group_excluded: bool,
     carried: bool,
     standing: BTreeSet<String>,
 }
@@ -426,6 +428,10 @@ impl Fixture {
         Resolved {
             eligible: resolved.is_eligible(),
             causes: resolved.causes().into_iter().map(|(c, _)| c).collect(),
+            group_excluded: resolved
+                .causes()
+                .iter()
+                .any(|(_, text)| text.contains("excluded (rule")),
             carried: rows.iter().any(|row| row.evidence.carried),
             standing: rows
                 .iter()
@@ -537,6 +543,7 @@ fn every_consumer_of_effective_review_evidence_agrees_with_the_resolver() {
         let Resolved {
             eligible,
             causes,
+            group_excluded,
             carried,
             standing,
         } = fixture.resolver(&history, revision);
@@ -563,7 +570,7 @@ fn every_consumer_of_effective_review_evidence_agrees_with_the_resolver() {
         }
         // Commission may stay silent about an ineligible parent only where its plain
         // claim check sees nothing wrong: no carried evidence in play, no missing axis
-        // and no group-level cause. Here that is a fresh-only history whose only causes
+        // and no group-level cause (including a group that excluded a pass). Here that is a fresh-only history whose only causes
         // are a failing judgment or the finding ledger (the checked gate still refuses).
         let carry_in_play = history.iter().any(|r| r.kind == "evidence-applicability");
         let must_speak = [
@@ -574,7 +581,10 @@ fn every_consumer_of_effective_review_evidence_agrees_with_the_resolver() {
             "unresolved_finding",
         ];
         if !eligible
-            && (carried || carry_in_play || must_speak.iter().any(|cause| causes.contains(*cause)))
+            && (carried
+                || carry_in_play
+                || group_excluded
+                || must_speak.iter().any(|cause| causes.contains(*cause)))
         {
             assert!(
                 !lines.is_empty(),
