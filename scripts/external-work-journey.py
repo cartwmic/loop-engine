@@ -122,7 +122,7 @@ def intake_counts_advice(args, root):
         configured = artifacts.parent / 'advice-profile.json'
         base = artifacts.parent / 'base.json'
         base.write_text(json.dumps(profile))
-        process([args.software,'setup','--profile',base,'--output',configured,'--enable-advice','--set','principles.enabled=false'])
+        process([args.software,'setup','--profile',base,'--output',configured,'--enable-advice'])
         profile.clear()
         profile.update(json.loads(configured.read_text()))
         profile['advice_departures'] = {'version':1,'occasions':[{'state':'explore','event':'intent-ready',
@@ -2047,9 +2047,9 @@ def profile_preparation(args, root):
             assert 'counterexample' in axes['acceptance-sufficient']['description']
     # Setup fails closed without an explicit principles choice, with a missing file, and a decline drops the axis everywhere.
     for label, extra in [('no-choice', []), ('missing-file', ['--set','principles.ref='+str(work / 'absent.md')])]:
-        refused = subprocess.run([str(args.software),'setup','--rigor','minimal','--output',work / (label+'.json'),'--decline-advice',*[str(x) for x in extra]],
+        attempt = subprocess.run([str(args.software),'setup','--rigor','minimal','--output',work / (label+'.json'),'--decline-advice',*[str(x) for x in extra]],
                                  text=True, capture_output=True)
-        assert refused.returncode != 0 and not (work / (label+'.json')).exists(), (label, refused.stdout, refused.stderr)
+        assert attempt.returncode != 0 and not (work / (label+'.json')).exists(), (label, attempt.stdout, attempt.stderr)
     declined = process([args.software,'setup','--rigor','minimal','--output',work / 'declined.json','--decline-advice','--set','principles.enabled=false'])
     assert declined['extra']['principles']['enabled'] is False
     assert not any(a['id'] == 'principles-honored' for axes in declined['review_policies'].values() for a in axes)
