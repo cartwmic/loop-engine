@@ -62207,7 +62207,7 @@
     "attested_by": "Loop Engine Lane D #58 owner-delegated calibration driver (coordinator go evt584, decision #129); fresh read-only gpt-6.1-sol:high context per row on the exact prepared packet; raw return retained in returned-v18.json; A11-shape checks only; semantic acceptance not asserted; not owner corpus promotion",
     "model": "openai-codex/gpt-6.1-sol:high",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
-    "input_sha256": "8a94130b597f0e56cb7ede003035db09938acc08d439b3a3a724825868e8a5a5",
+    "input_sha256": "0dea5a9e0a2b4ad86430fdcec40d6262b0c7a246572bd6ff3844c2d58b16f72b",
     "result_ref": "crates/software-change-provider/data/calibration/returned-v18.json#/returns/minimal-18|design-review|mechanism-forced|aggregate|design-defective"
   },
   {
@@ -62221,7 +62221,7 @@
     "attested_by": "Loop Engine Lane D #58 owner-delegated calibration driver (coordinator go evt584, decision #129); fresh read-only gpt-6.1-sol:high context per row on the exact prepared packet; raw return retained in returned-v18.json; A11-shape checks only; semantic acceptance not asserted; not owner corpus promotion",
     "model": "openai-codex/gpt-6.1-sol:high",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
-    "input_sha256": "743b93d545db847b425208cd3b05883f8bc670769340817424049080b652b381",
+    "input_sha256": "036b09ee8c0f5e9f754a23739efef1f5d96b5ee0cb31ef4466042dec964c2fd6",
     "result_ref": "crates/software-change-provider/data/calibration/returned-v18.json#/returns/minimal-18|design-review|mechanism-forced|aggregate|design-forced"
   },
   {
@@ -65127,7 +65127,7 @@
     "attested_by": "Loop Engine Lane D #58 owner-delegated calibration driver (coordinator go evt584, decision #129); fresh read-only gpt-6.1-sol:high context per row on the exact prepared packet; raw return retained in returned-v18.json; A11-shape checks only; semantic acceptance not asserted; not owner corpus promotion",
     "model": "openai-codex/gpt-6.1-sol:high",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
-    "input_sha256": "f4abf986f20779704b084b2f711bac377fd8814a608de6b0a417357e7fa7e12d",
+    "input_sha256": "5dd51c308002a1b8dcfe1129434835d79f5d145c1608817fe0cba6389a91231c",
     "result_ref": "crates/software-change-provider/data/calibration/returned-v18.json#/returns/standard-18|design-review|mechanism-forced|aggregate|design-defective"
   },
   {
@@ -65141,7 +65141,7 @@
     "attested_by": "Loop Engine Lane D #58 owner-delegated calibration driver (coordinator go evt584, decision #129); fresh read-only gpt-6.1-sol:high context per row on the exact prepared packet; raw return retained in returned-v18.json; A11-shape checks only; semantic acceptance not asserted; not owner corpus promotion",
     "model": "openai-codex/gpt-6.1-sol:high",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
-    "input_sha256": "725b759db8d4e21923ae8a92f60bb1848d166ca0be4085f194bfa1b06fdba152",
+    "input_sha256": "624d3d25d193b65ae7df6eab375b173bc92009172fbc509034c50399edb2c515",
     "result_ref": "crates/software-change-provider/data/calibration/returned-v18.json#/returns/standard-18|design-review|mechanism-forced|aggregate|design-forced"
   },
   {
@@ -68485,7 +68485,7 @@
     "attested_by": "Loop Engine Lane D #58 owner-delegated calibration driver (coordinator go evt584, decision #129); fresh read-only gpt-6.1-sol:high context per row on the exact prepared packet; raw return retained in returned-v18.json; A11-shape checks only; semantic acceptance not asserted; not owner corpus promotion",
     "model": "openai-codex/gpt-6.1-sol:high",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
-    "input_sha256": "a54b605fb86ba6987ed59100f4ea5429c2f313c37979eb145b25963e44e966cd",
+    "input_sha256": "83c6c3b35420f53b44cad21e62fa8aac456b9db9ad4d6eba7b53a4d01e5efab0",
     "result_ref": "crates/software-change-provider/data/calibration/returned-v18.json#/returns/high-rigor-18|design-review|mechanism-forced|individual|design-defective"
   },
   {
@@ -68499,7 +68499,7 @@
     "attested_by": "Loop Engine Lane D #58 owner-delegated calibration driver (coordinator go evt584, decision #129); fresh read-only gpt-6.1-sol:high context per row on the exact prepared packet; raw return retained in returned-v18.json; A11-shape checks only; semantic acceptance not asserted; not owner corpus promotion",
     "model": "openai-codex/gpt-6.1-sol:high",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
-    "input_sha256": "7b0e46640d6f06ca49bcc7cd39cdc00b284e9f8e21f23e0feb0ea04a1657e9f8",
+    "input_sha256": "d8c23ce397c3dff3aeee431e514c77e4184cbf0bfa492ecda44e8b93883bf60b",
     "result_ref": "crates/software-change-provider/data/calibration/returned-v18.json#/returns/high-rigor-18|design-review|mechanism-forced|individual|design-forced"
   },
   {
@@ -68693,7 +68693,7 @@
     "attested_by": "Loop Engine Lane D #58 owner-delegated calibration driver (coordinator go evt584, decision #129); fresh read-only gpt-6.1-sol:high context per row on the exact prepared packet; raw return retained in returned-v18.json; A11-shape checks only; semantic acceptance not asserted; not owner corpus promotion",
     "model": "openai-codex/gpt-6.1-sol:high",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
-    "input_sha256": "1107aced6f0860b28c46007c4a3b18bfea0323e76d5c7d5e8e762af39e698646",
+    "input_sha256": "140c0875f28877afb402beaa1a51a14aaa80f6c25fd7b816087ff6fc37180448",
     "result_ref": "crates/software-change-provider/data/calibration/returned-v18.json#/returns/high-rigor-18|design-review|mechanism-forced|aggregate|design-defective"
   },
   {
@@ -68707,7 +68707,7 @@
     "attested_by": "Loop Engine Lane D #58 owner-delegated calibration driver (coordinator go evt584, decision #129); fresh read-only gpt-6.1-sol:high context per row on the exact prepared packet; raw return retained in returned-v18.json; A11-shape checks only; semantic acceptance not asserted; not owner corpus promotion",
     "model": "openai-codex/gpt-6.1-sol:high",
     "invocation": "Fresh owner-attested review: copy exact config example_prompt, reviewer-protocol.md, paired fixture inputs, then request one JSON review-evidence record; no prompt adaptation.",
-    "input_sha256": "86ceebe0f38a7c32f3cda2a30dd19c76ecb214d5cd16b6d9e7e7235fc301b724",
+    "input_sha256": "577ff9e087794934bf8dfde836e29b80a7a581ed5db30e69fc3543206aab2059",
     "result_ref": "crates/software-change-provider/data/calibration/returned-v18.json#/returns/high-rigor-18|design-review|mechanism-forced|aggregate|design-forced"
   },
   {

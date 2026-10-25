@@ -595,15 +595,15 @@ mod tests {
         for (name, expected) in [
             (
                 "minimal",
-                "9dd3e9bf1ed54f48031d9c9a4bbfed34cac0b03ad507cb5aefeaf6e26f82416c",
+                "139981291da1afac8e7554a88b2265f6e60e180daf47ed6d475c074d4848898d",
             ),
             (
                 "standard",
-                "74dff2e485129346e3c4b2c4bf0c585af77357903493c754df7bc801f9b70cdf",
+                "fe26b0aa7f4e339f3ba89fe1e2f968f265625ab7f5a3ff70eba7199cfb222a0b",
             ),
             (
                 "high-rigor",
-                "9c57020dfdffbd196d4013af7610e5cdf577fe23cac7c351ff6395c10b0276bc",
+                "4247aacc17489c0cbec6e28362fcbde6a9eeb6661ee2d76bbf6913eceed86703",
             ),
         ] {
             let path = format!("crates/software-change-provider/data/configs/{name}.json");
