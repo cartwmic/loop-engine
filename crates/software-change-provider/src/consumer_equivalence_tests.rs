@@ -14,6 +14,15 @@
 //! 3. commission of the corresponding challenge, through `commission::inspect_with_stage`:
 //!    its parent-claim refusal (`missing_inputs`) and its labeled `parent_review` block.
 //!
+//! The packet commission delivers is checked too: it must hold the records the resolver's
+//! rows stand on and none that a retirement or withdrawal excluded.
+//!
+//! Left out on purpose, because they answer a different question than "does this axis
+//! have effective evidence": `commission::challenge_standing` (whether a challenge row
+//! precedes ordinary clearance, a chronology question owned by the gate's cutoff
+//! function) and the owner-rejection applicability exclusions in `option_evaluation`
+//! (narrative and checkpoint options, not review axes).
+//!
 //! Two further consumers need no generated check: admission of a challenge write
 //! (`challenge_admission`) reads record kinds, not evidence standing, and the
 //! criterion-verdict command index is one function (`validation::verified_command_index`)
@@ -108,7 +117,25 @@ fn ledger(findings: Vec<Value>) -> Rec {
     )
 }
 
-/// What one generated history looks like, for the coverage floor.
+struct Resolved {
+    eligible: bool,
+    causes: BTreeSet<String>,
+    carried: bool,
+    standing: BTreeSet<String>,
+}
+
+/// What commission said about the parent review of the challenge.
+struct Commissioned {
+    /// Refusal lines (also holds a hard error).
+    lines: Vec<String>,
+    /// The labeled parent block, when one is present.
+    parent_review: Option<Value>,
+    /// Ids of the records the packet delivers; absent on a hard error.
+    delivered: Option<BTreeSet<String>>,
+}
+
+/// What an admitted history contains, for the coverage floor. Counted after the
+/// append rules ran, so a record the rules refused is not counted.
 #[derive(Default, Debug)]
 struct Shape {
     carried: bool,
@@ -117,11 +144,26 @@ struct Shape {
     failing: bool,
 }
 
+fn observed(history: &[ContextRecord]) -> Shape {
+    let has = |prefix: &str, axis: &str| {
+        history
+            .iter()
+            .any(|r| r.id.as_str() == format!("{prefix}-{axis}"))
+    };
+    Shape {
+        carried: history.iter().any(|r| r.kind == "evidence-applicability"),
+        withdrawn: history.iter().any(|r| r.kind == "record-withdrawal"),
+        superseded: AXES
+            .iter()
+            .any(|axis| has("carry", axis) && has("fresh", axis)),
+        failing: history.iter().any(|r| r.id.as_str().starts_with("fail-")),
+    }
+}
+
 /// Independent event chains (an event follows the events it depends on), plus the
 /// finding-ledger variant. Chains are interleaved at random.
-fn generate(rng: &mut Rng) -> (Vec<Vec<Rec>>, Option<Rec>, Shape) {
+fn generate(rng: &mut Rng) -> (Vec<Vec<Rec>>, Option<Rec>) {
     let mut chains: Vec<Vec<Rec>> = Vec::new();
-    let mut shape = Shape::default();
     let mut failing = Vec::new();
     // One history in three keeps a single reviewer and assessment, so cleared
     // groups (the interesting eligible cases) are common, not lucky.
@@ -157,7 +199,6 @@ fn generate(rng: &mut Rng) -> (Vec<Vec<Rec>>, Option<Rec>, Shape) {
                     origin(rng),
                     carry(&format!("carry-{axis}"), &format!("orig-{axis}"), REVISION),
                 ]);
-                shape.carried = true;
             }
             // Fresh pass.
             2 | 3 => chains.push(vec![review(
@@ -179,7 +220,6 @@ fn generate(rng: &mut Rng) -> (Vec<Vec<Rec>>, Option<Rec>, Shape) {
                     false,
                 )]);
                 failing.push(format!("fail-{axis}"));
-                shape.failing = true;
             }
             // Nothing for this axis.
             5 => {}
@@ -195,8 +235,6 @@ fn generate(rng: &mut Rng) -> (Vec<Vec<Rec>>, Option<Rec>, Shape) {
                     carry(&format!("carry-{axis}"), &format!("orig-{axis}"), REVISION),
                     withdrawal(&format!("withdraw-{axis}"), &target),
                 ]);
-                shape.carried = true;
-                shape.withdrawn = true;
             }
             // Carried, and a fresh pass for the same axis appended before or after.
             7 => {
@@ -212,21 +250,9 @@ fn generate(rng: &mut Rng) -> (Vec<Vec<Rec>>, Option<Rec>, Shape) {
                     assessment(rng),
                     true,
                 )]);
-                shape.carried = true;
-                shape.superseded = true;
             }
-            // Old-revision judgment never carried, or carried to the wrong revision.
-            8 => {
-                let mut chain = vec![origin(rng)];
-                if rng.below(2) == 0 {
-                    chain.push(carry(
-                        &format!("carry-{axis}"),
-                        &format!("orig-{axis}"),
-                        "9",
-                    ));
-                }
-                chains.push(chain);
-            }
+            // Judgment of an old revision that was never carried.
+            8 => chains.push(vec![origin(rng)]),
             // A fresh pass that was then withdrawn.
             _ => {
                 chains.push(vec![
@@ -240,7 +266,6 @@ fn generate(rng: &mut Rng) -> (Vec<Vec<Rec>>, Option<Rec>, Shape) {
                     ),
                     withdrawal(&format!("withdraw-{axis}"), &format!("fresh-{axis}")),
                 ]);
-                shape.withdrawn = true;
             }
         }
     }
@@ -269,7 +294,7 @@ fn generate(rng: &mut Rng) -> (Vec<Vec<Rec>>, Option<Rec>, Shape) {
             ))
         }
     };
-    (chains, ledger, shape)
+    (chains, ledger)
 }
 
 /// Random interleaving of the chains; the ledger lands after the records it cites.
@@ -380,18 +405,39 @@ impl Fixture {
         history
     }
 
-    /// Resolver: eligibility, named cause categories, and whether any row is carried.
-    fn resolver(&self, history: &[ContextRecord]) -> (bool, BTreeSet<String>, bool) {
+    /// Rewrite the design at another revision (the artifact moved on).
+    fn set_revision(&self, revision: &str) {
+        std::fs::write(
+            self.root.join(SUBJECT),
+            format!(
+                r#"{{"revision":"{revision}","author":{{"name":"driver","kind":"agent"}},"elements":[{{"name":"x"}},{{"name":"y"}}],"decisions":[]}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    /// Resolver: eligibility, named cause categories, whether any row is carried,
+    /// and the records its rows stand on (judgments and the applicability that carried them).
+    fn resolver(&self, history: &[ContextRecord], revision: &str) -> Resolved {
         let owner = evidence::AuthorIdentity::new("driver", "agent");
         let resolved =
-            evidence::resolve_gate(&self.input, history, GATE, SUBJECT, REVISION, &owner).unwrap();
-        let categories = resolved.causes().into_iter().map(|(c, _)| c).collect();
-        let carried = resolved
-            .evidence
-            .rows
-            .iter()
-            .any(|row| row.evidence.carried);
-        (resolved.is_eligible(), categories, carried)
+            evidence::resolve_gate(&self.input, history, GATE, SUBJECT, revision, &owner).unwrap();
+        let rows = &resolved.evidence.rows;
+        Resolved {
+            eligible: resolved.is_eligible(),
+            causes: resolved.causes().into_iter().map(|(c, _)| c).collect(),
+            carried: rows.iter().any(|row| row.evidence.carried),
+            standing: rows
+                .iter()
+                .flat_map(|row| {
+                    [
+                        Some(row.evidence.source_id.clone()),
+                        row.evidence.applicability_id.clone(),
+                    ]
+                })
+                .flatten()
+                .collect(),
+        }
     }
 
     /// Checked gate: does the ordinary review gate's approval edge allow?
@@ -416,9 +462,9 @@ impl Fixture {
         }
     }
 
-    /// Commission of the challenge: refusal lines about the parent review, and the
-    /// labeled parent block when one is present.
-    fn commission(&self, history: &[ContextRecord]) -> (Vec<String>, Option<Value>) {
+    /// Commission of the challenge: refusal lines about the parent review, the
+    /// labeled parent block when one is present, and the records delivered.
+    fn commission(&self, history: &[ContextRecord]) -> Commissioned {
         let slot = WorkSlot::new(CHALLENGE, CHALLENGE, "approved").with_stdin_context_kinds(vec![
             "review-evidence".into(),
             "evidence-applicability".into(),
@@ -429,19 +475,31 @@ impl Fixture {
             "initial_input": self.input
         }});
         match commission::inspect_with_stage(&input, Some(CHALLENGE), None, None) {
-            Ok(output) => (
-                output["missing_inputs"]
+            Ok(output) => Commissioned {
+                lines: output["missing_inputs"]
                     .as_array()
                     .into_iter()
                     .flatten()
                     .filter_map(|line| line.as_str().map(str::to_owned))
                     .collect(),
-                output
+                parent_review: output
                     .get("parent_review")
                     .cloned()
                     .filter(|v| !v.is_null()),
-            ),
-            Err(error) => (vec![error], None),
+                delivered: Some(
+                    output["context"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|r| r["id"].as_str().map(str::to_owned))
+                        .collect(),
+                ),
+            },
+            Err(error) => Commissioned {
+                lines: vec![error],
+                parent_review: None,
+                delivered: None,
+            },
         }
     }
 }
@@ -466,13 +524,28 @@ fn every_consumer_of_effective_review_evidence_agrees_with_the_resolver() {
     let mut seen = std::collections::BTreeMap::<&str, usize>::new();
     for seed in 1..=150u64 {
         let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-        let (chains, ledger, shape) = generate(&mut rng);
+        let (chains, ledger) = generate(&mut rng);
+        fixture.set_revision(REVISION);
         let history = fixture.append(&interleave(&mut rng, chains, ledger));
-        let at = format!("seed {seed}: {} {shape:?}", names(&history));
+        let shape = observed(&history);
+        // One history in eight is asked about after the artifact moved to a new revision.
+        let moved = rng.below(8) == 0;
+        let revision = if moved { "6" } else { REVISION };
+        fixture.set_revision(revision);
+        let at = format!("seed {seed}: {} {shape:?} moved={moved}", names(&history));
 
-        let (eligible, causes, carried) = fixture.resolver(&history);
+        let Resolved {
+            eligible,
+            causes,
+            carried,
+            standing,
+        } = fixture.resolver(&history, revision);
         let (allowed, gate_response) = fixture.gate(&history);
-        let (lines, parent_review) = fixture.commission(&history);
+        let Commissioned {
+            lines,
+            parent_review,
+            delivered,
+        } = fixture.commission(&history);
 
         // The checked gate and the resolver give the same answer.
         assert_eq!(
@@ -488,12 +561,48 @@ fn every_consumer_of_effective_review_evidence_agrees_with_the_resolver() {
                 "{at}: commission refused an eligible parent: {lines:?}"
             );
         }
+        // Commission may stay silent about an ineligible parent only where its plain
+        // claim check sees nothing wrong: no carried evidence in play, no missing axis
+        // and no group-level cause. Here that is a fresh-only history whose only causes
+        // are a failing judgment or the finding ledger (the checked gate still refuses).
         let carry_in_play = history.iter().any(|r| r.kind == "evidence-applicability");
-        if !eligible && (carried || carry_in_play) {
+        let must_speak = [
+            "missing",
+            "assessment_missing",
+            "assessment_inconsistent",
+            "mixed_authors",
+            "unresolved_finding",
+        ];
+        if !eligible
+            && (carried || carry_in_play || must_speak.iter().any(|cause| causes.contains(*cause)))
+        {
             assert!(
                 !lines.is_empty(),
                 "{at}: commission accepted an ineligible parent: {causes:?}"
             );
+        }
+        // The packet delivers the records the resolver's rows stand on, and nothing
+        // that a retirement or withdrawal excluded.
+        if let Some(delivered) = &delivered {
+            let excluded = software_change_provider::recovery::excluded_record_ids(
+                &history,
+                GATE,
+                SUBJECT,
+                Some(&json!(fixture.root)),
+            )
+            .unwrap();
+            let leaked: Vec<_> = delivered.intersection(&excluded).collect();
+            assert!(
+                leaked.is_empty(),
+                "{at}: packet delivered excluded records {leaked:?}"
+            );
+            if eligible && !moved {
+                let missing: Vec<_> = standing.difference(delivered).collect();
+                assert!(
+                    missing.is_empty(),
+                    "{at}: packet omits records the parent stands on {missing:?}"
+                );
+            }
         }
         // Every cause commission names is a cause the resolver names.
         for line in &lines {
@@ -534,6 +643,7 @@ fn every_consumer_of_effective_review_evidence_agrees_with_the_resolver() {
             ("withdrawn", shape.withdrawn),
             ("superseded", shape.superseded),
             ("failing", shape.failing),
+            ("moved", moved),
             ("eligible-with-carry", eligible && carried),
             ("refused-with-carry", !eligible && carried),
         ] {
@@ -551,6 +661,7 @@ fn every_consumer_of_effective_review_evidence_agrees_with_the_resolver() {
         "withdrawn",
         "superseded",
         "failing",
+        "moved",
         "eligible-with-carry",
         "refused-with-carry",
     ] {
