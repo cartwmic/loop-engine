@@ -11,6 +11,8 @@ mod criterion;
 mod currency;
 mod evidence;
 // Retain task-routing ledger projections for external-driver policy consumers.
+#[cfg(test)]
+mod consumer_equivalence_tests;
 #[allow(dead_code)]
 mod finding_ledger;
 mod gates;
