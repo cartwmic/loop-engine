@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.29.0] - 2026-10-24
+
+### Added
+
+- An owner can withdraw, relax, defer or clarify a reviewed requirement by recording the owner's words as ordinary `user-steering`, without revising intent, design or plan (LE-201). A criterion or goal verdict may cite an earlier, unsuperseded steering record with or instead of command evidence; the provider checks only that the record exists, is steering and is not superseded. Validation commissions list the citable steering.
+- Validation-review commissions list the command-evidence IDs a verdict may cite (`citable_evidence`), naming the original ID for each indexed applicability wrapper. Citing the wrapper itself is still refused.
+
+### Changed
+
+- Review commissions deliver other revisions' review evidence by reference (verdict, findings, grounds, size, digest and locator) instead of whole stored exchanges, so a commission's size follows the evidence applicable to its target revision.
+- The refusal for a missing implementation proof history now says that only the checked hop into validation writes it, that an owner override does not, and how to recover.
+- LE-182 states how challenge scope carries across rounds.
+
+### Compatibility
+
+- Existing runs keep their frozen profiles and review obligations. No profile, schema, template or reviewer-protocol change; no new record kind.
+
 ## [0.25.0] - 2026-10-11
 
 ### Added
