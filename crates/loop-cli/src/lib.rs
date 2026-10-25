@@ -1234,6 +1234,9 @@ fn execute_operation(
                     )
                 }
             };
+            let history = core::execute_history(HistoryRequest::new(run_id.clone()), &persistence);
+            // Read kinds after history: records are immutable, so every
+            // context entry read above has its kind here.
             let kinds = match persistence.context_record_kinds(&run_id) {
                 Ok(kinds) => kinds,
                 Err(error) => {
@@ -1244,13 +1247,12 @@ fn execute_operation(
                     )
                 }
             };
-            let outcome =
-                core::execute_history(HistoryRequest::new(run_id), &persistence).map(|history| {
-                    history
-                        .into_iter()
-                        .map(|entry| CliHistoryEntry::new(entry, &kinds))
-                        .collect::<Vec<_>>()
-                });
+            let outcome = history.map(|history| {
+                history
+                    .into_iter()
+                    .map(|entry| CliHistoryEntry::new(entry, &kinds))
+                    .collect::<Vec<_>>()
+            });
             let mut rendered = render_operation(operation, output, &outcome);
             if outcome.is_completed() {
                 // Preserve the historical result array; run-wide metadata lives

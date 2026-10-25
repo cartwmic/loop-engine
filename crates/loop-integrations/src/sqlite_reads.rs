@@ -368,10 +368,12 @@ fn resolve_pointer<'a>(root: &'a Value, pointer: &str) -> Result<&'a Value, Stri
     let mut current = root;
     let mut walked = String::new();
     for raw in path.split('/') {
-        let token = raw.replace("~1", "/").replace("~0", "~");
+        let token = unescape_pointer_token(raw).ok_or_else(|| {
+            format!("pointer segment `{raw}` has an invalid escape; write ~0 for ~ and ~1 for /")
+        })?;
         let next = match current {
             Value::Object(map) => map.get(&token),
-            Value::Array(items) => token.parse::<usize>().ok().and_then(|i| items.get(i)),
+            Value::Array(items) => array_index(&token).and_then(|i| items.get(i)),
             _ => None,
         };
         let Some(next) = next else {
@@ -392,6 +394,31 @@ fn resolve_pointer<'a>(root: &'a Value, pointer: &str) -> Result<&'a Value, Stri
         current = next;
     }
     Ok(current)
+}
+
+fn unescape_pointer_token(raw: &str) -> Option<String> {
+    let mut token = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c == '~' {
+            match chars.next()? {
+                '0' => token.push('~'),
+                '1' => token.push('/'),
+                _ => return None,
+            }
+        } else {
+            token.push(c);
+        }
+    }
+    Some(token)
+}
+
+/// RFC 6901 array index: `0` or digits with no sign or leading zero.
+fn array_index(token: &str) -> Option<usize> {
+    let canonical = token == "0"
+        || (token.starts_with(|c: char| c.is_ascii_digit() && c != '0')
+            && token.chars().all(|c| c.is_ascii_digit()));
+    canonical.then(|| token.parse().ok()).flatten()
 }
 
 fn read_assignment_page(

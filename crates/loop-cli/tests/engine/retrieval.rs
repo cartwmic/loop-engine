@@ -113,6 +113,7 @@ fn context_headers_page_filter_and_stay_small() {
     assert_eq!(first["scalars"]["result"], "pass");
     assert_eq!(first["scalars"]["round"], 3);
     assert_eq!(first["scalars"]["ok"], true);
+    assert!(first["scalars"].as_object().unwrap().contains_key("none"));
     assert!(first["scalars"]["none"].is_null());
     assert!(first["scalars"].get("nested").is_none(), "{first}");
     let long = first["scalars"]["long"].as_str().unwrap();
@@ -245,80 +246,152 @@ fn history_entries_name_the_context_kind() {
     assert_eq!(kinds, ["review-evidence", "driver-note", "review-evidence"]);
 }
 
-// bookends:LE-148 — retrieval of run context is a bounded read through the public binary, with no whole-run payload.
+// bookends:LE-148 — reads are bounded: page limits, wrong-kind options and malformed pointers refuse.
 #[test]
-fn list_filters_narrow_and_unfiltered_list_is_unchanged() {
+fn malformed_requests_and_pointers_refuse() {
     let directory = tempdir().expect("tempdir");
     let database = seeded(directory.path());
-    let persistence = SqlitePersistence::open(&database).expect("sqlite");
-    create_run(&persistence, "other-run", Some("beta"), "provider-b");
-    drop(persistence);
-    let (code, terminated, _) = cli(&database, &["terminate", "other-run"]);
-    assert_eq!(code, 0, "{terminated}");
-
-    let ids = |args: &[&str]| -> Vec<String> {
-        let (code, value, _) = cli(&database, args);
-        assert_eq!(code, 0, "{value}");
-        let mut ids: Vec<String> = value["result"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|run| run["id"].as_str().unwrap().to_owned())
-            .collect();
-        ids.sort();
-        ids
+    let refused = |args: &[&str], code: &str| {
+        let (status, value, _) = cli(&database, args);
+        assert_ne!(status, 0, "{value}");
+        assert_eq!(value["code"], code, "{value}");
     };
-    assert_eq!(ids(&["list"]), ["ctx-run", "other-run"]);
-    assert_eq!(ids(&["list", "--lifecycle", "active"]), ["ctx-run"]);
-    assert_eq!(ids(&["list", "--lifecycle=terminated"]), ["other-run"]);
-    assert_eq!(ids(&["list", "--label", "review"]), ["ctx-run"]);
-    assert_eq!(ids(&["list", "--provider", "provider-b"]), ["other-run"]);
-    assert!(ids(&["list", "--provider", "provider"]).is_empty());
-    assert_eq!(
-        ids(&[
-            "list",
-            "--lifecycle",
-            "active",
-            "--label",
-            "alpha",
-            "--provider",
-            "provider-a"
-        ]),
-        ["ctx-run"]
+    refused(
+        &["read", "ctx-run", "--kind", "context", "--limit", "0"],
+        "invalid-read-limit",
     );
-
-    let (code, bad, _) = cli(&database, &["list", "--lifecycle", "running"]);
-    assert_ne!(code, 0);
-    assert_eq!(bad["code"], "invalid-invocation", "{bad}");
-    let (code, elsewhere, _) = cli(&database, &["show", "ctx-run", "--lifecycle", "active"]);
-    assert_ne!(code, 0);
-    assert_eq!(elsewhere["code"], "invalid-invocation", "{elsewhere}");
+    refused(
+        &["read", "ctx-run", "--kind", "context", "--limit", "501"],
+        "invalid-read-limit",
+    );
+    refused(
+        &["read", "ctx-run", "--kind", "history", "--record-kind", "x"],
+        "invalid-invocation",
+    );
+    refused(
+        &["read", "ctx-run", "--kind", "context", "--id", "x"],
+        "invalid-invocation",
+    );
+    refused(
+        &["read", "ctx-run", "--kind", "context", "--pointer", "/data"],
+        "invalid-invocation",
+    );
+    let record = [
+        "read",
+        "ctx-run",
+        "--kind",
+        "record",
+        "--id",
+        "evidence-1",
+        "--pointer",
+    ];
+    // Array indexes are canonical; escapes are only ~0 and ~1.
+    for pointer in [
+        "/data/nested/findings/01",
+        "/data/nested/findings/+1",
+        "/data/nested/findings/-",
+        "/data/nested/findings/2",
+        "/data/nested~2",
+        "data/nested",
+    ] {
+        let mut args = record.to_vec();
+        args.push(pointer);
+        let (status, value, _) = cli(&database, &args);
+        assert_ne!(status, 0, "{pointer}: {value}");
+        assert_eq!(
+            value["code"], "record-pointer-not-found",
+            "{pointer}: {value}"
+        );
+    }
+    let mut args = record.to_vec();
+    args.push("/data/nested/findings/0");
+    assert_eq!(cli(&database, &args).1["result"]["value"], "f1");
 }
 
+// bookends:LE-148 — a ten-megabyte run still answers header reads through the public binary.
+#[test]
+fn context_headers_on_a_ten_megabyte_run_complete() {
+    let directory = tempdir().expect("tempdir");
+    let database = directory.path().join("loop.sqlite");
+    let persistence = SqlitePersistence::open(&database).expect("sqlite");
+    create_run(&persistence, "big-run", None, "provider-a");
+    for index in 0..100 {
+        append(
+            &persistence,
+            "big-run",
+            &format!("record-{index}"),
+            "review-evidence",
+            json!({"axis": index, "transcript": "x".repeat(100_000)}),
+        );
+    }
+    drop(persistence);
+    let started = std::time::Instant::now();
+    let (code, headers, raw) = cli(&database, &["read", "big-run", "--kind", "context"]);
+    let elapsed = started.elapsed();
+    assert_eq!(code, 0, "{headers}");
+    assert_eq!(headers["result"]["items"].as_array().unwrap().len(), 100);
+    assert!(raw.len() < 40_000, "{} bytes", raw.len());
+    assert!(elapsed.as_secs() < 5, "{elapsed:?}");
+}
+
+/// Run the binary with its output pipe already closed at the reader end, and
+/// return its stderr and whether it exited successfully before the deadline.
 #[cfg(unix)]
-// bookends:LE-148 — retrieval of run context is a bounded read through the public binary, with no whole-run payload.
+fn run_with_closed_stdout(args: &[&str]) -> (bool, String) {
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    drop(reader);
+    let mut child = Command::new(workspace_integration::binary("loop-engine"))
+        .args(args)
+        .stdout(writer)
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("loop-engine did not finish with a closed stdout pipe");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut stderr).unwrap();
+    (status.success(), stderr)
+}
+
+// bookends:LE-148 — a reader that has closed the pipe ends output quietly and successfully.
+#[cfg(unix)]
 #[test]
 fn closed_pipe_ends_output_quietly() {
     let directory = tempdir().expect("tempdir");
     let database = seeded(directory.path());
-    let mut child = Command::new(workspace_integration::binary("loop-engine"))
-        .args([
+    let db = database.to_str().expect("database");
+    for args in [
+        vec![
             "--database",
-            database.to_str().expect("database"),
+            db,
             "--json",
             "show",
             "--view",
             "full",
             "ctx-run",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn");
-    // The reader leaves before reading anything, as `| head -c 10` does.
-    drop(child.stdout.take());
-    let output = child.wait_with_output().expect("wait");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("panicked"), "{stderr}");
-    assert!(!stderr.contains("Broken pipe"), "{stderr}");
+        ],
+        vec![
+            "monitor",
+            "--run",
+            "ctx-run",
+            "--database",
+            db,
+            "--json",
+            "--poll-seconds",
+            "0.05",
+        ],
+    ] {
+        let (succeeded, stderr) = run_with_closed_stdout(&args);
+        assert!(succeeded, "{args:?}: {stderr}");
+        assert!(stderr.is_empty(), "{args:?}: {stderr}");
+    }
 }
