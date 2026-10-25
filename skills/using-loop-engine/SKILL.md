@@ -118,6 +118,8 @@ loop-engine --json show RUN --view action
 loop-engine --json show RUN --view status
 loop-engine monitor --run RUN --database /absolute/loop.db --json --attention-seconds 300
 loop-engine read RUN --kind history --cursor 1 --limit 20
+loop-engine read RUN --kind context --record-kind KIND --limit 20
+loop-engine read RUN --kind record --id RECORD [--pointer /data/field]
 loop-engine explore RUN
 ```
 
@@ -127,6 +129,17 @@ After a meaningful observed change, post a concise source-backed owner update na
 what changed and the needed action/decision before another wait or inspection.
 Use targeted read for bounded history/delta or retained historical output; missing
 execution information is unknown, not success. Explore is a terminal inspection UI.
+
+## Resuming after compaction or a handoff
+
+Read in this order; stop when you can name the next action.
+1. Find the run: `loop-engine --json list --lifecycle active --label PART` (also `--provider NAME`). A driver's directory name is not the run ID; use `result[].id`.
+2. Orient cheaply, no arming: `loop-engine show RUN --compact` (about 0.6 KB).
+3. Read what is owed with `loop-engine --json show RUN` (action view). It arms mutation, so do it when you will act.
+4. See what happened: `loop-engine --json read RUN --kind history --limit 20`. Context entries carry `context_kind`.
+5. See what exists without transcripts: `read RUN --kind context [--record-kind KIND]` pages headers (id, kind, sequence, `data_bytes`, top-level scalars). Fetch one record with `read RUN --kind record --id ID`, or a slice with `--pointer /data/findings`.
+6. Use `show --view full` only to feed a provider helper. It can reach 10 MB; write it to a file, never into your context.
+7. Do not pipe JSON through `head` to shorten it; use `--limit` and `--pointer`. Re-read the artifacts on disk before trusting a summary you wrote earlier.
 
 ## Canonical loop
 

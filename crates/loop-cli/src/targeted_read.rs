@@ -6,7 +6,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-const HELP: &str = "Usage: loop-engine read [--database DB] [--json] RUN_ID --kind history|delta|assignment|error|attempt|stdout|stderr [--assignment ID] [--invocation ID] [--cursor N] [--attempt N] [--offset N] [--limit N]\nHistory cursors are semantic sequence numbers. Assignment/attempt cursors are numeric page offsets. Stream output is exact hex-encoded original bytes.\n";
+const HELP: &str = "Usage: loop-engine read [--database DB] [--json] RUN_ID --kind history|delta|context|record|assignment|error|attempt|stdout|stderr [--assignment ID] [--invocation ID] [--cursor N] [--attempt N] [--offset N] [--limit N] [--record-kind KIND] [--id RECORD_ID] [--pointer POINTER]\n--kind context pages headers of context records (id, kind, sequence, data_bytes, top-level scalar fields cut at 80 characters); --record-kind keeps one kind. --kind record --id RECORD_ID returns that record exactly as show --view full lists it; --pointer PTR returns a JSON Pointer slice of it, such as /data/findings.\nHistory and context cursors are semantic sequence numbers. Assignment/attempt cursors are numeric page offsets. Stream output is exact hex-encoded original bytes.\n";
 const READ_BUDGET: Duration = Duration::from_millis(1100);
 
 pub(super) fn dispatch(args: &[String]) -> Option<Execution> {
@@ -128,6 +128,9 @@ fn parse(args: &[String]) -> Result<(CliOptions, RunId, TargetedReadRequest), Cl
             "--attempt" => request.attempt = Some(parse_u32(value, key)?),
             "--offset" => request.offset = parse_u64(value, key)?,
             "--limit" => request.limit = parse_u32(value, key)?,
+            "--record-kind" => request.record_kind = Some(value.clone()),
+            "--id" => request.record_id = Some(value.clone()),
+            "--pointer" => request.pointer = Some(value.clone()),
             _ => {
                 return Err(CliError::new(
                     "invalid-invocation",
@@ -141,11 +144,37 @@ fn parse(args: &[String]) -> Result<(CliOptions, RunId, TargetedReadRequest), Cl
         run_id.ok_or_else(|| CliError::new("invalid-invocation", "read requires RUN_ID"))?;
     if !matches!(
         request.kind.as_str(),
-        "history" | "delta" | "assignment" | "error" | "attempt" | "stdout" | "stderr"
+        "history"
+            | "delta"
+            | "context"
+            | "record"
+            | "assignment"
+            | "error"
+            | "attempt"
+            | "stdout"
+            | "stderr"
     ) {
         return Err(CliError::new(
             "invalid-invocation",
-            "--kind must be history, delta, assignment, error, attempt, stdout, or stderr",
+            "--kind must be history, delta, context, record, assignment, error, attempt, stdout, or stderr",
+        ));
+    }
+    if request.record_kind.is_some() && request.kind != "context" {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "--record-kind is valid only for context reads",
+        ));
+    }
+    if (request.record_id.is_some() || request.pointer.is_some()) && request.kind != "record" {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "--id and --pointer are valid only for record reads",
+        ));
+    }
+    if request.kind == "record" && request.record_id.as_deref().is_none_or(str::is_empty) {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "record reads require --id RECORD_ID",
         ));
     }
     if matches!(

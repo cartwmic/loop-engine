@@ -194,11 +194,15 @@ fn emit(o: &Options, mut p: Value, event: &str) -> Result<(), String> {
     p["sampled_at_ms"] = json!(sampled_at_ms);
     visibility::add_rendered_freshness(&mut p, sampled_at_ms);
     if o.json {
+        let line = serde_json::to_string(&p).map_err(|e| e.to_string())?;
         let mut out = io::stdout().lock();
-        serde_json::to_writer(&mut out, &p).map_err(|e| e.to_string())?;
-        writeln!(out)
-            .and_then(|()| out.flush())
-            .map_err(|e| e.to_string())?;
+        if let Err(e) = writeln!(out, "{line}").and_then(|()| out.flush()) {
+            // A reader that closed the pipe has all it wanted.
+            if e.kind() == io::ErrorKind::BrokenPipe {
+                std::process::exit(0);
+            }
+            return Err(e.to_string());
+        }
     } else {
         eprintln!("{event}: {p}");
     }

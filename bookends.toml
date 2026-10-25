@@ -15,6 +15,7 @@ pathspecs = [
   "crates/bookends-check/tests/backlog_t08_history.rs",
   "crates/bookends-check/tests/backlog_t09_public.rs",
   "crates/loop-cli/tests/engine/backlog_t01.rs",
+  "crates/loop-cli/tests/engine/retrieval.rs",
   "crates/software-change-provider/tests/provider/backlog_t05.rs",
   "crates/software-change-provider/tests/provider/challenge_clearance.rs",
   "crates/software-change-provider/tests/provider/backlog_t10.rs",

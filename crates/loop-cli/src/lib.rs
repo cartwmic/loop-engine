@@ -78,7 +78,7 @@ impl Default for CliOptions {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PrimaryCommand {
     Start(StartArgs),
-    List,
+    List(ListFilter),
     Show(RunId),
     Append(AppendArgs),
     Event {
@@ -95,13 +95,39 @@ impl PrimaryCommand {
     pub const fn name(&self) -> &'static str {
         match self {
             Self::Start(_) => "start",
-            Self::List => "list",
+            Self::List(_) => "list",
             Self::Show(_) => "show",
             Self::Append(_) => "append",
             Self::Event { .. } => "event",
             Self::History(_) => "history",
             Self::Terminate(_) => "terminate",
         }
+    }
+}
+
+/// Optional `list` filters, applied to the unchanged run list.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ListFilter {
+    pub lifecycle: Option<core::Lifecycle>,
+    /// Substring of the run label.
+    pub label: Option<String>,
+    /// Exact provider name.
+    pub provider: Option<String>,
+}
+
+impl ListFilter {
+    fn matches(&self, run: &core::RunSummary) -> bool {
+        self.lifecycle
+            .is_none_or(|lifecycle| lifecycle == run.lifecycle)
+            && self.label.as_deref().is_none_or(|needle| {
+                run.label
+                    .as_deref()
+                    .is_some_and(|label| label.contains(needle))
+            })
+            && self
+                .provider
+                .as_deref()
+                .is_none_or(|name| run.provider.as_deref() == Some(name))
     }
 }
 
@@ -200,6 +226,7 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     let mut provider = None;
     let mut input = None;
     let mut label = None;
+    let mut lifecycle = None;
     let mut run_id = None;
     let mut start_id = None;
     let mut kind = None;
@@ -409,6 +436,20 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
                     input = Some(
                         value
                             .strip_prefix("--initial-input=")
+                            .expect("checked prefix")
+                            .to_owned(),
+                    );
+                    index += 1;
+                    continue;
+                }
+                "--lifecycle" => {
+                    lifecycle = Some(next_option_value(args, &mut index, token)?);
+                    continue;
+                }
+                value if value.starts_with("--lifecycle=") => {
+                    lifecycle = Some(
+                        value
+                            .strip_prefix("--lifecycle=")
                             .expect("checked prefix")
                             .to_owned(),
                     );
@@ -659,6 +700,12 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
     }
     options.compact = compact;
 
+    if command_name != "list" && lifecycle.is_some() {
+        return Err(CliError::new(
+            "invalid-invocation",
+            "--lifecycle is only valid for list",
+        ));
+    }
     if command_name != "event" && event_override.is_some() {
         return Err(CliError::new(
             "invalid-invocation",
@@ -713,6 +760,12 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
         event,
     )?;
 
+    if let PrimaryCommand::List(filter) = &mut command {
+        filter.lifecycle = lifecycle
+            .as_deref()
+            .map(parse_lifecycle_filter)
+            .transpose()?;
+    }
     if let PrimaryCommand::Event {
         override_attestation,
         advice_exception,
@@ -723,6 +776,18 @@ fn parse_args_slice(args: &[String]) -> Result<ParsedRequest, CliError> {
         *advice_exception = event_advice_exception;
     }
     Ok(ParsedRequest::Operation { options, command })
+}
+
+fn parse_lifecycle_filter(value: &str) -> Result<core::Lifecycle, CliError> {
+    match value {
+        "active" => Ok(core::Lifecycle::Active),
+        "final" => Ok(core::Lifecycle::Final),
+        "terminated" => Ok(core::Lifecycle::Terminated),
+        other => Err(CliError::new(
+            "invalid-invocation",
+            format!("--lifecycle must be active, final or terminated, not `{other}`"),
+        )),
+    }
 }
 
 fn next_option_value(args: &[String], index: &mut usize, option: &str) -> Result<String, CliError> {
@@ -812,9 +877,7 @@ fn parse_primary_command(
         }
         "list" => {
             ensure_no_positionals(&positionals, name)?;
-            if provider.is_some()
-                || input.is_some()
-                || label.is_some()
+            if input.is_some()
                 || run_id.is_some()
                 || start_id.is_some()
                 || kind.is_some()
@@ -824,10 +887,14 @@ fn parse_primary_command(
             {
                 return Err(CliError::new(
                     "invalid-invocation",
-                    "list does not accept operation arguments",
+                    "list accepts only --lifecycle, --label and --provider",
                 ));
             }
-            Ok(PrimaryCommand::List)
+            Ok(PrimaryCommand::List(ListFilter {
+                lifecycle: None,
+                label,
+                provider,
+            }))
         }
         "show" => {
             let run = run_id.or_else(|| take_positional(&mut positionals));
@@ -1105,9 +1172,10 @@ fn execute_operation(
                 .map(CliCreateRunResult::from);
             render_operation(operation, output, &outcome)
         }
-        PrimaryCommand::List => {
+        PrimaryCommand::List(filter) => {
             let outcome = core::execute_list(&persistence).map(|runs| {
                 runs.into_iter()
+                    .filter(|run| filter.matches(run))
                     .map(CliRunSummary::from)
                     .collect::<Vec<_>>()
             });
@@ -1166,13 +1234,25 @@ fn execute_operation(
                     )
                 }
             };
-            let outcome =
-                core::execute_history(HistoryRequest::new(run_id), &persistence).map(|history| {
-                    history
-                        .into_iter()
-                        .map(CliHistoryEntry::from)
-                        .collect::<Vec<_>>()
-                });
+            let history = core::execute_history(HistoryRequest::new(run_id.clone()), &persistence);
+            // Read kinds after history: records are immutable, so every
+            // context entry read above has its kind here.
+            let kinds = match persistence.context_record_kinds(&run_id) {
+                Ok(kinds) => kinds,
+                Err(error) => {
+                    return render_operation_error(
+                        operation,
+                        output,
+                        CliError::new(error.code(), error.to_string()),
+                    )
+                }
+            };
+            let outcome = history.map(|history| {
+                history
+                    .into_iter()
+                    .map(|entry| CliHistoryEntry::new(entry, &kinds))
+                    .collect::<Vec<_>>()
+            });
             let mut rendered = render_operation(operation, output, &outcome);
             if outcome.is_completed() {
                 // Preserve the historical result array; run-wide metadata lives
@@ -2166,14 +2246,25 @@ struct CliHistoryEntry {
     sequence: core::SemanticSequence,
     occurred_at: core::Timestamp,
     action: core::HistoryAction,
+    /// Kind of the added context record; a projection of the stored record,
+    /// absent for every other action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context_kind: Option<String>,
 }
 
-impl From<core::HistoryEntry> for CliHistoryEntry {
-    fn from(entry: core::HistoryEntry) -> Self {
+impl CliHistoryEntry {
+    fn new(entry: core::HistoryEntry, kinds: &std::collections::BTreeMap<String, String>) -> Self {
+        let context_kind = match &entry.action {
+            core::HistoryAction::ContextAppended { context_record_id } => {
+                kinds.get(context_record_id.as_str()).cloned()
+            }
+            _ => None,
+        };
         Self {
             sequence: entry.sequence,
             occurred_at: entry.occurred_at,
             action: entry.action,
+            context_kind,
         }
     }
 }
@@ -2376,7 +2467,7 @@ fn usage(command: Option<&str>) -> String {
         Some("history") => "Usage: loop-engine [options] history <run-id>\n".to_owned(),
         Some("explore") => "Usage: loop-engine [--database DB] explore RUN_ID\n\nRead-only interactive workflow navigator. Requires a TTY; arrows or j/k move the one-column list, [ and ] scroll detail, g/G jump, and q exits.\n".to_owned(),
         Some("terminate") => "Usage: loop-engine [options] terminate <run-id>\n".to_owned(),
-        Some("list") => "Usage: loop-engine [options] list\n".to_owned(),
+        Some("list") => "Usage: loop-engine [options] list [--lifecycle active|final|terminated] [--label SUBSTRING] [--provider NAME]\n\nFilters narrow the unchanged run list; with none, every run is listed.\n".to_owned(),
         _ => "Usage: loop-engine [options] COMMAND\n\nCommands:\n  start PROVIDER JSON [LABEL]\n  list\n  show RUN_ID\n  append RUN_ID KIND JSON\n  event RUN_ID EVENT\n  history RUN_ID\n  terminate RUN_ID\n  read RUN_ID --kind KIND\n  explore RUN_ID\n  monitor --run RUN_ID --database PATH\n  reclaim [--apply]\n\nGlobal options:\n  --json, -j\n  --database PATH\n  --config PATH\n  --timeout-ms MILLISECONDS\n  --help, -h\n  --version, -V\n".to_owned(),
     }
 }
