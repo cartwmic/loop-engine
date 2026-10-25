@@ -1512,7 +1512,7 @@ fn setup_refuses_historical_14_and_16_profiles_and_accepts_shipped_successors() 
                 .arg(source)
                 .arg("--output")
                 .arg(&output)
-                .arg("--decline-advice");
+                .args(["--decline-advice", "--set", "principles.enabled=false"]);
             command
                 .bounded_output("setup shipped profile identity")
                 .unwrap()
@@ -1542,7 +1542,7 @@ fn setup_refuses_historical_14_and_16_profiles_and_accepts_shipped_successors() 
         let accepted = run_setup(&source);
         assert_exit(&accepted, 0);
         let profile: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
-        assert_eq!(profile["config_version"], format!("{name}-17"));
+        assert_eq!(profile["config_version"], format!("{name}-18"));
     }
 }
 
@@ -1555,14 +1555,20 @@ fn software_change_setup_knobs_explain_drift_and_author_counts_cli() {
         command
             .args(["setup", "--rigor", "minimal", "--output"])
             .arg(&output)
-            .args(["--decline-advice", "--set", "criterion.required_authors=2"]);
+            .args([
+                "--decline-advice",
+                "--set",
+                "criterion.required_authors=2",
+                "--set",
+                "principles.enabled=false",
+            ]);
         command.args(additional);
         command.bounded_output("setup policy").unwrap()
     };
     assert_exit(&run_setup(&[]), 0);
     let explain_path = root.path.join("profile.json.explain.json");
     let mut explain: Value = serde_json::from_slice(&fs::read(&explain_path).unwrap()).unwrap();
-    assert_eq!(explain["base"]["id"], "minimal-17");
+    assert_eq!(explain["base"]["id"], "minimal-18");
     explain["overrides"][1]["base_value"] = json!(7);
     fs::write(&explain_path, serde_json::to_vec(&explain).unwrap()).unwrap();
     assert_exit(

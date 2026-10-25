@@ -30,10 +30,10 @@ Start a run with the profile through `loop-engine start`, using a dedicated data
 
 ### Optional narratives and owner checkpoints
 
-The current source provider's `minimal-15`, `standard-15` and `high-rigor-15` profiles default both options off. Enable selected phases during setup, before confirming and starting the run:
+The current source provider's `minimal-18`, `standard-18` and `high-rigor-18` profiles default both options off. Enable selected phases during setup, before confirming and starting the run:
 
 ```sh
-target/debug/software-change setup --rigor standard --decline-advice --output /absolute/profile.json --set narrative.design=true --set checkpoint.design=true
+target/debug/software-change setup --rigor standard --decline-advice --output /absolute/profile.json --set principles.ref=/absolute/design-principles.md --set narrative.design=true --set checkpoint.design=true
 target/debug/loop-engine --help
 ```
 

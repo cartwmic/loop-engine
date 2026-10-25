@@ -1494,7 +1494,7 @@ mod tests {
         ] {
             let value: Value = serde_json::from_str(source).unwrap();
             let parsed = validate_config(&value).unwrap();
-            assert_eq!(parsed.config_version(), format!("{name}-17"));
+            assert_eq!(parsed.config_version(), format!("{name}-18"));
             assert_eq!(value["extra"]["narratives"], json!([]));
             assert_eq!(value["extra"]["checkpoints"], json!([]));
             for (pass, base) in [

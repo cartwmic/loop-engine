@@ -359,6 +359,7 @@ needs no hand edit:
 
 ```sh
 software-change setup --rigor standard --decline-advice --output /absolute/profile.json \
+  --set principles.ref=/absolute/design-principles.md \
   --set binding.ordinary-reviewer=provider/reviewer-model@high \
   --set binding.driver=provider/driver-model@high \
   --set binding.driver-session=provider/driver-model@high
@@ -539,18 +540,20 @@ criterion/goal duties unchanged.
 
 ## Software-change narratives and checkpoints
 
-These forms use current source `software-change` with `-17` profiles; setup refuses
-historical shipped IDs through -16 and reports minimal-17, standard-17, high-rigor-17.
+These forms use current source `software-change` with `-18` profiles; setup refuses
+historical shipped IDs through -17 and reports minimal-18, standard-18, high-rigor-18.
+Every shipped-profile setup also needs a principles choice (`--set principles.ref=PATH` or
+`--set principles.enabled=false`); see the skill's Setup section.
 The installed 0.24.1 predecessor lacks these options; existing `-14` runs retain their
 frozen graph, obligations and original runtime. Load the
 [software-change skill](../crates/software-change-provider/skills/using-software-change-provider/SKILL.md#optional-narratives-and-owner-checkpoints)
 for the full procedure before driving either option.
 
-Both options default off in `minimal-17`, `standard-17` and `high-rigor-17`. Setup
+Both options default off in `minimal-18`, `standard-18` and `high-rigor-18`. Setup
 accepts repeated boolean phase settings; `false` removes a selected phase:
 
 ```sh
-software-change setup --rigor standard --decline-advice --output /absolute/profile.json --set narrative.design=true --set checkpoint.design=true
+software-change setup --rigor standard --decline-advice --output /absolute/profile.json --set principles.ref=/absolute/design-principles.md --set narrative.design=true --set checkpoint.design=true
 ```
 
 Narrative phases are `design`, `plan`, `validation`; checkpoint phases are `intent`,

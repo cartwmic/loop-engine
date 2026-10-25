@@ -286,6 +286,8 @@ fn setup_is_policy_only_and_retired_commands_refuse() {
             "--output",
             output.to_str().unwrap(),
             "--enable-advice",
+            "--set",
+            "principles.enabled=false",
         ],
         b"",
     );

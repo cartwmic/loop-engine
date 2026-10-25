@@ -14,7 +14,7 @@ DRIVER = binding('provider/driver-model', 'high')
 
 
 def setup(log, args, output, *settings, expect_ok=True):
-    argv = [args.provider, 'setup', '--rigor', 'minimal', '--decline-advice', '--output', output]
+    argv = [args.provider, 'setup', '--rigor', 'minimal', '--decline-advice', '--set', 'principles.enabled=false', '--output', output]
     for key, value in settings:
         argv += ['--set', f'{key}={value}']
     result = log.execute(argv, cwd=args.source_root, raw=True)

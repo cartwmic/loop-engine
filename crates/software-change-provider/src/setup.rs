@@ -1,10 +1,10 @@
 //! Resolve policy without launching workers, advisors, or the engine.
-use crate::{config, embedded_data, narratives, overlay};
+use crate::{config, embedded_data, narratives, overlay, principles};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{fs, path::PathBuf};
 
-const USAGE: &str = "usage: software-change setup (--rigor minimal|standard|high | --profile FILE) --output FILE (--enable-advice | --decline-advice) [--bookends] [--set KEY=VALUE (including narrative.<design|plan|validation>=true|false, checkpoint.<intent|design|plan|implementation|validation>=true|false, binding.<driver|author|implementer|ordinary-reviewer|challenge-reviewer|cold-reader|criterion-author>=provider/model@thinking and binding.driver-session=provider/model@thinking)] [--remove-axis gate.stage.axis] [--add-axis gate.stage.axis=gate.stage.axis] [--previous-explain FILE]";
+const USAGE: &str = "usage: software-change setup (--rigor minimal|standard|high | --profile FILE) --output FILE (--enable-advice | --decline-advice) [--bookends] [--set KEY=VALUE (including principles.ref=PATH or principles.enabled=false, required for shipped profiles; narrative.<design|plan|validation>=true|false, checkpoint.<intent|design|plan|implementation|validation>=true|false, binding.<driver|author|implementer|ordinary-reviewer|challenge-reviewer|cold-reader|criterion-author>=provider/model@thinking and binding.driver-session=provider/model@thinking)] [--remove-axis gate.stage.axis] [--add-axis gate.stage.axis=gate.stage.axis] [--previous-explain FILE]";
 
 pub fn run_from_args(args: &[String]) -> i32 {
     if args == ["--help"] || args == ["-h"] {
@@ -180,6 +180,9 @@ fn set(profile: &mut Value, key: &str, raw: &str) -> Result<(), String> {
     if let ["binding", name] = parts.as_slice() {
         return set_binding(profile, name, raw);
     }
+    if let ["principles", field] = parts.as_slice() {
+        return set_principles(profile, field, raw);
+    }
     let (slot, field) = match parts.as_slice() {
         ["review", gate, stage, axis, field @ ("required_authors" | "self_review" | "group")] => (
             axis_mut(profile, &format!("{gate}.{stage}.{axis}"))?,
@@ -223,9 +226,43 @@ fn set(profile: &mut Value, key: &str, raw: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn set_principles(profile: &mut Value, field: &str, raw: &str) -> Result<(), String> {
+    if !profile["extra"]["principles"].is_null() {
+        return if field == "enabled"
+            && raw == "true"
+            && profile["extra"]["principles"]["enabled"] == true
+        {
+            Ok(())
+        } else {
+            Err("principles already set for this profile; set it once".into())
+        };
+    }
+    if !principles::has_marker(profile) {
+        return Err(
+            "this profile has no principles marker; principles settings do not apply".into(),
+        );
+    }
+    match (field, raw) {
+        ("ref", path) if !path.is_empty() => {
+            let bytes = fs::read(path).map_err(|e| format!("principles file {path}: {e}"))?;
+            let text = String::from_utf8(bytes)
+                .map_err(|_| format!("principles file {path} is not valid UTF-8"))?;
+            principles::apply(profile, &principles::snapshot(path, &text)?);
+            Ok(())
+        }
+        ("enabled", "false") => {
+            principles::decline(profile);
+            Ok(())
+        }
+        ("enabled", "true") => Err("principles.enabled=true needs principles.ref=PATH".into()),
+        _ => Err("principles settings are principles.ref=PATH or principles.enabled=false".into()),
+    }
+}
+
 fn setting(profile: &Value, key: &str) -> Value {
     let parts: Vec<_> = key.split('.').collect();
     let value = match parts.as_slice() {
+        ["principles", "ref"] => profile["extra"]["principles"]["source"].clone(),
         ["review", gate, stage, axis, field] => profile["review_policies"][*gate]
             .as_array()
             .into_iter()
@@ -383,9 +420,9 @@ fn resolve(args: &[String]) -> Result<(Value, PathBuf, Value), String> {
     if base["config_version"].as_str().is_some_and(|id| {
         ["minimal", "standard", "high-rigor"]
             .iter()
-            .any(|name| (1..=16).any(|version| id == format!("{name}-{version}")) || id == *name)
+            .any(|name| (1..=17).any(|version| id == format!("{name}-{version}")) || id == *name)
     }) {
-        return Err("historical shipped profile IDs cannot be used for new setup; supported shipped IDs: minimal-17, standard-17, high-rigor-17".into());
+        return Err("historical shipped profile IDs cannot be used for new setup; supported shipped IDs: minimal-18, standard-18, high-rigor-18".into());
     }
     if base["contract_version"] != 4 {
         return Err("profile must use contract_version 4".into());
@@ -472,6 +509,9 @@ fn resolve(args: &[String]) -> Result<(Value, PathBuf, Value), String> {
             overrides.push(json!({"key":format!("axis.{target}"),"base_value":setting(&base,&format!("axis.{target}")),"value":entry}));
         }
     }
+    if principles::has_marker(&profile) {
+        return Err("choose --set principles.ref=PATH (owner principles file) or --set principles.enabled=false".into());
+    }
     fill_missing_narrative_gates(&mut profile, &base, &mut overrides)?;
     config::validate_config(&profile).map_err(|e| e.to_string())?;
     config::validate_config(&overlay::apply(&profile)).map_err(|e| e.to_string())?;
@@ -488,7 +528,7 @@ fn resolve(args: &[String]) -> Result<(Value, PathBuf, Value), String> {
             }
         }
     }
-    let mut explain = json!({"base":{"id":base["config_version"],"sha256":digest},"overrides":overrides,"effective":{"config_version":profile["config_version"],"review_policies":profile["review_policies"],"criterion_policy":profile["criterion_policy"],"advice":profile["extra"]["advice"],"bookends":profile["extra"]["bookends"],"narratives":profile["extra"]["narratives"].as_array().cloned().unwrap_or_default(),"checkpoints":profile["extra"]["checkpoints"].as_array().cloned().unwrap_or_default()},"drift":drift});
+    let mut explain = json!({"base":{"id":base["config_version"],"sha256":digest},"overrides":overrides,"effective":{"config_version":profile["config_version"],"review_policies":profile["review_policies"],"criterion_policy":profile["criterion_policy"],"advice":profile["extra"]["advice"],"bookends":profile["extra"]["bookends"],"principles":profile["extra"]["principles"],"narratives":profile["extra"]["narratives"].as_array().cloned().unwrap_or_default(),"checkpoints":profile["extra"]["checkpoints"].as_array().cloned().unwrap_or_default()},"drift":drift});
     if let Some(bindings) = profile.get(loop_core::MODEL_BINDINGS_INPUT_KEY) {
         explain["effective"][loop_core::MODEL_BINDINGS_INPUT_KEY] = bindings.clone();
     }
@@ -506,13 +546,15 @@ mod tests {
             "--output",
             "profile.json",
             "--decline-advice",
+            "--set",
+            "principles.enabled=false",
         ]
         .map(str::to_owned);
         let (profile, _, explain) = resolve(&args).unwrap();
         assert!(profile.get("work_slot_bindings").is_none());
         assert!(profile.get("advice_command").is_none());
         assert_eq!(profile["contract_version"], 4);
-        assert_eq!(explain["base"]["id"], "standard-17");
+        assert_eq!(explain["base"]["id"], "standard-18");
     }
     #[test]
     fn refuses_standard_14_for_new_setup() {
@@ -541,25 +583,27 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         assert_eq!(
             error,
-            "historical shipped profile IDs cannot be used for new setup; supported shipped IDs: minimal-17, standard-17, high-rigor-17"
+            "historical shipped profile IDs cannot be used for new setup; supported shipped IDs: minimal-18, standard-18, high-rigor-18"
         );
     }
     #[test]
     fn successor_identity_preserves_entire_retained_15_profile_policy_and_defaults() {
-        // Frozen canonical hashes of genuine HEAD 29652002312d4ba7cb36b1e59d4b00db8a0ec11a
-        // -15 source originals, not a policy reconstructed from successor assertions.
+        // Frozen canonical hashes of the shipped -18 profiles (with config_version rewritten to -15),
+        // re-pinned in #58. They previously pinned the genuine -15 originals (HEAD
+        // 29652002312d4ba7cb36b1e59d4b00db8a0ec11a); -18 adds principles-honored and tightens
+        // mechanism-forced, so that historical-continuity assertion no longer holds.
         for (name, expected) in [
             (
                 "minimal",
-                "375394f69e24d13741c5b8d798b1536624f7c48ef9d1a2ac8ce33ca22bb3e84f",
+                "139981291da1afac8e7554a88b2265f6e60e180daf47ed6d475c074d4848898d",
             ),
             (
                 "standard",
-                "42d492969c11a1bd005f7da1a53f97c9e644d22b07e7839600f539981ce057d0",
+                "fe26b0aa7f4e339f3ba89fe1e2f968f265625ab7f5a3ff70eba7199cfb222a0b",
             ),
             (
                 "high-rigor",
-                "aa9b7fce7d2d2eb1c0b093d4c53fcf98e5a0ce68b899707c285f36a845b4d2b1",
+                "4247aacc17489c0cbec6e28362fcbde6a9eeb6661ee2d76bbf6913eceed86703",
             ),
         ] {
             let path = format!("crates/software-change-provider/data/configs/{name}.json");
@@ -569,7 +613,7 @@ mod tests {
                 .unwrap()
                 .bytes;
             let mut value: Value = serde_json::from_slice(bytes).unwrap();
-            assert_eq!(value["config_version"], format!("{name}-17"));
+            assert_eq!(value["config_version"], format!("{name}-18"));
             value["config_version"] = json!(format!("{name}-15"));
             assert_eq!(
                 format!("{:x}", Sha256::digest(serde_json::to_vec(&value).unwrap())),
@@ -631,6 +675,8 @@ mod tests {
             args.push("--set".into());
             args.push((*set).into());
         }
+        args.push("--set".into());
+        args.push("principles.enabled=false".into());
         args
     }
 
@@ -726,6 +772,7 @@ mod tests {
         )
         .unwrap();
         expected["extra"]["advice"]["enabled"] = json!(false);
+        principles::decline(&mut expected);
         assert_eq!(profile_bytes(&profile), profile_bytes(&expected));
         assert!(!explain.to_string().contains("model_bindings"));
     }
@@ -797,6 +844,8 @@ mod tests {
             "profile.json",
             "--set",
             "advice.enabled=true",
+            "--set",
+            "principles.enabled=false",
         ]
         .map(str::to_owned);
         assert_eq!(
@@ -814,6 +863,8 @@ mod tests {
             "--output",
             "profile.json",
             "--decline-advice",
+            "--set",
+            "principles.enabled=false",
         ]
         .map(str::to_owned);
         resolve(&args).unwrap().0
@@ -884,6 +935,8 @@ mod tests {
             "profile.json",
             "--decline-advice",
             "--bookends",
+            "--set",
+            "principles.enabled=false",
             "--set",
             "narrative.design=true",
             "--set",
@@ -1088,6 +1141,8 @@ mod tests {
                 "--output",
                 "profile.json",
                 "--decline-advice",
+                "--set",
+                "principles.enabled=false",
             ]
             .map(str::to_owned);
             let (profile, _, explain) = resolve(&args).unwrap();
@@ -1102,10 +1157,11 @@ mod tests {
             )
             .unwrap();
             expected["extra"]["advice"]["enabled"] = json!(false);
+            principles::decline(&mut expected);
             assert_eq!(profile, expected);
             assert_eq!(explain["effective"]["narratives"], json!([]));
             assert_eq!(explain["effective"]["checkpoints"], json!([]));
-            assert_eq!(explain["overrides"].as_array().unwrap().len(), 1);
+            assert_eq!(explain["overrides"].as_array().unwrap().len(), 2);
         }
     }
 
@@ -1121,5 +1177,185 @@ mod tests {
         ] {
             assert!(resolve(&[flag.into(), "x".into()]).is_err());
         }
+    }
+
+    const PRINCIPLES_FILE: &str = "# Fictional\n\n## 1. Alpha\nA\n\n## 2. Beta gamma\nB\n";
+
+    fn principles_fixture(name: &str, text: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "software-change-principles-{}-{name}.md",
+            std::process::id()
+        ));
+        fs::write(&path, text).unwrap();
+        path
+    }
+
+    fn rigor_args(rigor: &str, sets: &[&str]) -> Vec<String> {
+        let mut args = ["--rigor", rigor, "--output", "p.json", "--decline-advice"]
+            .map(str::to_owned)
+            .to_vec();
+        for set in sets {
+            args.push("--set".into());
+            args.push((*set).into());
+        }
+        args
+    }
+
+    #[test]
+    fn shipped_profiles_need_an_explicit_principles_choice() {
+        for rigor in ["minimal", "standard", "high"] {
+            let error = resolve(&rigor_args(rigor, &[])).unwrap_err();
+            assert!(error.contains("principles.ref=PATH"), "{error}");
+            assert!(error.contains("principles.enabled=false"), "{error}");
+        }
+    }
+
+    #[test]
+    fn principles_ref_freezes_the_file_into_the_profile_and_explain() {
+        let path = principles_fixture("ref", PRINCIPLES_FILE);
+        let set = format!("principles.ref={}", path.display());
+        let (profile, _, explain) = resolve(&rigor_args("standard", &[&set])).unwrap();
+        let record = &profile["extra"]["principles"];
+        assert_eq!(record["source"], path.display().to_string());
+        assert_eq!(
+            record["sha256"],
+            format!("{:x}", Sha256::digest(PRINCIPLES_FILE.as_bytes()))
+        );
+        assert_eq!(record["bytes"], PRINCIPLES_FILE.len());
+        assert_eq!(record["headings"][1]["anchor"], "beta-gamma");
+        assert!(!principles::has_marker(&profile));
+        let gates = profile["review_policies"].as_object().unwrap();
+        let carriers: Vec<_> = gates
+            .iter()
+            .flat_map(|(gate, entries)| {
+                entries
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|entry| {
+                        entry["example_prompt"]
+                            .as_str()
+                            .unwrap()
+                            .contains(PRINCIPLES_FILE)
+                    })
+                    .map(move |entry| format!("{gate}/{}", entry["id"].as_str().unwrap()))
+            })
+            .collect();
+        assert_eq!(carriers.len(), 7, "{carriers:?}");
+        assert!(carriers.contains(&"design-adversarial-review/mechanism-forced".to_owned()));
+        assert!(!carriers
+            .iter()
+            .any(|c| c.contains("adversarial") && c.contains("principles")));
+        assert_eq!(explain["effective"]["principles"], *record);
+        let change = explain["overrides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["key"] == "principles.ref")
+            .unwrap();
+        assert_eq!(
+            change,
+            &json!({"key": "principles.ref", "base_value": null, "value": path.display().to_string()})
+        );
+        let again = resolve(&rigor_args("standard", &[&set])).unwrap().0;
+        assert_eq!(profile_bytes(&again), profile_bytes(&profile));
+        config::validate_config(&profile).unwrap();
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn principles_decline_drops_the_axis_everywhere() {
+        let (profile, _, explain) =
+            resolve(&rigor_args("high", &["principles.enabled=false"])).unwrap();
+        assert_eq!(profile["extra"]["principles"], json!({"enabled": false}));
+        for entries in profile["review_policies"].as_object().unwrap().values() {
+            assert!(entries
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|entry| entry["id"] != "principles-honored"));
+        }
+        assert!(!principles::has_marker(&profile));
+        let change = explain["overrides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["key"] == "principles.enabled")
+            .unwrap();
+        assert_eq!(
+            change,
+            &json!({"key": "principles.enabled", "base_value": false, "value": false})
+        );
+    }
+
+    #[test]
+    fn principles_settings_refuse_bad_and_conflicting_choices() {
+        let good = principles_fixture("good", PRINCIPLES_FILE);
+        let headingless = principles_fixture("none", "no headings here\n");
+        let dup = principles_fixture("dup", "## 1. Same\na\n## 2. Same\nb\n");
+        let good_set = format!("principles.ref={}", good.display());
+        let cases: Vec<(Vec<&str>, &str)> = vec![
+            (
+                vec!["principles.ref=/no/such/principles.md"],
+                "principles file",
+            ),
+            (vec!["principles.enabled=true"], "needs principles.ref=PATH"),
+            (
+                vec!["principles.enabled=maybe"],
+                "principles.ref=PATH or principles.enabled=false",
+            ),
+            (
+                vec!["principles.ref="],
+                "principles.ref=PATH or principles.enabled=false",
+            ),
+            (vec!["principles.enabled=false", &good_set], "already set"),
+            (vec![&good_set, "principles.enabled=false"], "already set"),
+            (vec![&good_set, &good_set], "already set"),
+        ];
+        for (sets, needle) in cases {
+            let error = resolve(&rigor_args("minimal", &sets)).unwrap_err();
+            assert!(error.contains(needle), "{sets:?}: {error}");
+        }
+        for (path, needle) in [
+            (&headingless, "no \"## \" headings"),
+            (&dup, "duplicate anchor"),
+        ] {
+            let set = format!("principles.ref={}", path.display());
+            let error = resolve(&rigor_args("minimal", &[&set])).unwrap_err();
+            assert!(error.contains(needle), "{error}");
+        }
+        for path in [good, headingless, dup] {
+            fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn reused_profile_keeps_its_snapshot_and_needs_no_new_choice() {
+        let path = principles_fixture("reuse", PRINCIPLES_FILE);
+        let set = format!("principles.ref={}", path.display());
+        let (first, _, _) = resolve(&rigor_args("minimal", &[&set])).unwrap();
+        let profile_path = std::env::temp_dir().join(format!(
+            "software-change-principles-{}-reuse.json",
+            std::process::id()
+        ));
+        fs::write(&profile_path, serde_json::to_vec(&first).unwrap()).unwrap();
+        let args = [
+            "--profile",
+            profile_path.to_str().unwrap(),
+            "--output",
+            "p.json",
+            "--decline-advice",
+        ]
+        .map(str::to_owned);
+        let (second, _, _) = resolve(&args).unwrap();
+        assert_eq!(second["extra"]["principles"], first["extra"]["principles"]);
+        let mut again = args.to_vec();
+        again.extend(["--set".into(), set]);
+        assert!(resolve(&again).unwrap_err().contains("already set"));
+        let mut other = args.to_vec();
+        other.extend(["--set".into(), "principles.enabled=false".into()]);
+        assert!(resolve(&other).unwrap_err().contains("already set"));
+        fs::remove_file(path).unwrap();
+        fs::remove_file(profile_path).unwrap();
     }
 }

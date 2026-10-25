@@ -586,6 +586,7 @@ fn report_ledger_derives_current_checkpoint_instead_of_copying_state() {
         "tasks-actually-done",
         "no-scope-creep",
         "design-faithful-final",
+        "principles-honored",
     ]
     .into_iter()
     .enumerate()
