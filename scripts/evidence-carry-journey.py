@@ -727,7 +727,7 @@ def intent_cases(args, root):
         ctx = start_at(args, root / name, 'minimal', INTENT_GATE)
         policy = policies(ctx, INTENT_GATE)
         aggregate = [a for a, p in policy.items() if p['group'] == 'intent-review.aggregate']
-        require(len(aggregate) == 8, aggregate)
+        require(len(aggregate) == 9 and 'principles-honored' in aggregate, aggregate)
         first = judge(ctx, INTENT_GATE, INTENT, aggregate, 'reviewer-a', 'A1', locators=intent_locators(aggregate))
         stale = [a for a in aggregate if a in CITES_ACCEPTANCE]
         return ctx, aggregate, first, [a for a in aggregate if a not in stale], stale, intent_revise(ctx, change)
@@ -737,14 +737,14 @@ def intent_cases(args, root):
         ledger(ctx, INTENT_GATE, INTENT)
         return compare(ctx, INTENT_CHALLENGE, expect=expect, label=label)
 
-    # (a) floor 1: six axes carried from one author, two freshly passed by another.
-    ctx, aggregate, first, kept, stale, revision = prepared('six-carried-two-fresh', True)
+    # (a) floor 1: seven axes carried from one author, two freshly passed by another.
+    ctx, aggregate, first, kept, stale, revision = prepared('seven-carried-two-fresh', True)
     for axis in kept:
         carry(ctx, first[axis], INTENT, revision)
     judge(ctx, INTENT_GATE, INTENT, stale, 'reviewer-b', 'B1', locators=intent_locators(stale))
-    row = finish(ctx, 'AC-6(a) six carried from one author, two fresh from another, criterion text changed')
+    row = finish(ctx, 'AC-6(a) seven carried from one author, two fresh from another, criterion text changed')
     parts = row['parent_review']['parts']
-    require(len([p for p in parts if p['label'] == 'original judgment']) == 6, parts)
+    require(len([p for p in parts if p['label'] == 'original judgment']) == len(kept), parts)
     labels_by_axis = {p['axis']: p['label'] for p in parts if p['label'] in ('fresh review', 'original judgment')
                       or p['label'].startswith('re-appended')}
     # Every freshly judged axis is labeled fresh (not a re-append of an earlier assessment),
@@ -752,20 +752,20 @@ def intent_cases(args, root):
     require(all(labels_by_axis[axis] == 'fresh review' for axis in stale), (stale, labels_by_axis))
     require(not any(p['label'].startswith('re-appended') for p in parts), parts)
     rows.append(trim(row))
-    # (b) floor 1: three carried, five fresh from the same reviewer name under a new assessment.
-    ctx, aggregate, first, kept, stale, revision = prepared('three-carried-five-fresh', True)
+    # (b) floor 1: three carried, six fresh from the same reviewer name under a new assessment.
+    ctx, aggregate, first, kept, stale, revision = prepared('three-carried-six-fresh', True)
     for axis in kept[:3]:
         carry(ctx, first[axis], INTENT, revision)
     fresh = stale + kept[3:]
     judge(ctx, INTENT_GATE, INTENT, fresh, 'reviewer-a', 'A2', locators=intent_locators(fresh))
-    rows.append(trim(finish(ctx, 'AC-6(b) three carried, five fresh from the same reviewer under a new assessment')))
-    # Six carried plus two fresh axes from two different authors.
-    ctx, aggregate, first, kept, stale, revision = prepared('six-carried-two-authors', True)
+    rows.append(trim(finish(ctx, 'AC-6(b) three carried, six fresh from the same reviewer under a new assessment')))
+    # Seven carried plus two fresh axes from two different authors.
+    ctx, aggregate, first, kept, stale, revision = prepared('seven-carried-two-authors', True)
     for axis in kept:
         carry(ctx, first[axis], INTENT, revision)
     judge(ctx, INTENT_GATE, INTENT, [stale[0]], 'reviewer-b', 'B1', locators=intent_locators(stale))
     judge(ctx, INTENT_GATE, INTENT, [stale[1]], 'reviewer-d', 'D1', locators=intent_locators(stale))
-    rows.append(trim(finish(ctx, 'AC-6 six carried, two fresh axes from two different authors')))
+    rows.append(trim(finish(ctx, 'AC-6 seven carried, two fresh axes from two different authors')))
     # AC-12: a revision-only edit keeps every carry ...
     ctx, aggregate, first, kept, stale, revision = prepared('revision-only', False)
     for axis in aggregate:

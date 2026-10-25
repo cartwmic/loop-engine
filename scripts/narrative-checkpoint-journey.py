@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+PRINCIPLES = ROOT / 'crates/software-change-provider/data/calibration/companions/fictional-repo/design-principles.md'
 sys.dont_write_bytecode = True  # Journey artifacts/captures stay outside the checkout.
 SPEC = importlib.util.spec_from_file_location('software_journey', ROOT / 'scripts/software-change-journey.py')
 SOFTWARE = importlib.util.module_from_spec(SPEC)
@@ -88,7 +89,7 @@ class Journey:
         base = self.root / 'base.json'
         write_json(base, profile)
         selected = self.root / 'setup.json'
-        argv = [self.args.provider, 'setup', '--profile', base, '--decline-advice', '--output', selected]
+        argv = [self.args.provider, 'setup', '--profile', base, '--decline-advice', '--set', f'principles.ref={PRINCIPLES}', '--output', selected]
         enabled_narratives = ['validation'] if self.reviewless and self.final_narrative else NARRATIVES
         if self.reviewless and not self.final_narrative:
             enabled_narratives = ['design']  # Bind the real nested reviewless approval ID.

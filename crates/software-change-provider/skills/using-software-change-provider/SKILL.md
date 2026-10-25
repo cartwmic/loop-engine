@@ -48,16 +48,28 @@ Choose a shipped minimal, standard or high-rigor profile; read its exact policy 
 Generate a policy-only per-run file, explicitly choosing advice enablement:
 
 ```sh
-software-change setup --rigor standard --output /absolute/profile.json --decline-advice
-# Alternatively, use edited complete profile bytes:
+software-change setup --rigor standard --output /absolute/profile.json --decline-advice \
+  --set principles.ref=/absolute/design-principles.md
+# Alternatively, use edited complete profile bytes (no principles choice if the file already took one):
 software-change setup --profile /absolute/copied.json --output /absolute/profile.json --enable-advice
 loop-engine --json --config /absolute/providers.toml start software-change @/absolute/profile.json "change"
 ```
 
 `setup` edits policy only. Tools prepare or evaluate data, not external execution.
-Setup starts no run or worker. Current shipped source IDs are `minimal-17`, `standard-17` and `high-rigor-17`; setup refuses historical shipped IDs through -16 and reports these supported IDs. An identity bump is not semantic calibration or applicability. Shipped IDs change with releases and setup accepts no alias: a handoff or earlier confirmation that names an older ID (for example `minimal-15`) does not carry over. Confirm with the owner the ID that setup resolves, not the ID in the handoff. Preserve frozen older runtime/profile bytes. Inspect output/explanation and effective policy;
+Setup starts no run or worker. Current shipped source IDs are `minimal-18`, `standard-18` and `high-rigor-18`; setup refuses historical shipped IDs through -17 and reports these supported IDs. An identity bump is not semantic calibration or applicability. Shipped IDs change with releases and setup accepts no alias: a handoff or earlier confirmation that names an older ID (for example `minimal-15`) does not carry over. Confirm with the owner the ID that setup resolves, not the ID in the handoff. Preserve frozen older runtime/profile bytes. Inspect output/explanation and effective policy;
 --set, --add-axis and --remove-axis are explicit policy edits, not executor controls.
 Confirm every changed obligation, author floor and advice/Bookends state before start.
+
+Principles choice. A shipped profile carries a placeholder where the owner's design principles
+go, and setup refuses until you choose: `--set principles.ref=PATH` (the owner principles
+file named in the owner's global instructions; ask if there is none) or
+`--set principles.enabled=false`, which drops the `principles-honored` axis everywhere. Setup
+reads the file once and freezes its path, sha256 and per-heading anchors and hashes into
+`extra.principles` and its bytes into the `principles-honored` and design `mechanism-forced`
+prompts; a later edit to the file does not reach a started run, so say which sha a report
+used. Unreadable or headingless files, and a repeated choice, are refused. A profile used
+without setup leaves the placeholder, and its reviewer fails closed with "principles
+snapshot missing". Confirm the choice with the owner before start.
 Use --bookends only for an explicit opt-in. Read the resulting exact config/contract
 versions; do not apply current contracts to historical runs or silently migrate them.
 Register the absolute provider command under exact alias software-change.
@@ -92,8 +104,8 @@ bindings.
 
 ## Optional narratives and owner checkpoints
 
-Use the current source provider for this procedure. Its `minimal-17`, `standard-17`
-and `high-rigor-17` profiles default `extra.narratives` and `extra.checkpoints` to
+Use the current source provider for this procedure. Its `minimal-18`, `standard-18`
+and `high-rigor-18` profiles default `extra.narratives` and `extra.checkpoints` to
 empty lists. Installed 0.24.1 and existing `-14` runs retain their earlier capabilities
 and obligations; do not change their runtime or infer these options from this skill.
 
@@ -491,6 +503,14 @@ holes, not a second unrestricted search. Late findings need current evidence, vi
 obligation, consequence, validation gap and provenance (newly exposed, fix-introduced,
 previously overlooked). Known material defects are not waived by prior clearance;
 comprehensive-first and materiality burdens prohibit drip-feeding or unrelated reopening.
+
+`principles-honored` carries per heading without a new schema. The frozen snapshot cannot change
+inside a run; the artifact does. For revision N+1 give the reviewer the prior verdict lines
+and the revision delta: re-judge each heading the delta can bear on and repeat the rest as
+`carried from <record id>`. The return is still one fresh whole-axis judgment, so the carry
+rules below do not apply. If the delta cannot bear on any heading, the whole axis may be
+carried by evidence-applicability; then its group is judged per axis (see below). The
+verdict lines are part of the axis judgment and sit in `grounds.reason`.
 
 Reuse requires explicit evidence-applicability with original context-record origin,
 current target subject/revision/checkpoint, attesting_driver and reason. Preserve author,

@@ -32,6 +32,57 @@ NARRATIVE_PAIRINGS = {
 }
 
 
+# Shipped prompts carry this placeholder where setup puts the owner's principles file. Calibration
+# substitutes a fictional companion by the same function setup uses (src/principles.rs).
+PRINCIPLES_MARKER = "<<owner-principles-snapshot>>"
+PRINCIPLES_COMPANION = (
+    "crates/software-change-provider/data/calibration/companions/fictional-repo/design-principles.md"
+)
+PRINCIPLES_AXIS = "principles-honored"
+# Fixture selection for the principles axis: one passing and one failing subject per gate.
+PRINCIPLES_FIXTURES = {
+    "intent-review": (("intent-good", "pass"), ("intent-defective", "fail")),
+    "design-review": (("design-good", "pass"), ("design-overbuilt", "fail")),
+    "plan-review": (("plan-good", "pass"), ("plan-oversplit", "fail")),
+    "implementation-review": (
+        ("implementation-report-replacement-case-01", "pass"),
+        ("implementation-report-replacement-case-02", "fail"),
+    ),
+    "validation-review": (("validation-report-good", "pass"), ("validation-report-defective", "fail")),
+}
+MECHANISM_AXIS = "mechanism-forced"
+DESIGN_GATES = ("design-review", "design-adversarial-review")
+MECHANISM_PASS_FIXTURE = "design-forced"
+PREDECESSOR_SUFFIX = "-17"
+SUCCESSOR_SUFFIX = "-18"
+
+
+def principles_anchor(title: str) -> str:
+    title = title.strip()
+    match = re.match(r"[0-9]+\. ", title)
+    rest = title[match.end():] if match else title
+    return re.sub(r"[^a-z0-9]+", "-", rest.lower()).strip("-")
+
+
+def principles_snapshot_text(text: str) -> str:
+    """Python twin of principles::snapshot(..).rendered; the A11 consumer checks both agree."""
+    anchors = [principles_anchor(line[3:]) for line in text.splitlines(keepends=True) if line.startswith("## ")]
+    if not anchors or "" in anchors or len(set(anchors)) != len(anchors):
+        die("principles companion needs distinct nonempty heading anchors")
+    sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return (
+        f"Heading anchors in this snapshot: {', '.join(anchors)}.\n\n"
+        f"Principles snapshot (verbatim, sha256 {sha}):\n{text}"
+    )
+
+
+def substitute_principles_snapshot(repository: Path, prompt: str) -> str:
+    if PRINCIPLES_MARKER not in prompt:
+        return prompt
+    companion = read_bytes(repository / PRINCIPLES_COMPANION, "fictional principles companion")
+    return prompt.replace(PRINCIPLES_MARKER, principles_snapshot_text(companion.decode("utf-8")))
+
+
 def narrative_pairing(profile: str, phase: str, axis: str) -> tuple[str, str]:
     """Keep the paired universe; isolate validation seeds by profile family."""
     pair = NARRATIVE_PAIRINGS.get(phase, {}).get(axis)
@@ -607,7 +658,7 @@ def make_case(
             f"crates/software-change-provider/data/calibration/fixtures/{fixture_id}.json",
             "fixture",
         )
-        prompt = policy_prompt(profile, gate, axis, stage)
+        prompt = substitute_principles_snapshot(repository, policy_prompt(profile, gate, axis, stage))
         case_name = identity["row_key"]
         coverage_metadata: dict[str, Any] = {}
     else:
@@ -833,13 +884,14 @@ def requirement_companions_for_narrative(repository: Path) -> list[tuple[str, by
 
 
 def prepare_successor_manifest(repository: Path, manifest: list, procedure: bytes) -> list:
-    """Derive complete successor identities, never observations/applicability.
+    """Derive complete -18 identities from the -17 universe, never observations/applicability.
 
-    An attested current row is kept only when its recorded input hash equals the
-    freshly derived packet hash; otherwise preparation stops for review."""
+    Every -18 policy key takes the fixtures of its -17 key; the principles axis takes the table
+    above. An attested -18 row is kept only when its recorded input hash equals the freshly
+    derived packet hash; otherwise preparation stops for review."""
     key_of = lambda row: tuple(row[k] for k in ("config_version", "gate", "axis", "review_stage", "fixture_id"))
-    output = [row for row in manifest if not row["config_version"].endswith("-15")]
-    existing = {key_of(row): row for row in manifest if row["config_version"].endswith("-15")}
+    output = [row for row in manifest if not row["config_version"].endswith(SUCCESSOR_SUFFIX)]
+    existing = {key_of(row): row for row in manifest if row["config_version"].endswith(SUCCESSOR_SUFFIX)}
     def keep_or_new(row: dict) -> dict:
         prior = existing.get(key_of(row))
         if prior and prior["observed"] != "pending":
@@ -850,16 +902,21 @@ def prepare_successor_manifest(repository: Path, manifest: list, procedure: byte
     for name in PROFILE_NAMES:
         path = repository / f"crates/software-change-provider/data/configs/{name}.json"
         profile = read_json(path, "successor profile")
-        if profile["config_version"] != name + "-15": die("successor preparation requires v15 profiles")
+        if profile["config_version"] != name + SUCCESSOR_SUFFIX: die("successor preparation requires -18 profiles")
         for gate, policies in profile["review_policies"].items():
             for policy in policies:
-                sources = [row for row in manifest if row["config_version"] == name + "-14"
-                           and row["gate"] == gate and row["axis"] == policy["id"]
-                           and row["review_stage"] == policy["review_stage"]]
-                if policy["id"] in ("intent-sufficient", "acceptance-sufficient"):
-                    sources = [dict(fixture_id=policy["id"] + "-" + quality, gate=gate, axis=policy["id"], review_stage=policy["review_stage"], expected=result) for quality, result in (("good", "pass"), ("defective", "fail"))]
-                if policy["id"] == "parallelism-honest":
-                    sources = [dict(fixture_id=fixture, gate=gate, axis=policy["id"], review_stage=policy["review_stage"], expected=result) for fixture, result in PARALLELISM_FIXTURES]
+                if policy["id"] == PRINCIPLES_AXIS:
+                    sources = [dict(fixture_id=fixture, gate=gate, axis=policy["id"], review_stage=policy["review_stage"], expected=result)
+                               for fixture, result in PRINCIPLES_FIXTURES[gate]]
+                else:
+                    sources = [row for row in manifest if row["config_version"] == name + PREDECESSOR_SUFFIX
+                               and row["gate"] == gate and row["axis"] == policy["id"]
+                               and row["review_stage"] == policy["review_stage"]]
+                    if policy["id"] == MECHANISM_AXIS and gate in DESIGN_GATES:
+                        # The tightened prompt asks for a stated failing simpler alternative per
+                        # agent-selected mechanism, so its passing subject is design-forced.
+                        sources = [dict(row, fixture_id=MECHANISM_PASS_FIXTURE) if row["fixture_id"] == "design-good" else row
+                                   for row in sources]
                 if not sources: die(f"missing predecessor fixtures for {name}/{gate}/{policy['id']}")
                 for source in sources:
                     output.append(keep_or_new(pending_successor(repository, procedure, path, profile, source)))
@@ -877,9 +934,12 @@ def pending_successor(repository: Path, procedure: bytes, path: Path, profile: d
     row = {k: source[k] for k in ("fixture_id", "gate", "axis", "review_stage", "expected")}
     row.update(config_version=profile["config_version"], observed="pending", model="", attested_by="",
                invocation="Fresh review pending: mechanical rehash complete; owner must perform exact fresh review and attest returned evidence before green calibration.")
+    if source.get("input_framing"):
+        row["input_framing"] = source["input_framing"]
     key = "|".join(row[k] for k in ("config_version", "gate", "axis", "review_stage", "fixture_id"))
     row["input_sha256"] = make_case(repository=repository, procedure=procedure, manifest=[row],
-        profile_path=path, profile=profile, output_root=repository, identity=parse_row_key(key), hash_only=True)
+        profile_path=path, profile=profile, output_root=repository, identity=parse_row_key(key), hash_only=True,
+        input_framing=row.get("input_framing"))
     return row
 
 

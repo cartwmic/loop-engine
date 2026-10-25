@@ -1438,7 +1438,9 @@ mod tests {
                     .and_then(|guidance| guidance.get_mut("review_axes"))
                     .and_then(Value::as_array_mut)
                 {
-                    axes.retain(|axis| axis["id"] != "parallelism-honest");
+                    axes.retain(|axis| {
+                        axis["id"] != "parallelism-honest" && axis["id"] != "principles-honored"
+                    });
                 }
             }
             let bytes = serde_json::to_vec(&value).unwrap();

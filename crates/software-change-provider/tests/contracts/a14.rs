@@ -772,6 +772,12 @@ fn append_review_records(
             axes,
         );
     }
+    // principles-honored is judged by ordinary reviewers only; it has no challenge counterpart.
+    let axes: Vec<&str> = axes
+        .iter()
+        .copied()
+        .filter(|axis| *axis != "principles-honored" || !gate.ends_with("-adversarial-review"))
+        .collect();
     let start = context.len() + 1;
     for (index, axis) in axes.iter().enumerate() {
         let sequence = start + index;
@@ -871,6 +877,7 @@ fn validation_rechecks_external_results_and_reference_inputs_on_each_public_call
             "tasks-actually-done",
             "no-scope-creep",
             "design-faithful-final",
+            "principles-honored",
         ],
     );
     let implementation_request = support::base_request(
@@ -912,6 +919,7 @@ fn validation_rechecks_external_results_and_reference_inputs_on_each_public_call
             "intent-delivered",
             "docs-integrated",
             "requirement-proof-mapping",
+            "principles-honored",
         ],
     );
     let context = Value::Array(context);
@@ -1210,6 +1218,7 @@ fn scoped_external_results_verify_secondary_identity() {
             "tasks-actually-done",
             "no-scope-creep",
             "design-faithful-final",
+            "principles-honored",
         ],
     );
     let implementation_request = support::base_request(
@@ -1251,6 +1260,7 @@ fn scoped_external_results_verify_secondary_identity() {
             "intent-delivered",
             "docs-integrated",
             "requirement-proof-mapping",
+            "principles-honored",
         ],
     );
     let context = Value::Array(context);

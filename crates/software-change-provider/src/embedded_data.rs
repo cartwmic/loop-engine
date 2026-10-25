@@ -24,6 +24,9 @@ pub static FILES: &[EmbeddedFile] = &[
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/returned-v16.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/returned-v16.json")) },
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/returned-v17.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/returned-v17.json")) },
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/returned-v17-r2.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/returned-v17-r2.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/returned-v18.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/returned-v18.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/fixtures/design-forced.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/fixtures/design-forced.json")) },
+    EmbeddedFile { path: "crates/software-change-provider/data/calibration/companions/fictional-repo/design-principles.md", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/companions/fictional-repo/design-principles.md")) },
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/current-mechanical-proof.json", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/companions/fictional-repo/implementation-evidence/current-mechanical-proof.json")) },
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/companions/fictional-repo/implementation-evidence/current-proof-harness/new-current-proof.py")) },
     EmbeddedFile { path: "crates/software-change-provider/data/calibration/companions/fictional-repo/implementation-evidence/current-proof-harness/proof_support.py", bytes: include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/data/calibration/companions/fictional-repo/implementation-evidence/current-proof-harness/proof_support.py")) },
@@ -707,7 +710,7 @@ mod tests {
                 .expect("profile is in FILES");
             let profile: serde_json::Value = serde_json::from_slice(file.bytes).unwrap();
             assert_eq!(profile["contract_version"], 4);
-            assert_eq!(profile["config_version"], format!("{name}-17"));
+            assert_eq!(profile["config_version"], format!("{name}-18"));
             assert_eq!(profile["extra"]["narratives"], serde_json::json!([]));
             assert_eq!(profile["extra"]["checkpoints"], serde_json::json!([]));
             for entries in profile["review_policies"].as_object().unwrap().values() {

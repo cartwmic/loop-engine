@@ -33,25 +33,65 @@ const CURRENT_INVOCATION_V11: &str = "Fresh owner-attested review with input fra
 /// under v1+v1.1 (the rows of 059, judged by lane fresh-072, and of 060, judged by lane fresh-070, plus 061, 062, 064, 066, 067 and 068). The row of fresh-063 keeps its v1 marker and
 /// stays pending: its valid v1.1 judgment disagrees with the oracle and is kept only as external evidence.
 const FRAMED_ROWS: &[(&str, &str, &str)] = &[
-    ("high-rigor-17|validation-review|docs-integrated|aggregate|validation-report-good", "15fbc6ed92b29a32c551f8d1708079389b0f58c4ee057a0cd85755f4416697b4", INPUT_FRAMING_V11),
-    ("high-rigor-17|validation-review|docs-integrated|individual|validation-report-good", "4a89237425a325510aabadd9070b4f2db3926815e531f29c8723eac9af4e642f", INPUT_FRAMING_V11),
-    ("minimal-17|validation-adversarial-review|docs-integrated|aggregate|validation-report-good", "8b992eb95e9d06e31e47bca334db4fc37d900c0e05f9e5d8b528e2b7d79bdcc6", INPUT_FRAMING_V11),
-    ("minimal-17|validation-review|docs-integrated|aggregate|validation-report-good", "f9375ca3603be98b5c6b817b0586ac7d5c8150fba7fc96dbaa719c2a6ba1390a", INPUT_FRAMING_V11),
-    ("standard-17|validation-adversarial-review|docs-integrated|aggregate|validation-report-good", "e2c76d21227e706d0a96c375f453a9e1d924fa864d15e2dd3022cc70cf2df32e", INPUT_FRAMING_V1),
-    ("standard-17|validation-review|docs-integrated|aggregate|validation-report-good", "08944b715ab4f68a4fdcd632493089bb1c23ba12945ae90793a91cc1012d8b6c", INPUT_FRAMING_V11),
-    ("high-rigor-17|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-01", "0d7a5b2539dd7f3a93e70b2a402cd00aca41d4c847fa857d3a03aef45b71c2d5", INPUT_FRAMING_V11),
-    ("minimal-17|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-01", "0868e9e0e8b655f39c344d33f0ceb33bdc326d571f04819061ebaae735f81523", INPUT_FRAMING_V11),
-    ("minimal-17|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01", "4ba0d98ff6c06bdd8fc48fc7a80d7fe3fe67b14778862cf227ebbfb69e313589", INPUT_FRAMING_V11),
+    ("high-rigor-18|validation-review|docs-integrated|aggregate|validation-report-good", "3dbc29d931cb26ebe1df41710b8cf90640c43c0e63558d06151bc65d1dcb59d3", INPUT_FRAMING_V11),
+    ("high-rigor-18|validation-review|docs-integrated|individual|validation-report-good", "f25dcea2bbd1a4f6853fe4445d1aa05966f5d20d9b41d62388cb15c47b17ef57", INPUT_FRAMING_V11),
+    ("minimal-18|validation-adversarial-review|docs-integrated|aggregate|validation-report-good", "17ab1e3b468bbc294858caec2a67cab6b2416f13ad984674e78a22121da8af07", INPUT_FRAMING_V11),
+    ("minimal-18|validation-review|docs-integrated|aggregate|validation-report-good", "89ab5dafd30e86cca33fed8bea5ad6aff609b0aca71770b7db2e64e92ab649f2", INPUT_FRAMING_V11),
+    ("standard-18|validation-adversarial-review|docs-integrated|aggregate|validation-report-good", "eac620183471c76f22c290e194607932872824b6873017781f4a7f509ea72a0d", INPUT_FRAMING_V1),
+    ("standard-18|validation-review|docs-integrated|aggregate|validation-report-good", "dc831b563a69e833b8ac22c99712403a99273c69c80c2a1ff6c3f8c320656076", INPUT_FRAMING_V11),
+    ("high-rigor-18|implementation-review|design-faithful-final|aggregate|implementation-report-replacement-case-01", "d723cc3118fc22c43c369f78296214d0f1b7a53b14dfbffb76778e5ee3f33cee", INPUT_FRAMING_V11),
+    ("minimal-18|implementation-adversarial-review|no-scope-creep|aggregate|implementation-report-replacement-case-01", "c81af5c6d29ca87f52ad545cdb2a406720d0d6ab4703bfc1edddeefb4ddf05a9", INPUT_FRAMING_V11),
+    ("minimal-18|implementation-adversarial-review|tasks-actually-done|aggregate|implementation-report-replacement-case-01", "c958a712ec31ae181e43ea724c26879b70bccc77f4ddc7df202cdca5f4970b5a", INPUT_FRAMING_V11),
 ];
 const NEUTRAL_REVISION: &str = "r15";
-const HISTORICAL_CONFIG_SUFFIXES: &[&str] = &["-10", "-11", "-12", "-13", "-14", "-15", "-16"];
-const PREDECESSOR_CONFIG_SUFFIX: &str = "-16";
-const CURRENT_CONFIG_SUFFIX: &str = "-17";
+const PRINCIPLES_AXIS: &str = "principles-honored";
+
+/// Passing and failing subject for the principles axis at each ordinary gate (a pair per key).
+fn principles_fixtures(gate: &str) -> [&'static str; 2] {
+    match gate {
+        "intent-review" => ["intent-good", "intent-defective"],
+        "design-review" => ["design-good", "design-overbuilt"],
+        "plan-review" => ["plan-good", "plan-oversplit"],
+        "implementation-review" => [
+            "implementation-report-replacement-case-01",
+            "implementation-report-replacement-case-02",
+        ],
+        "validation-review" => ["validation-report-good", "validation-report-defective"],
+        other => panic!("the principles axis has no fixtures at {other}"),
+    }
+}
+
+const FICTIONAL_PRINCIPLES_DATA_PATH: &str =
+    "calibration/companions/fictional-repo/design-principles.md";
+
+/// Shipped prompts carry a placeholder where setup puts the owner's principles file. Calibration
+/// substitutes the fictional companion through the same function setup uses.
+fn calibration_prompt(prompt: &str) -> String {
+    if !prompt.contains(software_change_provider::principles::MARKER) {
+        return prompt.to_owned();
+    }
+    let text =
+        String::from_utf8(read_data(FICTIONAL_PRINCIPLES_DATA_PATH)).expect("UTF-8 companion");
+    let snapshot = software_change_provider::principles::snapshot(
+        "fictional-repo/design-principles.md",
+        &text,
+    )
+    .expect("fictional principles companion");
+    prompt.replace(
+        software_change_provider::principles::MARKER,
+        &snapshot.rendered,
+    )
+}
+
+const HISTORICAL_CONFIG_SUFFIXES: &[&str] =
+    &["-10", "-11", "-12", "-13", "-14", "-15", "-16", "-17"];
+const PREDECESSOR_CONFIG_SUFFIX: &str = "-17";
+const CURRENT_CONFIG_SUFFIX: &str = "-18";
 const HISTORICAL_V10_ROW_COUNT: usize = 368;
 const HISTORICAL_V11_ROW_COUNT: usize = 396;
 const HISTORICAL_ROW_COUNT: usize =
-    HISTORICAL_V10_ROW_COUNT + HISTORICAL_V11_ROW_COUNT + 396 + 396 + 420 + 612 + 612;
-const CURRENT_ROW_COUNT: usize = 612;
+    HISTORICAL_V10_ROW_COUNT + HISTORICAL_V11_ROW_COUNT + 396 + 396 + 420 + 612 + 612 + 612;
+const CURRENT_ROW_COUNT: usize = 642;
 const PARALLELISM_FIXTURES: &[&str] = &[
     "plan-good",
     "plan-defective",
@@ -63,11 +103,11 @@ const PARALLELISM_FIXTURES: &[&str] = &[
 const HISTORICAL_V10_AXIS_KEYS: usize = 184;
 const HISTORICAL_V11_AXIS_KEYS: usize = 196;
 const HISTORICAL_AXIS_KEYS: usize =
-    HISTORICAL_V10_AXIS_KEYS + HISTORICAL_V11_AXIS_KEYS + 196 + 196 + 208 + 288 + 288;
-const CURRENT_AXIS_KEYS: usize = 288;
+    HISTORICAL_V10_AXIS_KEYS + HISTORICAL_V11_AXIS_KEYS + 196 + 196 + 208 + 288 + 288 + 288;
+const CURRENT_AXIS_KEYS: usize = 303;
 const EXPECTED_AXIS_KEYS: usize = HISTORICAL_AXIS_KEYS + CURRENT_AXIS_KEYS;
 const HISTORICAL_MANIFEST_CANONICAL_SHA256: &str =
-    "591840cb4cb7f402fd6c9d7e475995d5a97a6f8e258abdf01d438efd66cef4bc";
+    "2e9e98dfa3a0e3ca4e69ffb586b33f8dab807b747832f8ac8d0e302dda6863db";
 const HISTORICAL_THROUGH_V14_CANONICAL_SHA256: &str =
     "d4ccae56ee7d3fb13fc280c51f83e623200c9ae7bd329393605a4555818eb658";
 const IMPLEMENTATION_COMPANION_LABEL: &str =
@@ -119,9 +159,9 @@ fn read_data(relative: &str) -> Vec<u8> {
 
 fn profile_name(config_version: &str) -> &'static str {
     match config_version {
-        "minimal-17" => "minimal",
-        "standard-17" => "standard",
-        "high-rigor-17" => "high-rigor",
+        "minimal-18" => "minimal",
+        "standard-18" => "standard",
+        "high-rigor-18" => "high-rigor",
         other => panic!("current calibration source records do not accept {other}"),
     }
 }
@@ -1137,6 +1177,7 @@ fn source_records_for_entry(entry: &Map<String, Value>) -> CalibrationInput {
         })
         .unwrap_or_else(|| panic!("missing {gate}/{axis} policy"))["example_prompt"]
         .as_str()
+        .map(calibration_prompt)
         .expect("example_prompt");
 
     let mut source_records = vec![
@@ -2151,6 +2192,28 @@ fn required_current_row_keys(entries: &[Value]) -> Result<BTreeSet<CalibrationRo
                         })
                         .collect();
                 }
+                if axis_id == PRINCIPLES_AXIS {
+                    fixtures = principles_fixtures(&gate)
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect();
+                }
+                if axis_id == "mechanism-forced"
+                    && matches!(gate.as_str(), "design-review" | "design-adversarial-review")
+                {
+                    // The tightened prompt asks for a stated failing simpler alternative per
+                    // agent-selected mechanism, so its passing subject is design-forced.
+                    fixtures = fixtures
+                        .into_iter()
+                        .map(|fixture| {
+                            if fixture == "design-good" {
+                                "design-forced".to_owned()
+                            } else {
+                                fixture
+                            }
+                        })
+                        .collect();
+                }
                 if axis_id == "parallelism-honest" {
                     fixtures = PARALLELISM_FIXTURES
                         .iter()
@@ -2641,7 +2704,7 @@ fn historic_v10_v11_v12_v13_v14_v15_v16_rows_remain_unchanged_and_v17_packets_us
         .iter()
         .filter(|entry| {
             let version = entry["config_version"].as_str().unwrap();
-            !(version.ends_with("-15") || version.ends_with("-16"))
+            !(version.ends_with("-15") || version.ends_with("-16") || version.ends_with("-17"))
         })
         .cloned()
         .collect();
@@ -2727,7 +2790,7 @@ fn historic_v10_v11_v12_v13_v14_v15_v16_rows_remain_unchanged_and_v17_packets_us
         .to_path_buf();
     let temporary = support::TestDir::new("calibration-history");
     let output_root = temporary.path().join("packets");
-    let row_key = "minimal-17|intent-review|solution-agnostic|aggregate|intent-good";
+    let row_key = "minimal-18|intent-review|solution-agnostic|aggregate|intent-good";
     let mut prepare = Command::new("python3");
     prepare
         .current_dir(&repository)
@@ -2758,7 +2821,7 @@ fn historic_v10_v11_v12_v13_v14_v15_v16_rows_remain_unchanged_and_v17_packets_us
         &fs::read(case_dir.join("preparation.json")).expect("preparation metadata"),
     )
     .expect("preparation JSON");
-    assert_eq!(preparation["config_version"], "minimal-17");
+    assert_eq!(preparation["config_version"], "minimal-18");
     assert_eq!(preparation["row_key"], row_key);
     for forbidden in ["expected", "observed", "attested_by", "oracle"] {
         assert!(
@@ -2931,6 +2994,7 @@ fn counterpart_keys_have_good_fail_pairs_and_good_fixtures_pass_adversarial() {
             }
             assert!(
                 fixture.ends_with("-good")
+                    || fixture == "design-forced"
                     || fixture == "implementation-report-replacement-case-01"
                     || (axis == "parallelism-honest" && fixture == "plan-serial-honest")
                     || is_narrative_gate(gate)
@@ -3155,7 +3219,7 @@ fn implementation_companion_mutation_changes_digest() {
         .find(|entry| {
             entry["gate"] == "implementation-review"
                 && entry["fixture_id"] == "implementation-report-replacement-case-01"
-                && entry["config_version"] == "standard-17"
+                && entry["config_version"] == "standard-18"
         })
         .expect("current implementation row");
     let input = source_records_for_entry(entry.as_object().expect("manifest row object"));
@@ -3476,16 +3540,16 @@ fn validation_docs_coverage_has_exact_mapped_companion_bytes() {
         }
     }
     assert_eq!(
-        historical_rows, 112,
-        "v10/v11/v12/v13/v14/v15/v16 historical docs-integrated coverage must remain unchanged"
+        historical_rows, 128,
+        "v10 through v17 historical docs-integrated coverage must remain unchanged"
     );
     assert_eq!(
         current_rows, 16,
-        "missing current v17 docs-integrated companion coverage: expected all good/defective rows on parent/adversarial validation gates"
+        "missing current v18 docs-integrated companion coverage: expected all good/defective rows on parent/adversarial validation gates"
     );
     assert_eq!(
-        docs_rows, 128,
-        "complete coverage requires 112 historical v10-through-v16 rows plus 16 current v17 rows"
+        docs_rows, 144,
+        "complete coverage requires 128 historical v10-through-v17 rows plus 16 current v18 rows"
     );
 }
 
@@ -3542,16 +3606,16 @@ fn validation_intent_delivered_has_inspectable_repository_state_companion() {
         }
     }
     assert_eq!(
-        historical_rows, 112,
+        historical_rows, 128,
         "v10/v11/v12/v13/v14/v15/v16 historical intent-delivered coverage must remain unchanged"
     );
     assert_eq!(
         current_rows, 16,
-        "missing current v17 intent-delivered companion coverage: expected all good/defective rows on parent/adversarial validation gates"
+        "missing current v18 intent-delivered companion coverage: expected all good/defective rows on parent/adversarial validation gates"
     );
     assert_eq!(
-        intent_delivered_rows, 128,
-        "complete coverage requires 112 historical v10-through-v16 rows plus 16 current v17 rows"
+        intent_delivered_rows, 144,
+        "complete coverage requires 128 historical v10-through-v17 rows plus 16 current v18 rows"
     );
 }
 
@@ -3650,16 +3714,16 @@ fn validation_requirement_proof_mapping_has_inspectable_public_proof_companions(
         }
     }
     assert_eq!(
-        historical_rows, 112,
+        historical_rows, 128,
         "v10/v11/v12/v13/v14/v15/v16 historical requirement-proof-mapping coverage must remain unchanged"
     );
     assert_eq!(
         current_rows, 16,
-        "missing current v17 requirement-proof-mapping companion coverage: expected all good/defective rows on parent/adversarial validation gates"
+        "missing current v18 requirement-proof-mapping companion coverage: expected all good/defective rows on parent/adversarial validation gates"
     );
     assert_eq!(
-        rows, 128,
-        "complete coverage requires 112 historical v10-through-v16 rows plus 16 current v17 rows"
+        rows, 144,
+        "complete coverage requires 128 historical v10-through-v17 rows plus 16 current v18 rows"
     );
 }
 
@@ -3990,6 +4054,7 @@ fn source_record_identity_preserves_pairing_and_neutral_request() {
             .iter()
             .find(|(fixture_id, _)| {
                 fixture_id.ends_with("-good")
+                    || fixture_id == "design-forced"
                     || fixture_id == "implementation-report-replacement-case-01"
             })
             .expect("good owner fixture row");
@@ -3999,6 +4064,7 @@ fn source_record_identity_preserves_pairing_and_neutral_request() {
                 fixture_id.ends_with("-defective")
                     || fixture_id == "implementation-report-replacement-case-02"
                     || fixture_id.ends_with("-overbuilt")
+                    || fixture_id.ends_with("-oversplit")
                     || fixture_id.ends_with("-bundled")
                     || fixture_id.ends_with("-fragmented")
                     || fixture_id.ends_with("-impractical")
@@ -4158,11 +4224,11 @@ fn canonical_source_records_have_exact_order_and_labels() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-17"
+                && entry["config_version"] == "standard-18"
         })
         .expect("docs-integrated current row");
     let entry = entry.as_object().expect("manifest row object");
-    // This single standard-17 docs-integrated row is framed in the manifest (v1 or v1.1, per its marker). Its unframed copy
+    // This single standard-18 docs-integrated row is framed in the manifest (v1 or v1.1, per its marker). Its unframed copy
     // reproduces the original zero-framing packet exactly (asserted by
     // input_framing_marks_exactly_the_approved_rows_and_keeps_their_evidence),
     // so the original order and mutation assertions run unchanged on it. The framed form is
@@ -4238,7 +4304,7 @@ fn canonical_source_records_have_exact_order_and_labels() {
         let row = manifest()
             .into_iter()
             .find(|row| {
-                row["config_version"] == "standard-17"
+                row["config_version"] == "standard-18"
                     && row["axis"] == axis
                     && row["expected"] == "pass"
                     && gate_family(row["gate"].as_str().unwrap()) == "validation"
@@ -4285,11 +4351,11 @@ fn every_supplied_source_record_mutation_changes_digest() {
             entry["gate"] == "validation-review"
                 && entry["axis"] == "docs-integrated"
                 && entry["expected"] == "pass"
-                && entry["config_version"] == "standard-17"
+                && entry["config_version"] == "standard-18"
         })
         .expect("docs-integrated current row");
     let entry = entry.as_object().expect("manifest row object");
-    // This single standard-17 docs-integrated row is framed in the manifest (v1 or v1.1, per its marker). Its unframed copy
+    // This single standard-18 docs-integrated row is framed in the manifest (v1 or v1.1, per its marker). Its unframed copy
     // reproduces the original zero-framing packet exactly (asserted by
     // input_framing_marks_exactly_the_approved_rows_and_keeps_their_evidence),
     // so the original order and mutation assertions run unchanged on it. The framed form is
@@ -4361,6 +4427,8 @@ fn framed_entries() -> Vec<Map<String, Value>> {
         .into_iter()
         .filter_map(|entry| entry.as_object().cloned())
         .filter(|entry| entry.contains_key("input_framing"))
+        // Earlier successors' framed rows are retained history; the approved framed set is current only.
+        .filter(|entry| !is_historical_entry(entry))
         .collect()
 }
 
@@ -4460,11 +4528,7 @@ fn input_framing_marks_exactly_the_approved_rows_and_keeps_their_evidence() {
             assert!(!string_field(entry, "attested_by").is_empty(), "{key}");
             assert!(!string_field(entry, "model").is_empty(), "{key}");
             let result_ref = string_field(entry, "result_ref");
-            assert!(
-                result_ref.contains("returned-v17.json#/returns/")
-                    || result_ref.contains("returned-v17-r2.json#/returns/"),
-                "{key}"
-            );
+            assert!(result_ref.contains("returned-v18.json#/returns/"), "{key}");
         }
         // Without the framing records, and with the reviewer protocol exactly as it was when the zero-framing
         // identity was approved, the very same row reproduces that hash: the evidence bodies and expected
@@ -4769,7 +4833,7 @@ fn explicit_applicability_checks_real_retained_returns_without_relabeling_histor
     let mut current = entries
         .iter()
         .find(|row| {
-            row["config_version"] == "minimal-17"
+            row["config_version"] == "minimal-18"
                 && row["gate"] == source["gate"]
                 && row["axis"] == source["axis"]
                 && row["fixture_id"] == source["fixture_id"]
@@ -5611,15 +5675,15 @@ fn narrative_templates_packets_and_raw_batch_checks_cover_every_stage() {
     assert_eq!(
         counts,
         BTreeMap::from([
-            (("minimal-17".to_owned(), "aggregate".to_owned()), 36),
-            (("standard-17".to_owned(), "aggregate".to_owned()), 36),
-            (("high-rigor-17".to_owned(), "individual".to_owned()), 36),
-            (("high-rigor-17".to_owned(), "aggregate".to_owned()), 36),
+            (("minimal-18".to_owned(), "aggregate".to_owned()), 36),
+            (("standard-18".to_owned(), "aggregate".to_owned()), 36),
+            (("high-rigor-18".to_owned(), "individual".to_owned()), 36),
+            (("high-rigor-18".to_owned(), "aggregate".to_owned()), 36),
         ])
     );
     let mut row = entries
         .iter()
-        .find(|e| e["config_version"] == "minimal-17" && e["axis"] == "narrative-faithful")
+        .find(|e| e["config_version"] == "minimal-18" && e["axis"] == "narrative-faithful")
         .unwrap()
         .as_object()
         .unwrap()
@@ -5851,7 +5915,7 @@ fn narrative_applicability_selected_accepts_genuine_original_without_rebinding()
 
     // A current-row identity must not replace the actual original -15 identity.
     let mut rebound = source.clone();
-    rebound.insert("config_version".into(), json!("minimal-17"));
+    rebound.insert("config_version".into(), json!("minimal-18"));
     assert!(validate_applicability_selected(&rebound, &selected).is_err());
 }
 

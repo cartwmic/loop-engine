@@ -17,6 +17,7 @@ fn standard_profile_and_task_packet_template_carry_doc_integration_contract() {
         BTreeSet::from([
             "docs-integrated",
             "intent-delivered",
+            "principles-honored",
             "requirement-proof-mapping"
         ])
     );

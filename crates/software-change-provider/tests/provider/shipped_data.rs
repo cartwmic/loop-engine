@@ -31,6 +31,9 @@ const SUBJECTS: &[&str] = &[
     "implementation-report.json",
     "validation-report.json",
 ];
+const PRINCIPLES_AXIS: &str = "principles-honored";
+const PRINCIPLES_MARKER: &str = "<<owner-principles-snapshot>>";
+
 const PROMPT_GUARDS: &[&str] = &[
     "silence is not a finding",
     "check omissions only against the named acceptance/requirements set — do not hunt for unlisted omissions",
@@ -85,6 +88,7 @@ fn high_rigor_axes() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
                 "owner-comprehensible",
                 "intent-sufficient",
                 "acceptance-sufficient",
+                PRINCIPLES_AXIS,
             ]),
         ),
         (
@@ -96,6 +100,7 @@ fn high_rigor_axes() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
                 "decisions-justified",
                 "risk-honest",
                 "mechanism-forced",
+                PRINCIPLES_AXIS,
             ]),
         ),
         (
@@ -108,6 +113,7 @@ fn high_rigor_axes() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
                 "design-faithful",
                 "dependencies-honest",
                 "parallelism-honest",
+                PRINCIPLES_AXIS,
             ]),
         ),
         (
@@ -116,6 +122,7 @@ fn high_rigor_axes() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
                 "tasks-actually-done",
                 "no-scope-creep",
                 "design-faithful-final",
+                PRINCIPLES_AXIS,
             ]),
         ),
         (
@@ -124,6 +131,7 @@ fn high_rigor_axes() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
                 "intent-delivered",
                 "docs-integrated",
                 "requirement-proof-mapping",
+                PRINCIPLES_AXIS,
             ]),
         ),
     ]))
@@ -135,7 +143,10 @@ fn with_counterparts(
     let mut out = BTreeMap::new();
     for (gate, axes) in &parents {
         out.insert(*gate, axes.clone());
-        out.insert(adversarial_gate(gate), axes.clone());
+        // The principles axis is ordinary-only: it has no adversarial counterpart.
+        let mut challenge = axes.clone();
+        challenge.remove(PRINCIPLES_AXIS);
+        out.insert(adversarial_gate(gate), challenge);
     }
     out
 }
@@ -284,9 +295,9 @@ fn all_profiles_pass_production_config_validation_and_have_exact_subjects() {
     for profile in PROFILES {
         let config = load_profile(profile);
         let expected_version = match *profile {
-            "minimal" => "minimal-17",
-            "standard" => "standard-17",
-            "high-rigor" => "high-rigor-17",
+            "minimal" => "minimal-18",
+            "standard" => "standard-18",
+            "high-rigor" => "high-rigor-18",
             _ => unreachable!("unknown profile {profile}"),
         };
         assert_eq!(config["config_version"], expected_version);
@@ -487,6 +498,10 @@ fn shipped_review_prompts_and_calibration_fixtures_expose_the_new_boundaries() {
             .as_array()
             .unwrap_or(&Vec::new())
         {
+            // principles-honored judges the owner's design principles, not validation proof.
+            if object(policy, "validation policy")["id"] == PRINCIPLES_AXIS {
+                continue;
+            }
             let prompt = string(
                 &object(policy, "validation policy")["example_prompt"],
                 "prompt",
@@ -669,6 +684,7 @@ fn profiles_carry_exact_shipped_profile_mapping_and_author_counts() {
         assert_eq!(stages.len(), 2, "{gate} must have two review stages");
         if gate == "intent-review" || gate == "intent-adversarial-review" {
             let mut expected_individual = stages["aggregate"].clone();
+            expected_individual.remove(PRINCIPLES_AXIS);
             expected_individual.remove("acceptance-granularity");
             expected_individual.remove("owner-comprehensible");
             expected_individual.remove("intent-sufficient");
@@ -680,8 +696,10 @@ fn profiles_carry_exact_shipped_profile_mapping_and_author_counts() {
             assert!(stages["aggregate"].contains("acceptance-granularity"));
             assert!(stages["aggregate"].contains("owner-comprehensible"));
         } else {
+            let mut expected_individual = stages["aggregate"].clone();
+            expected_individual.remove(PRINCIPLES_AXIS);
             assert_eq!(
-                stages["individual"], stages["aggregate"],
+                stages["individual"], expected_individual,
                 "{gate} stage axes"
             );
         }
@@ -845,9 +863,11 @@ fn shipped_profiles_describe_live_graph_and_keep_one_to_one_counterparts() {
                 policies.contains_key(adversarial),
                 "{profile} missing adversarial key {adversarial} for parent {parent}"
             );
+            let mut counterpart_ids = parent_ids.clone();
+            counterpart_ids.remove(PRINCIPLES_AXIS);
             assert_eq!(
-                adversarial_ids, parent_ids,
-                "{profile} {adversarial} axis id set must equal {parent} (1:1, same policy_id)"
+                adversarial_ids, counterpart_ids,
+                "{profile} {adversarial} axis id set must equal {parent} minus the ordinary-only principles axis (1:1, same policy_id)"
             );
             assert_eq!(
                 states.contains(adversarial),
@@ -877,8 +897,10 @@ fn shipped_profiles_describe_live_graph_and_keep_one_to_one_counterparts() {
                     .map(|entries| axis_ids(entries, parent))
                     .unwrap_or_default();
                 let adversarial_ids = axis_ids(&policies[*adversarial], adversarial);
+                let mut counterpart_ids = parent_ids.clone();
+                counterpart_ids.remove(PRINCIPLES_AXIS);
                 assert_eq!(
-                    adversarial_ids, parent_ids,
+                    adversarial_ids, counterpart_ids,
                     "{profile} shipped subset of counterparts on {adversarial}"
                 );
             } else {
@@ -1169,4 +1191,62 @@ fn setup_replaces_the_inline_skill_constructor() {
     assert!(skill.contains("Tools prepare or evaluate data, not external execution"));
     assert!(!skill.contains("--slurpfile roster \"$ROSTER\""));
     assert!(!skill.contains("SEPARATE_AXES_REASON"));
+}
+
+#[test]
+fn principles_snapshot_marker_sits_only_where_the_amendment_puts_it() {
+    for profile in PROFILES {
+        let config = load_profile(profile);
+        for (gate, entries) in object(&config["review_policies"], "review_policies") {
+            for entry in array(entries, gate) {
+                let entry = object(entry, "policy entry");
+                let id = string(&entry["id"], "policy id");
+                let prompt = string(&entry["example_prompt"], "prompt");
+                let design_mechanism = id == "mechanism-forced"
+                    && (gate == "design-review" || gate == "design-adversarial-review");
+                assert_eq!(
+                    prompt.contains(PRINCIPLES_MARKER),
+                    id == PRINCIPLES_AXIS || design_mechanism,
+                    "{profile}/{gate}/{id}: snapshot marker placement"
+                );
+                if prompt.contains(PRINCIPLES_MARKER) {
+                    assert!(
+                        prompt.ends_with(PRINCIPLES_MARKER),
+                        "{profile}/{gate}/{id}: marker closes the prompt"
+                    );
+                }
+                if id == PRINCIPLES_AXIS {
+                    assert!(
+                        !gate.contains("adversarial"),
+                        "{profile}/{gate}: ordinary only"
+                    );
+                    assert_eq!(entry["review_stage"], "aggregate");
+                    assert_eq!(entry["group"], format!("{gate}.aggregate"));
+                    assert!(prompt.starts_with("Judge principles-honored only."));
+                    assert!(
+                        prompt.contains("owner-excluded"),
+                        "{profile}/{gate}: owner-excluded sentence"
+                    );
+                    assert!(prompt.contains("principles snapshot missing"));
+                }
+                if design_mechanism {
+                    assert!(
+                        prompt.contains("simplest alternative")
+                            || prompt.contains("simpler alternative")
+                    );
+                    assert!(prompt.contains("owner design principles snapshot"));
+                }
+            }
+        }
+        // Shipped bytes name neither a principles path nor any principle text.
+        let text = serde_json::to_string(&config).unwrap();
+        assert!(
+            !text.contains("design-principles.md"),
+            "{profile} must not name a principles path"
+        );
+        assert!(
+            config["extra"].get("principles").is_none(),
+            "{profile} ships no snapshot record"
+        );
+    }
 }

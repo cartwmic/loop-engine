@@ -40,6 +40,7 @@ pub mod intent_correction;
 #[cfg(test)]
 mod intent_correction_tests;
 pub mod model_roles;
+pub mod principles;
 pub mod setup;
 
 /// Validate one shipped initial-input template with production config rules.

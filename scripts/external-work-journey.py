@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from external_work_driver import process
 
 ROOT = Path(__file__).resolve().parents[1]
+PRINCIPLES = ROOT / 'crates/software-change-provider/data/calibration/companions/fictional-repo/design-principles.md'
 RETIRED_ENGINE = ['invoke','fan-out','amend-binding','cancel-invocation','invocation-progress',
                   'preview-bindings','capture-command','capture-matrix','capture-abort','advise']
 RETIRED_PROVIDER = ['bindings','invoke','run-plan-graph','run-validation','recover-review','repair-review']
@@ -121,7 +122,7 @@ def intake_counts_advice(args, root):
         configured = artifacts.parent / 'advice-profile.json'
         base = artifacts.parent / 'base.json'
         base.write_text(json.dumps(profile))
-        process([args.software,'setup','--profile',base,'--output',configured,'--enable-advice'])
+        process([args.software,'setup','--profile',base,'--output',configured,'--enable-advice','--set','principles.enabled=false'])
         profile.clear()
         profile.update(json.loads(configured.read_text()))
         profile['advice_departures'] = {'version':1,'occasions':[{'state':'explore','event':'intent-ready',
@@ -2016,8 +2017,16 @@ def profile_preparation(args, root):
     work.mkdir()
     for rigor in ['minimal','standard','high']:
         output = work / (rigor+'.json')
-        profile = process([args.software,'setup','--rigor',rigor,'--output',output,'--decline-advice'])
+        profile = process([args.software,'setup','--rigor',rigor,'--output',output,'--decline-advice','--set',f'principles.ref={PRINCIPLES}'])
         assert profile == json.loads(output.read_text())
+        # setup freezes the principles file's identity and bytes into the effective profile; shipped profiles carry no path.
+        text = PRINCIPLES.read_text()
+        record = profile['extra']['principles']
+        assert record['enabled'] and record['source'] == str(PRINCIPLES) and record['sha256'] == hashlib.sha256(text.encode()).hexdigest()
+        assert [h['anchor'] for h in record['headings']][:2] == ['single-purpose-components','yagni-and-kiss']
+        prompts = [a['example_prompt'] for gate in profile['review_policies'].values() for a in gate]
+        assert not any('<<owner-principles-snapshot>>' in p for p in prompts) and sum(text in p for p in prompts) >= 5
+        assert {g for g, axes in profile['review_policies'].items() if any(a['id'] == 'principles-honored' for a in axes)} == {'intent-review','design-review','plan-review','implementation-review','validation-review'}
         explain = json.loads(Path(str(output)+'.explain.json').read_text())
         assert explain['effective']['review_policies'] == profile['review_policies']
         assert explain['base']['sha256'].startswith('sha256:') and explain['base']['id'] == profile['config_version']
@@ -2036,6 +2045,15 @@ def profile_preparation(args, root):
             assert {'acceptance-granularity','owner-comprehensible','intent-sufficient','acceptance-sufficient'} <= axes.keys(), axes
             assert 'final state' in axes['intent-sufficient']['description'].replace('-', ' ')
             assert 'counterexample' in axes['acceptance-sufficient']['description']
+    # Setup fails closed without an explicit principles choice, with a missing file, and a decline drops the axis everywhere.
+    for label, extra in [('no-choice', []), ('missing-file', ['--set','principles.ref='+str(work / 'absent.md')])]:
+        refused = subprocess.run([str(args.software),'setup','--rigor','minimal','--output',work / (label+'.json'),'--decline-advice',*[str(x) for x in extra]],
+                                 text=True, capture_output=True)
+        assert refused.returncode != 0 and not (work / (label+'.json')).exists(), (label, refused.stdout, refused.stderr)
+    declined = process([args.software,'setup','--rigor','minimal','--output',work / 'declined.json','--decline-advice','--set','principles.enabled=false'])
+    assert declined['extra']['principles']['enabled'] is False
+    assert not any(a['id'] == 'principles-honored' for axes in declined['review_policies'].values() for a in axes)
+    assert not any('<<owner-principles-snapshot>>' in a['example_prompt'] for axes in declined['review_policies'].values() for a in axes)
     base_path = work / 'standard.json'
     base = json.loads(base_path.read_text())
     axis = base['review_policies']['intent-review'][0]['id']
