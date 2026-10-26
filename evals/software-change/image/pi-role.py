@@ -64,7 +64,7 @@ def main():
                    "--no-prompt-templates", "--no-themes", "--provider", "inspect",
                    "--model", role, "--models", role,
                    "--skill", str(ROOT / "skills/using-loop-engine"),
-                   "--skill", str(ROOT / "skills/using-software-change-provider")]
+                   "--skill", str(ROOT / "skills" / os.environ.get("SC_PROVIDER_SKILL", "using-software-change-provider"))]
         if role != "role-driver":
             command += ["--append-system-prompt",
                         "You are a delegated worker. Return evidence to the driver; do not mutate "

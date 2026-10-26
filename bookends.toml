@@ -11,6 +11,7 @@ pathspecs = [
   "scripts/narrative-checkpoint-journey.py",
   "scripts/policy-document-journey.py",
   "scripts/research-journey.py",
+  "scripts/lean-change-journey.py",
   "scripts/generate-prd-journey.py",
   "crates/bookends-check/tests/backlog_t08_history.rs",
   "crates/bookends-check/tests/backlog_t09_public.rs",

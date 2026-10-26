@@ -92,3 +92,9 @@ jobs:
             --provider "$BIN_DIR/research" \
             --checker "$BIN_DIR/bookends-check" \
             --profile crates/research-provider/data/configs/generate-prd.json
+      - name: Lean-change source journey
+        shell: bash
+        run: |
+          python3 scripts/lean-change-journey.py \
+            --engine "$BIN_DIR/loop-engine" \
+            --provider "$BIN_DIR/lean-change"

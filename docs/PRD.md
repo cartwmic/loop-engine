@@ -2577,3 +2577,44 @@ When the owner's instruction withdraws, relaxes, defers or clarifies a requireme
 A criterion or goal verdict may cite an earlier `user-steering` record, with or instead of command evidence, when the owner's words establish its result. The provider checks only that the cited record exists, is an earlier `user-steering` record and has not been superseded; it does not judge whether the words support the verdict. Every criterion keeps its verdict in the validation index. A failure that results from the changed requirement still needs an exact-source disposition (LE-115) that names the steering.
 
 The instruction does not waive review coverage, author floors, command proof (LE-178) or any unresolved finding. An instruction that adds or strengthens an obligation, or changes enduring meaning in a Bookends-enabled run, is an ordinary revision (LE-142). Runs started on earlier releases keep their behavior.
+### LE-202: The lean-change provider has one workflow in two profiles that differ only by the review state
+- Status: live
+- Coverage: e2e/journey
+
+The `lean-change` provider (binary `lean-change`, not released) describes a workflow of explore, intent-approval, plan, implement, verify, review and end. Profile `b` freezes `review: true` and keeps all seven states (twelve transitions). Profile `c` freezes `review: false` and describes the same workflow without the review state: verify routes to end (six states, ten transitions). Every other state, edge and gate is identical in both profiles. A run frozen under one profile is never evaluated as the other. The provider is a checker; the driver does the work and appends the records named below with `append`. It reuses the engine and the generic owner-decision and repository-identity modules and changes neither.
+
+### LE-203: Setup freezes the repository, its base and the principles; the intent names an executable check for each criterion
+- Status: live
+- Coverage: e2e/journey
+
+`lean-change setup --profile b|c --repo PATH [--principles FILE]` prints the initial input: schema version, profile version, absolute repository path, the base commit, the review flag and, when given, the principles text with its sha256. Profile `b` refuses to set up without principles; the input refuses a principles text that does not match its hash. `explore` leaves only on a valid latest `intent` record: an author, a goal, constraints, a `hard` flag and at least one criterion, each with a unique id, a statement and an executable check (argv and a timeout). A missing or invalid intent is refused.
+
+### LE-204: Only the owner's verbatim words, bound to the current intent record, approve an intent
+- Status: live
+- Coverage: e2e/journey
+
+`intent-approval` leaves by `approved` (hard=false, to implement) or `approved-hard` (hard=true, to plan) only when the latest well-formed `owner-decision` (checkpoint `intent`, subject `intent`) approves the latest intent record id and holds nonempty verbatim words. Blank words, a decision about another intent record, and an intent revised after the decision leave the approval pending and the event refused. A recorded rejection is refused and names its reason. The event that does not match the `hard` flag is refused. `revise` returns to explore without a check.
+
+### LE-205: Hard work needs a plan for the current intent
+- Status: live
+- Coverage: e2e/journey
+
+`plan` leaves by `planned` only when the latest `plan` record names the current intent record and has nonempty text. Work that is not hard skips the plan state. The plan is not reviewed.
+
+### LE-206: Verify needs every criterion's approved check to pass on the current tree
+- Status: live
+- Coverage: e2e/journey
+
+`lean-change verify` reads the full `show` envelope, runs each criterion's check in the repository with its timeout, and prints a `verification` record: the intent record id, the repository proof identity after the checks, and per criterion the check's sha256, exit code, timeout flag and output tail. `verified` is refused unless the current intent record is approved by the owner (LE-204) and, when hard, has its plan (LE-205); a later intent record therefore never inherits an earlier approval, plan or verification. It is also refused unless the latest verification names the current intent record, its tree equals the current repository proof identity, and every criterion has a result for its approved check with exit code 0 and no timeout. Each check runs in its own process group with its output reduced to a bounded tail; the group is killed at the timeout and after exit. If the checks leave different trees (a later check edits what an earlier one relied on) after two passes, `verify` prints no record. The repository proof identity covers tracked and not-ignored files; git-ignored files are outside it. A missing verification, a missing criterion, a failed or timed-out check, a check other than the approved one and any edit after the verification are each refused with the criterion and reason.
+
+### LE-207: Profile b needs one independent, fresh-context diff review with six fixed questions and every finding disposed
+- Status: live
+- Coverage: e2e/journey
+
+`lean-change review-packet` prints the six fixed questions (intent, scope, edge-cases, checks, docs, principles), the approved intent, the frozen principles text and sha256, the checks that passed with the tree they vouch for (a packet for a stale tree is refused), and the diff of the tree against the base. The principles question applies the owner's design principles; the Gate lines apply to new components and new cross-component boundaries, not to small changes inside an existing component, and a finding without an obligation, evidence and consequence is not a finding. `reviewed` is refused unless the verification is current (LE-206) and the first well-formed `review` record for the current intent (a later review cannot replace it) has a reviewer other than the intent author, `fresh_context: true`, one noted answer to each question and no other, a finding for every failed question, each finding with an id, question, text, evidence and consequence, and a `finding-disposition` (fixed or rejected, with a reason; the latest wins) for every finding. If the tree changed after the review, at least one finding must be disposed as fixed. There is one review: later edits are answered by re-verification, not a second review. Profile `c` has no review state.
+
+### LE-208: Accepted limits of the lean-change provider
+- Status: live
+- Coverage: e2e/journey
+
+The provider records claims, not authentication: reviewer identity, fresh context and the owner's words are as honest as the driver that appends them. Criteria have executable checks only; there are no manual criteria. A check can be too weak: the review's `checks` question is the only defence, and profile `c` has none. Review is one pass; edits after it are checked only by re-verification. The topology cannot depend on context, so hard work uses two approval events. A check that starts a process outside its process group is not contained. The Loop Engine start confirmation by the owner is driver procedure, not a provider gate. Software-change keeps its own requirements; this provider adds none to it.

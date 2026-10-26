@@ -496,6 +496,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lean-change-provider"
+version = "0.29.0"
+dependencies = [
+ "loop-core",
+ "loop-integrations",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 import re
 
-ARM_IDS = ("native", "superpowers", "openspec", "loop-engine")
+ARM_IDS = ("native", "superpowers", "openspec", "loop-engine", "lean-b", "lean-c")
+# The lean-change provider arms: B has the one fresh-context review, C is the same provider with the review state off.
+LEAN_ARM_IDS = ("lean-b", "lean-c")
 COMPLETION_RULE = "driver-exit"
 ARM_KEYS = frozenset({"id", "driver_command", "prompt_template", "workflow_owned_paths", "completion_rule", "image"})
 REQUIRED_ARM_KEYS = ARM_KEYS - {"image"}
@@ -49,6 +51,26 @@ Owner's standing instructions for Loop Engine runs (the same ones the owner give
   reviews by default.
 - If a carry is refused, rerun only the review that is needed and say which rule refused the carry.
 """,
+    "lean-b": """Profile: {profile}
+Use the lean-change provider (profile b, with the one fresh-context diff review). Read the installed using-loop-engine and using-lean-change-provider skills,
+then follow the lean-change skill exactly. You do the work yourself; the provider only checks your records.
+The one diff review MUST be done by sc-review (a fresh session, given the packet unchanged).
+Use /workspace/trial/run.sqlite, providers.toml at /workspace/trial/providers.toml (provider name lean-change),
+run ID {run_id}. Keep every file the run produces (profile, packet, verification, intent) in /workspace/trial/work
+(create it), outside the repository. The owner's design principles are at /opt/sc-evals/owner-context/design-principles.md.
+The owner has preapproved this exact profile. Owner approval of the intent is the owner's own reply, recorded
+verbatim as the owner-decision. Finish by reaching the terminal state `end`; merely saying you are done does not count.
+""",
+    "lean-c": """Profile: {profile}
+Use the lean-change provider (profile c, without a review state). Read the installed using-loop-engine and using-lean-change-provider skills,
+then follow the lean-change skill exactly. You do the work yourself; the provider only checks your records.
+There is no review step in this profile; do not add one.
+Use /workspace/trial/run.sqlite, providers.toml at /workspace/trial/providers.toml (provider name lean-change),
+run ID {run_id}. Keep every file the run produces (profile, packet, verification, intent) in /workspace/trial/work
+(create it), outside the repository. The owner's design principles are at /opt/sc-evals/owner-context/design-principles.md.
+The owner has preapproved this exact profile. Owner approval of the intent is the owner's own reply, recorded
+verbatim as the owner-decision. Finish by reaching the terminal state `end`; merely saying you are done does not count.
+""",
 }
 
 
@@ -80,7 +102,7 @@ def load_arm(target_options: Mapping[str, object]) -> ArmDescriptor | None:
         raise ValueError(f"{owned} must be set inside arm, not beside it, when arm is set")
     arm_id = raw["id"]
     if arm_id not in ARM_IDS:
-        raise ValueError("arm id must be one of native, superpowers, openspec, loop-engine")
+        raise ValueError("arm id must be one of " + ", ".join(ARM_IDS))
     command = raw["driver_command"]
     if not isinstance(command, list) or not command or not all(isinstance(s, str) and s for s in command):
         raise ValueError("arm driver_command must be a nonempty argv array (prompt is appended)")
@@ -107,6 +129,8 @@ CHECKIN_ADDITIONS = {
     "superpowers": "the design/spec document you write (and your implementation plan, if separate)",
     "openspec": "your OpenSpec proposal, design and spec files for the change",
     "loop-engine": "the intent.json you wrote for the run",
+    "lean-b": "the intent record JSON you drafted (save a copy as /workspace/trial/work/intent.json)",
+    "lean-c": "the intent record JSON you drafted (save a copy as /workspace/trial/work/intent.json)",
 }
 
 
