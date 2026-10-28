@@ -1,11 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [0.30.0] - 2026-10-27
 
 ### Added
 
 - The lean-change provider (LE-202–LE-209) is the software reference workflow and ships as a release binary.
 - A reference `model-binding-provider` fixture proves the engine's model-binding contract (LE-195–LE-200) through the public binary.
+- Leaner run-context reads: `read --kind context` pages record headers; `read --kind record --id ID [--pointer P]` returns one record exactly or a JSON Pointer slice; history entries name the context kind; `list` takes `--lifecycle`, `--label` and `--provider`; a closed pipe ends output quietly.
 
 ### Removed
 
@@ -13,7 +14,7 @@
 
 ### Compatibility
 
-- The engine is unchanged. Runs started under software-change keep their stored graphs, context and history and still list and show; continuing one needs the release binary its run names. Nothing is migrated.
+- Removing software-change changed nothing in the engine. Runs started under software-change keep their stored graphs, context and history and still list and show; continuing one needs the release binary its run names. Nothing is migrated.
 
 ## [0.29.0] - 2026-10-24
 
