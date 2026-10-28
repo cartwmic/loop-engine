@@ -1187,3 +1187,38 @@ fn review_packet_includes_a_tracked_file_that_matches_an_ignore_rule() {
     assert!(packet.contains("+forced content"), "{packet}");
     assert!(!packet.contains("ignored content"));
 }
+
+#[test]
+fn review_packet_includes_tracked_edits_hidden_by_index_bits() {
+    let r = repo();
+    std::fs::write(r.join("b.txt"), "two").unwrap();
+    git(&r, &["add", "b.txt"]);
+    git(&r, &["commit", "-qm", "b"]);
+    git(&r, &["update-index", "--assume-unchanged", "a.txt"]);
+    git(&r, &["update-index", "--skip-worktree", "b.txt"]);
+    std::fs::write(r.join("a.txt"), "assumed edit").unwrap();
+    std::fs::write(r.join("b.txt"), "skipped edit").unwrap();
+    let i = intent(false);
+    let ctx = vec![
+        record("intent-1", "intent", 1, i.clone()),
+        record("d-ok", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("v1", "verification", 3, verification(&r, &i)),
+    ];
+    let packet = crate::packet::review_packet(&show(&r, true, ctx)).unwrap();
+    assert!(
+        packet.contains("+assumed edit") && packet.contains("+skipped edit"),
+        "{packet}"
+    );
+    // The repository's own index keeps its bits.
+    let bits = Command::new("git")
+        .args(["ls-files", "-v"])
+        .current_dir(&r)
+        .output()
+        .unwrap()
+        .stdout;
+    let bits = String::from_utf8(bits).unwrap();
+    assert!(
+        bits.contains("h a.txt") && bits.contains("S b.txt"),
+        "{bits}"
+    );
+}

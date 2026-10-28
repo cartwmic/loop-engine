@@ -51,6 +51,8 @@ MUTATIONS = [
     ('repo is the worktree root', RUN, 'if worktree_root(&given)? != given {', 'if false {'),
     ('setup uses the worktree root', PACKET, '    let repo = worktree_root(&repo).map_err(|e| format!("--repo: {e}"))?;\n', ''),
     ('packet keeps every tracked path', PACKET, 'std::fs::copy(real_index.trim(), &index)', 'Err::<u64, _>(std::io::Error::from(std::io::ErrorKind::NotFound))'),
+    ('packet clears assume-unchanged', PACKET, '.and_then(|_| clear("--no-assume-unchanged"))', ''),
+    ('packet clears skip-worktree', PACKET, '.and_then(|_| clear("--no-skip-worktree"))', ''),
     ('packet eligibility', PACKET, 'verification_ready(&records, &input, &tree_identity)', 'Ok::<(), serde_json::Value>(())'),
     ('c has no review state', WORKFLOW, 'if review {\n        states.push', 'if true {\n        states.push'),
 ]

@@ -8,12 +8,35 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn git(repo: &Path, args: &[&str], index: Option<&Path>) -> Result<String, String> {
+    git_bytes(repo, args, index, None).map(|out| String::from_utf8_lossy(&out).into_owned())
+}
+
+/// Raw git output, so that `-z` path lists survive non-UTF-8 names.
+fn git_bytes(
+    repo: &Path,
+    args: &[&str],
+    index: Option<&Path>,
+    stdin: Option<&[u8]>,
+) -> Result<Vec<u8>, String> {
+    use std::io::Write;
     let mut command = Command::new("git");
     command.args(args).current_dir(repo);
     if let Some(index) = index {
         command.env("GIT_INDEX_FILE", index);
     }
-    let out = command.output().map_err(|e| format!("git: {e}"))?;
+    command
+        .stdin(if stdin.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().map_err(|e| format!("git: {e}"))?;
+    if let (Some(bytes), Some(mut pipe)) = (stdin, child.stdin.take()) {
+        pipe.write_all(bytes).map_err(|e| format!("git: {e}"))?;
+    }
+    let out = child.wait_with_output().map_err(|e| format!("git: {e}"))?;
     if !out.status.success() {
         return Err(format!(
             "git {}: {}",
@@ -21,7 +44,7 @@ fn git(repo: &Path, args: &[&str], index: Option<&Path>) -> Result<String, Strin
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(out.stdout)
 }
 
 /// Profile B (`b`: review on) or C (`c`: review off), frozen with the repo base.
@@ -127,7 +150,21 @@ pub fn review_packet(show: &Value) -> Result<String, String> {
         }
         Err(e) => Err(format!("could not copy the index: {e}")),
     };
+    // A copied index keeps assume-unchanged and skip-worktree bits, and `add -A` skips such
+    // entries; clear them in the copy only (one call per flag: a combined call keeps skip-worktree).
+    let clear = |flag: &str| -> Result<(), String> {
+        let paths = git_bytes(repo, &["ls-files", "-z"], Some(&index), None)?;
+        git_bytes(
+            repo,
+            &["update-index", flag, "-z", "--stdin"],
+            Some(&index),
+            Some(&paths),
+        )
+        .map(|_| ())
+    };
     let diff = seeded
+        .and_then(|_| clear("--no-assume-unchanged"))
+        .and_then(|_| clear("--no-skip-worktree"))
         .and_then(|_| git(repo, &["add", "-A"], Some(&index)))
         .and_then(|_| git(repo, &["diff", "--cached", &input.base], Some(&index)));
     let _ = std::fs::remove_file(&index);
