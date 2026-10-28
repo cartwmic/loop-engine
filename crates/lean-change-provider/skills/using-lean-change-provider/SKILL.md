@@ -55,8 +55,9 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    The reviewer returns one JSON object; append it as kind `intent-check`. Each question they could not settle from the
    intent fails with a finding whose text is a concrete question for the owner. The first well-formed check is the
    check; a second cannot replace it. For each finding, either change the intent (`fixed`, and append a new intent record
-   that carries the fix) or reject it with a reason you would say to the owner. Append one `finding-disposition` per
-   finding, with `review` set to the `intent-check` record id. The check runs once per run; a later revision is not re-checked.
+   that carries the fix) or reject it with a reason you would say to the owner. A `criteria-gap` finding names a delivery
+   that passes every check yet misses the goal; fix it with a criterion whose check fails for that delivery. Append one
+   `finding-disposition` per finding, with `review` set to the `intent-check` record id. The check runs once per run; a later revision is not re-checked.
 2. **intent-approval.** Show the owner the intent verbatim, with the check's findings and how each was disposed (profile b), and ask: "What do you expect that is not listed?" Their answer may change the intent. Append their exact words (do not edit them):
 
    ```sh
@@ -107,7 +108,7 @@ gates check the records again when you return.
 ## Rules
 
 - The reviewer must not be you and must be in a fresh context. `fresh_context: true` is a claim; make it true.
-- The intent check has four fixed questions and the review has six, including whether the diff breaks the owner's design principles.
+- The intent check has five fixed questions and the review has six, including whether the diff breaks the owner's design principles.
   Do not shorten or reword them. Do not pre-answer them for the reviewer.
 - Findings are not nits: each has an obligation, evidence and a consequence. Reject a finding only with a reason you would say to the owner.
 - Never write a `verification` record by hand. Never copy an owner decision from an earlier intent.

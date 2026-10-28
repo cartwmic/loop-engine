@@ -13,16 +13,17 @@ pub const QUESTIONS: [(&str, &str); 6] = [
     ("scope", "Does the diff do only what the intent asks? Name any change the intent does not require."),
     ("edge-cases", "For each criterion, which edge and failure cases can still break it, and does the code or a check handle them? Name an unhandled case with a concrete input."),
     ("checks", "Does each criterion's check exercise the criterion from outside, the way a user would, and fail if the criterion were not met? Name any check that mirrors the implementation or cannot fail."),
-    ("docs", "Are the docs, help text, examples and contracts that the change touches or invalidates updated? Name any that now say something false."),
+    ("docs", "Are the docs, help text, examples and contracts that the change touches or invalidates updated? Name any that now say something false. If the repository keeps a living PRD, name each requirement the change adds, changes or relies on, and the check that proves it; a requirement that no check proves is a finding."),
     ("principles", "Against the owner's design principles (full text in the packet; sha256 in the profile): does the diff violate one? The Gate lines (sections 2, 3 and 7) apply to new components and new cross-component boundaries, not to small changes inside an existing component. Cite the section, the evidence in the diff and the consequence. A finding without an obligation, evidence and consequence is not a finding."),
 ];
 
-/// The four fixed intent-check questions: (id, text). A failed one carries the concrete question for the owner.
-pub const INTENT_QUESTIONS: [(&str, &str); 4] = [
+/// The five fixed intent-check questions: (id, text). A failed one carries the concrete question for the owner.
+pub const INTENT_QUESTIONS: [(&str, &str); 5] = [
     ("use", "Once this exists, what will the owner or its users need to see or do with it, and which of those can they not do yet under this intent?"),
     ("edge", "What is the likeliest case the listed checks miss, and what should happen then?"),
     ("control", "Where is this intent unclear or silent, such that a delivery would have to guess?"),
     ("terms", "Which term in this intent could mean two things to different readers, and which meaning do you intend?"),
+    ("criteria-gap", "Could a plausible delivery pass every criterion's check and still leave the goal, or a problem the goal names, unmet? Give the delivery, show why each check still passes, and state the consequence. Do not ask for more than the goal promises."),
 ];
 
 fn nonblank(value: &str, what: &str) -> Result<(), String> {
