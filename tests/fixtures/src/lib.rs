@@ -387,10 +387,13 @@ fn admit_model_binding(request: AdmitFixtureRequest) -> Value {
         }
         loop_core::SESSION_DECLARATION_RECORD_KIND => {
             let role = data["role"].as_str().and_then(loop_core::ModelRole::parse);
-            if role != Some(loop_core::ModelRole::Author) {
+            if !matches!(
+                role,
+                Some(loop_core::ModelRole::Author | loop_core::ModelRole::Implementer)
+            ) {
                 return refused(
                     "declaration-malformed",
-                    "session-declaration role must be author".into(),
+                    "session-declaration role must be author or implementer".into(),
                 );
             }
             if data["subject_revision"]
@@ -411,8 +414,14 @@ fn admit_model_binding(request: AdmitFixtureRequest) -> Value {
                 Err(error) => refused("declaration-malformed", error),
             }
         }
-        "review" => {
-            let role = loop_core::ModelRole::OrdinaryReviewer;
+        kind @ ("review" | "challenge" | "cold-read" | "verdict") => {
+            // Each stored return kind is the work of one bound role.
+            let role = match kind {
+                "review" => loop_core::ModelRole::OrdinaryReviewer,
+                "challenge" => loop_core::ModelRole::ChallengeReviewer,
+                "cold-read" => loop_core::ModelRole::ColdReader,
+                _ => loop_core::ModelRole::CriterionAuthor,
+            };
             let declared = match declared_session(data) {
                 Ok(declared) => declared,
                 Err(error) => {
@@ -582,28 +591,34 @@ fn evaluate_model_binding(request: EvaluateRequest) -> Result<Value, FixtureErro
     };
     match request.transition.event.as_str() {
         "drafted" => {
-            let role = loop_core::ModelRole::Author;
-            let declared = request
-                .context
-                .iter()
-                .rev()
-                .find(|record| {
-                    record.kind == loop_core::SESSION_DECLARATION_RECORD_KIND
-                        && record.data["subject_revision"].as_str() == Some(revision.as_str())
-                })
-                .and_then(|record| declared_session(&record.data).ok().flatten());
-            match loop_core::check_declared_session(
-                role,
-                folded.in_force().get(&role),
-                declared.as_ref(),
-            ) {
-                Ok(()) => Ok(json!({"result": "allow"})),
-                Err(mismatch) => Ok(deny(
-                    "session-mismatch",
-                    format!("draft \u{60}{revision}\u{60}: {mismatch}"),
-                    json!({"role": role, "subject_revision": revision}),
-                )),
+            // The author's draft and the implementer's report of this exact revision.
+            for role in [
+                loop_core::ModelRole::Author,
+                loop_core::ModelRole::Implementer,
+            ] {
+                let declared = request
+                    .context
+                    .iter()
+                    .rev()
+                    .find(|record| {
+                        record.kind == loop_core::SESSION_DECLARATION_RECORD_KIND
+                            && record.data["role"].as_str() == Some(role.as_str())
+                            && record.data["subject_revision"].as_str() == Some(revision.as_str())
+                    })
+                    .and_then(|record| declared_session(&record.data).ok().flatten());
+                if let Err(mismatch) = loop_core::check_declared_session(
+                    role,
+                    folded.in_force().get(&role),
+                    declared.as_ref(),
+                ) {
+                    return Ok(deny(
+                        "session-mismatch",
+                        format!("draft \u{60}{revision}\u{60}: {mismatch}"),
+                        json!({"role": role, "subject_revision": revision}),
+                    ));
+                }
             }
+            Ok(json!({"result": "allow"}))
         }
         "approved" => {
             let eligibility = model_binding_eligibility(

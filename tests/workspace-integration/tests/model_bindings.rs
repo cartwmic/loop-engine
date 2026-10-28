@@ -722,13 +722,7 @@ fn model_bindings_mixed_binding_group_and_owner_view_public_binary() {
             Some(driver.clone()),
         ),
     );
-    // The same author again, under the new binding, still counts once.
-    catalog.stored(
-        run,
-        "rev-a2",
-        "review",
-        review("Reviewer A", "r1", Some(second.clone())),
-    );
+    // One old-binding author alone is short of the two-author floor.
     let short = catalog.approval_agrees(run, false);
     assert!(short.to_string().contains("Reviewer A"), "{short}");
     catalog.stored(
@@ -753,10 +747,163 @@ fn model_bindings_mixed_binding_group_and_owner_view_public_binary() {
         "{view}"
     );
     assert_eq!(view["history"].as_array().unwrap().len(), 2, "{view}");
+    // Reviewer A's old-binding return and Reviewer B's new-binding return cover the group together.
+    let context = catalog.full(run)["context"].as_array().unwrap().clone();
+    let reviews: Vec<_> = context
+        .iter()
+        .filter(|record| record["kind"] == "review")
+        .map(|record| (record["id"].clone(), record["data"]["session"].clone()))
+        .collect();
+    assert_eq!(
+        reviews,
+        [
+            (json!("rev-a"), first.clone()),
+            (json!("rev-b"), second.clone())
+        ]
+    );
     let allowed = catalog.approval_agrees(run, true);
     assert_eq!(
         allowed["details"]["eligible_authors"],
         json!(["Reviewer A", "Reviewer B"]),
         "{allowed}"
     );
+
+    // Author independence is unchanged: one author under two bindings counts once.
+    let run = "same-author";
+    assert_eq!(
+        catalog.start(run, &json!({"required_authors": 2}))["status"],
+        "completed"
+    );
+    catalog.stored(run, "add", "model-binding-amendment",
+        amendment(json!([{"role":"ordinary-reviewer","old":null,"new":first},{"role":"driver","old":null,"new":driver}]), Some(driver.clone())));
+    catalog.stored(run, "d1", "draft", json!({"revision":"r1"}));
+    catalog.moved(run, "drafted", "review");
+    catalog.stored(
+        run,
+        "rev-a",
+        "review",
+        review("Reviewer A", "r1", Some(first.clone())),
+    );
+    catalog.stored(
+        run,
+        "change",
+        "model-binding-amendment",
+        amendment(
+            json!([{"role":"ordinary-reviewer","old":first,"new":second}]),
+            Some(driver.clone()),
+        ),
+    );
+    catalog.stored(
+        run,
+        "rev-a2",
+        "review",
+        review("Reviewer A", "r1", Some(second.clone())),
+    );
+    catalog.approval_agrees(run, false);
+    let prepared = catalog.commission(run)["approval"].clone();
+    assert_eq!(
+        prepared["details"]["eligible_authors"],
+        json!(["Reviewer A"]),
+        "{prepared}"
+    );
+}
+
+fn role_return(revision: &str, session: Option<Value>) -> Value {
+    let mut data = json!({"author":{"name":"Role worker","kind":"agent"},"subject_revision":revision,"result":"pass"});
+    if let Some(session) = session {
+        data["session"] = session;
+    }
+    data
+}
+
+#[test]
+// bookends:LE-196 bookends:LE-197 — bound implementer reports, challenge judgments, cold-reader reconstructions and criterion verdicts need an exactly equal declared session; missing or mismatched ones are refused and store nothing, then matching ones are accepted.
+fn model_bindings_other_role_declarations_public_binary() {
+    let catalog = Catalog::new();
+    let implementer = binding("openai/gpt-codex", "high");
+    let challenger = binding("anthropic/claude-opus", "max");
+    let reader = binding("google/gemini", "low");
+    let criterion = binding("openai/gpt", "medium");
+    let run = "roles";
+    assert_eq!(
+        catalog.start(
+            run,
+            &json!({"model_bindings":{"roles":{"implementer":implementer,"challenge-reviewer":challenger,
+                "cold-reader":reader,"criterion-author":criterion}}})
+        )["status"],
+        "completed"
+    );
+    catalog.stored(run, "d1", "draft", json!({"revision":"r1"}));
+    catalog.refused(
+        run,
+        || catalog.event(run, "drafted"),
+        &["implementer", "statement missing", "gpt-codex"],
+    );
+    let report = |session: Value| json!({"role":"implementer","subject":"draft","subject_revision":"r1","session":session});
+    catalog.stored(
+        run,
+        "impl-low",
+        "session-declaration",
+        report(binding("openai/gpt-codex", "low")),
+    );
+    catalog.refused(
+        run,
+        || catalog.event(run, "drafted"),
+        &["implementer", "thinking level only"],
+    );
+    catalog.stored(
+        run,
+        "impl-ok",
+        "session-declaration",
+        report(implementer.clone()),
+    );
+    catalog.moved(run, "drafted", "review");
+    for (kind, role, bound) in [
+        ("challenge", "challenge-reviewer", &challenger),
+        ("cold-read", "cold-reader", &reader),
+        ("verdict", "criterion-author", &criterion),
+    ] {
+        let missing = format!("{kind}-missing");
+        let data = role_return("r1", None);
+        catalog.refused(
+            run,
+            || catalog.append(run, &missing, kind, &data),
+            &[role, "statement missing", &missing],
+        );
+        let wrong = format!("{kind}-wrong");
+        let data = role_return(
+            "r1",
+            Some(binding("other/model", bound["thinking"].as_str().unwrap())),
+        );
+        catalog.refused(
+            run,
+            || catalog.append(run, &wrong, kind, &data),
+            &[role, "model only", &wrong],
+        );
+        catalog.stored(
+            run,
+            &format!("{kind}-ok"),
+            kind,
+            role_return("r1", Some(bound.clone())),
+        );
+    }
+    let stored: Vec<_> = catalog.full(run)["context"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| record["id"].clone())
+        .collect();
+    assert_eq!(
+        stored,
+        [
+            json!("d1"),
+            json!("impl-low"),
+            json!("impl-ok"),
+            json!("challenge-ok"),
+            json!("cold-read-ok"),
+            json!("verdict-ok")
+        ]
+    );
+    catalog.stored(run, "rev-1", "review", review("Reviewer", "r1", None));
+    catalog.moved(run, "approved", "done");
 }
