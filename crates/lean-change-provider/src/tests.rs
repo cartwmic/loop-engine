@@ -1115,8 +1115,11 @@ fn the_question_lists_match_the_prd_text() {
     let le207 = section("LE-207");
     assert!(le207.contains("(intent, scope, edge-cases, checks, docs, principles)"));
     let docs = QUESTIONS.iter().find(|(id, _)| *id == "docs").unwrap().1;
-    assert!(docs.contains("living PRD") && docs.contains("the check that proves it"));
-    assert!(le207.contains("living PRD") && le207.contains("the check that proves it"));
+    assert!(docs.ends_with(
+        "If the repository keeps a living PRD, name each requirement the change adds, changes or relies on, \
+         and the check that proves it; a requirement that no check proves is a finding."
+    ));
+    assert!(le207.contains(&format!("\"{docs}\" (docs)")));
 }
 
 #[test]
