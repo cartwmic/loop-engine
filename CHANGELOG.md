@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- The lean-change provider (LE-202–LE-209) is the software reference workflow and ships as a release binary.
+- A reference `model-binding-provider` fixture proves the engine's model-binding contract (LE-195–LE-200) through the public binary.
+
+### Removed
+
+- The software-change provider, its skill, journeys and real-binary integration tests. Its PRD requirements are tombstoned with their IDs and titles kept.
+
+### Compatibility
+
+- The engine is unchanged. Runs started under software-change keep their stored graphs, context and history and still list and show; continuing one needs the release binary its run names. Nothing is migrated.
+
 ## [0.29.0] - 2026-10-24
 
 ### Added

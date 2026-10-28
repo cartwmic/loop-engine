@@ -19,13 +19,11 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo build --workspace --locked
 cargo test --workspace
 python3 scripts/external-work-journey.py
-python3 scripts/software-change-journey.py
 python3 scripts/policy-document-journey.py
 python3 scripts/research-journey.py
 python3 scripts/lean-change-journey.py
 python3 scripts/lean-change-mutations.py
 python3 scripts/generate-prd-journey.py
-python3 scripts/narrative-checkpoint-journey.py
 
 # Capture metadata separately so a Cargo failure retains its own exit status.
 metadata="$(cargo metadata --format-version 1 --no-deps)"

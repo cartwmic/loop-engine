@@ -87,6 +87,14 @@ if request.get("operation") == "describe":
     print(pathlib.Path(selected).read_text(), end="")
     raise SystemExit(0)
 
+if request.get("operation") == "admit":
+    data = request.get("record", {{}}).get("data")
+    if isinstance(data, dict) and data.get("invalid") is True:
+        print(json.dumps({{"refused": {{"rule": "fixture-invalid", "message": "record is marked invalid at write time"}}}}))
+    else:
+        print("{{}}")
+    raise SystemExit(0)
+
 if request.get("operation") != "evaluate":
     print(json.dumps({{"result": "unsupported"}}))
     raise SystemExit(0)
@@ -1295,6 +1303,410 @@ fn external_work_supplied_typed_advice_closes_departure_public_binary() {
     assert_eq!(
         show_full(&fixture, "advice-external")["result"]["current_state"],
         "done"
+    );
+}
+
+fn append_record(
+    fixture: &ProviderFixture,
+    run_id: &str,
+    id: &str,
+    kind: &str,
+    data: &Value,
+) -> Value {
+    show_full(fixture, run_id);
+    let (_, value) = cli_owned(
+        fixture,
+        &fixture.cwd_a,
+        vec![
+            "append".into(),
+            run_id.into(),
+            kind.into(),
+            data.to_string(),
+            "--record-id".into(),
+            id.into(),
+        ],
+    );
+    value
+}
+
+fn appended(fixture: &ProviderFixture, run_id: &str, id: &str, kind: &str, data: Value) {
+    let value = append_record(fixture, run_id, id, kind, &data);
+    assert_eq!(value["status"], "completed", "{id}: {value}");
+}
+
+/// A refused write or departure stores nothing: context, state, visit and history are unchanged.
+fn refused_unchanged(
+    fixture: &ProviderFixture,
+    run_id: &str,
+    attempt: impl FnOnce() -> Value,
+    needle: &str,
+) -> Value {
+    let before = show_full(fixture, run_id);
+    let before_history = history(fixture, run_id);
+    let value = attempt();
+    assert_ne!(value["status"], "completed", "{value}");
+    assert!(
+        value.to_string().contains(needle),
+        "missing {needle:?}: {value}"
+    );
+    let after = show_full(fixture, run_id);
+    for key in ["context", "current_state", "state_visit"] {
+        assert_eq!(after["result"][key], before["result"][key], "{key} changed");
+    }
+    assert_eq!(history(fixture, run_id), before_history);
+    value
+}
+
+#[test]
+// bookends:LE-163 bookends:LE-165 bookends:LE-166 — explicit advice enablement, typed external Choice advice, accountable occasions and a reasoned reject close a check-free departure on a generic provider.
+// bookends:LE-189 — duplicate occasion records refuse and name the existing record; explicit revisions govern while originals remain.
+// bookends:LE-192 — owner advice-policy changes enable, remove and disable requirements on a running run; received answers keep their disposition obligation.
+// bookends:LE-188 — malformed engine-owned advice records refuse before storage, including on an advice-off start.
+fn external_work_advice_policy_changes_and_occasion_revisions_public_binary() {
+    let fixture = ProviderFixture::new(workflow(
+        vec![
+            State::new("start", "Start", "Work", false),
+            State::new("done", "Done", "Finished", true),
+        ],
+        vec![Transition::check_free("start", "finish", "done")],
+    ));
+    let run = "advice-live";
+    start(&fixture, run, json!({}));
+    assert_eq!(
+        show_full(&fixture, run)["result"]["advice_policy"]["enabled"],
+        false
+    );
+    refused_unchanged(
+        &fixture,
+        run,
+        || append_record(&fixture, run, "early-answer", "advice-answer", &json!({})),
+        "advice-record-refused",
+    );
+    appended(
+        &fixture,
+        run,
+        "trigger",
+        "external-evidence",
+        json!({"question":"bounded decision"}),
+    );
+    let occasion = |id: &str| json!({"state":"start","event":"finish","occasion_id":id});
+    let change = |id: &str, occasions: Vec<Value>| {
+        let visit = show_full(&fixture, run)["result"]["state_visit"].clone();
+        let departures = json!({"version":1,"occasions":occasions});
+        appended(
+            &fixture,
+            run,
+            id,
+            "advice-policy-change",
+            json!({
+            "actor":{"name":"owner","kind":"human"},"reason":"Owner changes advice requirements.",
+            "state_visit":visit,"advice_departures":departures.clone()}),
+        );
+        show_full(&fixture, run)
+    };
+    let added = change("owner-add", vec![occasion("A"), occasion("B")]);
+    assert_eq!(
+        added["result"]["advice_policy"]["enabled"], true,
+        "{}",
+        added["result"]["advice_policy"]
+    );
+    let event = || cli(&fixture, &["event", run, "finish"]);
+    refused_unchanged(
+        &fixture,
+        run,
+        || {
+            show_full(&fixture, run);
+            event()
+        },
+        "no driver record",
+    );
+    let target = json!({"revision":"r1"});
+    let record = |id: &str, revises: Option<&str>| {
+        let visit = show_full(&fixture, run)["result"]["state_visit"].clone();
+        let mut data = json!({"state_visit":visit,"source_state":"start","event":"finish","occasion_id":id,
+            "target":target,"triggered":false,"trigger_source_ids":[],"response_ids":[],
+            "reason":"No admissible atomic question on these supplied facts."});
+        if let Some(previous) = revises {
+            data["revises"] = json!(previous);
+            data["revision_reason"] = json!("Driver corrects its occasion record.");
+            data["reason"] = json!("Corrected: still no admissible atomic question.");
+        }
+        data
+    };
+    let original = record("A", None);
+    appended(
+        &fixture,
+        run,
+        "occasion-original",
+        "advice-occasion",
+        original.clone(),
+    );
+    refused_unchanged(
+        &fixture,
+        run,
+        || {
+            append_record(
+                &fixture,
+                run,
+                "duplicate",
+                "advice-occasion",
+                &record("A", None),
+            )
+        },
+        "occasion-original",
+    );
+    appended(
+        &fixture,
+        run,
+        "occasion-revised",
+        "advice-occasion",
+        record("A", Some("occasion-original")),
+    );
+    change("owner-remove-A", vec![occasion("B")]);
+    let blocked = refused_unchanged(
+        &fixture,
+        run,
+        || {
+            show_full(&fixture, run);
+            event()
+        },
+        "no driver record",
+    );
+    assert!(
+        blocked.to_string().contains("\u{60}B\u{60}")
+            && !blocked.to_string().contains("\u{60}A\u{60}"),
+        "{blocked}"
+    );
+    let visit = show_full(&fixture, run)["result"]["state_visit"].clone();
+    let request = json!({"version":loop_core::ADVICE_PROTOCOL_VERSION,
+        "state":{"admissibility":{"bounded_judgment":true,"evidence_sufficient":true}},"target":target,"occasion":"B",
+        "questions":{"claim":{"type":"choice","instructions":"Does the supplied record support the claim?",
+            "criteria":{"supported":"The record states it.","contradicted":"The record denies it."}}}});
+    let answer = json!({"occasion":"B","request":request,
+        "response":{"answers":{"claim":{"type":"choice","choice":"contradicted",
+            "probabilities":{"supported":0.2,"contradicted":0.8},"confidence":0.7}}},
+        "author":{"name":"External advisor","kind":"agent"},"original":{"text":"contradicted, 0.8"}});
+    for (key, value, needle) in [
+        ("occasion", json!("wrong"), "occasion must match"),
+        (
+            "author",
+            json!({"name":" ","kind":"agent"}),
+            "nonempty author",
+        ),
+        ("original", json!({}), "genuine original"),
+    ] {
+        let mut invalid = answer.clone();
+        invalid[key] = value;
+        refused_unchanged(
+            &fixture,
+            run,
+            || append_record(&fixture, run, "answer-B", "advice-answer", &invalid),
+            needle,
+        );
+    }
+    appended(&fixture, run, "answer-B", "advice-answer", answer);
+    appended(
+        &fixture,
+        run,
+        "occasion-B",
+        "advice-occasion",
+        json!({"state_visit":visit,"source_state":"start","event":"finish",
+        "occasion_id":"B","target":target,"triggered":true,"trigger_source_ids":["trigger"],"response_ids":["answer-B"]}),
+    );
+    let disabled = change("owner-disable", vec![]);
+    assert_eq!(
+        disabled["result"]["advice_policy"]["enabled"], false,
+        "{}",
+        disabled["result"]["advice_policy"]
+    );
+    refused_unchanged(
+        &fixture,
+        run,
+        || {
+            show_full(&fixture, run);
+            event()
+        },
+        "answer-B",
+    );
+    appended(
+        &fixture,
+        run,
+        "disposition",
+        "advice-disposition",
+        json!({"response_id":"answer-B","answer_id":"claim",
+        "occasion_id":"B","state_visit":visit,"target":target,"disposition":"reject",
+        "reason":"The advisor misread the record; the driver rejects the answer."}),
+    );
+    show_full(&fixture, run);
+    let finished_event = event();
+    assert_eq!(finished_event["status"], "completed", "{finished_event}");
+    let finished = show_full(&fixture, run);
+    assert_eq!(finished["result"]["current_state"], "done");
+    assert!(finished["result"]["initial_input"]
+        .get("advice_departures")
+        .is_none());
+    let context = finished["result"]["context"].as_array().unwrap();
+    assert!(context
+        .iter()
+        .any(|row| row["id"] == "occasion-original" && row["data"] == original));
+}
+
+#[test]
+// bookends:LE-54 — a check-free revision edge and termination work while provider evaluation is unavailable; on an advice-enabled run the revision still needs its own due advice closure.
+fn check_free_revision_survives_unavailable_provider_public_binary() {
+    let fixture = ProviderFixture::new(workflow(
+        vec![
+            State::new("start", "Start", "Work", false),
+            State::new("review", "Review", "Review", false),
+            State::new("done", "Done", "Finished", true),
+        ],
+        vec![
+            Transition::check_free("start", "submit", "review"),
+            Transition::checked("review", "approve", "done"),
+            Transition::check_free("review", "revise", "start"),
+        ],
+    ));
+    start(&fixture, "plain", json!({}));
+    start(
+        &fixture,
+        "advised",
+        json!({"advice_departures":{"version":1,
+        "occasions":[{"state":"review","event":"revise","occasion_id":"revise-decision"}]}}),
+    );
+    for run in ["plain", "advised"] {
+        show_full(&fixture, run);
+        assert_eq!(
+            cli(&fixture, &["event", run, "submit"])["status"],
+            "completed"
+        );
+    }
+    // The frozen provider command disappears: evaluation is unavailable from here on.
+    let provider = fixture._root.path().join("provider.sh");
+    let parked = fixture._root.path().join("provider.parked");
+    fs::rename(&provider, &parked).expect("park provider");
+    let offline = |parts: &[&str]| cli(&fixture, parts);
+    for run in ["plain", "advised"] {
+        offline(&["show", run, "--view", "full"]);
+        let denied = offline(&["event", run, "approve"]);
+        assert_ne!(denied["status"], "completed", "{denied}");
+        assert_eq!(
+            offline(&["show", run, "--view", "full"])["result"]["current_state"],
+            "review"
+        );
+    }
+    let revised = offline(&["event", "plain", "revise"]);
+    assert_eq!(revised["status"], "completed", "{revised}");
+    assert_eq!(
+        offline(&["show", "plain", "--view", "full"])["result"]["current_state"],
+        "start"
+    );
+    let blocked = offline(&["event", "advised", "revise"]);
+    assert_ne!(blocked["status"], "completed", "{blocked}");
+    assert!(
+        blocked.to_string().contains("no driver record"),
+        "{blocked}"
+    );
+    let visit = offline(&["show", "advised", "--view", "full"])["result"]["state_visit"].clone();
+    let occasion = json!({"state_visit":visit,"source_state":"review","event":"revise","occasion_id":"revise-decision",
+        "target":{"revision":"r1"},"triggered":false,"trigger_source_ids":[],"response_ids":[],
+        "reason":"No admissible atomic question: the revision is the driver's own correction."});
+    let stored = offline(&[
+        "append",
+        "advised",
+        "advice-occasion",
+        &occasion.to_string(),
+        "--record-id",
+        "no-question",
+    ]);
+    assert_eq!(stored["status"], "completed", "{stored}");
+    offline(&["show", "advised", "--view", "full"]);
+    let advised = offline(&["event", "advised", "revise"]);
+    assert_eq!(advised["status"], "completed", "{advised}");
+    offline(&["show", "plain", "--view", "full"]);
+    let terminated = offline(&["terminate", "plain"]);
+    assert_eq!(terminated["status"], "completed", "{terminated}");
+    assert_eq!(
+        offline(&["show", "plain", "--view", "full"])["result"]["lifecycle"],
+        "terminated"
+    );
+    fs::rename(&parked, &provider).expect("restore provider");
+}
+
+#[test]
+// bookends:LE-188 — engine integrity first, engine-owned rules second, then provider admission refuses a provably invalid record before storage, naming record and rule.
+fn provider_admission_refuses_invalid_records_before_storage_public_binary() {
+    let fixture = ProviderFixture::new(
+        workflow(
+            vec![
+                State::new("start", "Start", "Work", false),
+                State::new("done", "Done", "Finished", true),
+            ],
+            vec![Transition::check_free("start", "finish", "done")],
+        )
+        .with_admit(true),
+    );
+    let run = "admitted";
+    start(&fixture, run, json!({}));
+    let refusal = refused_unchanged(
+        &fixture,
+        run,
+        || {
+            append_record(
+                &fixture,
+                run,
+                "bad",
+                "fixture-record",
+                &json!({"invalid":true}),
+            )
+        },
+        "fixture-invalid",
+    );
+    assert_rejected_code(&refusal, "record-refused");
+    assert!(refusal.to_string().contains("bad"), "{refusal}");
+    appended(
+        &fixture,
+        run,
+        "good",
+        "fixture-record",
+        json!({"invalid":false}),
+    );
+    let duplicate = refused_unchanged(
+        &fixture,
+        run,
+        || {
+            append_record(
+                &fixture,
+                run,
+                "good",
+                "fixture-record",
+                &json!({"invalid":true}),
+            )
+        },
+        "good",
+    );
+    assert_ne!(duplicate["code"], "record-refused", "{duplicate}");
+    let engine_rule = refused_unchanged(
+        &fixture,
+        run,
+        || append_record(&fixture, run, "answer", "advice-answer", &json!({})),
+        "invalid answer shape",
+    );
+    assert_rejected_code(&engine_rule, "advice-record-refused");
+    let mut admitted: Vec<String> = provider_requests(&fixture)
+        .into_iter()
+        .filter(|request| request["operation"] == "admit")
+        .map(|request| {
+            request["record"]["id"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    admitted.sort();
+    assert_eq!(
+        admitted,
+        ["bad", "good"],
+        "only integrity-clean, engine-valid candidates reach admission"
     );
 }
 

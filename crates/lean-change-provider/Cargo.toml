@@ -8,7 +8,7 @@ repository.workspace = true
 autotests = false
 
 [package.metadata.dist]
-dist = false
+dist = true
 
 [lib]
 name = "lean_change_provider"

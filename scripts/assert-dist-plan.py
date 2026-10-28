@@ -14,13 +14,13 @@ TARGETS = {
     "x86_64-unknown-linux-gnu",
 }
 APPS = {
+    "lean-change-provider",
     "loop-cli",
     "policy-document-provider",
     "research-provider",
-    "software-change-provider",
 }
 ARCHIVE_RE = re.compile(
-    r"^(?P<app>loop-cli|policy-document-provider|research-provider|software-change-provider)-(?P<target>"
+    r"^(?P<app>lean-change-provider|loop-cli|policy-document-provider|research-provider)-(?P<target>"
     r"aarch64-apple-darwin|x86_64-unknown-linux-gnu)\.tar\.xz$"
 )
 

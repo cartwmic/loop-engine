@@ -106,6 +106,7 @@ def main():
         dumped = Path(args.data_root).resolve()
         if dumped.exists() and any(dumped.iterdir()):
             parser.error('packaged --data-root must be empty')
+        # bookends:LE-106 — the released binary's embedded data-dump supplies a packaged run with no checkout at runtime.
         subprocess.run([str(provider), 'data-dump', str(dumped)],check=True,capture_output=True)
         profile_path = dumped / 'crates/research-provider/data/configs' / profile_path.name
     with tempfile.TemporaryDirectory(prefix='research-external-') as temporary:

@@ -44,21 +44,11 @@ jobs:
         run: |
           python3 scripts/external-work-journey.py \
             --engine "$BIN_DIR/loop-engine" \
-            --software "$BIN_DIR/software-change" \
+            --lean "$BIN_DIR/lean-change" \
             --policy "$BIN_DIR/policy-document" \
             --research "$BIN_DIR/research" \
             --checker "$BIN_DIR/bookends-check" \
             --output-root "$JOURNEY_ROOT/external-work"
-      - name: Full software-change source journey
-        shell: bash
-        run: |
-          python3 scripts/software-change-journey.py \
-            --mode source \
-            --engine "$BIN_DIR/loop-engine" \
-            --provider "$BIN_DIR/software-change" \
-            --profile crates/software-change-provider/data/configs/high-rigor.json \
-            --traversal-depth full \
-            --jobs 2
       - name: Policy-document draft source journey
         shell: bash
         run: |

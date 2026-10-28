@@ -50,7 +50,7 @@ def brief_artifact() -> dict[str, Any]:
         ],
         "non_goals": [
             "Certifying semantic completeness.",
-            "Calling software-change evaluate or creating another provider.",
+            "Calling another provider's evaluate or creating another provider.",
         ],
     }
 

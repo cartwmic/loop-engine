@@ -21,6 +21,10 @@ path = "src/bin/policy_document_provider.rs"
 name = "research-provider"
 path = "src/bin/research_provider.rs"
 
+[[bin]]
+name = "model-binding-provider"
+path = "src/bin/model_binding_provider.rs"
+
 [dependencies]
 loop-core = { path = "../../crates/loop-core" }
 serde = { version = "1", features = ["derive"] }
