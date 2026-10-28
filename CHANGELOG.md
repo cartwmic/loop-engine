@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.31.0] - 2026-10-28
+
+### Changed
+
+- Lean-change profile `b`'s intent check has a fifth fixed question, `criteria-gap`: could a plausible delivery pass every criterion's check and still leave the goal unmet (LE-208, LE-209).
+- The lean-change review's `docs` question also asks, where the repository keeps a living PRD, for each requirement the change adds, changes or relies on and the check that proves it; a requirement no check proves is a finding (LE-207).
+
+### Compatibility
+
+- Profile versions are unchanged. An `intent-check` record evaluated by this release needs one answer for each of the five questions, so a profile `b` run that recorded a four-answer check under 0.30.0 is refused at `intent-ready` if continued with this binary. Profile `c` and the engine are unchanged.
+
 ## [0.30.0] - 2026-10-27
 
 ### Added
