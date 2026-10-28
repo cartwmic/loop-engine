@@ -81,7 +81,7 @@ pub fn evaluate(request: &EvaluateRequest, tree: TreeIdentity) -> Result<Value, 
 
 /// Profile b: the first well-formed intent-check, every finding disposed, and a fix means a newer intent.
 fn intent_ready(records: &[ContextRecord], input: &InitialInput) -> Gate {
-    let (id, intent) = current_intent(records)?;
+    let (id, _) = current_intent(records)?;
     if !input.review {
         return Ok(());
     }
@@ -93,8 +93,7 @@ fn intent_ready(records: &[ContextRecord], input: &InitialInput) -> Gate {
         .collect();
     let none = "run lean-change intent-packet, give it to a fresh reviewer and append their intent-check record";
     let (check_id, check) =
-        first_well_formed(checks, none, |r| intent_check_form(r, records, &intent))
-            .map_err(incomplete)?;
+        first_well_formed(checks, none, |r| intent_check_form(r, records)).map_err(incomplete)?;
     if disposed(records, check_id, &check.findings).map_err(incomplete)? && check.intent == id {
         return Err(incomplete(
             "a finding was fixed, so append a new intent record that fixes it".into(),
@@ -214,20 +213,20 @@ fn review_form(record: &ContextRecord, intent: &Intent) -> Result<Review, String
 fn intent_check_form(
     record: &ContextRecord,
     records: &[ContextRecord],
-    intent: &Intent,
 ) -> Result<IntentCheck, String> {
     let check: IntentCheck = serde_json::from_value(record.data.clone())
         .map_err(|e| format!("the intent-check record is invalid: {e}"))?;
-    if !records
+    // Independence is judged against the author of the intent that was checked.
+    let checked = records
         .iter()
-        .any(|r| r.kind == "intent" && r.id.as_str() == check.intent)
-    {
-        return Err("the intent-check must name an intent record".into());
-    }
+        .find(|r| r.kind == "intent" && r.id.as_str() == check.intent)
+        .ok_or("the intent-check must name an intent record")?;
+    let intent = Intent::parse(&checked.data)
+        .map_err(|e| format!("the checked intent record is invalid: {e}"))?;
     let (who, fresh) = (&check.reviewer, check.fresh_context);
     form(
         &INTENT_QUESTIONS,
-        intent,
+        &intent,
         (who, fresh),
         &check.answers,
         &check.findings,

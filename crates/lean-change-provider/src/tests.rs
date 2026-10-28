@@ -322,6 +322,44 @@ fn intent_ready_needs_an_independent_complete_disposed_intent_check() {
     let mut ctx = failed();
     ctx.push(record("chk2", "intent-check", 3, check_value()));
     assert!(check_denial(&r, ctx).contains("f1 needs a disposition"));
+    // Order in the context does not matter, only the sequence.
+    let mut ctx = failed();
+    ctx.push(record("chk2", "intent-check", 3, check_value()));
+    ctx.reverse();
+    assert!(check_denial(&r, ctx).contains("f1 needs a disposition"));
+    // Independence is judged against the author of the intent that was checked, not the current one.
+    let by = |name: &str| {
+        let mut v = intent(false);
+        v["author"]["name"] = json!(name);
+        v
+    };
+    let checked_by = |reviewer: &str, mut value: Value| {
+        value["reviewer"]["name"] = json!(reviewer);
+        value
+    };
+    let ctx = vec![
+        record("intent-1", "intent", 1, by("alice")),
+        record("chk1", "intent-check", 2, checked_by("bob", failed_check())),
+        record("intent-2", "intent", 3, by("bob")),
+        record(
+            "chk2",
+            "intent-check",
+            4,
+            checked_by("carol", check_value()),
+        ),
+    ];
+    assert!(check_denial(&r, ctx).contains("f1 needs a disposition"));
+    let ctx = vec![
+        record("intent-1", "intent", 1, by("alice")),
+        record(
+            "chk1",
+            "intent-check",
+            2,
+            checked_by("alice", check_value()),
+        ),
+        record("intent-2", "intent", 3, by("bob")),
+    ];
+    assert!(check_denial(&r, ctx).contains("someone other"));
     // An earlier malformed check does not count.
     let mut ctx = vec![record("intent-1", "intent", 1, intent(false))];
     let mut broken = check_value();
@@ -908,6 +946,12 @@ fn a_later_clean_review_cannot_erase_the_first_reviews_findings() {
     first["findings"] = json!([finding("f1", "principles")]);
     let mut ctx = review_ctx(&r, first, vec![]);
     ctx.push(record("rev2", "review", 5, review(&r)));
+    let mut shuffled = ctx.clone();
+    shuffled.reverse();
+    assert_eq!(
+        code(&ask(&r, true, "review", "reviewed", shuffled)),
+        "review-incomplete"
+    );
     let denied = ask(&r, true, "review", "reviewed", ctx.clone());
     assert_eq!(code(&denied), "review-incomplete");
     assert!(denied["feedback"]["message"]
