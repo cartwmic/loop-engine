@@ -10,7 +10,7 @@ from external_work_driver import engine_call
 
 PRINCIPLES = '# Principles\n1. Compose small parts.\n'
 QUESTIONS = ['intent', 'scope', 'edge-cases', 'checks', 'docs', 'principles']
-CHECK_QUESTIONS = ['use', 'edge', 'control', 'terms']
+CHECK_QUESTIONS = ['use', 'edge', 'control', 'terms', 'criteria-gap']
 OWNER = {'name': 'owner', 'kind': 'human'}
 WORKER = {'name': 'worker', 'kind': 'script'}
 
@@ -132,6 +132,7 @@ def run_profile(engine, provider, profile, work):
         j.refused('intent-ready', 'intent-check-incomplete', 'explore')
         packet = j.tool('intent-packet', j.show_text())
         assert all(f'- {q}: ' in packet for q in CHECK_QUESTIONS) and 'intent-1' in packet, packet
+        assert 'pass every criterion\'s check and still leave the goal' in packet, packet
         j.append('chk-own', 'intent-check', intent_check('worker'))
         out = j.refused('intent-ready', 'intent-check-incomplete', 'explore')
         assert 'someone other' in out, out
@@ -181,6 +182,7 @@ def run_profile(engine, provider, profile, work):
         j.refused('reviewed', 'review-incomplete', 'review')
         packet = j.tool('review-packet', j.show_text())
         assert all(q in packet for q in QUESTIONS) and 'Compose small parts' in packet and 'greeting.txt' in packet
+        assert 'living PRD' in packet and 'the check that proves it' in packet, packet
         own = review(fresh['tree'], True)
         own['reviewer']['name'] = 'worker'
         j.append('rev-own', 'review', own)

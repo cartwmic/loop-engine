@@ -1081,7 +1081,49 @@ fn review_packet_refuses_what_verified_would_refuse() {
 }
 
 #[test]
-fn intent_packet_carries_the_four_questions_and_the_draft_intent() {
+fn the_question_lists_match_the_prd_text() {
+    let prd =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/PRD.md"))
+            .unwrap();
+    let section = |id: &str| -> String {
+        let start = prd.find(&format!("### {id}:")).unwrap();
+        let rest = &prd[start + 4..];
+        rest[..rest.find("\n### ").unwrap_or(rest.len())].to_owned()
+    };
+    let intent_ids: Vec<&str> = INTENT_QUESTIONS.iter().map(|(id, _)| *id).collect();
+    assert_eq!(
+        intent_ids,
+        ["use", "edge", "control", "terms", "criteria-gap"]
+    );
+    let le209 = section("LE-209");
+    for (id, text) in INTENT_QUESTIONS {
+        assert!(le209.contains(&format!("\"{text}\" ({id})")), "{id}");
+    }
+    assert!(le209.contains("five fixed intent-check questions"));
+    let review_ids: Vec<&str> = QUESTIONS.iter().map(|(id, _)| *id).collect();
+    assert_eq!(
+        review_ids,
+        [
+            "intent",
+            "scope",
+            "edge-cases",
+            "checks",
+            "docs",
+            "principles"
+        ]
+    );
+    let le207 = section("LE-207");
+    assert!(le207.contains("(intent, scope, edge-cases, checks, docs, principles)"));
+    let docs = QUESTIONS.iter().find(|(id, _)| *id == "docs").unwrap().1;
+    assert!(docs.ends_with(
+        "If the repository keeps a living PRD, name each requirement the change adds, changes or relies on, \
+         and the check that proves it; a requirement that no check proves is a finding."
+    ));
+    assert!(le207.contains(&format!("\"{docs}\" (docs)")));
+}
+
+#[test]
+fn intent_packet_carries_the_five_questions_and_the_draft_intent() {
     let r = repo();
     let draft = vec![record("intent-1", "intent", 1, intent(false))];
     // Needs no verification: the intent is still a draft.

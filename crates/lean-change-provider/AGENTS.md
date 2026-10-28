@@ -13,6 +13,6 @@ and no shipped data.
 
 Profiles b and c share one code base. Do not fork the code for c: c is the review flag off. A new gate needs a
 unit test that fails without it and a row in `scripts/lean-change-mutations.py`. The core (`src/lib.rs`: model, workflow, gates) does no process, file or git access; the binary supplies the repository tree through the `TreeIdentity` port and a unit test enforces the boundary. Put new I/O in `run.rs` or `packet.rs`, never in the core. Keep the question lists in
-`src/model.rs` (the four intent-check questions and the six review questions) identical to the PRD text (LE-207 and LE-209).
+`src/model.rs` (the five intent-check questions and the six review questions) identical to the PRD text (LE-207 and LE-209).
 
 Check from the checkout root: `cargo test -p lean-change-provider`, then the journey and the mutation script named in the root `AGENTS.md`.
