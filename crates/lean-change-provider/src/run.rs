@@ -4,16 +4,43 @@ use loop_integrations::proof_metadata::repository_proof_identity;
 use serde_json::Value;
 use std::io::Read;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const TAIL_BYTES: usize = 2000;
 
-/// The adapter behind the core's TreeIdentity port.
+/// The root of the Git worktree that contains `dir`, canonicalized.
+pub fn worktree_root(dir: &Path) -> Result<PathBuf, String> {
+    let out = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("git: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "{} is not inside a Git worktree: {}",
+            dir.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let top = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    std::fs::canonicalize(&top).map_err(|e| format!("{top}: {e}"))
+}
+
+/// The adapter behind the core's TreeIdentity port. It measures the whole worktree, so the
+/// frozen repo must be the worktree root: a subdirectory would miss edits outside it.
 pub fn tree_identity(input: &InitialInput) -> Result<String, String> {
-    repository_proof_identity(Path::new(&input.repo))
+    let given =
+        std::fs::canonicalize(&input.repo).map_err(|e| format!("repo {}: {e}", input.repo))?;
+    if worktree_root(&given)? != given {
+        return Err(format!(
+            "repo {} is not the root of its Git worktree; set the run up with the worktree root",
+            input.repo
+        ));
+    }
+    repository_proof_identity(&given)
         .map_err(|e| format!("could not identify the repository tree: {e}"))
 }
 

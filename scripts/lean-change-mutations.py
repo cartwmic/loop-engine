@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Mutation check: disable each lean-change gate in turn and require the unit tests or the journey to fail."""
 import argparse
-import json
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,19 +48,37 @@ MUTATIONS = [
     ('verify tree stability', RUN, 'if trees.windows(2).all(|pair| pair[0] == pair[1]) {', 'if true {'),
     ('verify kills the process group', RUN, '    kill_group(pid);\n    let mut tail', '    let mut tail'),
     ('verify entry tree', RUN, 'let mut trees = vec![tree_identity(&input)?];', 'let mut trees = Vec::new();'),
+    ('repo is the worktree root', RUN, 'if worktree_root(&given)? != given {', 'if false {'),
+    ('setup uses the worktree root', PACKET, '    let repo = worktree_root(&repo).map_err(|e| format!("--repo: {e}"))?;\n', ''),
+    ('packet keeps every tracked path', PACKET, 'std::fs::copy(real_index.trim(), &index)', 'Err::<u64, _>(std::io::Error::from(std::io::ErrorKind::NotFound))'),
     ('packet eligibility', PACKET, 'verification_ready(&records, &input, &tree_identity)', 'Ok::<(), serde_json::Value>(())'),
     ('c has no review state', WORKFLOW, 'if review {\n        states.push', 'if true {\n        states.push'),
 ]
 
 
-def run(args, **kw):
-    return subprocess.run(args, cwd=ROOT, text=True, capture_output=True, **kw)
+def run(args, cwd, **kw):
+    return subprocess.run(args, cwd=cwd, text=True, capture_output=True, **kw)
+
+
+def copy_source(work):
+    """Copy the tracked and non-ignored files of this checkout; mutants never touch the checkout or its target."""
+    names = run(['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], ROOT, check=True).stdout
+    source = work / 'source'
+    for name in filter(None, names.split('\0')):
+        origin = ROOT / name
+        if not origin.is_file():
+            continue
+        destination = source / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(origin, destination, follow_symlinks=False)
+    return source
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--engine')
     parser.add_argument('--list', action='store_true')
+    parser.add_argument('--work-root', help='driver-owned directory outside the checkout (default: a fresh temporary directory, removed after)')
     args = parser.parse_args()
     # Bare invocation is the recognized CI collection form; the full proof rebuilds the provider once per mutation.
     if args.list or len(sys.argv) == 1:
@@ -69,33 +89,52 @@ def main():
     if not args.engine:
         parser.error('--engine is required')
     engine = Path(args.engine).resolve()
-    target = json.loads(run(['cargo', 'metadata', '--format-version', '1', '--no-deps'], check=True).stdout)['target_directory']
-    provider = Path(target) / 'debug/lean-change'
+    if args.work_root:
+        work = Path(args.work_root).resolve()
+        assert not work.is_relative_to(ROOT), '--work-root must be outside the checkout'
+        work.mkdir(parents=True, exist_ok=True)
+        work = Path(tempfile.mkdtemp(prefix='lean-change-mutations-', dir=work))
+    else:
+        work = Path(tempfile.mkdtemp(prefix='lean-change-mutations-'))
+    try:
+        survivors = mutate_all(engine, work)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    assert not survivors, f'mutations not caught: {survivors}'
+    print('every lean-change gate mutation was caught')
+
+
+def mutate_all(engine, work):
+    # Mutants are built from a disposable copy into a disposable target directory, so the
+    # checkout's sources and its target/debug/lean-change are never altered, even on interruption.
+    source = copy_source(work)
+    env = dict(os.environ, CARGO_TARGET_DIR=str(work / 'target'))
+    provider = work / 'target/debug/lean-change'
     survivors = []
     for name, path, old, new in MUTATIONS:
-        original = path.read_text()
+        copy = source / path.relative_to(ROOT)
+        original = copy.read_text()
         assert original.count(old) == 1, f'stale mutation: {name}'
         try:
-            path.write_text(original.replace(old, new))
-            build = run(['cargo', 'build', '-p', 'lean-change-provider', '--locked'])
+            copy.write_text(original.replace(old, new))
+            build = run(['cargo', 'build', '-p', 'lean-change-provider', '--locked'], source, env=env)
             if build.returncode:
                 print(f'{name}: DOES NOT COMPILE\n{build.stderr[-800:]}')
                 survivors.append(name)
                 continue
-            unit = run(['cargo', 'test', '-p', 'lean-change-provider', '--locked', '--quiet'])
+            unit = run(['cargo', 'test', '-p', 'lean-change-provider', '--locked', '--quiet'], source, env=env)
             if unit.returncode:
                 print(f'{name}: killed by unit tests')
                 continue
-            journey = run([sys.executable, 'scripts/lean-change-journey.py', '--engine', str(engine), '--provider', str(provider)])
+            journey = run([sys.executable, 'scripts/lean-change-journey.py', '--engine', str(engine), '--provider', str(provider)], source, env=env)
             if journey.returncode:
                 print(f'{name}: killed by the journey')
                 continue
             print(f'{name}: SURVIVED')
             survivors.append(name)
         finally:
-            path.write_text(original)
-    assert not survivors, f'mutations not caught: {survivors}'
-    print('every lean-change gate mutation was caught')
+            copy.write_text(original)
+    return survivors
 
 
 if __name__ == '__main__':

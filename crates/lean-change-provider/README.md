@@ -25,4 +25,6 @@ python3 scripts/lean-change-journey.py --engine "$BIN_DIR"/loop-engine --provide
 python3 scripts/lean-change-mutations.py --engine "$BIN_DIR"/loop-engine
 ```
 
-(run the scripts from the checkout root).
+(run the scripts from the checkout root). The mutation script builds each mutant from a disposable
+copy into a disposable target directory (`--work-root DIR` to place it), so the checkout and its
+`target/debug/lean-change` are never altered.

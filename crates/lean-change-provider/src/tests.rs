@@ -1123,3 +1123,67 @@ fn only_b_asks_for_the_intent_check_and_c_is_unchanged() {
         "9785388e978bfb46fc8bd80f6fddca0637d0e689ca7bd7b783d23643729987d5"
     );
 }
+
+#[test]
+fn the_frozen_repo_is_the_worktree_root_never_a_subdirectory() {
+    let r = repo();
+    std::fs::create_dir(r.join("sub")).unwrap();
+    std::fs::write(r.join("sub/k.txt"), "k").unwrap();
+    git(&r, &["add", "-A"]);
+    git(&r, &["commit", "-qm", "sub"]);
+    let sub = r.join("sub");
+    let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    // Setup normalizes a subdirectory to its worktree root.
+    let c = crate::packet::setup(&args(&[
+        "--profile",
+        "c",
+        "--repo",
+        &sub.display().to_string(),
+    ]))
+    .unwrap();
+    assert_eq!(
+        c["repo"],
+        std::fs::canonicalize(&r).unwrap().display().to_string()
+    );
+    // A hand-written input naming a subdirectory is refused. Otherwise a check reading ../a.txt
+    // could pass on an already-modified a.txt whose later edit the subdirectory tree would miss.
+    std::fs::write(r.join("a.txt"), "dirty").unwrap();
+    let ctx = verify_ctx(&sub, |_| {});
+    std::fs::write(r.join("a.txt"), "dirty and different").unwrap();
+    assert_eq!(
+        code(&ask(&sub, false, "verify", "verified", ctx.clone())),
+        "tree-unreadable"
+    );
+    let parsed = InitialInput::parse(&input(&sub, false)).unwrap();
+    assert!(crate::run::tree_identity(&parsed)
+        .unwrap_err()
+        .contains("root of its Git worktree"));
+    assert!(crate::run::verify(&show(&sub, false, ctx)).is_err());
+    assert!(crate::packet::setup(&args(&[
+        "--profile",
+        "c",
+        "--repo",
+        &std::env::temp_dir().display().to_string()
+    ]))
+    .is_err());
+}
+
+#[test]
+fn review_packet_includes_a_tracked_file_that_matches_an_ignore_rule() {
+    let r = repo();
+    std::fs::write(r.join(".gitignore"), "*.log\n").unwrap();
+    git(&r, &["add", ".gitignore"]);
+    git(&r, &["commit", "-qm", "ignore logs"]);
+    std::fs::write(r.join("forced.log"), "forced content").unwrap();
+    git(&r, &["add", "-f", "forced.log"]);
+    std::fs::write(r.join("skipped.log"), "ignored content").unwrap();
+    let i = intent(false);
+    let ctx = vec![
+        record("intent-1", "intent", 1, i.clone()),
+        record("d-ok", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("v1", "verification", 3, verification(&r, &i)),
+    ];
+    let packet = crate::packet::review_packet(&show(&r, true, ctx)).unwrap();
+    assert!(packet.contains("+forced content"), "{packet}");
+    assert!(!packet.contains("ignored content"));
+}

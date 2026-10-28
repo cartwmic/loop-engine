@@ -24,6 +24,8 @@ shasum -a 256 /abs/profile.json
 loop-engine --database D --config C --json start --id RUN lean-change @/abs/profile.json "label"
 ```
 
+`setup` freezes the Git worktree root, even when `--repo` names a subdirectory; a profile that names
+a subdirectory is refused at verify and review.
 `providers.toml` names the provider `lean-change` with the `lean-change` binary as its command.
 Keep every file the run produces (profile, database, config, verification, packet) in a work directory
 `$WORK` OUTSIDE the repository: a new file inside it is an edit and makes the verification stale.

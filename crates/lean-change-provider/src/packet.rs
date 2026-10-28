@@ -1,5 +1,5 @@
 //! `lean-change setup`, `lean-change intent-packet` and `lean-change review-packet`.
-use crate::run::{from_show, tree_identity};
+use crate::run::{from_show, tree_identity, worktree_root};
 use lean_change_provider::evaluate::verification_ready;
 use lean_change_provider::model::*;
 use loop_core::ContextRecord;
@@ -46,6 +46,8 @@ pub fn setup(args: &[String]) -> Result<Value, String> {
     };
     let repo = std::fs::canonicalize(repo.ok_or("--repo is required")?)
         .map_err(|e| format!("--repo: {e}"))?;
+    // The checks and the tree identity cover the whole worktree, never a subdirectory of it.
+    let repo = worktree_root(&repo).map_err(|e| format!("--repo: {e}"))?;
     let base = git(&repo, &["rev-parse", "HEAD"], None)?.trim().to_owned();
     let principles = match principles {
         Some(path) => {
@@ -111,7 +113,21 @@ pub fn review_packet(show: &Value) -> Result<String, String> {
     let call = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let index =
         std::env::temp_dir().join(format!("lean-change-index-{}-{call}", std::process::id()));
-    let diff = git(repo, &["read-tree", &input.base], Some(&index))
+    // Start from a copy of the repository's own index so that every tracked path, including one
+    // force-added under an ignore rule, stays in the diff; `add -A` then stages the working tree.
+    let real_index = git(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+        None,
+    )?;
+    let seeded = match std::fs::copy(real_index.trim(), &index) {
+        Ok(_) => Ok(String::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            git(repo, &["read-tree", &input.base], Some(&index))
+        }
+        Err(e) => Err(format!("could not copy the index: {e}")),
+    };
+    let diff = seeded
         .and_then(|_| git(repo, &["add", "-A"], Some(&index)))
         .and_then(|_| git(repo, &["diff", "--cached", &input.base], Some(&index)));
     let _ = std::fs::remove_file(&index);
