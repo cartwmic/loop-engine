@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 pub const SOFTWARE_CHANGE_PROVIDER: &str = "software-change-provider";
 pub const POLICY_DOCUMENT_PROVIDER: &str = "policy-document-provider";
 pub const RESEARCH_PROVIDER: &str = "research-provider";
+pub const MODEL_BINDING_PROVIDER: &str = "model-binding-provider";
 
 /// Reference software-change review gates.
 pub const DESIGN_REVIEW_GATE: &str = "design-review";
@@ -36,6 +37,7 @@ pub enum FixtureProvider {
     SoftwareChange,
     PolicyDocument,
     Research,
+    ModelBinding,
 }
 
 /// A response written by a fixture executable.
@@ -157,6 +159,9 @@ pub fn process_request(
                 FixtureProvider::SoftwareChange => software_change_workflow(),
                 FixtureProvider::PolicyDocument => policy_document_workflow(),
                 FixtureProvider::Research => research_workflow(),
+                FixtureProvider::ModelBinding => {
+                    model_binding_describe(object.get("initial_input"))?
+                }
             };
             Ok(FixtureResponse::Json(
                 serde_json::to_value(workflow).map_err(|error| {
@@ -175,7 +180,17 @@ pub fn process_request(
                     evaluate_policy_document(request).map(FixtureResponse::Json)
                 }
                 FixtureProvider::Research => evaluate_research(request).map(FixtureResponse::Json),
+                FixtureProvider::ModelBinding => {
+                    evaluate_model_binding(request).map(FixtureResponse::Json)
+                }
             }
+        }
+        "admit" if provider == FixtureProvider::ModelBinding => {
+            let request: AdmitFixtureRequest =
+                serde_json::from_value(Value::Object(object.clone())).map_err(|error| {
+                    FixtureError::new(format!("invalid admit request: {error}"))
+                })?;
+            Ok(FixtureResponse::Json(admit_model_binding(request)))
         }
         other => Err(FixtureError::new(format!(
             "unsupported provider operation `{other}`"
@@ -281,6 +296,222 @@ pub fn software_change_workflow() -> Workflow {
             Transition::check_free(VALIDATION_GATE, "revise", "implement"),
         ],
     )
+}
+
+/// Model-binding reference workflow: a draft by an author, a review by an
+/// ordinary reviewer, then done. It is the generic user of the engine's
+/// model-binding library (LE-195..LE-200): admission refuses missing or
+/// unequal declared sessions and invalid owner amendments, and the checked
+/// steps judge author declarations and stale-marked review eligibility.
+pub fn model_binding_workflow() -> Workflow {
+    Workflow::new(
+        "model-binding",
+        "draft",
+        vec![
+            State::new(
+                "draft",
+                "Draft",
+                "The author drafts the subject and declares its session.",
+                false,
+            ),
+            State::new(
+                "review",
+                "Review",
+                "An ordinary reviewer reviews the current draft.",
+                false,
+            ),
+            State::new("done", "Done", "The reviewed draft is complete.", true),
+        ],
+        vec![
+            Transition::checked("draft", "drafted", "review"),
+            Transition::checked("review", "approved", "done"),
+            Transition::check_free("review", "revise", "draft"),
+        ],
+    )
+    .with_admit(true)
+}
+
+/// The single review axis the model-binding workflow requires.
+pub const MODEL_BINDING_REVIEW_AXIS: &str = "correctness";
+
+fn model_binding_describe(initial_input: Option<&Value>) -> Result<Workflow, FixtureError> {
+    if let Some(bindings) =
+        initial_input.and_then(|input| input.get(loop_core::MODEL_BINDINGS_INPUT_KEY))
+    {
+        loop_core::parse_frozen_model_bindings(bindings)
+            .map_err(|error| FixtureError::new(format!("start refused: {error}")))?;
+    }
+    Ok(model_binding_workflow())
+}
+
+#[derive(Debug, Deserialize)]
+struct AdmitFixtureRequest {
+    initial_input: Value,
+    context: Vec<ContextRecord>,
+    record: AdmitCandidate,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdmitCandidate {
+    id: String,
+    kind: String,
+    data: Value,
+}
+
+fn refused(rule: &str, message: String) -> Value {
+    json!({"refused": {"rule": rule, "message": message}})
+}
+
+fn declared_session(data: &Value) -> Result<Option<loop_core::Binding>, String> {
+    match data.get("session") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => loop_core::Binding::from_value(value)
+            .map(Some)
+            .map_err(|error| format!("declared session {error}")),
+    }
+}
+
+fn admit_model_binding(request: AdmitFixtureRequest) -> Value {
+    let folded = match loop_core::fold_model_bindings(&request.initial_input, &request.context) {
+        Ok(folded) => folded,
+        Err(error) => return refused("model-bindings-unavailable", error),
+    };
+    let in_force = folded.in_force();
+    let data = &request.record.data;
+    match request.record.kind.as_str() {
+        loop_core::MODEL_BINDING_AMENDMENT_RECORD_KIND => {
+            match loop_core::validate_amendment(&in_force, data) {
+                Ok(_) => json!({}),
+                Err(refusal) => refused(refusal.cause.code(), refusal.to_string()),
+            }
+        }
+        loop_core::SESSION_DECLARATION_RECORD_KIND => {
+            let role = data["role"].as_str().and_then(loop_core::ModelRole::parse);
+            if role != Some(loop_core::ModelRole::Author) {
+                return refused(
+                    "declaration-malformed",
+                    "session-declaration role must be author".into(),
+                );
+            }
+            if data["subject_revision"]
+                .as_str()
+                .is_none_or(|text| text.trim().is_empty())
+            {
+                return refused(
+                    "declaration-malformed",
+                    "session-declaration needs a nonblank subject_revision".into(),
+                );
+            }
+            match declared_session(data) {
+                Ok(Some(_)) => json!({}),
+                Ok(None) => refused(
+                    "declaration-malformed",
+                    "session-declaration needs a session".into(),
+                ),
+                Err(error) => refused("declaration-malformed", error),
+            }
+        }
+        "review" => {
+            let role = loop_core::ModelRole::OrdinaryReviewer;
+            let declared = match declared_session(data) {
+                Ok(declared) => declared,
+                Err(error) => {
+                    return refused(
+                        "session-mismatch",
+                        format!("model binding for role \u{60}{role}\u{60} is not met: {error}"),
+                    )
+                }
+            };
+            match loop_core::check_declared_session(role, in_force.get(&role), declared.as_ref()) {
+                Ok(()) => json!({}),
+                Err(mismatch) => refused(
+                    "session-mismatch",
+                    format!("record \u{60}{}\u{60}: {mismatch}", request.record.id),
+                ),
+            }
+        }
+        _ => json!({}),
+    }
+}
+
+fn evaluate_model_binding(request: EvaluateRequest) -> Result<Value, FixtureError> {
+    request.validate_operation()?;
+    let folded = loop_core::fold_model_bindings(&request.initial_input, &request.context)
+        .map_err(|error| FixtureError::new(format!("model bindings unavailable: {error}")))?;
+    let latest_draft = request
+        .context
+        .iter()
+        .rev()
+        .find(|record| record.kind == "draft")
+        .and_then(|record| record.data["revision"].as_str().map(str::to_owned));
+    let Some(revision) = latest_draft else {
+        return Ok(deny(
+            "draft-missing",
+            "no draft record exists".into(),
+            json!({}),
+        ));
+    };
+    match request.transition.event.as_str() {
+        "drafted" => {
+            let role = loop_core::ModelRole::Author;
+            let declared = request
+                .context
+                .iter()
+                .rev()
+                .find(|record| {
+                    record.kind == loop_core::SESSION_DECLARATION_RECORD_KIND
+                        && record.data["subject_revision"].as_str() == Some(revision.as_str())
+                })
+                .and_then(|record| declared_session(&record.data).ok().flatten());
+            match loop_core::check_declared_session(
+                role,
+                folded.in_force().get(&role),
+                declared.as_ref(),
+            ) {
+                Ok(()) => Ok(json!({"result": "allow"})),
+                Err(mismatch) => Ok(deny(
+                    "session-mismatch",
+                    format!("draft \u{60}{revision}\u{60}: {mismatch}"),
+                    json!({"role": role, "subject_revision": revision}),
+                )),
+            }
+        }
+        "approved" => {
+            let stale = folded.stale_marks();
+            let mut refusals = Vec::new();
+            for record in request.context.iter().filter(|record| {
+                record.kind == "review"
+                    && record.data["subject_revision"].as_str() == Some(revision.as_str())
+                    && record.data["axis"].as_str() == Some(MODEL_BINDING_REVIEW_AXIS)
+                    && record.data["result"].as_str() == Some("pass")
+            }) {
+                let mark = stale.iter().find(|mark| {
+                    mark.role == loop_core::ModelRole::OrdinaryReviewer
+                        && mark.sequence > record.sequence
+                });
+                match mark {
+                    None => return Ok(json!({"result": "allow"})),
+                    Some(mark) => refusals.push(json!({
+                        "amendment": mark.amendment_id, "role": mark.role,
+                        "author": record.data["reviewer"]["name"], "assessment": record.id,
+                        "axis": MODEL_BINDING_REVIEW_AXIS})),
+                }
+            }
+            let message = if refusals.is_empty() {
+                format!(
+                    "no passing {MODEL_BINDING_REVIEW_AXIS} review of draft \u{60}{revision}\u{60}"
+                )
+            } else {
+                format!("every passing review of draft \u{60}{revision}\u{60} is ineligible after a stale mark: {}", Value::Array(refusals.clone()))
+            };
+            Ok(deny(
+                "review-incomplete",
+                message,
+                json!({"ineligible": refusals}),
+            ))
+        }
+        _ => Ok(json!({"result": "allow"})),
+    }
 }
 
 /// Exact policy-document reference topology from PRD §11.2.

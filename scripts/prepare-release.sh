@@ -63,7 +63,7 @@ PY
 cargo update --workspace --offline
 cargo build --locked \
   -p loop-cli \
-  -p software-change-provider \
+  -p lean-change-provider \
   -p policy-document-provider \
   -p research-provider \
   -p bookends-check

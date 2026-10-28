@@ -7,9 +7,9 @@ description: Use when extracting a schema-valid living markdown PRD candidate fr
 
 ## Overview
 
-Generate-PRD is a recurring research profile plus this skill. It proposes a schema-valid living markdown PRD candidate with per-requirement repository evidence. It is not a fourth Loop Engine provider, not a software-change profile family, and not a software-change precondition. Repositories without a schema-valid git PRD can still complete software-change with bookends off.
+Generate-PRD is a recurring research profile plus this skill. It proposes a schema-valid living markdown PRD candidate with per-requirement repository evidence. It is not a fourth Loop Engine provider and not a precondition for any other run.
 
-Drive the run with the **existing** `research` binary and `crates/research-provider/data/configs/generate-prd.json`. Describe and evaluate stay on that binary. Never invoke a model from the research provider binary itself. Never call software-change evaluate.
+Drive the run with the **existing** `research` binary and `crates/research-provider/data/configs/generate-prd.json`. Describe and evaluate stay on that binary. Never invoke a model from the research provider binary itself. Never call another provider's evaluate.
 
 `using-research-provider` (`skills/using-research-provider/SKILL.md`) and `using-loop-engine` (`skills/using-loop-engine/SKILL.md`) are required companions for engine driving, external work policy, evidence, and envelopes. This skill does not replace them. Do not markdown-link outside this crate.
 
@@ -67,11 +67,11 @@ Every proposed requirement must have one and only one evidence mapping. The mapp
 - On accept, only that human (or an agent acting after explicit human acceptance) may commit the candidate to `docs/PRD.md`.
 - Never auto-commit. Do not run `git commit` as part of this skill.
 
-This extract path is not required to start a software-change run.
+This extract path is not required to start a lean-change run.
 
 ## Gate map
 
-Same research topology as `standard.json`: `scope → gather → verify → synthesize → end`, plus check-free owning-phase `revise*` edges. Checked events, evidence rules, and production-start isolation rules are those in `skills/using-research-provider/SKILL.md`. Do not treat generate-PRD as a software-change workflow (`intent` / `design` / `plan` / `implement` / `validation`) and do not run `scripts/software-change-journey.py` for this path.
+Same research topology as `standard.json`: `scope → gather → verify → synthesize → end`, plus check-free owning-phase `revise*` edges. Checked events, evidence rules, and production-start isolation rules are those in `skills/using-research-provider/SKILL.md`. Do not treat generate-PRD as a lean-change workflow (`explore` / `intent-approval` / `implement` / `verify`).
 
 Small pre-start overrides use `--set review.GATE.AXIS.required_authors=N`,
 `--set review.GATE.AXIS.self_review=true`, and `--set review.GATE.AXIS.group=NAME`.

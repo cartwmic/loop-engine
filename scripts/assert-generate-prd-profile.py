@@ -126,9 +126,9 @@ def main() -> int:
         path.parent.name for path in (ROOT / "crates").glob("*-provider/Cargo.toml")
     }
     if provider_crates != {
+        "lean-change-provider",
         "policy-document-provider",
         "research-provider",
-        "software-change-provider",
     }:
         fail(f"unexpected provider crate set: {sorted(provider_crates)}")
 
@@ -141,7 +141,7 @@ def main() -> int:
         "A human must accept or reject the candidate before any commit to docs/PRD.md.",
         "Never auto-commit.",
         "Never mint IDs outside the published grammar.",
-        "Never call software-change evaluate.",
+        "Never call another provider's evaluate.",
         "Never invoke a model from the research provider binary itself.",
         "prd-candidate.md",
         "bookends-check candidate",

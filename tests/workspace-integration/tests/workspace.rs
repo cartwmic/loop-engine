@@ -37,25 +37,6 @@ mod research_embedded_data;
 mod research_evaluate;
 #[path = "../../../crates/research-provider/tests/shipped_data.rs"]
 mod research_shipped_data;
-#[path = "../../../crates/software-change-provider/tests/cli.rs"]
-mod software_change_cli;
-#[path = "../../../crates/software-change-provider/tests/contracts.rs"]
-mod software_change_contracts;
-#[path = "../../../crates/software-change-provider/tests/provider.rs"]
-mod software_change_provider;
-#[path = "../../../crates/software-change-provider/tests/recovery_dispatch.rs"]
-mod software_change_recovery_dispatch;
 
-mod provider_external_reviews;
-
-#[cfg(unix)]
-mod c_packets_admission;
-
-#[cfg(unix)]
-mod evidence_carry;
-
-#[cfg(unix)]
 mod model_bindings;
-
-#[cfg(unix)]
-mod locator_repair;
+mod provider_external_reviews;

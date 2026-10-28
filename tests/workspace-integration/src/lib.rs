@@ -50,11 +50,6 @@ const REQUIRED_BINARIES: &[RequiredBinary] = &[
         alias: "research",
     },
     RequiredBinary {
-        package: "software-change-provider",
-        target: "software-change",
-        alias: "software-change",
-    },
-    RequiredBinary {
         package: "loop-reference-fixtures",
         target: "policy-document-provider",
         alias: "fixture:policy-document-provider",
@@ -68,6 +63,11 @@ const REQUIRED_BINARIES: &[RequiredBinary] = &[
         package: "loop-reference-fixtures",
         target: "software-change-provider",
         alias: "fixture:software-change-provider",
+    },
+    RequiredBinary {
+        package: "loop-reference-fixtures",
+        target: "model-binding-provider",
+        alias: "fixture:model-binding-provider",
     },
 ];
 
@@ -83,8 +83,6 @@ const FRESH_BUILD_ARGS: &[&str] = &[
     "policy-document-provider",
     "-p",
     "research-provider",
-    "-p",
-    "software-change-provider",
     "-p",
     "loop-reference-fixtures",
     "--bins",
@@ -134,7 +132,7 @@ pub fn binary(name: &str) -> PathBuf {
     })
 }
 
-/// Resolve one of the three reference-provider fixture executables.
+/// Resolve one of the reference-provider fixture executables.
 pub fn fixture_binary(name: &str) -> PathBuf {
     let key = format!("fixture:{name}");
     resolve_binary(&key).unwrap_or_else(|error| {

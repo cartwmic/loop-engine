@@ -19,7 +19,6 @@ ignored = [
     "loop-reference-fixtures",
     "research-provider",
     "rusqlite",
-    "software-change-provider",
     "tempfile",
 ]
 
@@ -41,4 +40,3 @@ loop-integrations = { path = "../../crates/loop-integrations" }
 loop-reference-fixtures = { path = "../fixtures" }
 research-provider = { path = "../../crates/research-provider" }
 rusqlite = { version = "0.40.1", features = ["bundled"] }
-software-change-provider = { path = "../../crates/software-change-provider" }

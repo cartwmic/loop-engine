@@ -20,7 +20,7 @@ import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-APPS = {"loop-cli": "loop-engine", "software-change-provider": "software-change",
+APPS = {"loop-cli": "loop-engine", "lean-change-provider": "lean-change",
         "policy-document-provider": "policy-document", "research-provider": "research"}
 
 
@@ -111,10 +111,8 @@ def main():
                 if version != expected:
                     raise ValueError(f"wrong version for {name}: {version}")
         engine = binaries["loop-cli"]
-        call([sys.executable, ROOT / "scripts/software-change-journey.py", "--mode", "packaged",
-              "--engine", engine, "--provider", binaries["software-change-provider"],
-              "--data-root", attempt / "software-data", "--work-root", attempt / "software-work",
-              "--profile", "high-rigor.json", "--traversal-depth", "checked-prefix"])
+        call([sys.executable, ROOT / "scripts/lean-change-journey.py",
+              "--engine", engine, "--provider", binaries["lean-change-provider"]])
         policy_data = attempt / "policy-data"
         call([binaries["policy-document-provider"], "data-dump", policy_data])
         for mode in ("draft", "audit"):

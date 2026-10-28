@@ -1003,19 +1003,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
-name = "software-change-provider"
-version = "0.29.0"
-dependencies = [
- "bookends-check",
- "jsonschema",
- "loop-core",
- "loop-integrations",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
 name = "sqlite-wasm-rs"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1327,7 +1314,6 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "sha2",
- "software-change-provider",
  "tempfile",
 ]
 

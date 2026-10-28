@@ -51,6 +51,7 @@ class Journey:
         self.config.write_text(f'[providers.lean-change]\ncommand = {json.dumps(str(provider))}\nargs = []\n')
         self.database = work / 'run.sqlite'
         self.run_id = None
+        self.appended = set()
 
     def engine_args(self, *args):
         return [str(self.engine), '--database', str(self.database), '--config', str(self.config), '--json', *args]
@@ -69,6 +70,7 @@ class Journey:
     def append(self, record_id, kind, data):
         self.state()  # the engine refuses mutation of a run that was not just observed
         self.call('append', '--record-id', record_id, self.run_id, kind, json.dumps(data))
+        self.appended.add(record_id)
 
     def event(self, name):
         self.state()
@@ -193,6 +195,9 @@ def run_profile(engine, provider, profile, work):
     final = j.call('show', '--view', 'full', j.run_id)
     # bookends:LE-202 — both profiles reach the final state through the real engine.
     assert final['current_state'] == 'end' and final['lifecycle'] == 'final', final
+    # bookends:LE-107 — minimum provenance: the finished run holds only the driver's own records, each once.
+    ids = [record['id'] for record in final['context']]
+    assert len(ids) == len(set(ids)) and set(ids) == j.appended, (ids, j.appended)
     return j
 
 

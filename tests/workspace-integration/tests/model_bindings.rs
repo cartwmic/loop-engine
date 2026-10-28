@@ -1,77 +1,502 @@
-//! Black-box proof of amendable per-role model bindings.
-//! The Python scenario drives the built loop-engine and software-change programs on fresh
-//! private catalogs; reviewer judgments are scripted and never claim semantic review.
+//! Public-binary proof of the engine's model-binding library and view through the
+//! reference model-binding fixture provider: frozen per-role bindings, declared
+//! sessions, refusals, owner amendments, stale-mark eligibility and visibility.
+//! Declarations are scripted; nothing here runs or verifies a real model.
 
-#[path = "../../bounded_process.rs"]
-mod bounded_process;
-
+use serde_json::{json, Value};
+use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
-use std::time::Duration;
 
-const SCENARIOS: [&str; 8] = [
-    "profile-identity",
-    "unbound-amendments",
-    "author-implementer-declarations",
-    "cold-reader-return",
-    "review-and-verdict-returns",
-    "unmarked-amendment",
-    "carried-after-amendment",
-    "marked-amendment",
-];
+struct Catalog {
+    _root: tempfile::TempDir,
+    home: PathBuf,
+    database: PathBuf,
+    config: PathBuf,
+}
 
-// bookends:LE-195 bookends:LE-196 bookends:LE-197 bookends:LE-198
-// bookends:LE-199 bookends:LE-200
-#[test]
-fn model_binding_scenarios() {
-    let repository = workspace_integration::repository_root();
-    let temporary = tempfile::tempdir().expect("external fixture root");
-    let output = temporary.path().join("model-bindings");
-    let mut command = Command::new("python3");
-    command
-        .arg("-B")
-        .arg(repository.join("tests/workspace-integration/tests/model_bindings/scenario.py"))
-        .arg("--source-root")
-        .arg(&repository)
-        .arg("--output-root")
-        .arg(&output)
-        .current_dir(&repository);
-    for (option, name) in [
-        ("--engine", "loop-engine"),
-        ("--provider", "software-change"),
-    ] {
-        command.arg(option).arg(workspace_integration::binary(name));
-    }
-    let result = bounded_process::run_with_deadline(
-        &mut command,
-        "model binding scenarios",
-        Duration::from_secs(1500),
-    );
-    let result = match result {
-        Ok(result) => result,
-        Err(error) => {
-            let retained = temporary.keep();
-            panic!("model binding scenario process failed: {error}; retained {retained:?}");
+impl Catalog {
+    fn new() -> Self {
+        let root = tempfile::tempdir().expect("catalog root");
+        let home = root.path().join("home");
+        fs::create_dir_all(&home).expect("home");
+        let config = root.path().join("providers.toml");
+        let provider = workspace_integration::fixture_binary("model-binding-provider");
+        fs::write(
+            &config,
+            format!(
+                "[providers.model-binding]\ncommand = {}\nargs = []\n",
+                Value::String(provider.to_string_lossy().into_owned())
+            ),
+        )
+        .expect("provider catalog");
+        Self {
+            database: root.path().join("run.sqlite"),
+            home,
+            config,
+            _root: root,
         }
-    };
-    if !result.status.success() {
-        let retained = temporary.keep();
-        panic!(
-            "model binding scenarios failed; retained {retained:?}:\n{}\n{}",
-            String::from_utf8_lossy(&result.stdout),
-            String::from_utf8_lossy(&result.stderr)
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self._root.path().join(name)
+    }
+
+    fn cli(&self, parts: &[&str]) -> Value {
+        let mut command = Command::new(workspace_integration::binary("loop-engine"));
+        command
+            .current_dir(self._root.path())
+            .env("HOME", &self.home)
+            .env("XDG_DATA_HOME", self.home.join("xdg-data"))
+            .env("XDG_CONFIG_HOME", self.home.join("xdg-config"))
+            .env("LOOP_ENGINE_HOME", self.home.join("loop-engine"))
+            .env_remove("LOOP_ENGINE_DATABASE")
+            .env_remove("LOOP_ENGINE_PROVIDER_CONFIG")
+            .env_remove("LOOP_ENGINE_MONITOR_DIR")
+            .arg("--json")
+            .arg("--database")
+            .arg(&self.database)
+            .arg("--config")
+            .arg(&self.config)
+            .args(parts);
+        let output = command.output().expect("run loop-engine");
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "{parts:?}: {error}\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        })
+    }
+
+    fn start(&self, run: &str, input: &Value) -> Value {
+        let profile = self.path(&format!("{run}-profile.json"));
+        fs::write(&profile, input.to_string()).expect("profile");
+        let started = self.cli(&[
+            "start",
+            "--id",
+            run,
+            "model-binding",
+            &format!("@{}", profile.display()),
+            run,
+        ]);
+        // Later edits to the profile file never reach the frozen run input.
+        fs::write(&profile, json!({"model_bindings":{"roles":{}}}).to_string())
+            .expect("edit profile");
+        started
+    }
+
+    fn full(&self, run: &str) -> Value {
+        let shown = self.cli(&["show", "--view", "full", run]);
+        assert_eq!(shown["status"], "completed", "{shown}");
+        shown["result"].clone()
+    }
+
+    fn append(&self, run: &str, id: &str, kind: &str, data: &Value) -> Value {
+        self.full(run);
+        self.cli(&["append", run, kind, &data.to_string(), "--record-id", id])
+    }
+
+    fn stored(&self, run: &str, id: &str, kind: &str, data: Value) {
+        let value = self.append(run, id, kind, &data);
+        assert_eq!(value["status"], "completed", "{id}: {value}");
+    }
+
+    fn event(&self, run: &str, event: &str) -> Value {
+        self.full(run);
+        self.cli(&["event", run, event])
+    }
+
+    fn moved(&self, run: &str, event: &str, to: &str) {
+        let value = self.event(run, event);
+        assert_eq!(value["status"], "completed", "{event}: {value}");
+        assert_eq!(self.full(run)["current_state"], to);
+    }
+
+    /// The attempt is refused, names every needle, and leaves context and state unchanged.
+    fn refused(&self, run: &str, attempt: impl FnOnce() -> Value, needles: &[&str]) -> Value {
+        let before = self.full(run);
+        let value = attempt();
+        assert_ne!(value["status"], "completed", "{value}");
+        for needle in needles {
+            assert!(
+                value.to_string().contains(needle),
+                "missing {needle:?}: {value}"
+            );
+        }
+        let after = self.full(run);
+        assert_eq!(after["context"], before["context"]);
+        assert_eq!(after["current_state"], before["current_state"]);
+        value
+    }
+}
+
+fn binding(model: &str, thinking: &str) -> Value {
+    json!({"model": model, "thinking": thinking})
+}
+
+fn review(name: &str, revision: &str, session: Option<Value>) -> Value {
+    let mut data = json!({"reviewer":{"name":name,"kind":"agent"},"subject_revision":revision,
+        "axis":"correctness","result":"pass","findings":[]});
+    if let Some(session) = session {
+        data["session"] = session;
+    }
+    data
+}
+
+fn declaration(revision: &str, session: Value) -> Value {
+    json!({"role":"author","subject":"draft","subject_revision":revision,"session":session})
+}
+
+fn amendment(changes: Value, driver_session: Option<Value>) -> Value {
+    let mut data = json!({"actor":{"name":"Michael","kind":"human"},"authority":{"kind":"owner"},
+        "words":"Use the cheaper reviewer from here on.","changes":changes});
+    if let Some(session) = driver_session {
+        data["driver_session"] = session;
+    }
+    data
+}
+
+#[test]
+// bookends:LE-195 — per-run bindings are validated at start, frozen with the input, unchanged by profile edits.
+// bookends:LE-200 — status and full views state never-bound runs explicitly; unbound runs behave as before.
+fn model_bindings_profile_identity_and_unbound_runs_public_binary() {
+    let catalog = Catalog::new();
+    let author = binding("anthropic/claude-sonnet", "high");
+    let driver = binding("openai/gpt", "medium");
+    for (input, needle) in [
+        (
+            json!({"model_bindings":{"roles":{"author":{"model":" ","thinking":"high"}}}}),
+            "author",
+        ),
+        (
+            json!({"model_bindings":{"roles":{"tester":author}}}),
+            "unknown role",
+        ),
+        (
+            json!({"model_bindings":{"roles":{"driver":driver}}}),
+            "driver_session is required",
+        ),
+        (
+            json!({"model_bindings":{"roles":{"driver":driver},"driver_session":binding("openai/gpt","low")}}),
+            "thinking level only",
+        ),
+    ] {
+        let refused = catalog.start("refused", &input);
+        assert_ne!(refused["status"], "completed", "{refused}");
+        assert!(
+            refused.to_string().contains(needle),
+            "missing {needle:?}: {refused}"
+        );
+        assert!(catalog
+            .cli(&["list"])
+            .to_string()
+            .find("\"refused\"")
+            .is_none());
+    }
+    let bound = json!({"model_bindings":{"roles":{"author":author,"driver":driver},"driver_session":driver}});
+    assert_eq!(catalog.start("bound", &bound)["status"], "completed");
+    let full = catalog.full("bound");
+    assert_eq!(
+        full["initial_input"]["model_bindings"],
+        bound["model_bindings"]
+    );
+    assert_eq!(full["model_bindings"]["state"], "bound");
+    let roles = full["model_bindings"]["roles"].as_array().unwrap();
+    let author_row = roles.iter().find(|row| row["role"] == "author").unwrap();
+    assert_eq!(author_row["original"], author);
+    assert_eq!(author_row["in_force"], author);
+    assert!(roles
+        .iter()
+        .any(|row| row["role"] == "ordinary-reviewer" && row["original"].is_null()));
+    let status = catalog.cli(&["show", "--view", "status", "bound"]);
+    assert_eq!(
+        status["result"]["model_bindings"], full["model_bindings"],
+        "{status}"
+    );
+
+    assert_eq!(catalog.start("plain", &json!({}))["status"], "completed");
+    for view in ["status", "full"] {
+        let shown = catalog.cli(&["show", "--view", view, "plain"]);
+        assert_eq!(
+            shown["result"]["model_bindings"]["state"], "never-bound",
+            "{shown}"
+        );
+        assert_eq!(
+            shown["result"]["model_bindings"]["statement"],
+            loop_core::NEVER_BOUND_STATEMENT
         );
     }
-    let stdout = String::from_utf8(result.stdout).expect("scenario UTF-8");
-    let summary: serde_json::Value =
-        serde_json::from_str(stdout.lines().last().expect("scenario summary"))
-            .expect("scenario summary JSON");
-    let completed: Vec<&str> = summary["completed"]
+    catalog.stored("plain", "d1", "draft", json!({"revision":"r1"}));
+    catalog.moved("plain", "drafted", "review");
+    catalog.stored("plain", "rev-1", "review", review("Reviewer", "r1", None));
+    catalog.moved("plain", "approved", "done");
+}
+
+#[test]
+// bookends:LE-196 bookends:LE-197 — bound author and reviewer work needs an exactly equal declared session; refusals name role, expected, actual and the differing part, and store nothing.
+fn model_bindings_declared_sessions_and_refusals_public_binary() {
+    let catalog = Catalog::new();
+    let author = binding("anthropic/claude-sonnet", "high");
+    let reviewer = binding("openai/gpt", "xhigh");
+    let run = "declared";
+    assert_eq!(
+        catalog.start(
+            run,
+            &json!({"model_bindings":{"roles":{"author":author,"ordinary-reviewer":reviewer}}})
+        )["status"],
+        "completed"
+    );
+    catalog.stored(run, "d1", "draft", json!({"revision":"r1"}));
+    let missing = catalog.refused(
+        run,
+        || catalog.event(run, "drafted"),
+        &["author", "statement missing"],
+    );
+    let history = catalog.cli(&["history", run]).to_string();
+    assert!(
+        history.contains("denied") || history.contains("deny"),
+        "denial recorded: {history}"
+    );
+    assert!(missing.to_string().contains("claude-sonnet"), "{missing}");
+    catalog.stored(
+        run,
+        "decl-1",
+        "session-declaration",
+        declaration("r1", binding("anthropic/claude-sonnet", "low")),
+    );
+    catalog.refused(
+        run,
+        || catalog.event(run, "drafted"),
+        &["author", "thinking level only"],
+    );
+    catalog.stored(
+        run,
+        "decl-2",
+        "session-declaration",
+        declaration("r1", author.clone()),
+    );
+    catalog.moved(run, "drafted", "review");
+    for (id, session, needle) in [
+        ("rev-missing", None, "statement missing"),
+        (
+            "rev-model",
+            Some(binding("openai/gpt-mini", "xhigh")),
+            "model only",
+        ),
+        (
+            "rev-both",
+            Some(binding("openai/gpt-mini", "low")),
+            "model and thinking level",
+        ),
+        (
+            "rev-alias",
+            Some(binding("OpenAI/GPT", "xhigh")),
+            "model only",
+        ),
+    ] {
+        let data = review("Reviewer", "r1", session);
+        let value = catalog.refused(
+            run,
+            || catalog.append(run, id, "review", &data),
+            &["ordinary-reviewer", needle, id],
+        );
+        assert_eq!(value["code"], "record-refused", "{value}");
+    }
+    catalog.stored(
+        run,
+        "rev-1",
+        "review",
+        review("Reviewer", "r1", Some(reviewer)),
+    );
+    catalog.moved(run, "approved", "done");
+}
+
+#[test]
+// bookends:LE-198 — owner amendments add, change and remove bindings at their own position; invalid amendments are refused with the run unchanged.
+// bookends:LE-199 — unmarked amendments keep earlier evidence eligible; a stale mark makes earlier reviews ineligible and names amendment, role, author, assessment and axis.
+// bookends:LE-200 — views show original, in-force and ordered amendment history with the owner's words.
+fn model_bindings_owner_amendments_and_eligibility_public_binary() {
+    let catalog = Catalog::new();
+    let first = binding("openai/gpt", "xhigh");
+    let second = binding("openai/gpt-mini", "medium");
+    let driver = binding("anthropic/claude-opus", "high");
+    let run = "amended";
+    assert_eq!(catalog.start(run, &json!({}))["status"], "completed");
+    let refusals = [
+        (
+            {
+                let mut data = amendment(
+                    json!([{"role":"ordinary-reviewer","old":null,"new":first}]),
+                    None,
+                );
+                data["actor"]["kind"] = json!("agent");
+                data
+            },
+            "actor-not-human",
+        ),
+        (
+            {
+                let mut data = amendment(
+                    json!([{"role":"ordinary-reviewer","old":null,"new":first}]),
+                    None,
+                );
+                data["authority"] = json!({"kind":"standing-delegation"});
+                data
+            },
+            "authority-not-owner",
+        ),
+        (
+            {
+                let mut data = amendment(
+                    json!([{"role":"ordinary-reviewer","old":null,"new":first}]),
+                    None,
+                );
+                data["words"] = json!("  ");
+                data
+            },
+            "words-blank",
+        ),
+        (
+            amendment(json!([{"role":"tester","old":null,"new":first}]), None),
+            "unknown-role",
+        ),
+        (
+            amendment(
+                json!([{"role":"ordinary-reviewer","old":second,"new":first}]),
+                None,
+            ),
+            "old-binding",
+        ),
+        (
+            amendment(
+                json!([{"role":"ordinary-reviewer","old":null,"new":{"model":"","thinking":"x"}}]),
+                None,
+            ),
+            "new-binding",
+        ),
+        (
+            amendment(json!([{"role":"driver","old":null,"new":driver}]), None),
+            "driver-declaration",
+        ),
+        (
+            amendment(
+                json!([{"role":"author","old":null,"new":first,"mark_stale":true}]),
+                None,
+            ),
+            "stale",
+        ),
+    ];
+    for (index, (data, needle)) in refusals.iter().enumerate() {
+        let id = format!("bad-{index}");
+        let value = catalog.refused(
+            run,
+            || catalog.append(run, &id, "model-binding-amendment", data),
+            &[needle],
+        );
+        assert_eq!(value["code"], "record-refused", "{value}");
+    }
+    assert_eq!(catalog.full(run)["model_bindings"]["state"], "never-bound");
+    catalog.stored(run, "add", "model-binding-amendment",
+        amendment(json!([{"role":"ordinary-reviewer","old":null,"new":first},{"role":"driver","old":null,"new":driver}]), Some(driver.clone())));
+    catalog.stored(run, "d1", "draft", json!({"revision":"r1"}));
+    catalog.moved(run, "drafted", "review");
+    catalog.stored(
+        run,
+        "rev-first",
+        "review",
+        review("First reviewer", "r1", Some(first.clone())),
+    );
+    // An unmarked change keeps the earlier review eligible; new returns need the new binding.
+    catalog.stored(
+        run,
+        "change",
+        "model-binding-amendment",
+        amendment(
+            json!([{"role":"ordinary-reviewer","old":first,"new":second}]),
+            Some(driver.clone()),
+        ),
+    );
+    catalog.refused(
+        run,
+        || {
+            catalog.append(
+                run,
+                "rev-old",
+                "review",
+                &review("Late reviewer", "r1", Some(first.clone())),
+            )
+        },
+        &["ordinary-reviewer", "model and thinking level"],
+    );
+    let view = catalog.full(run)["model_bindings"].clone();
+    let row = view["roles"]
         .as_array()
-        .expect("completed scenarios")
+        .unwrap()
         .iter()
-        .map(|name| name.as_str().expect("scenario name"))
-        .collect();
-    assert_eq!(completed, SCENARIOS);
-    assert_eq!(summary["failed"].as_array().unwrap().len(), 0);
-    assert_eq!(summary["semantic_review"], false);
+        .find(|row| row["role"] == "ordinary-reviewer")
+        .unwrap()
+        .clone();
+    assert!(
+        row["original"].is_null() && row["in_force"] == second,
+        "{view}"
+    );
+    let history = view["history"].as_array().unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .map(|entry| entry["record_id"].clone())
+            .collect::<Vec<_>>(),
+        [json!("add"), json!("change")]
+    );
+    assert_eq!(
+        history[1]["words"],
+        "Use the cheaper reviewer from here on."
+    );
+    assert_eq!(history[1]["actor"]["kind"], "human");
+    catalog.moved(run, "revise", "draft");
+    catalog.moved(run, "drafted", "review");
+    // A stale mark makes the earlier review ineligible for decisions requested after it.
+    catalog.stored(
+        run,
+        "stale",
+        "model-binding-amendment",
+        amendment(
+            json!([{"role":"ordinary-reviewer","old":second,"new":null,"mark_stale":true}]),
+            Some(driver.clone()),
+        ),
+    );
+    let denied = catalog.refused(
+        run,
+        || catalog.event(run, "approved"),
+        &[
+            "stale",
+            "rev-first",
+            "First reviewer",
+            "ordinary-reviewer",
+            "correctness",
+        ],
+    );
+    assert!(denied.to_string().contains("\"stale\""), "{denied}");
+    // The removed binding needs no declaration; a fresh review after the mark is eligible.
+    catalog.stored(
+        run,
+        "rev-after",
+        "review",
+        review("Fresh reviewer", "r1", None),
+    );
+    catalog.moved(run, "approved", "done");
+    let finished = catalog.full(run);
+    let context = finished["context"].as_array().unwrap();
+    assert!(
+        context.iter().any(|record| record["id"] == "rev-first"),
+        "original records stay"
+    );
+    assert_eq!(
+        finished["model_bindings"]["history"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
 }

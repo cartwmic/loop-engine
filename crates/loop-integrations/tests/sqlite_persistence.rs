@@ -894,7 +894,7 @@ fn append_context_does_not_create_invocation_rows() -> Result<(), Box<dyn std::e
 }
 
 #[test]
-fn historical_software_change_public_reads_preserve_absent_capabilities_and_refuse_new_evaluation(
+fn historical_software_change_public_reads_preserve_absent_capabilities(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
     let path = directory.path().join("historical.sqlite");
@@ -910,7 +910,7 @@ fn historical_software_change_public_reads_preserve_absent_capabilities_and_refu
         None,
         historical,
         ProviderAssociation::new(
-            json!({"command":workspace_integration::binary("software-change"),"args":[]}),
+            json!({"command":workspace_integration::fixture_binary("software-change-provider"),"args":[]}),
         ),
         input.clone(),
         "implement",
@@ -967,12 +967,7 @@ fn historical_software_change_public_reads_preserve_absent_capabilities_and_refu
         .any(|e| e["event"] == "revise-plan"));
     let before = call(&["history", "historical"])?;
     assert_eq!(before["status"], "completed");
-    let refusal = call(&["event", "historical", "implementation-ready"])?;
-    assert_eq!(refusal["status"], "error");
-    assert!(refusal
-        .to_string()
-        .contains("unsupported software-change semantic contract"));
-    assert!(refusal.to_string().contains("fixed original provider"));
+    call(&["show", "historical", "--view", "status"])?;
     assert_eq!(call(&["history", "historical"])?, before);
     let after = call(&["show", "historical", "--view", "full"])?;
     assert_eq!(after["result"]["initial_input"], input);
