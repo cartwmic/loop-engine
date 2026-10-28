@@ -62,6 +62,10 @@ jobs:
         run: python3 scripts/policy-document-journey.py
       - name: Research journey self-test
         run: python3 scripts/research-journey.py
+      - name: Lean-change journey self-test
+        run: python3 scripts/lean-change-journey.py
+      - name: Lean-change mutation applicability
+        run: python3 scripts/lean-change-mutations.py
       - name: Generate-PRD journey self-test
         run: python3 scripts/generate-prd-journey.py
       - name: Narrative-checkpoint journey self-test
