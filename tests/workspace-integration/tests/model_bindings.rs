@@ -92,6 +92,56 @@ impl Catalog {
         shown["result"].clone()
     }
 
+    /// The fixture's commission projection over the current full show.
+    fn commission(&self, run: &str) -> Value {
+        use std::io::Write;
+        let shown = self.cli(&["show", "--view", "full", run]);
+        let mut child = Command::new(workspace_integration::fixture_binary(
+            "model-binding-provider",
+        ))
+        .arg("commission")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run commission");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(shown.to_string().as_bytes())
+            .expect("commission input");
+        let output = child.wait_with_output().expect("commission output");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("commission json")
+    }
+
+    /// Commission and the checked event give the same answer; returns the event response.
+    fn approval_agrees(&self, run: &str, allowed: bool) -> Value {
+        let prepared = self.commission(run)["approval"].clone();
+        assert_eq!(
+            prepared["result"],
+            if allowed { "allow" } else { "deny" },
+            "{prepared}"
+        );
+        if allowed {
+            self.moved(run, "approved", "done");
+            return prepared;
+        }
+        let denied = self.refused(run, || self.event(run, "approved"), &["review-incomplete"]);
+        assert!(
+            denied
+                .to_string()
+                .contains(&prepared["details"].to_string()),
+            "commission {prepared} and event {denied} disagree"
+        );
+        denied
+    }
+
     fn append(&self, run: &str, id: &str, kind: &str, data: &Value) -> Value {
         self.full(run);
         self.cli(&["append", run, kind, &data.to_string(), "--record-id", id])
@@ -598,17 +648,19 @@ fn model_bindings_amendment_eligibility_and_carry_public_binary() {
         "evidence-applicability",
         carry("rev-first", "r2"),
     );
-    let denied = catalog.refused(
-        "stale-carry",
-        || catalog.event("stale-carry", "approved"),
-        &[
-            "stale",
-            "rev-first",
-            "First reviewer",
-            "ordinary-reviewer",
-            "correctness",
-        ],
-    );
+    let denied = catalog.approval_agrees("stale-carry", false);
+    for needle in [
+        "stale",
+        "rev-first",
+        "First reviewer",
+        "ordinary-reviewer",
+        "correctness",
+    ] {
+        assert!(
+            denied.to_string().contains(needle),
+            "missing {needle}: {denied}"
+        );
+    }
     assert!(denied.to_string().contains("\"stale\""), "{denied}");
     // The earlier decision and every original record stay as they were.
     let shown = catalog.full("stale-carry");
@@ -632,5 +684,79 @@ fn model_bindings_amendment_eligibility_and_carry_public_binary() {
         "review",
         review("Fresh reviewer", "r2", None),
     );
-    catalog.moved("stale-carry", "approved", "done");
+    catalog.approval_agrees("stale-carry", true);
+}
+
+#[test]
+// bookends:LE-199 — group coverage counts returns made under different bindings, author independence is unchanged, and commission and the checked event agree.
+// bookends:LE-200 — the owner approval view prepared by commission shows the same bindings and history as status and full.
+fn model_bindings_mixed_binding_group_and_owner_view_public_binary() {
+    let catalog = Catalog::new();
+    let first = binding("openai/gpt", "xhigh");
+    let second = binding("openai/gpt-mini", "medium");
+    let driver = binding("anthropic/claude-opus", "high");
+    let run = "grouped";
+    assert_eq!(
+        catalog.start(run, &json!({"required_authors": 2}))["status"],
+        "completed"
+    );
+    let never = catalog.commission(run)["owner_approval_view"]["model_bindings"].clone();
+    assert_eq!(never, catalog.full(run)["model_bindings"]);
+    assert_eq!(never["state"], "never-bound", "{never}");
+    catalog.stored(run, "add", "model-binding-amendment",
+        amendment(json!([{"role":"ordinary-reviewer","old":null,"new":first},{"role":"driver","old":null,"new":driver}]), Some(driver.clone())));
+    catalog.stored(run, "d1", "draft", json!({"revision":"r1"}));
+    catalog.moved(run, "drafted", "review");
+    catalog.stored(
+        run,
+        "rev-a",
+        "review",
+        review("Reviewer A", "r1", Some(first.clone())),
+    );
+    catalog.stored(
+        run,
+        "change",
+        "model-binding-amendment",
+        amendment(
+            json!([{"role":"ordinary-reviewer","old":first,"new":second}]),
+            Some(driver.clone()),
+        ),
+    );
+    // The same author again, under the new binding, still counts once.
+    catalog.stored(
+        run,
+        "rev-a2",
+        "review",
+        review("Reviewer A", "r1", Some(second.clone())),
+    );
+    let short = catalog.approval_agrees(run, false);
+    assert!(short.to_string().contains("Reviewer A"), "{short}");
+    catalog.stored(
+        run,
+        "rev-b",
+        "review",
+        review("Reviewer B", "r1", Some(second.clone())),
+    );
+    let view = catalog.commission(run)["owner_approval_view"]["model_bindings"].clone();
+    let status = catalog.cli(&["show", "--view", "status", run]);
+    assert_eq!(view, catalog.full(run)["model_bindings"]);
+    assert_eq!(view, status["result"]["model_bindings"], "{status}");
+    let row = view["roles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["role"] == "ordinary-reviewer")
+        .unwrap()
+        .clone();
+    assert!(
+        row["original"].is_null() && row["in_force"] == second,
+        "{view}"
+    );
+    assert_eq!(view["history"].as_array().unwrap().len(), 2, "{view}");
+    let allowed = catalog.approval_agrees(run, true);
+    assert_eq!(
+        allowed["details"]["eligible_authors"],
+        json!(["Reviewer A", "Reviewer B"]),
+        "{allowed}"
+    );
 }

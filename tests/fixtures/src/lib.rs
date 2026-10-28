@@ -434,6 +434,135 @@ fn admit_model_binding(request: AdmitFixtureRequest) -> Value {
     }
 }
 
+/// Approval eligibility shared by commission and the checked event, so both give the same answer.
+struct ModelBindingEligibility {
+    revision: String,
+    required_authors: u64,
+    eligible_authors: Vec<String>,
+    ineligible: Vec<Value>,
+}
+
+impl ModelBindingEligibility {
+    fn satisfied(&self) -> bool {
+        self.eligible_authors.len() as u64 >= self.required_authors
+    }
+
+    fn message(&self) -> String {
+        let revision = &self.revision;
+        if self.ineligible.is_empty() {
+            format!(
+                "draft \u{60}{revision}\u{60} needs {} distinct passing {MODEL_BINDING_REVIEW_AXIS} reviewers; eligible: {:?}",
+                self.required_authors, self.eligible_authors
+            )
+        } else {
+            format!(
+                "draft \u{60}{revision}\u{60} lacks eligible passing reviews; ineligible after a stale mark: {}",
+                Value::Array(self.ineligible.clone())
+            )
+        }
+    }
+
+    fn details(&self) -> Value {
+        json!({"subject_revision": self.revision, "required_authors": self.required_authors,
+            "eligible_authors": self.eligible_authors, "ineligible": self.ineligible})
+    }
+}
+
+fn model_binding_eligibility(
+    initial_input: &Value,
+    context: &[ContextRecord],
+    folded: &loop_core::ModelBindings,
+    revision: &str,
+) -> ModelBindingEligibility {
+    let stale = folded.stale_marks();
+    let passing = |record: &&ContextRecord| {
+        record.kind == "review"
+            && record.data["axis"].as_str() == Some(MODEL_BINDING_REVIEW_AXIS)
+            && record.data["result"].as_str() == Some("pass")
+    };
+    // Direct reviews of this draft, then reviews carried to it by explicit
+    // evidence-applicability. A carried review keeps its origin's sequence,
+    // so a later stale mark also stops it being carried to new targets.
+    let direct = context
+        .iter()
+        .filter(passing)
+        .filter(|record| record.data["subject_revision"].as_str() == Some(revision));
+    let carried = context
+        .iter()
+        .filter(|record| {
+            record.kind == "evidence-applicability"
+                && record.data["target"]["revision"].as_str() == Some(revision)
+        })
+        .filter_map(|carry| {
+            let origin = carry.data["origin"]["id"].as_str()?;
+            context
+                .iter()
+                .filter(passing)
+                .find(|record| record.id.as_str() == origin)
+        });
+    let mut eligible_authors: Vec<String> = Vec::new();
+    let mut ineligible = Vec::new();
+    for record in direct.chain(carried) {
+        let author = record.data["reviewer"]["name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let mark = stale.iter().find(|mark| {
+            mark.role == loop_core::ModelRole::OrdinaryReviewer && mark.sequence > record.sequence
+        });
+        match mark {
+            // Author independence is unchanged: one author counts once, whatever binding it ran under.
+            None if !author.is_empty() && !eligible_authors.contains(&author) => {
+                eligible_authors.push(author)
+            }
+            None => {}
+            Some(mark) => ineligible.push(json!({
+                "amendment": mark.amendment_id, "role": mark.role,
+                "author": author, "assessment": record.id,
+                "axis": MODEL_BINDING_REVIEW_AXIS})),
+        }
+    }
+    ModelBindingEligibility {
+        revision: revision.to_owned(),
+        required_authors: initial_input["required_authors"].as_u64().unwrap_or(1),
+        eligible_authors,
+        ineligible,
+    }
+}
+
+/// Commission projection over a completed full show: the approval eligibility the
+/// checked event will apply and the owner approval view of model bindings.
+pub fn model_binding_commission(shown: &Value) -> Result<Value, FixtureError> {
+    let result = &shown["result"];
+    if shown["status"] != "completed" || result["workflow_id"] != "model-binding" {
+        return Err(FixtureError::new(
+            "commission requires a completed model-binding full show",
+        ));
+    }
+    let initial_input = &result["initial_input"];
+    let context: Vec<ContextRecord> = serde_json::from_value(result["context"].clone())
+        .map_err(|error| FixtureError::new(format!("context: {error}")))?;
+    let folded = loop_core::fold_model_bindings(initial_input, &context)
+        .map_err(|error| FixtureError::new(format!("model bindings unavailable: {error}")))?;
+    let revision = context
+        .iter()
+        .rev()
+        .find(|record| record.kind == "draft")
+        .and_then(|record| record.data["revision"].as_str().map(str::to_owned));
+    let approval = match revision {
+        None => json!({"result": "deny", "details": {"reason": "no draft record exists"}}),
+        Some(revision) => {
+            let eligibility =
+                model_binding_eligibility(initial_input, &context, &folded, &revision);
+            json!({"result": if eligibility.satisfied() {"allow"} else {"deny"}, "details": eligibility.details()})
+        }
+    };
+    Ok(json!({
+        "approval": approval,
+        "owner_approval_view": {"model_bindings": loop_core::model_bindings_view(initial_input, &context)},
+    }))
+}
+
 fn evaluate_model_binding(request: EvaluateRequest) -> Result<Value, FixtureError> {
     request.validate_operation()?;
     let folded = loop_core::fold_model_bindings(&request.initial_input, &request.context)
@@ -477,58 +606,19 @@ fn evaluate_model_binding(request: EvaluateRequest) -> Result<Value, FixtureErro
             }
         }
         "approved" => {
-            let stale = folded.stale_marks();
-            let passing = |record: &&ContextRecord| {
-                record.kind == "review"
-                    && record.data["axis"].as_str() == Some(MODEL_BINDING_REVIEW_AXIS)
-                    && record.data["result"].as_str() == Some("pass")
-            };
-            // Direct reviews of this draft, then reviews carried to it by explicit
-            // evidence-applicability. A carried review keeps its origin's sequence,
-            // so a later stale mark also stops it being carried to new targets.
-            let direct = request.context.iter().filter(passing).filter(|record| {
-                record.data["subject_revision"].as_str() == Some(revision.as_str())
-            });
-            let carried = request
-                .context
-                .iter()
-                .filter(|record| {
-                    record.kind == "evidence-applicability"
-                        && record.data["target"]["revision"].as_str() == Some(revision.as_str())
-                })
-                .filter_map(|carry| {
-                    let origin = carry.data["origin"]["id"].as_str()?;
-                    request
-                        .context
-                        .iter()
-                        .filter(passing)
-                        .find(|record| record.id.as_str() == origin)
-                });
-            let mut refusals = Vec::new();
-            for record in direct.chain(carried) {
-                let mark = stale.iter().find(|mark| {
-                    mark.role == loop_core::ModelRole::OrdinaryReviewer
-                        && mark.sequence > record.sequence
-                });
-                match mark {
-                    None => return Ok(json!({"result": "allow"})),
-                    Some(mark) => refusals.push(json!({
-                        "amendment": mark.amendment_id, "role": mark.role,
-                        "author": record.data["reviewer"]["name"], "assessment": record.id,
-                        "axis": MODEL_BINDING_REVIEW_AXIS})),
-                }
+            let eligibility = model_binding_eligibility(
+                &request.initial_input,
+                &request.context,
+                &folded,
+                &revision,
+            );
+            if eligibility.satisfied() {
+                return Ok(json!({"result": "allow"}));
             }
-            let message = if refusals.is_empty() {
-                format!(
-                    "no passing {MODEL_BINDING_REVIEW_AXIS} review of draft \u{60}{revision}\u{60}"
-                )
-            } else {
-                format!("every passing review of draft \u{60}{revision}\u{60} is ineligible after a stale mark: {}", Value::Array(refusals.clone()))
-            };
             Ok(deny(
                 "review-incomplete",
-                message,
-                json!({"ineligible": refusals}),
+                eligibility.message(),
+                eligibility.details(),
             ))
         }
         _ => Ok(json!({"result": "allow"})),
