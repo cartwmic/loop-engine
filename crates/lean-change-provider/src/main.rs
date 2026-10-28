@@ -29,6 +29,7 @@ fn dispatch() -> i32 {
                 .and_then(|show| run::verify(&show))
                 .and_then(|v| serde_json::to_string_pretty(&v).map_err(|e| e.to_string())),
         ),
+        Some("intent-packet") => report(stdin_json().and_then(|show| packet::intent_packet(&show))),
         Some("review-packet") => report(stdin_json().and_then(|show| packet::review_packet(&show))),
         Some(other) => {
             eprintln!("unsupported command `{other}`");

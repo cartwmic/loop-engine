@@ -10,6 +10,7 @@ from external_work_driver import engine_call
 
 PRINCIPLES = '# Principles\n1. Compose small parts.\n'
 QUESTIONS = ['intent', 'scope', 'edge-cases', 'checks', 'docs', 'principles']
+CHECK_QUESTIONS = ['use', 'edge', 'control', 'terms']
 OWNER = {'name': 'owner', 'kind': 'human'}
 WORKER = {'name': 'worker', 'kind': 'script'}
 
@@ -31,6 +32,16 @@ def review(tree, fail_principles):
                      'evidence': 'greeting.txt line 1', 'consequence': 'Changing it needs a code edit.'}]
     return {'intent': 'intent-1', 'tree': tree, 'reviewer': {'name': 'fresh-reviewer', 'kind': 'agent'},
             'fresh_context': True, 'answers': answers, 'findings': findings}
+
+
+def intent_check(reviewer='fresh-reviewer', fail=None):
+    answers = [{'question': q, 'verdict': 'fail' if q == fail else 'pass', 'note': 'checked'} for q in CHECK_QUESTIONS]
+    findings = []
+    if fail:
+        findings = [{'id': 'f1', 'question': fail, 'text': 'Which greeting text do you want?', 'evidence': 'The goal says only a greeting.',
+                     'consequence': 'A delivery would pick any text.'}]
+    return {'intent': 'intent-1', 'reviewer': {'name': reviewer, 'kind': 'agent'}, 'fresh_context': True,
+            'answers': answers, 'findings': findings}
 
 
 class Journey:
@@ -114,6 +125,19 @@ def run_profile(engine, provider, profile, work):
     # bookends:LE-203 — no intent, no way out of explore.
     j.refused('intent-ready', 'intent-missing', 'explore')
     j.append('intent-1', 'intent', intent())
+    if profile == 'b':
+        # bookends:LE-209 — profile b: no intent-ready without one independent check with every finding disposed.
+        j.refused('intent-ready', 'intent-check-incomplete', 'explore')
+        packet = j.tool('intent-packet', j.show_text())
+        assert all(f'- {q}: ' in packet for q in CHECK_QUESTIONS) and 'intent-1' in packet, packet
+        j.append('chk-own', 'intent-check', intent_check('worker'))
+        out = j.refused('intent-ready', 'intent-check-incomplete', 'explore')
+        assert 'someone other' in out, out
+        j.append('chk-1', 'intent-check', intent_check(fail='terms'))
+        out = j.refused('intent-ready', 'intent-check-incomplete', 'explore')
+        assert 'disposition' in out, out
+        j.append('chk-disp-1', 'finding-disposition', {'review': 'chk-1', 'finding': 'f1', 'disposition': 'rejected',
+                                                       'reason': 'Any greeting text is fine; the criteria check for hello.'})
     j.event('intent-ready')
     assert j.state() == 'intent-approval'
 
@@ -227,7 +251,7 @@ def main():
     # Bare invocation is the recognized CI collection form; full proof uses the parameterized run below.
     if args.self_test or len(sys.argv) == 1:
         assert [q for q in QUESTIONS] == sorted(set(QUESTIONS), key=QUESTIONS.index)
-        assert len(intent()['criteria']) == 2 and review('t', True)['findings']
+        assert len(intent()['criteria']) == 2 and review('t', True)['findings'] and intent_check(fail='terms')['findings']
         print('lean-change journey self-test passed')
         return
     for name in ['engine', 'provider']:

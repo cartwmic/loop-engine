@@ -1,4 +1,4 @@
-//! `lean-change setup` and `lean-change review-packet`.
+//! `lean-change setup`, `lean-change intent-packet` and `lean-change review-packet`.
 use crate::run::{from_show, tree_identity};
 use lean_change_provider::evaluate::verification_ready;
 use lean_change_provider::model::*;
@@ -40,7 +40,7 @@ pub fn setup(args: &[String]) -> Result<Value, String> {
         }
     }
     let (review, version) = match profile {
-        Some("b") => (true, "lean-b-1"),
+        Some("b") => (true, "lean-b-2"),
         Some("c") => (false, "lean-c-1"),
         _ => return Err("--profile must be b or c".into()),
     };
@@ -63,6 +63,23 @@ pub fn setup(args: &[String]) -> Result<Value, String> {
     }
     InitialInput::parse(&input)?;
     Ok(input)
+}
+
+/// Everything a fresh-context reviewer needs to check a draft intent, as plain text.
+pub fn intent_packet(show: &Value) -> Result<String, String> {
+    let (input, intent_id, intent) = from_show(show)?;
+    if !input.review {
+        return Err("this profile has no intent check".into());
+    }
+    let questions: String = INTENT_QUESTIONS
+        .iter()
+        .map(|(id, text)| format!("- {id}: {text}\n"))
+        .collect();
+    Ok(format!(
+        "# Intent check packet\n\nYou are the reviewer. You did not write this intent. Judge only from this packet and the repository at {repo} as it is now.\nAnswer every question below with verdict pass or fail and a note. If the intent already settles a question, pass it. Otherwise fail it with one finding: text is the concrete question you would ask the owner, evidence is the intent's wording or its silence, consequence is what a delivery would have to guess. Do not invent strained readings or ask for more than the goal promises.\n\nReturn one JSON object:\n{{\"intent\": \"{intent_id}\", \"reviewer\": {{\"name\": \"...\", \"kind\": \"agent\"}}, \"fresh_context\": true, \"answers\": [{{\"question\": \"...\", \"verdict\": \"pass|fail\", \"note\": \"...\"}}], \"findings\": [{{\"id\": \"f1\", \"question\": \"...\", \"text\": \"...\", \"evidence\": \"...\", \"consequence\": \"...\"}}]}}\n\n## Questions\n{questions}\n## Draft intent ({intent_id})\n{intent}\n",
+        repo = input.repo,
+        intent = serde_json::to_string_pretty(&intent).map_err(|e| e.to_string())?,
+    ))
 }
 
 /// Everything a fresh-context reviewer needs, as plain text.
@@ -89,7 +106,11 @@ pub fn review_packet(show: &Value) -> Result<String, String> {
         .iter()
         .map(|r| format!("- {}: exit {:?}\n", r.criterion, r.exit_code))
         .collect();
-    let index = std::env::temp_dir().join(format!("lean-change-index-{}", std::process::id()));
+    // Unique per call: tests run review_packet on several threads of one process.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let call = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let index =
+        std::env::temp_dir().join(format!("lean-change-index-{}-{call}", std::process::id()));
     let diff = git(repo, &["read-tree", &input.base], Some(&index))
         .and_then(|_| git(repo, &["add", "-A"], Some(&index)))
         .and_then(|_| git(repo, &["diff", "--cached", &input.base], Some(&index)));

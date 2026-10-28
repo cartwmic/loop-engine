@@ -3,7 +3,7 @@ use crate::model::*;
 use crate::protocol::{allow, deny, unsupported, EvaluateRequest};
 use crate::workflow::workflow;
 use loop_core::ContextRecord;
-use loop_integrations::owner_checkpoint::{self, Status};
+use loop_integrations::owner_checkpoint::{self, Actor, Status};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
@@ -69,7 +69,7 @@ pub fn evaluate(request: &EvaluateRequest, tree: TreeIdentity) -> Result<Value, 
     }
     let records = &request.context;
     let gate = match (t.source.as_str(), t.event.as_str()) {
-        ("explore", "intent-ready") => current_intent(records).map(|_| ()),
+        ("explore", "intent-ready") => intent_ready(records, &input),
         ("intent-approval", event) => approval(records, event),
         ("plan", "planned") => plan(records),
         ("verify", "verified") => verification(records, &input, tree),
@@ -77,6 +77,30 @@ pub fn evaluate(request: &EvaluateRequest, tree: TreeIdentity) -> Result<Value, 
         _ => return Ok(unsupported()),
     };
     Ok(gate.map_or_else(|denial| denial, |()| allow()))
+}
+
+/// Profile b: the first well-formed intent-check, every finding disposed, and a fix means a newer intent.
+fn intent_ready(records: &[ContextRecord], input: &InitialInput) -> Gate {
+    let (id, intent) = current_intent(records)?;
+    if !input.review {
+        return Ok(());
+    }
+    let incomplete =
+        |problem: String| refuse("intent-check-incomplete", &problem, json!({"intent": id}));
+    let checks = records
+        .iter()
+        .filter(|r| r.kind == "intent-check")
+        .collect();
+    let none = "run lean-change intent-packet, give it to a fresh reviewer and append their intent-check record";
+    let (check_id, check) =
+        first_well_formed(checks, none, |r| intent_check_form(r, records, &intent))
+            .map_err(incomplete)?;
+    if disposed(records, check_id, &check.findings).map_err(incomplete)? && check.intent == id {
+        return Err(incomplete(
+            "a finding was fixed, so append a new intent record that fixes it".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn approval(records: &[ContextRecord], event: &str) -> Gate {
@@ -173,25 +197,84 @@ fn verification(records: &[ContextRecord], input: &InitialInput, tree: TreeIdent
     Err(refuse("verification-incomplete", "every criterion check must pass on the current tree; run lean-change verify and append its output", json!({"intent": id, "problems": problems})))
 }
 
-/// Structure of one review: independence, fresh context, six noted answers, complete findings.
 fn review_form(record: &ContextRecord, intent: &Intent) -> Result<Review, String> {
     let review: Review = serde_json::from_value(record.data.clone())
         .map_err(|e| format!("the review record is invalid: {e}"))?;
-    if review.reviewer.name.trim().is_empty()
-        || review
-            .reviewer
+    let (who, fresh) = (&review.reviewer, review.fresh_context);
+    form(
+        &QUESTIONS,
+        intent,
+        (who, fresh),
+        &review.answers,
+        &review.findings,
+    )?;
+    Ok(review)
+}
+
+fn intent_check_form(
+    record: &ContextRecord,
+    records: &[ContextRecord],
+    intent: &Intent,
+) -> Result<IntentCheck, String> {
+    let check: IntentCheck = serde_json::from_value(record.data.clone())
+        .map_err(|e| format!("the intent-check record is invalid: {e}"))?;
+    if !records
+        .iter()
+        .any(|r| r.kind == "intent" && r.id.as_str() == check.intent)
+    {
+        return Err("the intent-check must name an intent record".into());
+    }
+    let (who, fresh) = (&check.reviewer, check.fresh_context);
+    form(
+        &INTENT_QUESTIONS,
+        intent,
+        (who, fresh),
+        &check.answers,
+        &check.findings,
+    )?;
+    Ok(check)
+}
+
+/// The first well-formed record is the one that counts: a later one cannot replace it and drop its findings.
+fn first_well_formed<'a, T>(
+    mut candidates: Vec<&'a ContextRecord>,
+    none: &str,
+    parse: impl Fn(&ContextRecord) -> Result<T, String>,
+) -> Result<(&'a str, T), String> {
+    candidates.sort_by_key(|r| r.sequence);
+    let mut problem = none.to_owned();
+    for record in candidates {
+        match parse(record) {
+            Ok(parsed) => return Ok((record.id.as_str(), parsed)),
+            Err(p) => problem = p,
+        }
+    }
+    Err(problem)
+}
+
+/// Structure shared by the review and the intent check: independence, fresh context,
+/// one noted answer per question, complete findings.
+fn form(
+    questions: &[(&str, &str)],
+    intent: &Intent,
+    (reviewer, fresh_context): (&Actor, bool),
+    answers: &[Answer],
+    findings: &[Finding],
+) -> Result<(), String> {
+    if reviewer.name.trim().is_empty()
+        || reviewer
             .name
             .trim()
             .eq_ignore_ascii_case(intent.author.name.trim())
     {
         return Err("the reviewer must be someone other than the intent author".into());
     }
-    if !review.fresh_context {
+    if !fresh_context {
         return Err("the review must be done in a fresh context".into());
     }
     let mut asked = BTreeSet::new();
-    for answer in &review.answers {
-        if !QUESTIONS.iter().any(|(q, _)| *q == answer.question)
+    for answer in answers {
+        if !questions.iter().any(|(q, _)| *q == answer.question)
             || !asked.insert(answer.question.as_str())
         {
             return Err(format!("unknown or repeated question {}", answer.question));
@@ -200,11 +283,11 @@ fn review_form(record: &ContextRecord, intent: &Intent) -> Result<Review, String
             return Err(format!("answer to {} needs a note", answer.question));
         }
     }
-    if let Some((q, _)) = QUESTIONS.iter().find(|(q, _)| !asked.contains(q)) {
+    if let Some((q, _)) = questions.iter().find(|(q, _)| !asked.contains(q)) {
         return Err(format!("question {q} is unanswered"));
     }
     let mut ids = BTreeSet::new();
-    for finding in &review.findings {
+    for finding in findings {
         let fields = [
             &finding.id,
             &finding.text,
@@ -221,48 +304,25 @@ fn review_form(record: &ContextRecord, intent: &Intent) -> Result<Review, String
             ));
         }
     }
-    for answer in review.answers.iter().filter(|a| a.verdict == Verdict::Fail) {
-        if !review
-            .findings
-            .iter()
-            .any(|f| f.question == answer.question)
-        {
+    for answer in answers.iter().filter(|a| a.verdict == Verdict::Fail) {
+        if !findings.iter().any(|f| f.question == answer.question) {
             return Err(format!(
                 "question {} failed but has no finding",
                 answer.question
             ));
         }
     }
-    Ok(review)
+    Ok(())
 }
 
-fn review(records: &[ContextRecord], input: &InitialInput, tree: TreeIdentity) -> Gate {
-    verification(records, input, tree)?;
-    let (intent_id, intent) = current_intent(records)?;
-    let incomplete =
-        |problem: String| refuse("review-incomplete", &problem, json!({"intent": intent_id}));
-    let mut reviews: Vec<&ContextRecord> = records
-        .iter()
-        .filter(|r| r.kind == "review" && r.data["intent"] == intent_id.as_str())
-        .collect();
-    reviews.sort_by_key(|r| r.sequence);
-    // The first well-formed review is the review: a later one cannot replace it and drop its findings.
-    let mut problem = "append a review record for the current intent".to_owned();
-    let mut chosen = None;
-    for record in reviews {
-        match review_form(record, &intent) {
-            Ok(review) => {
-                chosen = Some((record.id.as_str(), review));
-                break;
-            }
-            Err(p) => problem = p,
-        }
-    }
-    let Some((review_id, review)) = chosen else {
-        return Err(incomplete(problem));
-    };
+/// Every finding needs its latest disposition with a reason; true when any was fixed.
+fn disposed(
+    records: &[ContextRecord],
+    record_id: &str,
+    findings: &[Finding],
+) -> Result<bool, String> {
     let mut fixed = false;
-    for finding in &review.findings {
+    for finding in findings {
         let disposition = records
             .iter()
             .filter(|r| r.kind == "finding-disposition")
@@ -271,7 +331,7 @@ fn review(records: &[ContextRecord], input: &InitialInput, tree: TreeIdentity) -
                     .ok()
                     .map(|d| (r.sequence, d))
             })
-            .filter(|(_, d)| d.review == review_id && d.finding == finding.id)
+            .filter(|(_, d)| d.review == record_id && d.finding == finding.id)
             .max_by_key(|(sequence, _)| *sequence)
             .map(|(_, d)| d);
         match disposition {
@@ -279,13 +339,29 @@ fn review(records: &[ContextRecord], input: &InitialInput, tree: TreeIdentity) -
                 fixed |= d.disposition == DispositionKind::Fixed
             }
             _ => {
-                return Err(incomplete(format!(
+                return Err(format!(
                     "finding {} needs a disposition (fixed or rejected) with a reason",
                     finding.id
-                )))
+                ))
             }
         }
     }
+    Ok(fixed)
+}
+
+fn review(records: &[ContextRecord], input: &InitialInput, tree: TreeIdentity) -> Gate {
+    verification(records, input, tree)?;
+    let (intent_id, intent) = current_intent(records)?;
+    let incomplete =
+        |problem: String| refuse("review-incomplete", &problem, json!({"intent": intent_id}));
+    let reviews = records
+        .iter()
+        .filter(|r| r.kind == "review" && r.data["intent"] == intent_id.as_str())
+        .collect();
+    let none = "append a review record for the current intent";
+    let (review_id, review) =
+        first_well_formed(reviews, none, |r| review_form(r, &intent)).map_err(incomplete)?;
+    let fixed = disposed(records, review_id, &review.findings).map_err(incomplete)?;
     let now = tree(input).map_err(|e| refuse("tree-unreadable", &e, json!({})))?;
     if review.tree != now && !fixed {
         return Err(incomplete(

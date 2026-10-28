@@ -4,8 +4,12 @@ use crate::model::WORKFLOW_ID;
 
 /// B has a review state; C is the same topology without it.
 pub fn workflow(review: bool) -> Workflow {
+    let mut explore = "Read the repository and the request. Append one `intent` record (author, goal, constraints, hard, criteria each with id, statement and an executable check {argv, timeout_ms}) with --record-id intent-N, then request intent-ready. Set hard=true only for work that needs a written plan.".to_owned();
+    if review {
+        explore.push_str(" Before intent-ready, pipe `loop-engine --json show --view full RUN` into `lean-change intent-packet` and give the packet to a fresh-context reviewer who did not write the intent. Append their `intent-check` record and one `finding-disposition` per finding (fixed or rejected, with a reason). A fix is a new intent record.");
+    }
     let mut states = vec![
-        State::new("explore", "Explore", "Read the repository and the request. Append one `intent` record (author, goal, constraints, hard, criteria each with id, statement and an executable check {argv, timeout_ms}) with --record-id intent-N, then request intent-ready. Set hard=true only for work that needs a written plan.", false),
+        State::new("explore", "Explore", explore, false),
         State::new("intent-approval", "Intent approval", "Show the owner the intent record verbatim. Append their exact words as an `owner-decision` record (checkpoint \"intent\", subject \"intent\", subject_revision = the intent record id, decision approve or reject, text = their words, actor). Request approved (hard=false) or approved-hard (hard=true). Request revise to change the intent.", false),
         State::new("plan", "Plan", "Hard work only. Append a `plan` record {intent: intent record id, text}, then request planned.", false),
         State::new("implement", "Implement", "Make the change in the repository. Do not edit outside the approved intent. When done, request ready.", false),

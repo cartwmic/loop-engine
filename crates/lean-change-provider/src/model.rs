@@ -17,6 +17,14 @@ pub const QUESTIONS: [(&str, &str); 6] = [
     ("principles", "Against the owner's design principles (full text in the packet; sha256 in the profile): does the diff violate one? The Gate lines (sections 2, 3 and 7) apply to new components and new cross-component boundaries, not to small changes inside an existing component. Cite the section, the evidence in the diff and the consequence. A finding without an obligation, evidence and consequence is not a finding."),
 ];
 
+/// The four fixed intent-check questions: (id, text). A failed one carries the concrete question for the owner.
+pub const INTENT_QUESTIONS: [(&str, &str); 4] = [
+    ("use", "Once this exists, what will the owner or its users need to see or do with it, and which of those can they not do yet under this intent?"),
+    ("edge", "What is the likeliest case the listed checks miss, and what should happen then?"),
+    ("control", "Where is this intent unclear or silent, such that a delivery would have to guess?"),
+    ("terms", "Which term in this intent could mean two things to different readers, and which meaning do you intend?"),
+];
+
 fn nonblank(value: &str, what: &str) -> Result<(), String> {
     if value.trim().is_empty() {
         return Err(format!("{what} must be nonempty"));
@@ -188,6 +196,18 @@ pub struct Review {
     pub findings: Vec<Finding>,
 }
 
+/// Profile b: one fresh-context check of the draft intent, before the owner sees it.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntentCheck {
+    /// Record id of the intent that was checked.
+    pub intent: String,
+    pub reviewer: Actor,
+    pub fresh_context: bool,
+    pub answers: Vec<Answer>,
+    pub findings: Vec<Finding>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Answer {
@@ -216,7 +236,7 @@ pub struct Finding {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Disposition {
-    /// Record id of the review the finding belongs to.
+    /// Record id of the review or intent-check the finding belongs to.
     pub review: String,
     pub finding: String,
     pub disposition: DispositionKind,

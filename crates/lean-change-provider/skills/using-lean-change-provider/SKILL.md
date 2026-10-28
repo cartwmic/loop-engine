@@ -1,6 +1,6 @@
 ---
 name: using-lean-change-provider
-description: Use when driving a lean-change run in Loop Engine: explore, owner-approved intent, implement, verify with digest-bound checks, and (profile b) one fresh-context diff review.
+description: Use when driving a lean-change run in Loop Engine: explore, owner-approved intent, implement, verify with digest-bound checks, and (profile b) one fresh-context intent check and one fresh-context diff review.
 ---
 
 # Using the lean-change provider
@@ -9,7 +9,7 @@ lean-change checks; it does not work. You do the work and append records. The pr
 a transition until the records for it are complete. Load the `using-loop-engine` skill for
 the engine commands (`start`, `show`, `append`, `event`). Use explicit `--database` and `--config`.
 
-Two profiles, one provider: **b** has a review state, **c** has none. The profile is frozen at start.
+Two profiles, one provider: **b** has an intent check and a review state, **c** has neither. The profile is frozen at start.
 
 ## Start (owner confirms first)
 
@@ -43,7 +43,19 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    Every criterion needs a command that fails when the criterion is not met and passes when it is.
    Cover edge cases with extra criteria, not prose. Set `hard` true only when the work needs a plan.
    Each new intent gets a new record id (`intent-2`, ...); the latest one counts.
-2. **intent-approval.** Show the owner the intent verbatim. Append their exact words (do not edit them):
+   **Intent check (profile b).** Before `intent-ready` have the draft checked once by a reviewer who has not seen this work
+   (a fresh session or a different model). Give them the packet unchanged:
+
+   ```sh
+   loop-engine ... --json show --view full RUN | lean-change intent-packet > "$WORK/intent-packet.md"
+   ```
+
+   The reviewer returns one JSON object; append it as kind `intent-check`. Each question they could not settle from the
+   intent fails with a finding whose text is a concrete question for the owner. The first well-formed check is the
+   check; a second cannot replace it. For each finding, either change the intent (`fixed`, and append a new intent record
+   that carries the fix) or reject it with a reason you would say to the owner. Append one `finding-disposition` per
+   finding, with `review` set to the `intent-check` record id. The check runs once per run; a later revision is not re-checked.
+2. **intent-approval.** Show the owner the intent verbatim, with the check's findings and how each was disposed (profile b), and ask: "What do you expect that is not listed?" Their answer may change the intent. Append their exact words (do not edit them):
 
    ```sh
    loop-engine ... append RUN owner-decision '{"checkpoint": "intent", "subject": "intent",
@@ -93,7 +105,7 @@ gates check the records again when you return.
 ## Rules
 
 - The reviewer must not be you and must be in a fresh context. `fresh_context: true` is a claim; make it true.
-- The review has six fixed questions, including whether the diff breaks the owner's design principles.
+- The intent check has four fixed questions and the review has six, including whether the diff breaks the owner's design principles.
   Do not shorten or reword them. Do not pre-answer them for the reviewer.
 - Findings are not nits: each has an obligation, evidence and a consequence. Reject a finding only with a reason you would say to the owner.
 - Never write a `verification` record by hand. Never copy an owner decision from an earlier intent.

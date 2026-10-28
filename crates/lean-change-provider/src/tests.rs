@@ -196,13 +196,139 @@ fn intent_gate_needs_a_valid_intent_with_a_check_per_criterion() {
         )),
         "intent-invalid"
     );
+    // Profile c needs no intent check.
     allowed(&ask(
         &r,
-        true,
+        false,
         "explore",
         "intent-ready",
         vec![record("intent-1", "intent", 1, intent(false))],
     ));
+}
+
+fn check_value() -> Value {
+    let answers: Vec<Value> = INTENT_QUESTIONS
+        .iter()
+        .map(|(q, _)| json!({"question":q,"verdict":"pass","note":"settled"}))
+        .collect();
+    json!({"intent":"intent-1","reviewer":{"name":"reviewer","kind":"agent"},"fresh_context":true,"answers":answers,"findings":[]})
+}
+
+/// A check whose question "use" failed with one finding f1.
+fn failed_check() -> Value {
+    let mut v = check_value();
+    v["answers"][0]["verdict"] = json!("fail");
+    v["findings"] = json!([finding("f1", "use")]);
+    v
+}
+
+fn check_ctx(check: Value, extra: Vec<ContextRecord>) -> Vec<ContextRecord> {
+    let mut ctx = vec![
+        record("intent-1", "intent", 1, intent(false)),
+        record("chk1", "intent-check", 2, check),
+    ];
+    ctx.extend(extra);
+    ctx
+}
+
+fn check_answer(r: &Path, ctx: Vec<ContextRecord>) -> Value {
+    ask(r, true, "explore", "intent-ready", ctx)
+}
+
+fn check_denial(r: &Path, ctx: Vec<ContextRecord>) -> String {
+    let response = check_answer(r, ctx);
+    assert_eq!(code(&response), "intent-check-incomplete", "{response}");
+    response["feedback"]["message"].as_str().unwrap().to_owned()
+}
+
+fn check_disposition(finding: &str, kind: &str, reason: &str, sequence: u64) -> ContextRecord {
+    record(
+        &format!("cd-{sequence}"),
+        "finding-disposition",
+        sequence,
+        json!({"review":"chk1","finding":finding,"disposition":kind,"reason":reason}),
+    )
+}
+
+#[test]
+fn intent_ready_needs_an_independent_complete_disposed_intent_check() {
+    let r = repo();
+    // No check, or only an intent: the driver is told what to run.
+    let message = check_denial(&r, vec![record("intent-1", "intent", 1, intent(false))]);
+    assert!(message.contains("intent-packet"), "{message}");
+    allowed(&check_answer(&r, check_ctx(check_value(), vec![])));
+    let bad = |mutate: fn(&mut Value)| {
+        let mut v = check_value();
+        mutate(&mut v);
+        check_denial(&r, check_ctx(v, vec![]))
+    };
+    assert!(bad(|v| v["reviewer"]["name"] = json!("Driver")).contains("someone other"));
+    assert!(bad(|v| v["fresh_context"] = json!(false)).contains("fresh context"));
+    assert!(bad(|v| v["intent"] = json!("intent-9")).contains("must name an intent record"));
+    assert!(bad(|v| v["answers"][1]["question"] = json!("scope")).contains("unknown or repeated"));
+    assert!(bad(|v| v["answers"][1]["question"] = json!("use")).contains("unknown or repeated"));
+    assert!(bad(|v| {
+        v["answers"].as_array_mut().unwrap().pop();
+    })
+    .contains("unanswered"));
+    assert!(bad(|v| v["answers"][0]["note"] = json!(" ")).contains("needs a note"));
+    assert!(bad(|v| v["answers"][3]["verdict"] = json!("fail")).contains("has no finding"));
+    assert!(bad(|v| v["findings"] = json!([finding("f1", "scope")])).contains("unique id"));
+    assert!(bad(|v| {
+        v["findings"] = json!([finding("f1", "use")]);
+        v["findings"][0]["evidence"] = json!("");
+    })
+    .contains("unique id"));
+    // Every finding is disposed with a reason; a disposition for another record does not count.
+    let failed = || check_ctx(failed_check(), vec![]);
+    assert!(check_denial(&r, failed()).contains("f1 needs a disposition"));
+    let wrong = record(
+        "d-rev",
+        "finding-disposition",
+        3,
+        json!({"review":"rev1","finding":"f1","disposition":"rejected","reason":"x"}),
+    );
+    assert!(
+        check_denial(&r, check_ctx(failed_check(), vec![wrong])).contains("f1 needs a disposition")
+    );
+    let blank = check_disposition("f1", "rejected", " ", 3);
+    assert!(
+        check_denial(&r, check_ctx(failed_check(), vec![blank])).contains("f1 needs a disposition")
+    );
+    allowed(&check_answer(
+        &r,
+        check_ctx(
+            failed_check(),
+            vec![check_disposition(
+                "f1",
+                "rejected",
+                "settled by the goal",
+                3,
+            )],
+        ),
+    ));
+    // A fix needs a newer intent record than the one checked.
+    let fixed = check_disposition("f1", "fixed", "named the term", 3);
+    assert!(
+        check_denial(&r, check_ctx(failed_check(), vec![fixed.clone()]))
+            .contains("new intent record")
+    );
+    let newer = record("intent-2", "intent", 4, intent(false));
+    allowed(&check_answer(
+        &r,
+        check_ctx(failed_check(), vec![fixed, newer]),
+    ));
+    // The first well-formed check is the check: a later clean one cannot drop its findings.
+    let mut ctx = failed();
+    ctx.push(record("chk2", "intent-check", 3, check_value()));
+    assert!(check_denial(&r, ctx).contains("f1 needs a disposition"));
+    // An earlier malformed check does not count.
+    let mut ctx = vec![record("intent-1", "intent", 1, intent(false))];
+    let mut broken = check_value();
+    broken["fresh_context"] = json!(false);
+    ctx.push(record("chk0", "intent-check", 2, broken));
+    ctx.push(record("chk1", "intent-check", 3, check_value()));
+    allowed(&check_answer(&r, ctx));
 }
 
 #[test]
@@ -907,5 +1033,49 @@ fn review_packet_refuses_what_verified_would_refuse() {
         base(true, &|v| v["results"][0]["check_sha256"] = json!("x"))
             .unwrap_err()
             .contains("approved")
+    );
+}
+
+#[test]
+fn intent_packet_carries_the_four_questions_and_the_draft_intent() {
+    let r = repo();
+    let draft = vec![record("intent-1", "intent", 1, intent(false))];
+    // Needs no verification: the intent is still a draft.
+    let packet = crate::packet::intent_packet(&show(&r, true, draft.clone())).unwrap();
+    for (id, text) in INTENT_QUESTIONS {
+        assert!(packet.contains(&format!("- {id}: {text}")), "{id}");
+    }
+    assert!(packet.contains("\"goal\": \"g\"") && packet.contains("(intent-1)"));
+    assert!(packet.contains(&r.display().to_string()));
+    // The latest intent record is the one checked.
+    let mut later = draft.clone();
+    later.push(record("intent-2", "intent", 2, intent(true)));
+    assert!(crate::packet::intent_packet(&show(&r, true, later))
+        .unwrap()
+        .contains("(intent-2)"));
+    assert!(crate::packet::intent_packet(&show(&r, false, draft)).is_err());
+    assert!(crate::packet::intent_packet(&show(&r, true, vec![])).is_err());
+}
+
+#[test]
+fn only_b_asks_for_the_intent_check_and_c_is_unchanged() {
+    // C is byte-for-byte the workflow of commit 9b3e9b8, before the intent check existed.
+    let c = serde_json::to_string(&workflow(false)).unwrap();
+    assert_eq!(
+        sha256_hex(c.as_bytes()),
+        "20c5f85d3365d568b27ca09029886dcd844ec154262c97685fd77e138c58dd60"
+    );
+    let explore = |review| workflow(review).states[0].instructions.clone();
+    assert!(explore(true).contains("intent-packet") && explore(true).contains("intent-check"));
+    assert!(!explore(false).contains("intent-check"));
+    // B differs from v1 B only in the explore text.
+    let strip = |mut w: serde_json::Value| {
+        w["states"][0]["instructions"] = json!("");
+        w
+    };
+    let b = strip(serde_json::to_value(workflow(true)).unwrap());
+    assert_eq!(
+        sha256_hex(b.to_string().as_bytes()),
+        "9785388e978bfb46fc8bd80f6fddca0637d0e689ca7bd7b783d23643729987d5"
     );
 }
