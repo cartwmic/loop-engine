@@ -6,11 +6,8 @@ from scevals.target import PREAMBLE
 
 WORKFLOW_PATHS = ["openspec/**", ".pi/**", "docs/superpowers/**", ".superpowers/**"]
 ROLE_SCRIPTS = {"native": ["arm-native"], "superpowers": ["arm-superpowers"],
-                "openspec": ["arm-openspec"], "loop-engine": ["sc-driver"],
-                "lean-b": ["env", "SC_PROVIDER_SKILL=using-lean-change-provider", "sc-driver"],
-                "lean-c": ["env", "SC_PROVIDER_SKILL=using-lean-change-provider", "sc-driver"]}
-ARM_PATHS = {"native": [], "superpowers": WORKFLOW_PATHS, "openspec": WORKFLOW_PATHS, "loop-engine": [],
-              "lean-b": [], "lean-c": []}
+                "openspec": ["arm-openspec"], "loop-engine": ["sc-driver"]}
+ARM_PATHS = {"native": [], "superpowers": WORKFLOW_PATHS, "openspec": WORKFLOW_PATHS, "loop-engine": []}
 DEFAULT_PROMPT_GOLDEN = """Run this software-change request unattended to a terminal engine state.
 Profile: standard-17
 Use the shipped software-change profile with exactly that config_version. Read the

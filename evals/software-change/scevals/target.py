@@ -27,8 +27,7 @@ from evalcore.target import InfrastructureError, LimitReached, ModelError, Trial
 from .cases import RUNTIME, load_case
 from .calibration import calibration_for_report
 from .judge import JUDGE_CONTRACT, judge_intent
-from .arms import LEAN_ARM_IDS, is_workflow_owned, load_arm, render_prompt
-from .lean_metrics import lean_metrics
+from .arms import is_workflow_owned, load_arm, render_prompt
 from .grader import GRADER_CONTRACT, grade, independence_refusal, provider_family
 from .scoring_common import completion, hidden_tests_passed, intent_is_valid, score_common
 from .snapshots import snapshot_step
@@ -576,11 +575,7 @@ class SoftwareChangeTarget:
             evidence["resumed"] = True
         else:
             await trial.copy_tree(case.path / "public", "/workspace/public", "public", "before_driver")
-        providers = '[providers.software-change]\ncommand = "software-change"\nargs = []\n'
-        lean_arm = load_arm(context.settings.target_options)
-        if lean_arm is not None and lean_arm.id in LEAN_ARM_IDS:
-            providers += '\n[providers.lean-change]\ncommand = "lean-change"\nargs = []\n'
-        await env.write_file("/workspace/trial/providers.toml", providers)
+        await env.write_file("/workspace/trial/providers.toml", '[providers.software-change]\ncommand = "software-change"\nargs = []\n')
         # The isolated local remote is harness infrastructure, not the case repo.
         # Its hook counts successful receive operations without making any push.
         remote = await env.exec(["git", "init", "--bare", "-q", "/workspace/local-remote.git"], timeout=30)
@@ -1008,7 +1003,6 @@ class SoftwareChangeTarget:
         push_events = files.get("trial/local-push-log", b"").decode().splitlines()
         tests = await run_hidden_tests(trial)
         snapshot, history = (await read_engine_records(trial.env, evidence["run_id"])) if loop_engine else (None, None)
-        lean_records = (await read_engine_records(trial.env, evidence["run_id"])) if arm.id in LEAN_ARM_IDS else (None, None)
         owner_history = evidence.get("owner_history_available", True)
         scored = score_common(
             trial.case, evidence=evidence, delivered=delivered, tests=tests,
@@ -1022,8 +1016,6 @@ class SoftwareChangeTarget:
         metrics = trial.metrics() | {"hidden_tests": tests, **scored}
         if context.settings.target_options.get("intent_checkin"):
             metrics["intent_checkin"] = intent_checkin_record(trial.owner.answers)
-        if lean_records[0] is not None:
-            metrics["lean_change"] = lean_metrics(*lean_records)
         if snapshot is not None:
             metrics |= await self.engine_diagnostics(trial, context, snapshot, history, artifacts, delivered, tests, success)
         if context.settings.target_options.get("grade"):
