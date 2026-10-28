@@ -44,6 +44,7 @@ jobs:
         run: |
           python3 scripts/external-work-journey.py \
             --engine "$BIN_DIR/loop-engine" \
+            --lean "$BIN_DIR/lean-change" \
             --policy "$BIN_DIR/policy-document" \
             --research "$BIN_DIR/research" \
             --checker "$BIN_DIR/bookends-check" \

@@ -478,13 +478,34 @@ fn evaluate_model_binding(request: EvaluateRequest) -> Result<Value, FixtureErro
         }
         "approved" => {
             let stale = folded.stale_marks();
-            let mut refusals = Vec::new();
-            for record in request.context.iter().filter(|record| {
+            let passing = |record: &&ContextRecord| {
                 record.kind == "review"
-                    && record.data["subject_revision"].as_str() == Some(revision.as_str())
                     && record.data["axis"].as_str() == Some(MODEL_BINDING_REVIEW_AXIS)
                     && record.data["result"].as_str() == Some("pass")
-            }) {
+            };
+            // Direct reviews of this draft, then reviews carried to it by explicit
+            // evidence-applicability. A carried review keeps its origin's sequence,
+            // so a later stale mark also stops it being carried to new targets.
+            let direct = request.context.iter().filter(passing).filter(|record| {
+                record.data["subject_revision"].as_str() == Some(revision.as_str())
+            });
+            let carried = request
+                .context
+                .iter()
+                .filter(|record| {
+                    record.kind == "evidence-applicability"
+                        && record.data["target"]["revision"].as_str() == Some(revision.as_str())
+                })
+                .filter_map(|carry| {
+                    let origin = carry.data["origin"]["id"].as_str()?;
+                    request
+                        .context
+                        .iter()
+                        .filter(passing)
+                        .find(|record| record.id.as_str() == origin)
+                });
+            let mut refusals = Vec::new();
+            for record in direct.chain(carried) {
                 let mark = stale.iter().find(|mark| {
                     mark.role == loop_core::ModelRole::OrdinaryReviewer
                         && mark.sequence > record.sequence

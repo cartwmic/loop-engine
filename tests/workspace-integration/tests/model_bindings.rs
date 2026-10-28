@@ -500,3 +500,137 @@ fn model_bindings_owner_amendments_and_eligibility_public_binary() {
         3
     );
 }
+
+fn carry(origin: &str, revision: &str) -> Value {
+    json!({"origin":{"kind":"context-record","id":origin},"target":{"subject":"draft","revision":revision},
+        "attesting_driver":{"name":"driver","kind":"agent"},"reason":"Only wording outside the reviewed claim changed."})
+}
+
+#[test]
+// bookends:LE-199 — an unmarked change keeps an earlier review eligible directly and when carried by explicit evidence-applicability; a stale mark makes it uncarryable to a new target and the refusal names amendment, role, author, assessment and axis.
+fn model_bindings_amendment_eligibility_and_carry_public_binary() {
+    let catalog = Catalog::new();
+    let first = binding("openai/gpt", "xhigh");
+    let second = binding("openai/gpt-mini", "medium");
+    let driver = binding("anthropic/claude-opus", "high");
+    let add = || {
+        amendment(
+            json!([{"role":"ordinary-reviewer","old":null,"new":first},{"role":"driver","old":null,"new":driver}]),
+            Some(driver.clone()),
+        )
+    };
+    let reviewed = |run: &str| {
+        assert_eq!(catalog.start(run, &json!({}))["status"], "completed");
+        catalog.stored(run, "add", "model-binding-amendment", add());
+        catalog.stored(run, "d1", "draft", json!({"revision":"r1"}));
+        catalog.moved(run, "drafted", "review");
+        catalog.stored(
+            run,
+            "rev-first",
+            "review",
+            review("First reviewer", "r1", Some(first.clone())),
+        );
+    };
+    let revised = |run: &str| {
+        catalog.moved(run, "revise", "draft");
+        catalog.stored(run, "d2", "draft", json!({"revision":"r2"}));
+        catalog.moved(run, "drafted", "review");
+    };
+    let change = amendment(
+        json!([{"role":"ordinary-reviewer","old":first,"new":second}]),
+        Some(driver.clone()),
+    );
+
+    // Unmarked change: the review made under the old binding still approves.
+    reviewed("unmarked");
+    catalog.stored(
+        "unmarked",
+        "change",
+        "model-binding-amendment",
+        change.clone(),
+    );
+    catalog.moved("unmarked", "approved", "done");
+
+    // Unmarked change: the old review, carried to a new draft, still approves.
+    reviewed("carried");
+    revised("carried");
+    catalog.stored(
+        "carried",
+        "change",
+        "model-binding-amendment",
+        change.clone(),
+    );
+    catalog.stored(
+        "carried",
+        "carry",
+        "evidence-applicability",
+        carry("rev-first", "r2"),
+    );
+    catalog.moved("carried", "approved", "done");
+    let context = catalog.full("carried")["context"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        context
+            .iter()
+            .filter(|record| record["kind"] == "review")
+            .count(),
+        1,
+        "no review was rerun"
+    );
+
+    // Stale mark: the old review cannot be carried to the new draft.
+    reviewed("stale-carry");
+    revised("stale-carry");
+    catalog.stored(
+        "stale-carry",
+        "stale",
+        "model-binding-amendment",
+        amendment(
+            json!([{"role":"ordinary-reviewer","old":first,"new":null,"mark_stale":true}]),
+            Some(driver.clone()),
+        ),
+    );
+    catalog.stored(
+        "stale-carry",
+        "carry",
+        "evidence-applicability",
+        carry("rev-first", "r2"),
+    );
+    let denied = catalog.refused(
+        "stale-carry",
+        || catalog.event("stale-carry", "approved"),
+        &[
+            "stale",
+            "rev-first",
+            "First reviewer",
+            "ordinary-reviewer",
+            "correctness",
+        ],
+    );
+    assert!(denied.to_string().contains("\"stale\""), "{denied}");
+    // The earlier decision and every original record stay as they were.
+    let shown = catalog.full("stale-carry");
+    let history = shown["evaluation_history"].as_array().unwrap();
+    assert!(
+        history
+            .iter()
+            .filter(|entry| entry.to_string().contains("drafted"))
+            .count()
+            >= 2,
+        "{shown}"
+    );
+    assert!(shown["context"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|record| record["id"] == "rev-first" && record["data"]["session"] == first));
+    catalog.stored(
+        "stale-carry",
+        "rev-fresh",
+        "review",
+        review("Fresh reviewer", "r2", None),
+    );
+    catalog.moved("stale-carry", "approved", "done");
+}

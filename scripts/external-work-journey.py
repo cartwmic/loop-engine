@@ -281,6 +281,18 @@ def provider_specific(args, root):
         refused([args.engine,'--database',database,'--config',config,'--json','event',run_id,event],needle='review-incomplete')
         for i, data in enumerate(independent):
             record('review-evidence',data,'independent-evidence-'+str(i))
+        if kind == 'policy-document':
+            # bookends:LE-127 — the real commission packet for a fresh first assessment keeps the current target and every policy instruction while excluding the peer judgments already recorded.
+            peers = [row['id'] for row in show()['result']['context'] if row['kind'] == 'review-evidence']
+            assert len(peers) >= 2 * len(grouped), peers
+            packet = process([binary, 'commission', json.dumps(profile)], show())
+            assert packet['record_ids'] == [] and not any(row['kind'] == 'review-evidence' for row in packet['context']), packet
+            assert packet['current_target']['target_path'] == str(target), packet
+            assert packet['current_target']['target_sha256'] == hashlib.sha256(target.read_bytes()).hexdigest(), packet
+            assert [(p['id'], p['description'], p['example_prompt']) for p in packet['review_policies']] == \
+                [(p['id'], p['description'], p['example_prompt']) for p in profile['semantic_policies']], packet
+            assert packet['missing_inputs'] == [], packet
+            print('external-work policy-document first-assessment commission excludes peers and keeps instructions passed')
         def amend(after,id):
             data = {'targets':[{'gate':gate,'axis':policy['id']}],'after':after,
                     'actor':owner,'authority':{'kind':'owner','reference':'scripted instruction'},'reason':'External review budget.'}
@@ -422,6 +434,95 @@ def retention_provider_runs(args, root):
         print(f'external-work {kind} retained artifacts readable after file deletion passed')
 
 
+# bookends:LE-186 — research retains only phase-exit bytes: drafts excluded, revise-loop re-exits appended, unchanged re-exits stored once, override exits marked and a missing artifact recorded absent.
+def retention_research_revisions(args, root):
+    import shutil
+    from external_work_driver import engine_call, record_reviews
+    spec = importlib.util.spec_from_file_location('retention_research_fixture', ROOT / 'scripts/research-journey.py')
+    research = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(research)
+    work = root / 'research-revisions'
+    artifacts = work / 'artifacts'
+    artifacts.mkdir(parents=True)
+    profile = json.loads((ROOT / 'crates/research-provider/data/configs/standard.json').read_text())
+    profile['artifact_root'] = str(artifacts)
+    (work / 'profile.json').write_text(json.dumps(profile))
+    config = work / 'providers.toml'
+    config.write_text(f'[providers.research]\ncommand = {json.dumps(args.research)}\nargs = []\n')
+    database, run_id = work / 'run.sqlite', 'research-revisions'
+    def call(*argv):
+        return engine_call(args.engine, database, config, list(argv))
+    def show():
+        return call('show', '--view', 'full', run_id)
+    def move(event):
+        show()
+        response = call('event', run_id, event)
+        assert response['status'] == 'completed', response
+    def override(event, reason):
+        attestation = json.dumps({'state_visit': show()['result']['state_visit'], 'owner': 'journey-owner', 'reason': reason})
+        response = call('event', '--override', attestation, run_id, event)
+        assert response['status'] == 'completed', response
+    def write(name, value):
+        (artifacts / name).write_text(json.dumps(value))
+        return (artifacts / name).read_bytes()
+    call('start', '--id', run_id, 'research', '@'+str(work / 'profile.json'), 'retention revisions')
+    exits = [write('brief.json', research.brief())]
+    move('scoped')
+    drafts = []
+    for title in ['Draft atlas one', 'Draft atlas two']:
+        value = research.sources()
+        value['sources'][0]['title'] = title
+        drafts.append(write('sources.json', value))
+    exits.append(write('sources.json', research.sources()))
+    move('gathered')
+    move('revise-brief')
+    exits.append(exits[0])
+    move('scoped')
+    value = research.sources()
+    value['sources'][0]['title'] = 'World atlas'
+    exits.append(write('sources.json', value))
+    move('gathered')
+    write('verification.json', research.verification())
+    record_reviews(Path(args.engine), database, config, Path(args.research), run_id, 'verify',
+                   [p['id'] for p in profile['review_policies']['verify']], 'verification.json', '1')
+    reviewed = [row for row in show()['result']['context'] if row['kind'] == 'review-evidence']
+    # bookends:LE-107 — a narrow correction keeps the original judgments: the driver declares applicability once per origin, no review is rerun, and the checked exit succeeds.
+    corrected = research.verification()
+    corrected['revision'] = '2'
+    exits.append(write('verification.json', corrected))
+    for row in reviewed:
+        call('append', '--record-id', 'carry-'+row['id'], run_id, 'evidence-applicability',
+             json.dumps({'origin': {'kind': 'context-record', 'id': row['id']},
+                         'target': {'subject': 'verification.json', 'revision': '2'},
+                         'attesting_driver': {'name': 'owner', 'kind': 'human'},
+                         'reason': 'Only the revision label changed; claims and sources are unchanged.'}))
+    move('verified')
+    context = show()['result']['context']
+    assert [row for row in context if row['kind'] == 'review-evidence'] == reviewed, 'original judgments and authors stay unchanged and are not replayed'
+    carries = [row for row in context if row['kind'] == 'evidence-applicability']
+    assert len(carries) == len(reviewed) and all(set(row['data']) == {'origin', 'target', 'attesting_driver', 'reason'} for row in carries), carries
+    print('external-work research narrow correction reuses original judgments without replay passed')
+    move('revise')
+    exits.append(exits[-1])
+    override('verified', 'Journey override with the artifact present.')
+    override('completed', 'Journey override with the artifact missing.')
+    exits.append(None)
+    entries = retained_view(call, run_id)
+    assert [e['name'] for e in entries] == ['brief.json', 'sources.json', 'brief.json', 'sources.json',
+                                          'verification.json', 'verification.json', 'report.json'], entries
+    assert [e['bytes'] for e in entries] == exits, 'each exit retains the bytes present at that exit'
+    assert [e['exit'] for e in entries] == ['checked'] * 5 + ['override'] * 2, entries
+    assert entries[2]['same_as'] == entries[0]['record'] and entries[5]['same_as'] == entries[4]['record'], entries
+    assert entries[3]['same_as'] is None and entries[3]['bytes'] != entries[1]['bytes'], entries[3]
+    assert not any(draft in exits for draft in drafts), 'intermediate drafts must not be retained'
+    terminal = show()['result']
+    assert terminal['current_state'] == 'end' and terminal['has_overrides'] and terminal['override_count'] == 2, terminal
+    shutil.rmtree(artifacts)
+    after = retained_view(call, run_id)
+    assert [(e['name'], e['bytes'], e['exit']) for e in after] == [(e['name'], e['bytes'], e['exit']) for e in entries]
+    print('external-work research retained exits, drafts, revise loop, unchanged re-exit and overrides passed')
+
+
 def _seed_legacy_invocations(database, run_id, rows, payload_bytes):
     """Insert legacy-format work-slot invocation rows with bulky payloads, as earlier releases wrote them."""
     worker = {'assignment_id': 'worker-0', 'command': '/legacy/bin/pi',
@@ -502,7 +603,32 @@ def _interrupt_reclaim_apply(engine, database, run_id):
         holder.close()
 
 
-# bookends:LE-100 — show reports a deterministic, provider-free change report for retained assignment records; unknown inputs are changed.
+def _seed_plan_task_invocation(database, run_id, invocation_id, started_at, status, current, snapshot):
+    """Insert one legacy plan-task invocation row: current worker records plus its completion snapshot."""
+    connection = sqlite3.connect(database, timeout=30)
+    with connection:
+        connection.execute(
+            """INSERT INTO work_slot_invocations (run_id, invocation_id, slot_id, binding_json,
+                   instruction_digest, subject, state_visit, waiter_pid, started_at, allowed_time_ms,
+                   status, exit_code, completed_at, capture_dir, inner_workers_json, assignment_selection_json,
+                   invocation_input_json, routed_inputs_json, frozen_run_identity_json, completion_snapshot_json)
+               VALUES (?, ?, 'plan-slot', ?, 'sha256:legacy', 'plan-subject', 0, 0, ?, 1000,
+                       ?, ?, ?, '/legacy/capture', ?, NULL, ?, '[]', NULL, ?)""",
+            (run_id, invocation_id, json.dumps({'command': '/legacy/bin/pi', 'args': ['--print']}), started_at,
+             status, 0 if status == 'succeeded' else 1, started_at + 1,
+             json.dumps(current), json.dumps({'plan': 'legacy'}), json.dumps(snapshot)))
+    connection.close()
+
+
+def _plan_task(assignment, **fields):
+    task = {'assignment_id': assignment, 'command': '/legacy/bin/pi', 'args': ['--task', assignment],
+            'exit_code': 0, 'attempts': [], 'task_definition': {'id': assignment, 'goal': 'Edit ' + assignment},
+            'task_packet': 'packet for ' + assignment, 'dependencies': [], 'routed_inputs': {'plan': 'plan.json'}}
+    task.update(fields)
+    return {key: value for key, value in task.items() if value is not None}
+
+
+# bookends:LE-100 — provider-free show reports a deterministic, fail-closed change report for legacy assignment records and recorded plan-task results; unknown inputs are changed.
 def legacy_change_report(args, root):
     work = root / 'legacy-change-report'
     work.mkdir()
@@ -510,21 +636,58 @@ def legacy_change_report(args, root):
     shutil.copyfile(root / 'research-specific' / 'run.sqlite', database)
     run_id = 'research-external-specific'
     _seed_legacy_invocations(database, run_id, 1, 10)
+    effect = {'files': ['src/a.rs']}
+    current = [_plan_task('task-same'),
+               _plan_task('task-changed', args=['--task', 'task-changed', '--retry'], dependencies=['task-same'],
+                          task_definition={'id': 'task-changed', 'goal': 'Edit more'}, task_packet='revised packet',
+                          repository_effect={'files': ['src/b.rs']}),
+               _plan_task('task-missing-packet', repository_effect=effect),
+               _plan_task('task-unrecorded')]
+    snapshot = [_plan_task('task-same'),
+                _plan_task('task-changed', repository_effect=effect),
+                _plan_task('task-missing-packet', task_packet=None, repository_effect=effect)]
+    _seed_plan_task_invocation(database, run_id, 'plan-first', 10, 'succeeded', current, snapshot)
     offline = work / 'offline.toml'
     offline.write_text('[providers.research]\ncommand = "/nonexistent/research"\nargs = []\n')
-    def report():
-        observed = raw([args.engine,'--database',database,'--config',offline,'--json','show','--view','full',run_id])
+    def observe(view):
+        observed = raw([args.engine,'--database',database,'--config',offline,'--json','show','--view',view,run_id])
         assert observed.returncode == 0, observed.stderr
-        shown = json.loads(observed.stdout)['result']
-        return shown['change_report'], [row['change_report'] for row in shown['work_slot_invocations']]
-    first, second = report(), report()
-    assert first == second, 'change report is deterministic'
+        return json.loads(observed.stdout)['result']
+    def report():
+        shown = observe('full')
+        return shown['change_report'], {row['invocation_id']: row['change_report'] for row in shown['work_slot_invocations']}
+    first = report()
+    assert first == report(), 'change report is deterministic'
     summary, rows = first
-    assert [row['assignment_id'] for row in summary['assignments']] == ['worker-0'] and summary['plan_task_results'] == []
-    dimensions = rows[0]['dimensions']
+    assert [row['assignment_id'] for row in summary['assignments']] == ['worker-0'], summary
+    legacy = next(row for key, row in rows.items() if key != 'plan-first')
+    dimensions = legacy['dimensions']
     assert dimensions['governing_policy_configuration']['changed'] is True and dimensions['governing_policy_configuration']['recorded'] is None
-    assert dimensions['worker_assignment']['changed'] is False and rows[0]['standing'] is False, rows[0]
-    print('external-work legacy change report deterministic and provider-free passed')
+    assert dimensions['worker_assignment']['changed'] is False and legacy['standing'] is False, legacy
+    tasks = {row['assignment_id']: row for row in summary['plan_task_results']}
+    assert list(tasks) == ['task-same', 'task-changed', 'task-missing-packet', 'task-unrecorded'], tasks
+    names = ['task_definition', 'task_packet', 'dependencies', 'routed_inputs', 'worker_binding', 'repository_effect']
+    def changed(assignment):
+        return {name for name in names if tasks[assignment]['dimensions'][name]['changed']}
+    # Both records omit the optional repository effect: a known equal absence, so the result stands.
+    same = tasks['task-same']
+    assert changed('task-same') == set() and same['standing'] is True, same
+    assert same['dimensions']['repository_effect'] == {'changed': False, 'recorded': None, 'current': None}, same
+    assert changed('task-changed') == {'task_definition', 'task_packet', 'dependencies', 'worker_binding', 'repository_effect'}, tasks['task-changed']
+    assert tasks['task-changed']['dimensions']['repository_effect']['recorded'] == effect, tasks['task-changed']
+    # A missing required dimension or record is unknown, therefore changed.
+    assert changed('task-missing-packet') == {'task_packet'} and tasks['task-missing-packet']['standing'] is False
+    assert changed('task-unrecorded') == set(names) and tasks['task-unrecorded']['standing'] is False
+    assert rows['plan-first']['standing'] is True, rows['plan-first']
+    action = observe('action')
+    # Ordinary action inspection leaves unrelated historical reports out and points at full inspection.
+    assert 'change_report' not in action and action['locators']['full'][-2:] == ['--view', 'full'], action['locators']
+    # A later real failed execution of the same task supersedes the standing result; nothing revives it.
+    _seed_plan_task_invocation(database, run_id, 'plan-failed', 20, 'failed', [_plan_task('task-same')], [])
+    summary, rows = report()
+    standing = [(row['assignment_id'], row['standing']) for row in summary['plan_task_results']]
+    assert ('task-same', True) not in standing and rows['plan-first']['standing'] is False, standing
+    print('external-work legacy change report deterministic, fail-closed and provider-free passed')
 
 
 # bookends:LE-187 — explicit reclaim previews without writing, clears only finished runs' legacy payloads, keeps cleaned runs listed and showable, leaves active runs advancing, and shrinks the catalog file.
@@ -887,7 +1050,7 @@ def locked_status(ctx):
 
 
 # bookends:LE-120 bookends:LE-145 — passive snapshots/attention expose workflow and source-backed owner-update guidance while external execution stays unknown and observer shutdown changes no run state.
-# bookends:LE-127 bookends:LE-148 — focused action is smaller than retained full detail; public history paging returns explicit cursors/totals without mutation.
+# bookends:LE-148 — focused action is smaller than retained full detail; public history paging returns explicit cursors/totals without mutation.
 def passive_views(ctx):
     import fcntl, pty, select, struct, termios
     append(ctx,'retained-detail',{'text':'original external detail '*3000},'large-retained-detail')
@@ -1141,6 +1304,7 @@ def main():
     profile_preparation(args,root)
     provider_specific(args,root)
     retention_provider_runs(args,root)
+    retention_research_revisions(args,root)
     legacy_change_report(args,root)
     reclaim_legacy_catalog(args,root)
     early_review_briefs(args,root)
