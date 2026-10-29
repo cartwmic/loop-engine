@@ -1560,7 +1560,11 @@ fn setup_writes_old_vs_new_proof_paths_in_order_and_refuses_bad_ones() {
         ":(exclude)../x",
         ":(literal)..",
         ":^../x",
+        "::../x",
+        ":!:../x",
+        ":^:../x",
         ":!/etc",
+        ":!:/etc",
         ":(top)/etc",
         ":(glob)/abs",
         ":/etc",
@@ -1680,6 +1684,58 @@ fn verify_lays_over_a_file_that_replaces_a_base_directory() {
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].exit_code, Some(0));
     assert_eq!(runs[0].output_tail, "new-data\n");
+}
+
+#[test]
+fn verify_lays_over_a_file_that_replaces_a_nested_base_directory() {
+    let r = repo();
+    std::fs::create_dir_all(r.join("journeys/data/sub/deep")).unwrap();
+    std::fs::write(r.join("journeys/data/sub/deep/a.txt"), "base-data\n").unwrap();
+    git(&r, &["add", "-A"]);
+    git(&r, &["commit", "-qm", "nested data directory at base"]);
+    // The change replaces the tracked directory by a staged file of the same name. The directories below it
+    // are left empty and go with it.
+    git(&r, &["rm", "-rq", "journeys/data"]);
+    std::fs::create_dir_all(r.join("journeys")).unwrap();
+    std::fs::write(r.join("journeys/data"), "new-data\n").unwrap();
+    git(&r, &["add", "journeys/data"]);
+    let mut i = intent_with(vec![criterion("data", Some(json!({"expect":"same"})))]);
+    i["criteria"][0]["check"] = json!({"argv":["cat","journeys/data"],"timeout_ms":5000});
+    let v = crate::run::verify(&show_with(
+        old_vs_new_input(&r, false, &["journeys"]),
+        vec![record("intent-1", "intent", 1, i)],
+    ))
+    .unwrap();
+    assert_eq!(v.results[0].output_tail, "new-data\n");
+    let runs = &v.results[0].old.as_ref().unwrap().runs;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].exit_code, Some(0));
+    assert_eq!(runs[0].output_tail, "new-data\n");
+}
+
+#[test]
+fn verify_refuses_a_file_left_in_a_directory_that_a_current_file_replaces() {
+    let r = repo();
+    std::fs::create_dir_all(r.join("journeys/data")).unwrap();
+    std::fs::write(r.join("journeys/data/a.txt"), "base-data\n").unwrap();
+    git(&r, &["add", "-A"]);
+    git(&r, &["commit", "-qm", "data directory at base"]);
+    // The glob matches only the top level of journeys, so journeys/data/a.txt is not a proof file and stays
+    // in the old tree. The current file journeys/data cannot replace a directory that still holds it.
+    git(&r, &["rm", "-rq", "journeys/data"]);
+    std::fs::create_dir_all(r.join("journeys")).unwrap();
+    std::fs::write(r.join("journeys/data"), "new-data\n").unwrap();
+    git(&r, &["add", "journeys/data"]);
+    let mut i = intent_with(vec![criterion("data", Some(json!({"expect":"same"})))]);
+    i["criteria"][0]["check"] = json!({"argv":["cat","journeys/data"],"timeout_ms":5000});
+    let Err(error) = crate::run::verify(&show_with(
+        old_vs_new_input(&r, false, &[":(glob)journeys/*"]),
+        vec![record("intent-1", "intent", 1, i)],
+    )) else {
+        panic!("verify lays over a file that still has a file inside its directory");
+    };
+    assert!(error.contains("a file remains"), "{error}");
+    assert!(error.contains("journeys/data/a.txt"), "{error}");
 }
 
 #[test]

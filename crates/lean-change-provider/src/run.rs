@@ -219,8 +219,8 @@ fn lay_over_proof(old: &Path, repo: &Path, proof_paths: &[String]) -> Result<(),
         proof_paths,
     )?;
     let base = pathspec_files(old, &["ls-files", "-z", "--"], proof_paths)?;
-    // Base files the repository no longer has go first. A directory they leave empty is in the way of a current
-    // file that replaces it, and `clear_target` removes it.
+    // Base files the repository no longer has go first. A directory they leave with only empty directories in it is
+    // in the way of a current file that replaces it, and `clear_target` removes it.
     for name in base.difference(&current) {
         remove_file_if_present(&old.join(OsStr::from_bytes(name)))?;
     }
@@ -266,15 +266,46 @@ fn create_parent(target: &Path) -> std::io::Result<()> {
     target.parent().map_or(Ok(()), std::fs::create_dir_all)
 }
 
-/// Clears the way for a current proof file: a file the base has there, or a directory an obsolete base file left
-/// empty. A directory that still holds files is an error, so nothing is removed from it.
+/// Clears the way for a current proof file: a file the base has there, or a directory whose obsolete base files left
+/// only empty directories. Those directories are removed deepest first. A file anywhere in the directory is an error,
+/// and then nothing is removed.
 fn clear_target(target: &Path) -> Result<(), String> {
     match std::fs::symlink_metadata(target) {
         Ok(meta) if meta.is_dir() => {
-            std::fs::remove_dir(target).map_err(|e| format!("{}: {e}", target.display()))
+            let mut dirs = vec![target.to_path_buf()];
+            collect_directories(target, &mut dirs)?;
+            // Parents come before their children, so the reverse removes each directory after those below it.
+            for dir in dirs.iter().rev() {
+                std::fs::remove_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            }
+            Ok(())
         }
         _ => remove_file_if_present(target),
     }
+}
+
+/// Appends the directories under `dir`, each before the directories below it. A file or symlink under `dir` is an
+/// error.
+fn collect_directories(dir: &Path, dirs: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
+        let path = entry.path();
+        // The entry's file type does not follow a symlink, so a symlink counts as a file.
+        let is_dir = entry
+            .file_type()
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .is_dir();
+        if !is_dir {
+            return Err(format!(
+                "{}: a file remains in a directory that a current proof file replaces",
+                path.display()
+            ));
+        }
+        dirs.push(path.clone());
+        collect_directories(&path, dirs)?;
+    }
+    Ok(())
 }
 
 fn remove_file_if_present(path: &Path) -> Result<(), String> {

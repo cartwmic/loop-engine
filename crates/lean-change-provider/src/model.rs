@@ -63,8 +63,9 @@ fn proof_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The path after git's pathspec magic, which is `:(words)` or a short `:` with `!` and `^` characters, and
-/// whether the words include `top`. A short `/` is left in the path, so `:!/etc` is absolute after its magic.
+/// The path after git's pathspec magic, which is `:(words)` or a short `:` with `!` and `^` characters and an
+/// optional `:` that ends them, and whether the words include `top`. A short `/` is left in the path, so `:!/etc`
+/// is absolute after its magic.
 fn pathspec_after_magic(path: &str) -> (&str, bool) {
     if let Some((words, rest)) = path
         .strip_prefix(":(")
@@ -72,9 +73,10 @@ fn pathspec_after_magic(path: &str) -> (&str, bool) {
     {
         return (rest, words.split(',').any(|word| word == "top"));
     }
-    let rest = path
-        .strip_prefix(':')
-        .map_or(path, |short| short.trim_start_matches(['!', '^']));
+    let rest = path.strip_prefix(':').map_or(path, |short| {
+        let magic = short.trim_start_matches(['!', '^']);
+        magic.strip_prefix(':').unwrap_or(magic)
+    });
     (rest, false)
 }
 
