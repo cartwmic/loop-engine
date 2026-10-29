@@ -50,7 +50,7 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    Every criterion also needs `old`, the old-vs-new expectation described in its section below.
 
    Every criterion needs a command that fails when the criterion is not met and passes when it is.
-   Before `intent-ready`, add one constraint per section of the principles file: "§N applies: cN" or "§N n/a: reason".
+   Before `intent-ready` (profile b, whose setup froze a principles file), add one constraint per section of that file: "§N applies: cN" or "§N n/a: reason".
    Cover edge cases with extra criteria, not prose. Set `hard` true only when the work needs a plan.
    Each new intent gets a new record id (`intent-2`, ...); the latest one counts.
    **Intent check (profile b).** Before `intent-ready` have the draft checked once by a reviewer who has not seen this work
