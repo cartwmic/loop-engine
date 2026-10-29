@@ -108,7 +108,13 @@ fn ask(
     event: &str,
     context: Vec<ContextRecord>,
 ) -> Value {
-    let wf = workflow(review_on);
+    ask_with(input(repo, review_on), source, event, context)
+}
+
+/// Asks the gate about an initial input as given, so an old-vs-new profile can be asked too.
+fn ask_with(initial_input: Value, source: &str, event: &str, context: Vec<ContextRecord>) -> Value {
+    let review = initial_input["review"].as_bool().unwrap();
+    let wf = workflow(review, initial_input.get("old_vs_new").is_some());
     let transition = wf
         .transitions
         .iter()
@@ -118,7 +124,7 @@ fn ask(
     let request = EvaluateRequest {
         operation: "evaluate".into(),
         workflow: wf,
-        initial_input: input(repo, review_on),
+        initial_input,
         context,
         transition,
         prior_evaluations: Vec::new(),
@@ -143,7 +149,7 @@ fn allowed(response: &Value) {
 fn check_free_edges_are_allowed_and_foreign_requests_unsupported() {
     let r = repo();
     allowed(&ask(&r, true, "implement", "ready", vec![]));
-    let wf = workflow(true);
+    let wf = workflow(true, false);
     let request = |workflow, transition| EvaluateRequest {
         operation: "evaluate".into(),
         workflow,
@@ -160,7 +166,7 @@ fn check_free_edges_are_allowed_and_foreign_requests_unsupported() {
     // A run frozen as C is not evaluated as B.
     let t = wf.transitions[0].clone();
     assert_eq!(
-        evaluate(&request(workflow(false), t)).unwrap()["result"],
+        evaluate(&request(workflow(false, false), t)).unwrap()["result"],
         "unsupported"
     );
 }
@@ -761,7 +767,11 @@ fn initial_input_is_validated() {
 }
 
 fn show(r: &Path, review_on: bool, context: Vec<ContextRecord>) -> Value {
-    json!({"operation":"show","status":"completed","result":{"workflow_id":"lean-change","initial_input":input(r, review_on),"context":context}})
+    show_with(input(r, review_on), context)
+}
+
+fn show_with(initial_input: Value, context: Vec<ContextRecord>) -> Value {
+    json!({"operation":"show","status":"completed","result":{"workflow_id":"lean-change","initial_input":initial_input,"context":context}})
 }
 
 #[test]
@@ -1146,12 +1156,12 @@ fn intent_packet_carries_the_five_questions_and_the_draft_intent() {
 #[test]
 fn only_b_asks_for_the_intent_check_and_c_is_unchanged() {
     // C is byte-for-byte the workflow of commit 9b3e9b8, before the intent check existed.
-    let c = serde_json::to_string(&workflow(false)).unwrap();
+    let c = serde_json::to_string(&workflow(false, false)).unwrap();
     assert_eq!(
         sha256_hex(c.as_bytes()),
         "20c5f85d3365d568b27ca09029886dcd844ec154262c97685fd77e138c58dd60"
     );
-    let explore = |review| workflow(review).states[0].instructions.clone();
+    let explore = |review| workflow(review, false).states[0].instructions.clone();
     assert!(explore(true).contains("intent-packet") && explore(true).contains("intent-check"));
     assert!(!explore(false).contains("intent-check"));
     // B differs from v1 B only in the explore text.
@@ -1159,7 +1169,7 @@ fn only_b_asks_for_the_intent_check_and_c_is_unchanged() {
         w["states"][0]["instructions"] = json!("");
         w
     };
-    let b = strip(serde_json::to_value(workflow(true)).unwrap());
+    let b = strip(serde_json::to_value(workflow(true, false)).unwrap());
     assert_eq!(
         sha256_hex(b.to_string().as_bytes()),
         "9785388e978bfb46fc8bd80f6fddca0637d0e689ca7bd7b783d23643729987d5"
@@ -1263,4 +1273,462 @@ fn review_packet_includes_tracked_edits_hidden_by_index_bits() {
         bits.contains("h a.txt") && bits.contains("S b.txt"),
         "{bits}"
     );
+}
+
+/// The initial input setup writes now: old-vs-new with these proof paths.
+fn old_vs_new_input(repo: &Path, review: bool, proof_paths: &[&str]) -> Value {
+    let mut v = input(repo, review);
+    v["old_vs_new"] = json!({"proof_paths": proof_paths});
+    v
+}
+
+fn criterion(id: &str, old: Option<Value>) -> Value {
+    let mut c = json!({"id":id,"statement":"s","check":{"argv":["true"],"timeout_ms":1000}});
+    if let Some(old) = old {
+        c["old"] = old;
+    }
+    c
+}
+
+fn intent_with(criteria: Vec<Value>) -> Value {
+    let mut i = intent(false);
+    i["criteria"] = json!(criteria);
+    i
+}
+
+fn intent_ready_with(initial_input: Value, criteria: Vec<Value>) -> Value {
+    ask_with(
+        initial_input,
+        "explore",
+        "intent-ready",
+        vec![record("intent-1", "intent", 1, intent_with(criteria))],
+    )
+}
+
+/// An old run as a verification record holds it.
+fn old_run_value(exit_code: Option<i32>, timed_out: bool, output_tail: &str) -> Value {
+    json!({"exit_code":exit_code,"timed_out":timed_out,"output_tail":output_tail})
+}
+
+/// The intent of the old-run gate tests: one criterion per expectation, in the order f, s, a, n.
+fn old_intent() -> Value {
+    intent_with(vec![
+        criterion("f", Some(json!({"expect":"fails"}))),
+        criterion("s", Some(json!({"expect":"same"}))),
+        criterion("a", Some(json!({"expect":"absent"}))),
+        criterion("n", Some(json!({"expect":"none","reason":"docs only"}))),
+    ])
+}
+
+/// Old results in the order of `old_intent()` that every gate test accepts; a test replaces one.
+fn good_olds() -> [Value; 4] {
+    [
+        json!({"expect":"fails","runs":[old_run_value(Some(1),false,"boom"),old_run_value(Some(1),false,"boom")]}),
+        json!({"expect":"same","runs":[old_run_value(Some(0),false,"")]}),
+        json!({"expect":"absent","runs":[old_run_value(Some(127),false,"")]}),
+        json!({"expect":"none","runs":[]}),
+    ]
+}
+
+/// The approved `old_intent()` with a verification whose old results are `olds`, asked by `verified`.
+fn old_verified_ctx(r: &Path, olds: [Value; 4]) -> Vec<ContextRecord> {
+    let i = old_intent();
+    let mut v = verification(r, &i);
+    for (result, old) in v["results"].as_array_mut().unwrap().iter_mut().zip(olds) {
+        result["old"] = old;
+    }
+    vec![
+        record("intent-1", "intent", 1, i),
+        record("d-ok", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("v1", "verification", 3, v),
+    ]
+}
+
+fn old_verified(r: &Path, olds: [Value; 4]) -> Value {
+    ask_with(
+        old_vs_new_input(r, false, &[]),
+        "verify",
+        "verified",
+        old_verified_ctx(r, olds),
+    )
+}
+
+#[test]
+fn old_vs_new_intent_needs_old_on_every_criterion_and_a_reason_for_none() {
+    let r = repo();
+    let profile = old_vs_new_input(&r, false, &[]);
+    // Every criterion needs old, even with no proof paths.
+    assert_eq!(
+        code(&intent_ready_with(
+            profile.clone(),
+            vec![criterion("c1", None)]
+        )),
+        "intent-invalid"
+    );
+    assert_eq!(
+        code(&intent_ready_with(
+            profile.clone(),
+            vec![criterion("c1", Some(json!({"expect":"maybe"})))]
+        )),
+        "intent-invalid"
+    );
+    // none needs a nonblank reason.
+    for old in [
+        json!({"expect":"none"}),
+        json!({"expect":"none","reason":"  "}),
+    ] {
+        assert_eq!(
+            code(&intent_ready_with(
+                profile.clone(),
+                vec![criterion("c1", Some(old))]
+            )),
+            "intent-invalid"
+        );
+    }
+    // A profile made by lean-change 0.31.0 refuses old.
+    assert_eq!(
+        code(&intent_ready_with(
+            input(&r, false),
+            vec![criterion("c1", Some(json!({"expect":"fails"})))]
+        )),
+        "intent-invalid"
+    );
+    // Every criterion may be none, with reasons; a 0.31.0 profile needs no old.
+    allowed(&intent_ready_with(
+        profile,
+        vec![
+            criterion("c1", Some(json!({"expect":"none","reason":"docs only"}))),
+            criterion("c2", Some(json!({"expect":"none","reason":"docs only"}))),
+        ],
+    ));
+    allowed(&intent_ready_with(
+        input(&r, false),
+        vec![criterion("c1", None)],
+    ));
+}
+
+#[test]
+fn fails_needs_two_real_failures_on_the_old_tree() {
+    let r = repo();
+    allowed(&old_verified(&r, good_olds()));
+    let with_f = |old: Value| {
+        let mut olds = good_olds();
+        olds[0] = old;
+        old_verified(&r, olds)
+    };
+    let one = with_f(json!({"expect":"fails","runs":[old_run_value(Some(1),false,"boom")]}));
+    assert_eq!(code(&one), "verification-incomplete");
+    assert!(problems(&one).contains("\"criterion\":\"f\""));
+    assert!(problems(&one).contains("two are needed"));
+    let passes = with_f(
+        json!({"expect":"fails","runs":[old_run_value(Some(0),false,""),old_run_value(Some(0),false,"")]}),
+    );
+    assert!(problems(&passes).contains("real failure"));
+    let absent_command = with_f(
+        json!({"expect":"fails","runs":[old_run_value(Some(127),false,""),old_run_value(Some(127),false,"")]}),
+    );
+    assert!(problems(&absent_command).contains("real failure"));
+    let timed_out = with_f(
+        json!({"expect":"fails","runs":[old_run_value(None,true,""),old_run_value(None,true,"")]}),
+    );
+    assert!(problems(&timed_out).contains("timed out"));
+    let flaky = with_f(
+        json!({"expect":"fails","runs":[old_run_value(Some(1),false,"a"),old_run_value(Some(2),false,"b")]}),
+    );
+    assert!(problems(&flaky).contains("disagree"));
+    // The judgment is the intent's expectation: a record relabelled none, or with no old, is refused.
+    let relabelled = with_f(json!({"expect":"none","runs":[]}));
+    assert!(problems(&relabelled).contains("names expect none instead of fails"));
+    assert!(problems(&relabelled).contains("missing"));
+    let no_old = with_f(json!(null));
+    assert!(problems(&no_old).contains("missing"));
+    // A run with no exit code is a command that could not start or a signal; the problem says so.
+    let signalled = with_f(
+        json!({"expect":"fails","runs":[old_run_value(None,false,"Killed"),old_run_value(None,false,"Killed")]}),
+    );
+    assert!(problems(&signalled).contains("had no exit code"));
+}
+
+#[test]
+fn same_and_absent_are_judged_by_their_one_old_run_and_none_is_not_judged() {
+    let r = repo();
+    let with_s = |old: Value| {
+        let mut olds = good_olds();
+        olds[1] = old;
+        old_verified(&r, olds)
+    };
+    let differs = with_s(json!({"expect":"same","runs":[old_run_value(Some(0),false,"old\n")]}));
+    assert!(problems(&differs).contains("differs"));
+    let failed = with_s(json!({"expect":"same","runs":[old_run_value(Some(1),false,"")]}));
+    assert!(problems(&failed).contains("a refactor needs exit 0"));
+    let with_a = |old: Value| {
+        let mut olds = good_olds();
+        olds[2] = old;
+        old_verified(&r, olds)
+    };
+    // Any old result but a pass, including a command that cannot start.
+    allowed(&with_a(
+        json!({"expect":"absent","runs":[old_run_value(Some(1),false,"")]}),
+    ));
+    allowed(&with_a(
+        json!({"expect":"absent","runs":[old_run_value(None,false,"could not start")]}),
+    ));
+    let passes = with_a(json!({"expect":"absent","runs":[old_run_value(Some(0),false,"")]}));
+    assert!(problems(&passes).contains("present on the old tree"));
+    let no_run = with_a(json!({"expect":"absent","runs":[]}));
+    assert!(problems(&no_run).contains("missing"));
+    // none is not run on the old tree, so a record's runs for it are not judged.
+    let mut olds = good_olds();
+    olds[3] = json!({"expect":"none","runs":[old_run_value(Some(0),false,"")]});
+    allowed(&old_verified(&r, olds));
+}
+
+#[test]
+fn old_record_must_name_the_intents_expectation_and_a_none_criterion_needs_its_old() {
+    let r = repo();
+    let with_f = |old: Value| {
+        let mut olds = good_olds();
+        olds[0] = old;
+        old_verified(&r, olds)
+    };
+    // Only old.expect is changed, so the two genuine failing runs stay: the record is refused for its name.
+    let as_absent = with_f(
+        json!({"expect":"absent","runs":[old_run_value(Some(1),false,"boom"),old_run_value(Some(1),false,"boom")]}),
+    );
+    assert_eq!(code(&as_absent), "verification-incomplete");
+    assert!(problems(&as_absent).contains("\"criterion\":\"f\""));
+    assert!(problems(&as_absent).contains("names expect absent instead of fails"));
+    // The runs are judged by the intent's expectation as well: exit 127 is no real failure for fails.
+    let absent_runs = with_f(
+        json!({"expect":"absent","runs":[old_run_value(Some(127),false,""),old_run_value(Some(127),false,"")]}),
+    );
+    assert!(problems(&absent_runs).contains("real failure"));
+    // A none criterion's result with its old removed is refused for that criterion.
+    let mut ctx = old_verified_ctx(&r, good_olds());
+    ctx[2].data["results"][3]
+        .as_object_mut()
+        .unwrap()
+        .remove("old");
+    let no_old = ask_with(old_vs_new_input(&r, false, &[]), "verify", "verified", ctx);
+    assert_eq!(code(&no_old), "verification-incomplete");
+    assert!(problems(&no_old).contains("\"criterion\":\"n\""));
+    assert!(problems(&no_old).contains("the record has no old runs"));
+    let mut none_named_fails = good_olds();
+    none_named_fails[3] = json!({"expect":"fails","runs":[]});
+    assert!(problems(&old_verified(&r, none_named_fails))
+        .contains("names expect fails instead of none"));
+    // The genuine record is accepted.
+    allowed(&old_verified(&r, good_olds()));
+}
+
+#[test]
+fn setup_writes_old_vs_new_proof_paths_in_order_and_refuses_bad_ones() {
+    let r = repo();
+    let repo_arg = r.display().to_string();
+    let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let with_paths = crate::packet::setup(&args(&[
+        "--profile",
+        "c",
+        "--repo",
+        &repo_arg,
+        "--proof-path",
+        "journeys",
+        "--proof-path",
+        ":(glob)**/*_test.sh",
+    ]))
+    .unwrap();
+    assert_eq!(with_paths["profile_version"], "lean-c-2");
+    assert_eq!(
+        with_paths["old_vs_new"],
+        json!({"proof_paths":["journeys",":(glob)**/*_test.sh"]})
+    );
+    InitialInput::parse(&with_paths).unwrap();
+    let none = crate::packet::setup(&args(&["--profile", "c", "--repo", &repo_arg])).unwrap();
+    assert_eq!(none["old_vs_new"], json!({"proof_paths":[]}));
+    // Git's pathspec magic does not hide a `..` or an absolute path from the check.
+    for bad in [
+        "",
+        " ",
+        "/absolute",
+        "a/../b",
+        "..",
+        ":",
+        ":(glob)",
+        ":!",
+        ":(glob)../x",
+        ":(top)../x",
+        ":(exclude)../x",
+        ":(literal)..",
+        ":^../x",
+        ":!/etc",
+        ":(top)/etc",
+        ":(glob)/abs",
+        ":/etc",
+    ] {
+        assert!(
+            crate::packet::setup(&args(&[
+                "--profile",
+                "c",
+                "--repo",
+                &repo_arg,
+                "--proof-path",
+                bad
+            ]))
+            .is_err(),
+            "{bad:?} is refused"
+        );
+    }
+    for good in [":/", ":(top)"] {
+        assert!(
+            crate::packet::setup(&args(&[
+                "--profile",
+                "c",
+                "--repo",
+                &repo_arg,
+                "--proof-path",
+                good
+            ]))
+            .is_ok(),
+            "{good:?} names the whole repository and is allowed"
+        );
+    }
+}
+
+#[test]
+fn verify_runs_the_old_checks_on_the_base_with_the_proof_paths_laid_over() {
+    let r = repo();
+    std::fs::create_dir_all(r.join("journeys")).unwrap();
+    std::fs::write(r.join("journeys/probe.sh"), "echo base-probe\n").unwrap();
+    std::fs::write(r.join("journeys/gone.sh"), "echo gone\n").unwrap();
+    git(&r, &["add", "-A"]);
+    git(&r, &["commit", "-qm", "proof at base"]);
+    // The product file, a proof file and a new proof file move on; a tracked proof file is deleted.
+    std::fs::write(r.join("a.txt"), "two").unwrap();
+    std::fs::write(r.join("journeys/probe.sh"), "echo current-probe\n").unwrap();
+    std::fs::write(r.join("journeys/new.sh"), "echo new-proof\n").unwrap();
+    std::fs::remove_file(r.join("journeys/gone.sh")).unwrap();
+    let mut i = intent_with(vec![criterion("probe", Some(json!({"expect":"fails"})))]);
+    i["criteria"][0]["check"] = json!({"argv":["sh","-c","cat a.txt; echo; ls journeys; sh journeys/probe.sh; sh journeys/new.sh; test \"$(cat a.txt)\" = two"],"timeout_ms":5000});
+    let v = crate::run::verify(&show_with(
+        old_vs_new_input(&r, false, &["journeys"]),
+        vec![record("intent-1", "intent", 1, i)],
+    ))
+    .unwrap();
+    assert_eq!(
+        v.results[0].output_tail,
+        "two\nnew.sh\nprobe.sh\ncurrent-probe\nnew-proof\n"
+    );
+    let runs = &v.results[0].old.as_ref().unwrap().runs;
+    assert_eq!(runs.len(), 2);
+    for run in runs {
+        assert_eq!(run.exit_code, Some(1));
+        assert_eq!(
+            run.output_tail,
+            "one\nnew.sh\nprobe.sh\ncurrent-probe\nnew-proof\n"
+        );
+    }
+    // The old tree is removed after the runs.
+    let prefix = format!("lean-change-old-{}-", std::process::id());
+    let leftover: Vec<_> = std::fs::read_dir(std::env::temp_dir())
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+        .collect();
+    assert!(leftover.is_empty(), "old trees left behind: {leftover:?}");
+}
+
+#[test]
+fn verify_lays_over_a_proof_directory_the_base_does_not_have() {
+    let r = repo();
+    std::fs::create_dir_all(r.join("journeys")).unwrap();
+    std::fs::write(r.join("journeys/new.sh"), "echo new-proof\n").unwrap();
+    let mut i = intent_with(vec![criterion("new", Some(json!({"expect":"absent"})))]);
+    i["criteria"][0]["check"] = json!({"argv":["sh","journeys/new.sh"],"timeout_ms":5000});
+    let v = crate::run::verify(&show_with(
+        old_vs_new_input(&r, false, &["journeys"]),
+        vec![record("intent-1", "intent", 1, i)],
+    ))
+    .unwrap();
+    let runs = &v.results[0].old.as_ref().unwrap().runs;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].exit_code, Some(0));
+    assert_eq!(runs[0].output_tail, "new-proof\n");
+}
+
+#[test]
+fn verify_lays_over_a_file_that_replaces_a_base_directory() {
+    let r = repo();
+    std::fs::create_dir_all(r.join("journeys/data")).unwrap();
+    std::fs::write(r.join("journeys/data/a.txt"), "base-data\n").unwrap();
+    git(&r, &["add", "-A"]);
+    git(&r, &["commit", "-qm", "data directory at base"]);
+    // The change replaces the tracked directory by a staged file of the same name.
+    git(&r, &["rm", "-rq", "journeys/data"]);
+    // git removes the now-empty journeys directory too.
+    std::fs::create_dir_all(r.join("journeys")).unwrap();
+    std::fs::write(r.join("journeys/data"), "new-data\n").unwrap();
+    git(&r, &["add", "journeys/data"]);
+    let mut i = intent_with(vec![criterion("data", Some(json!({"expect":"same"})))]);
+    i["criteria"][0]["check"] = json!({"argv":["cat","journeys/data"],"timeout_ms":5000});
+    let v = crate::run::verify(&show_with(
+        old_vs_new_input(&r, false, &["journeys"]),
+        vec![record("intent-1", "intent", 1, i)],
+    ))
+    .unwrap();
+    assert_eq!(v.results[0].output_tail, "new-data\n");
+    let runs = &v.results[0].old.as_ref().unwrap().runs;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].exit_code, Some(0));
+    assert_eq!(runs[0].output_tail, "new-data\n");
+}
+
+#[test]
+fn verify_lays_over_a_directory_that_replaces_a_base_file() {
+    let r = repo();
+    std::fs::create_dir_all(r.join("journeys")).unwrap();
+    std::fs::write(r.join("journeys/x"), "base-x\n").unwrap();
+    git(&r, &["add", "-A"]);
+    git(&r, &["commit", "-qm", "file at base"]);
+    // The change replaces the tracked file by a staged directory of the same name.
+    git(&r, &["rm", "-q", "journeys/x"]);
+    std::fs::create_dir_all(r.join("journeys/x")).unwrap();
+    std::fs::write(r.join("journeys/x/y.sh"), "echo new-x\n").unwrap();
+    git(&r, &["add", "journeys/x/y.sh"]);
+    let mut i = intent_with(vec![criterion("x", Some(json!({"expect":"same"})))]);
+    i["criteria"][0]["check"] = json!({"argv":["sh","journeys/x/y.sh"],"timeout_ms":5000});
+    let v = crate::run::verify(&show_with(
+        old_vs_new_input(&r, false, &["journeys"]),
+        vec![record("intent-1", "intent", 1, i)],
+    ))
+    .unwrap();
+    let runs = &v.results[0].old.as_ref().unwrap().runs;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].exit_code, Some(0));
+    assert_eq!(runs[0].output_tail, "new-x\n");
+}
+
+#[test]
+fn old_vs_new_describe_tells_the_driver_about_old_and_the_proof_paths() {
+    for review in [true, false] {
+        let explore = workflow(review, true).states[0].instructions.clone();
+        for words in ["`old`", "--proof-path", "bare base", "escape hatch"] {
+            assert!(explore.contains(words), "{words} missing: {explore}");
+        }
+        assert!(!workflow(review, false).states[0]
+            .instructions
+            .contains("--proof-path"));
+    }
+}
+
+#[test]
+fn review_packet_lists_each_criterions_old_runs_and_their_tails() {
+    let r = repo();
+    let ctx = old_verified_ctx(&r, good_olds());
+    let packet =
+        crate::packet::review_packet(&show_with(old_vs_new_input(&r, true, &["journeys"]), ctx))
+            .unwrap();
+    assert!(packet.contains("- f: old (expect fails): exit Some(1), Some(1)\n"));
+    assert!(packet.contains("  old output tail: \"boom\"\n"));
+    assert!(packet.contains("- s: old (expect same): exit Some(0)\n"));
+    assert!(!packet.contains("- n: old"));
 }

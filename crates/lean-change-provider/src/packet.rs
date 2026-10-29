@@ -12,7 +12,7 @@ fn git(repo: &Path, args: &[&str], index: Option<&Path>) -> Result<String, Strin
 }
 
 /// Raw git output, so that `-z` path lists survive non-UTF-8 names.
-fn git_bytes(
+pub(crate) fn git_bytes(
     repo: &Path,
     args: &[&str],
     index: Option<&Path>,
@@ -52,6 +52,7 @@ pub fn setup(args: &[String]) -> Result<Value, String> {
     let mut profile = None;
     let mut repo = None;
     let mut principles = None;
+    let mut proof_paths = Vec::new();
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let value = it.next().ok_or_else(|| format!("{flag} needs a value"))?;
@@ -59,12 +60,13 @@ pub fn setup(args: &[String]) -> Result<Value, String> {
             "--profile" => profile = Some(value.as_str()),
             "--repo" => repo = Some(PathBuf::from(value)),
             "--principles" => principles = Some(PathBuf::from(value)),
+            "--proof-path" => proof_paths.push(value.clone()),
             other => return Err(format!("unknown option {other}")),
         }
     }
     let (review, version) = match profile {
-        Some("b") => (true, "lean-b-2"),
-        Some("c") => (false, "lean-c-1"),
+        Some("b") => (true, "lean-b-3"),
+        Some("c") => (false, "lean-c-2"),
         _ => return Err("--profile must be b or c".into()),
     };
     let repo = std::fs::canonicalize(repo.ok_or("--repo is required")?)
@@ -86,6 +88,7 @@ pub fn setup(args: &[String]) -> Result<Value, String> {
     if let Some(principles) = principles {
         input["principles"] = principles;
     }
+    input["old_vs_new"] = json!({"proof_paths": proof_paths});
     InitialInput::parse(&input)?;
     Ok(input)
 }
@@ -131,6 +134,30 @@ pub fn review_packet(show: &Value) -> Result<String, String> {
         .iter()
         .map(|r| format!("- {}: exit {:?}\n", r.criterion, r.exit_code))
         .collect();
+    // The old runs of each criterion: the exit codes, then every old output tail.
+    let old_results: String = verification
+        .results
+        .iter()
+        .filter_map(|r| {
+            let old = r.old.as_ref().filter(|old| !old.runs.is_empty())?;
+            let codes: Vec<String> = old
+                .runs
+                .iter()
+                .map(|run| format!("{:?}", run.exit_code))
+                .collect();
+            let tails: String = old
+                .runs
+                .iter()
+                .map(|run| format!("  old output tail: {:?}\n", run.output_tail))
+                .collect();
+            Some(format!(
+                "- {}: old (expect {}): exit {}\n{tails}",
+                r.criterion,
+                old.expect.name(),
+                codes.join(", ")
+            ))
+        })
+        .collect();
     // Unique per call: tests run review_packet on several threads of one process.
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let call = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -173,7 +200,7 @@ pub fn review_packet(show: &Value) -> Result<String, String> {
         .map(|(id, text)| format!("- {id}: {text}\n"))
         .collect();
     Ok(format!(
-        "# Review packet\n\nYou are the reviewer. You did not write this change. Judge only from this packet and the repository at {repo}.\nAnswer every question below with verdict pass or fail and a note. Every fail needs at least one finding. Every finding needs an id, the question, text, evidence and consequence.\n\nReturn one JSON object:\n{{\"intent\": \"{intent_id}\", \"tree\": \"{tree}\", \"reviewer\": {{\"name\": \"...\", \"kind\": \"agent\"}}, \"fresh_context\": true, \"answers\": [{{\"question\": \"...\", \"verdict\": \"pass|fail\", \"note\": \"...\"}}], \"findings\": [{{\"id\": \"f1\", \"question\": \"...\", \"text\": \"...\", \"evidence\": \"...\", \"consequence\": \"...\"}}]}}\n\n## Questions\n{questions}\n## Approved intent ({intent_id})\n{intent}\n\n## Checks that passed on tree {tree}\n{results}\n## Design principles (sha256 {sha})\n{principles}\n\n## Diff against base {base}\n{diff}\n",
+        "# Review packet\n\nYou are the reviewer. You did not write this change. Judge only from this packet and the repository at {repo}.\nAnswer every question below with verdict pass or fail and a note. Every fail needs at least one finding. Every finding needs an id, the question, text, evidence and consequence.\n\nReturn one JSON object:\n{{\"intent\": \"{intent_id}\", \"tree\": \"{tree}\", \"reviewer\": {{\"name\": \"...\", \"kind\": \"agent\"}}, \"fresh_context\": true, \"answers\": [{{\"question\": \"...\", \"verdict\": \"pass|fail\", \"note\": \"...\"}}], \"findings\": [{{\"id\": \"f1\", \"question\": \"...\", \"text\": \"...\", \"evidence\": \"...\", \"consequence\": \"...\"}}]}}\n\n## Questions\n{questions}\n## Approved intent ({intent_id})\n{intent}\n\n## Checks that passed on tree {tree}\n{results}{old_results}\n## Design principles (sha256 {sha})\n{principles}\n\n## Diff against base {base}\n{diff}\n",
         repo = input.repo,
         tree = verification.tree,
         intent = serde_json::to_string_pretty(&intent).map_err(|e| e.to_string())?,

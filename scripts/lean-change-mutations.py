@@ -13,10 +13,11 @@ EVALUATE = ROOT / 'crates/lean-change-provider/src/evaluate.rs'
 WORKFLOW = ROOT / 'crates/lean-change-provider/src/workflow.rs'
 RUN = ROOT / 'crates/lean-change-provider/src/run.rs'
 PACKET = ROOT / 'crates/lean-change-provider/src/packet.rs'
+MODEL = ROOT / 'crates/lean-change-provider/src/model.rs'
 
 # (name, file, original text, mutated text). Each original must occur exactly once.
 MUTATIONS = [
-    ('intent gate', EVALUATE, '("explore", "intent-ready") => intent_ready(records, &input),', '("explore", "intent-ready") => current_intent(records).map(|_| ()),'),
+    ('intent gate', EVALUATE, '("explore", "intent-ready") => intent_ready(records, &input),', '("explore", "intent-ready") => current_intent(records, &input).map(|_| ()),'),
     ('intent check required for b', EVALUATE, '    if !input.review {\n        return Ok(());', '    if true {\n        return Ok(());'),
     ('intent check not required for c', EVALUATE, '    if !input.review {\n        return Ok(());', '    if false {\n        return Ok(());'),
     ('intent check names an intent record', EVALUATE, '.find(|r| r.kind == "intent" && r.id.as_str() == check.intent)', '.find(|r| r.kind == "intent")'),
@@ -27,7 +28,7 @@ MUTATIONS = [
     ('c asks for no intent check', WORKFLOW, 'if review {\n        explore.push_str(', 'if true {\n        explore.push_str('),
     ('owner decision', EVALUATE, 'match evaluation.status {\n        Status::Approved => {}', 'match evaluation.status {\n        _ => {}\n        Status::Approved => {}'),
     ('hard routing', EVALUATE, 'if (event == "approved-hard") != intent.hard {', 'if false {'),
-    ('plan gate', EVALUATE, 'fn plan(records: &[ContextRecord]) -> Gate {\n', 'fn plan(records: &[ContextRecord]) -> Gate {\n    if true {\n        return Ok(());\n    }\n'),
+    ('plan gate', EVALUATE, 'fn plan(records: &[ContextRecord], input: &InitialInput) -> Gate {\n', 'fn plan(records: &[ContextRecord], input: &InitialInput) -> Gate {\n    let _ = input;\n    if true {\n        return Ok(());\n    }\n'),
     ('verification stale', EVALUATE, 'if v.tree != now {', 'if false {'),
     ('verification missing criterion', EVALUATE, 'None => problems.push(json!({"criterion": criterion.id, "problem": "missing: no check result"})),', 'None => {}'),
     ('verification failed check', EVALUATE, 'Some(r) if r.timed_out || r.exit_code != Some(0) =>', 'Some(r) if false =>'),
@@ -42,7 +43,7 @@ MUTATIONS = [
     ('review tree change', EVALUATE, 'if review.tree != now && !fixed {', 'if false {'),
     ('review verification first', EVALUATE, 'fn review(records: &[ContextRecord], input: &InitialInput, tree: TreeIdentity) -> Gate {\n    verification(records, input, tree)?;\n', 'fn review(records: &[ContextRecord], input: &InitialInput, tree: TreeIdentity) -> Gate {\n'),
     ('downstream approval', EVALUATE, '    require_approved(records, &id)?;\n    if intent.hard {', '    if intent.hard {'),
-    ('downstream plan', EVALUATE, '    if intent.hard {\n        plan(records)?;\n    }', ''),
+    ('downstream plan', EVALUATE, '    if intent.hard {\n        plan(records, input)?;\n    }', ''),
     ('first well-formed record by sequence, not order', EVALUATE, '    candidates.sort_by_key(|r| r.sequence);\n', ''),
     ('first well-formed record is authoritative', EVALUATE, 'candidates.sort_by_key(|r| r.sequence);', 'candidates.sort_by_key(|r| std::cmp::Reverse(r.sequence));'),
     ('verify tree stability', RUN, 'if trees.windows(2).all(|pair| pair[0] == pair[1]) {', 'if true {'),
@@ -55,6 +56,27 @@ MUTATIONS = [
     ('packet clears skip-worktree', PACKET, '.and_then(|_| clear("--no-skip-worktree"))', ''),
     ('packet eligibility', PACKET, 'verification_ready(&records, &input, &tree_identity)', 'Ok::<(), serde_json::Value>(())'),
     ('c has no review state', WORKFLOW, 'if review {\n        states.push', 'if true {\n        states.push'),
+    ('old-vs-new intent is checked at intent-ready', EVALUATE, '.check_old(input.old_vs_new.is_some())', '.check_old(false)'),
+    ('old is required in an old-vs-new profile', MODEL, '(None, true) => {', '(None, true) if false => {'),
+    ('a 0.31.0 profile refuses old', MODEL, '(Some(_), false) => {', '(Some(_), false) if false => {'),
+    ('none needs a nonblank reason', MODEL, 'is_none_or(|r| r.trim().is_empty()) =>', 'is_none_or(|r| r.trim().is_empty()) && false =>'),
+    ('fails needs two old runs', MODEL, 'Expect::Fails => 2,', 'Expect::Fails => 1,'),
+    ('a command that is not found is not a real failure', MODEL, '!matches!(code, 0 | 126 | 127)', '!matches!(code, 0 | 126)'),
+    ('fails refuses a flaky pair', EVALUATE, 'if first.exit_code == second.exit_code {', 'if true {'),
+    ('absent refuses no pass', EVALUATE, '.position(|run| run.exit_code == Some(0) && !run.timed_out)', '.position(|run| false)'),
+    ('same compares the output', EVALUATE, 'if run.output_tail == current.output_tail {', 'if true {'),
+    ('verified judges the expectation the record names', EVALUATE, 'let expect = expectation.expect;', 'let expect = current.old.as_ref().map_or(expectation.expect, |o| o.expect);'),
+    ('old tree gets the proof files', RUN, 'lay_over_proof(&tree.root, repo, proof_paths)?;', 'let _ = (repo, proof_paths);'),
+    ('old tree is removed after the runs', RUN, 'let _ = std::fs::remove_dir_all(&self.root);', 'let _ = &self.root;'),
+    ('old tree makes a proof directory the base lacks', RUN, 'create_parent(&target).and_then(|()| std::fs::copy(&source, &target).map(|_| ()))', 'std::fs::copy(&source, &target).map(|_| ())'),
+    ('a none criterion needs its old record', EVALUATE, 'let Some(old) = current.old.as_ref() else {', 'let Some(old) = current.old.as_ref() else { if expect == Expect::NotApplicable { return None; }'),
+    ('verified refuses an old record that names another expectation', EVALUATE, 'let named = (old.expect != expect)', 'let named = (old.expect != expect && false)'),
+    ('old tree removes the base files the repository no longer has', RUN, 'for name in base.difference(&current) {', 'for name in base.difference(&current).take(0) {'),
+    ('old tree clears a directory the current file replaces', RUN, 'clear_target(&target)?;', 'remove_file_if_present(&target)?;'),
+    ('proof path validation sees the path without its magic', MODEL, 'let (rest, top) = pathspec_after_magic(path);', 'let (rest, top) = (path, false);'),
+    ('setup writes old_vs_new', PACKET, 'input["old_vs_new"] = json!({"proof_paths": proof_paths});', ''),
+    ('review packet lists old runs only where there are some', PACKET, '.filter(|old| !old.runs.is_empty())?;', '?;'),
+    ('describe tells the driver about old', WORKFLOW, 'if old_vs_new {', 'if false {'),
 ]
 
 

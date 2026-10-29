@@ -2,11 +2,15 @@ use loop_core::{State, Transition, Workflow};
 
 use crate::model::WORKFLOW_ID;
 
-/// B has a review state; C is the same topology without it.
-pub fn workflow(review: bool) -> Workflow {
+/// B has a review state; C is the same topology without it. An old-vs-new profile (one set up with
+/// `old_vs_new`) also says what each criterion expects on the old tree.
+pub fn workflow(review: bool, old_vs_new: bool) -> Workflow {
     let mut explore = "Read the repository and the request. Append one `intent` record (author, goal, constraints, hard, criteria each with id, statement and an executable check {argv, timeout_ms}) with --record-id intent-N, then request intent-ready. Set hard=true only for work that needs a written plan.".to_owned();
     if review {
         explore.push_str(" Before intent-ready, pipe `loop-engine --json show --view full RUN` into `lean-change intent-packet` and give the packet to a fresh-context reviewer who did not write the intent. Append their `intent-check` record and one `finding-disposition` per finding (fixed or rejected, with a reason). A fix is a new intent record.");
+    }
+    if old_vs_new {
+        explore.push_str(" Each criterion also needs `old`: {\"expect\": \"fails\" | \"same\" | \"absent\" | \"none\", \"reason\": \"...\"}. Verify runs its check on the old tree (the base commit with the current proof files over it) and records the result. \"fails\": a bug fix or a feature, the check must really fail there, twice. \"same\": a refactor, exit 0 with the same output. \"absent\": brand-new behavior, any result but a pass. \"none\" with a reason is the escape hatch for work the check cannot apply to. Add --proof-path to setup for each directory or file that holds the tests or journeys (a git pathspec relative to the repository root, repeatable; use :(glob) for tests that sit beside code). With no --proof-path the old tree is the bare base: a test file the change adds is missing there, so a check that runs it gives a cheap non-zero exit, which is not proof.");
     }
     let mut states = vec![
         State::new("explore", "Explore", explore, false),
@@ -48,7 +52,7 @@ mod tests {
     use super::*;
 
     fn routes(review: bool) -> Vec<(String, String, String, bool)> {
-        workflow(review)
+        workflow(review, false)
             .transitions
             .iter()
             .map(|t| {
@@ -64,7 +68,7 @@ mod tests {
 
     #[test]
     fn b_has_seven_states_and_twelve_transitions() {
-        let b = workflow(true);
+        let b = workflow(true, false);
         assert_eq!(b.states.len(), 7);
         assert_eq!(b.transitions.len(), 12);
         assert!(routes(true).contains(&(
@@ -78,7 +82,7 @@ mod tests {
 
     #[test]
     fn c_is_b_without_the_review_state() {
-        let c = workflow(false);
+        let c = workflow(false, false);
         assert_eq!(c.states.len(), 6);
         assert_eq!(c.transitions.len(), 10);
         assert!(c.states.iter().all(|s| s.id.as_str() != "review"));

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Lean-change has an old-vs-new check, on by default: `lean-change setup` writes `old_vs_new` with the repeatable `--proof-path` values, and `verify` runs each criterion's check on the base commit with the proof files laid over it. Each criterion says what its check must do there (`fails`, `same`, `absent` or `none` with a reason), and `verified` judges the recorded old runs against that expectation (LE-210). Drivers add `--proof-path` for test files; with none, the old tree is the bare base.
+
+### Compatibility
+
+- Profiles set up by lean-change 0.31.0 have no `old_vs_new` and behave as before. New setups print profile versions `lean-b-3` and `lean-c-2`; their intents need `old` on every criterion, and a 0.31.0 profile refuses it.
+
 ## [0.31.0] - 2026-10-28
 
 ### Changed
