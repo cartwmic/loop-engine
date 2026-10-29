@@ -8,13 +8,16 @@ explore -> intent-approval -> (plan if hard) -> implement -> verify -> review ->
 
 - The intent names an executable check for each criterion. The owner approves it in their own words.
 - `verify` runs the checks and binds the result to the repository tree. Any later edit makes it stale.
+- The old-vs-new check is on by default: `verify` also runs each check on the base commit with the proof files laid over
+  it, and each criterion says what it must do there (`fails`, `same`, `absent`, or `none` with a reason). `--proof-path`
+  at setup names the directories or files that hold the tests and journeys.
 - Profile `b` adds one fresh-context check of the draft intent before the owner sees it (five fixed questions: use,
   edge, control, terms, criteria-gap) and one fresh-context diff review with six fixed questions (intent, scope, edge cases,
   checks, docs, the owner's design principles). Every finding gets a disposition.
 - Profile `c` is the same code with the intent check and the review state absent.
 
 Binary: `lean-change` (not released). Commands: `setup`, `verify`, `intent-packet`, `review-packet`, and
-describe/evaluate on stdin for the engine. Requirements: LE-202 to LE-209 in docs/PRD.md at the checkout root.
+describe/evaluate on stdin for the engine. Requirements: LE-202 to LE-210 in docs/PRD.md at the checkout root.
 Driving procedure: [skill](skills/using-lean-change-provider/SKILL.md).
 
 ## Build and test

@@ -9,6 +9,7 @@ from pathlib import Path
 from external_work_driver import engine_call
 
 PRINCIPLES = '# Principles\n1. Compose small parts.\n'
+GREET_CHECK = 'out=$(sh app.sh Bob)\n[ "$out" = "Hello, Bob!" ] || { echo "got: $out"; exit 1; }\necho ok\n'
 QUESTIONS = ['intent', 'scope', 'edge-cases', 'checks', 'docs', 'principles']
 CHECK_QUESTIONS = ['use', 'edge', 'control', 'terms', 'criteria-gap']
 OWNER = {'name': 'owner', 'kind': 'human'}
@@ -18,9 +19,10 @@ WORKER = {'name': 'worker', 'kind': 'script'}
 def intent(hard=False):
     check = {'argv': ['sh', '-c', 'grep -q hello greeting.txt'], 'timeout_ms': 10000}
     other = {'argv': ['sh', '-c', 'test -f greeting.txt'], 'timeout_ms': 10000}
+    # Both checks fail on the base commit, which has no greeting.txt: a feature, so each expects fails there.
     return {'author': WORKER, 'goal': 'Add a greeting file.', 'constraints': ['Touch only greeting.txt.'], 'hard': hard,
-            'criteria': [{'id': 'says-hello', 'statement': 'greeting.txt says hello', 'check': check},
-                         {'id': 'exists', 'statement': 'greeting.txt exists', 'check': other}]}
+            'criteria': [{'id': 'says-hello', 'statement': 'greeting.txt says hello', 'check': check, 'old': {'expect': 'fails'}},
+                         {'id': 'exists', 'statement': 'greeting.txt exists', 'check': other, 'old': {'expect': 'fails'}}]}
 
 
 def review(tree, fail_principles):
@@ -249,6 +251,80 @@ def hard_run(engine, provider, work):
     assert final['current_state'] == 'end' and final['lifecycle'] == 'final', final
 
 
+def old_vs_new_run(engine, provider, work):
+    """A fix that must fail on the old tree, a refactor that must print the same, a new command that must be absent, and a relabelled old record."""
+    # bookends:LE-210 — the old-vs-new check is on by default: fails needs two real failures on the old tree, same the same output, absent no pass, and verified judges the recorded old runs against the intent's expectation.
+    j = Journey(engine, provider, work)
+    repo = work / 'repo'
+    repo.mkdir()
+    git(repo, 'init', '-q')
+    git(repo, 'config', 'user.email', 'j@example.invalid')
+    git(repo, 'config', 'user.name', 'j')
+    (repo / 'README.md').write_text('fixture\n')
+    (repo / 'app.sh').write_text('printf "hello, %s\\n" "$1"\n')
+    (repo / 'journeys').mkdir()
+    (repo / 'journeys' / 'greet.sh').write_text(GREET_CHECK)
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-qm', 'base')
+    profile_path = work / 'profile.json'
+    profile_path.write_text(subprocess.run([str(provider), 'setup', '--profile', 'c', '--repo', str(repo), '--proof-path', 'journeys'],
+                                           text=True, capture_output=True, check=True).stdout)
+    assert json.loads(profile_path.read_text())['old_vs_new'] == {'proof_paths': ['journeys']}
+    j.run_id = 'lean-old-vs-new'
+    j.call('start', '--id', j.run_id, 'lean-change', '@' + str(profile_path), 'old vs new')
+    timeout = 10000
+    criteria = [
+        {'id': 'greets', 'statement': 'app.sh greets Bob with Hello, Bob!', 'check': {'argv': ['sh', 'journeys/greet.sh'], 'timeout_ms': timeout},
+         'old': {'expect': 'fails'}},
+        {'id': 'readme', 'statement': 'README.md is still there and the output does not change', 'check': {'argv': ['sh', '-c', 'test -f README.md && echo readme-ok'], 'timeout_ms': timeout},
+         'old': {'expect': 'same'}},
+        {'id': 'tool', 'statement': 'tools/new.sh is a new command', 'check': {'argv': ['sh', 'tools/new.sh'], 'timeout_ms': timeout},
+         'old': {'expect': 'absent'}},
+        {'id': 'guard', 'statement': 'the proof script is intact', 'check': {'argv': ['test', '-f', 'journeys/greet.sh'], 'timeout_ms': timeout},
+         'old': {'expect': 'none', 'reason': 'a guard on the proof file, which the old tree cannot inform'}},
+    ]
+    j.append('intent-1', 'intent', {'author': WORKER, 'goal': 'Greet Bob with Hello, Bob!', 'constraints': ['Touch only app.sh and tools/.'],
+                                    'hard': False, 'criteria': criteria})
+    j.event('intent-ready')
+    j.append('d-ok', 'owner-decision', {'checkpoint': 'intent', 'subject': 'intent', 'subject_revision': 'intent-1',
+                                      'decision': 'approve', 'text': 'Yes, greet Bob.', 'actor': OWNER})
+    j.event('approved')
+    j.event('ready')
+    assert j.state() == 'verify'
+    j.refused('verified', 'verification-incomplete', 'verify')
+    (repo / 'app.sh').write_text('printf "Hello, %s!\\n" "$1"\n')
+    (repo / 'tools').mkdir()
+    (repo / 'tools' / 'new.sh').write_text('echo new\n')
+    genuine = j.verify()
+    assert [r['exit_code'] for r in genuine['results']] == [0, 0, 0, 0], genuine
+    runs = {r['criterion']: [(run['exit_code'], run['timed_out']) for run in (r['old'] or {}).get('runs', [])] for r in genuine['results']}
+    # A command that is missing on the old tree exits 127 or 2 by shell; either is a non-pass, as absent needs.
+    assert runs['greets'] == [(1, False)] * 2 and runs['readme'] == [(0, False)] and runs['guard'] == [], runs
+    assert len(runs['tool']) == 1 and runs['tool'][0][0] != 0 and not runs['tool'][0][1], runs
+    # The old tree's record is judged against the intent: a record that relabels greets as none is refused, and names greets.
+    forged = json.loads(json.dumps(genuine))
+    forged['results'][0]['old'] = {'expect': 'none', 'runs': []}
+    j.append('v-forged', 'verification', forged)
+    out = j.refused('verified', 'verification-incomplete', 'verify')
+    assert 'greets' in out and 'old (expect fails)' in out, out
+    # Only old.expect changed: the genuine runs stay, and the record is still refused for its name.
+    relabelled = json.loads(json.dumps(genuine))
+    relabelled['results'][0]['old']['expect'] = 'absent'
+    j.append('v-relabelled', 'verification', relabelled)
+    out = j.refused('verified', 'verification-incomplete', 'verify')
+    assert 'greets' in out and 'names expect absent instead of fails' in out, out
+    # The none criterion's result with its old removed is refused for guard.
+    unrecorded = json.loads(json.dumps(genuine))
+    del unrecorded['results'][3]['old']
+    j.append('v-unrecorded', 'verification', unrecorded)
+    out = j.refused('verified', 'verification-incomplete', 'verify')
+    assert 'guard' in out and 'the record has no old runs' in out, out
+    j.append('v-1', 'verification', genuine)
+    j.event('verified')
+    final = j.call('show', '--view', 'full', j.run_id)
+    assert final['current_state'] == 'end' and final['lifecycle'] == 'final', final
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--engine')
@@ -267,7 +343,8 @@ def main():
     engine, provider = Path(args.engine).resolve(), Path(args.provider).resolve()
     for name, action in [('b', lambda w: run_profile(engine, provider, 'b', w)),
                          ('c', lambda w: run_profile(engine, provider, 'c', w)),
-                         ('hard', lambda w: hard_run(engine, provider, w))]:
+                         ('hard', lambda w: hard_run(engine, provider, w)),
+                         ('old-vs-new', lambda w: old_vs_new_run(engine, provider, w))]:
         with tempfile.TemporaryDirectory(prefix=f'lean-change-{name}-') as temporary:
             action(Path(temporary))
         print(f'lean-change journey {name} passed')

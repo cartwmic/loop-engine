@@ -24,16 +24,23 @@ fn latest<'a>(records: &'a [ContextRecord], kind: &str) -> Option<&'a ContextRec
         .max_by_key(|r| r.sequence)
 }
 
-fn current_intent(records: &[ContextRecord]) -> Result<(String, Intent), Value> {
+fn current_intent(
+    records: &[ContextRecord],
+    input: &InitialInput,
+) -> Result<(String, Intent), Value> {
     let record = latest(records, "intent")
         .ok_or_else(|| refuse("intent-missing", "append an intent record first", json!({})))?;
-    let intent = Intent::parse(&record.data).map_err(|e| {
+    let invalid = |error: String| {
         refuse(
             "intent-invalid",
             "the latest intent record is invalid",
-            json!({"record": record.id.as_str(), "error": e}),
+            json!({"record": record.id.as_str(), "error": error}),
         )
-    })?;
+    };
+    let intent = Intent::parse(&record.data).map_err(invalid)?;
+    intent
+        .check_old(input.old_vs_new.is_some())
+        .map_err(invalid)?;
     Ok((record.id.as_str().to_owned(), intent))
 }
 
@@ -57,7 +64,7 @@ fn parse_latest<T: serde::de::DeserializeOwned>(
 
 pub fn evaluate(request: &EvaluateRequest, tree: TreeIdentity) -> Result<Value, String> {
     let input = InitialInput::parse(&request.initial_input)?;
-    if request.workflow != workflow(input.review) {
+    if request.workflow != workflow(input.review, input.old_vs_new.is_some()) {
         return Ok(unsupported());
     }
     let t = &request.transition;
@@ -70,8 +77,8 @@ pub fn evaluate(request: &EvaluateRequest, tree: TreeIdentity) -> Result<Value, 
     let records = &request.context;
     let gate = match (t.source.as_str(), t.event.as_str()) {
         ("explore", "intent-ready") => intent_ready(records, &input),
-        ("intent-approval", event) => approval(records, event),
-        ("plan", "planned") => plan(records),
+        ("intent-approval", event) => approval(records, &input, event),
+        ("plan", "planned") => plan(records, &input),
         ("verify", "verified") => verification(records, &input, tree),
         ("review", "reviewed") => review(records, &input, tree),
         _ => return Ok(unsupported()),
@@ -81,7 +88,7 @@ pub fn evaluate(request: &EvaluateRequest, tree: TreeIdentity) -> Result<Value, 
 
 /// Profile b: the first well-formed intent-check, every finding disposed, and a fix means a newer intent.
 fn intent_ready(records: &[ContextRecord], input: &InitialInput) -> Gate {
-    let (id, _) = current_intent(records)?;
+    let (id, _) = current_intent(records, input)?;
     if !input.review {
         return Ok(());
     }
@@ -102,8 +109,8 @@ fn intent_ready(records: &[ContextRecord], input: &InitialInput) -> Gate {
     Ok(())
 }
 
-fn approval(records: &[ContextRecord], event: &str) -> Gate {
-    let (id, intent) = current_intent(records)?;
+fn approval(records: &[ContextRecord], input: &InitialInput, event: &str) -> Gate {
+    let (id, intent) = current_intent(records, input)?;
     require_approved(records, &id)?;
     if (event == "approved-hard") != intent.hard {
         return Err(refuse(
@@ -143,8 +150,8 @@ fn require_approved(records: &[ContextRecord], id: &str) -> Gate {
     Ok(())
 }
 
-fn plan(records: &[ContextRecord]) -> Gate {
-    let (id, _) = current_intent(records)?;
+fn plan(records: &[ContextRecord], input: &InitialInput) -> Gate {
+    let (id, _) = current_intent(records, input)?;
     match parse_latest::<Plan>(records, "plan")? {
         Some((_, plan)) if plan.intent == id && !plan.text.trim().is_empty() => Ok(()),
         _ => Err(refuse(
@@ -165,11 +172,11 @@ pub fn verification_ready(
 }
 
 fn verification(records: &[ContextRecord], input: &InitialInput, tree: TreeIdentity) -> Gate {
-    let (id, intent) = current_intent(records)?;
+    let (id, intent) = current_intent(records, input)?;
     // A later intent record, or a later hard flag, must not inherit an earlier approval or plan.
     require_approved(records, &id)?;
     if intent.hard {
-        plan(records)?;
+        plan(records, input)?;
     }
     let mut problems = Vec::new();
     let recorded = parse_latest::<Verification>(records, "verification")?;
@@ -185,7 +192,11 @@ fn verification(records: &[ContextRecord], input: &InitialInput, tree: TreeIdent
                     None => problems.push(json!({"criterion": criterion.id, "problem": "missing: no check result"})),
                     Some(r) if r.check_sha256 != criterion.check.sha256() => problems.push(json!({"criterion": criterion.id, "problem": "the check is not the approved one"})),
                     Some(r) if r.timed_out || r.exit_code != Some(0) => problems.push(json!({"criterion": criterion.id, "problem": "the check failed", "exit_code": r.exit_code, "timed_out": r.timed_out, "output_tail": r.output_tail})),
-                    Some(_) => {}
+                    Some(r) => {
+                        if let Some(problem) = criterion.old.as_ref().and_then(|expectation| old_problem(expectation, r)) {
+                            problems.push(json!({"criterion": criterion.id, "problem": problem}));
+                        }
+                    }
                 }
             }
         }
@@ -194,6 +205,94 @@ fn verification(records: &[ContextRecord], input: &InitialInput, tree: TreeIdent
         return Ok(());
     }
     Err(refuse("verification-incomplete", "every criterion check must pass on the current tree; run lean-change verify and append its output", json!({"intent": id, "problems": problems})))
+}
+
+/// What the record's old runs must show for the intent's expectation. The record's `old` must exist and name that
+/// expectation too; its runs are judged against the intent's expectation, not the record's. None when all of that
+/// holds; otherwise the problem names the criterion's old runs.
+fn old_problem(expectation: &OldExpectation, current: &CheckResult) -> Option<String> {
+    let expect = expectation.expect;
+    let Some(old) = current.old.as_ref() else {
+        return Some(format!(
+            "old (expect {}): missing: the record has no old runs",
+            expect.name()
+        ));
+    };
+    let named = (old.expect != expect).then(|| {
+        format!(
+            "the record names expect {} instead of {}",
+            old.expect.name(),
+            expect.name()
+        )
+    });
+    let judged = run_problem(expect, &old.runs, current);
+    let details: Vec<String> = [named, judged].into_iter().flatten().collect();
+    (!details.is_empty()).then(|| format!("old (expect {}): {}", expect.name(), details.join("; ")))
+}
+
+/// The judgment of the old runs for the intent's expectation: None when they show it, otherwise what they show.
+fn run_problem(expect: Expect, runs: &[OldRun], current: &CheckResult) -> Option<String> {
+    let problem = |detail: String| Some(detail);
+    match expect {
+        Expect::NotApplicable => None,
+        Expect::Fails => match runs {
+            [] => problem("missing: no old runs are recorded; two are needed".into()),
+            [first, second] if first.is_real_failure() && second.is_real_failure() => {
+                if first.exit_code == second.exit_code {
+                    None
+                } else {
+                    problem(format!(
+                        "the two old runs disagree (exit {:?} and {:?}), so the check is flaky",
+                        first.exit_code, second.exit_code
+                    ))
+                }
+            }
+            [first, second] => problem(format!(
+                "old run 1 {} and old run 2 {}; a real failure exits other than 0, 126 or 127 without timeout",
+                describe_run(first),
+                describe_run(second)
+            )),
+            _ => problem(format!("{} old runs are recorded; two are needed", runs.len())),
+        },
+        Expect::Absent => match runs {
+            [] => problem("missing: no old run is recorded".into()),
+            _ => runs
+                .iter()
+                .position(|run| run.exit_code == Some(0) && !run.timed_out)
+                .and_then(|index| {
+                    problem(format!(
+                        "old run {} exited 0, so the behavior is present on the old tree",
+                        index + 1
+                    ))
+                }),
+        },
+        Expect::Same => match runs {
+            [] => problem("missing: no old run is recorded; one is needed".into()),
+            [run] if run.exit_code == Some(0) && !run.timed_out => {
+                if run.output_tail == current.output_tail {
+                    None
+                } else {
+                    problem("the old output differs from the current output".into())
+                }
+            }
+            [run] => problem(format!(
+                "the old run {}; a refactor needs exit 0 on the old tree",
+                describe_run(run)
+            )),
+            _ => problem(format!("{} old runs are recorded; one is needed", runs.len())),
+        },
+    }
+}
+
+fn describe_run(run: &OldRun) -> String {
+    match (run.timed_out, run.exit_code) {
+        (true, _) => "timed out".into(),
+        (false, Some(code)) => format!("exited {code}"),
+        (false, None) => {
+            "had no exit code (it could not start or was killed by a signal; see its output tail)"
+                .into()
+        }
+    }
 }
 
 fn review_form(record: &ContextRecord, intent: &Intent) -> Result<Review, String> {
@@ -350,7 +449,7 @@ fn disposed(
 
 fn review(records: &[ContextRecord], input: &InitialInput, tree: TreeIdentity) -> Gate {
     verification(records, input, tree)?;
-    let (intent_id, intent) = current_intent(records)?;
+    let (intent_id, intent) = current_intent(records, input)?;
     let incomplete =
         |problem: String| refuse("review-incomplete", &problem, json!({"intent": intent_id}));
     let reviews = records

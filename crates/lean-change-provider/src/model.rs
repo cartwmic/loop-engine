@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+use std::path::Path;
 
 pub const WORKFLOW_ID: &str = "lean-change";
 
@@ -31,6 +32,52 @@ fn nonblank(value: &str, what: &str) -> Result<(), String> {
         return Err(format!("{what} must be nonempty"));
     }
     Ok(())
+}
+
+/// A proof path is a git pathspec relative to the repository root: nonblank, not absolute, no `..` part.
+/// The checks apply to the path after git's pathspec magic, so `:(glob)../x` is refused as `../x` is. `:/` and
+/// `:(top)` name the whole repository and stay allowed.
+fn proof_path(path: &str) -> Result<(), String> {
+    nonblank(path, "proof path")?;
+    if path == ":/" {
+        return Ok(());
+    }
+    let (rest, top) = pathspec_after_magic(path);
+    if rest.is_empty() {
+        return if top {
+            Ok(())
+        } else {
+            Err(format!(
+                "proof path {path} must name a path after its magic"
+            ))
+        };
+    }
+    if Path::new(rest).is_absolute() {
+        return Err(format!(
+            "proof path {path} must be relative to the repository"
+        ));
+    }
+    if rest.split('/').any(|part| part == "..") {
+        return Err(format!("proof path {path} must not have a .. part"));
+    }
+    Ok(())
+}
+
+/// The path after git's pathspec magic, which is `:(words)` or a short `:` with `!` and `^` characters and an
+/// optional `:` that ends them, and whether the words include `top`. A short `/` is left in the path, so `:!/etc`
+/// is absolute after its magic.
+fn pathspec_after_magic(path: &str) -> (&str, bool) {
+    if let Some((words, rest)) = path
+        .strip_prefix(":(")
+        .and_then(|long| long.split_once(')'))
+    {
+        return (rest, words.split(',').any(|word| word == "top"));
+    }
+    let rest = path.strip_prefix(':').map_or(path, |short| {
+        let magic = short.trim_start_matches(['!', '^']);
+        magic.strip_prefix(':').unwrap_or(magic)
+    });
+    (rest, false)
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -61,6 +108,16 @@ pub struct InitialInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[allow(dead_code)]
     pub artifact_root: Option<String>,
+    /// Written by every setup of this version; absent in a profile made by lean-change 0.31.0 or earlier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_vs_new: Option<OldVsNew>,
+}
+
+/// Where the proof lives: the old tree is the base commit with these paths taken from the current tree.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OldVsNew {
+    pub proof_paths: Vec<String>,
 }
 
 impl InitialInput {
@@ -74,6 +131,9 @@ impl InitialInput {
         nonblank(&input.base, "base")?;
         if !std::path::Path::new(&input.repo).is_absolute() {
             return Err("repo must be an absolute path".into());
+        }
+        for path in input.old_vs_new.iter().flat_map(|o| &o.proof_paths) {
+            proof_path(path)?;
         }
         match (&input.principles, input.review) {
             (Some(p), _) => {
@@ -107,12 +167,59 @@ impl Check {
     }
 }
 
+/// What a criterion's check must do on the old tree.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Expect {
+    /// A bug fix or a feature: a real failure on the old tree, twice.
+    Fails,
+    /// A refactor: exit 0 with the output the current tree gives.
+    Same,
+    /// Brand-new behavior: any result but a pass.
+    Absent,
+    /// Work the check cannot apply to; the intent gives a reason.
+    #[serde(rename = "none")]
+    NotApplicable,
+}
+
+impl Expect {
+    /// The spelling the intent uses.
+    pub fn name(self) -> &'static str {
+        match self {
+            Expect::Fails => "fails",
+            Expect::Same => "same",
+            Expect::Absent => "absent",
+            Expect::NotApplicable => "none",
+        }
+    }
+
+    /// Runs on the old tree: fails twice, so one lucky pass cannot make a flaky check count; same and absent once; none never.
+    pub fn old_runs(self) -> usize {
+        match self {
+            Expect::Fails => 2,
+            Expect::Same | Expect::Absent => 1,
+            Expect::NotApplicable => 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OldExpectation {
+    pub expect: Expect,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Criterion {
     pub id: String,
     pub statement: String,
     pub check: Check,
+    /// Required in an old-vs-new profile, refused in any other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old: Option<OldExpectation>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -156,6 +263,37 @@ impl Intent {
         }
         Ok(intent)
     }
+
+    /// `old` is required in an old-vs-new profile and refused in any other; `none` needs a reason.
+    pub fn check_old(&self, old_vs_new: bool) -> Result<(), String> {
+        for criterion in &self.criteria {
+            match (&criterion.old, old_vs_new) {
+                (None, true) => {
+                    return Err(format!(
+                        "criterion {} needs old: expect fails, same, absent, or none with a reason",
+                        criterion.id
+                    ))
+                }
+                (Some(_), false) => {
+                    return Err(format!(
+                        "criterion {} has old, but its profile was set up by lean-change 0.31.0 or earlier",
+                        criterion.id
+                    ))
+                }
+                (Some(old), true)
+                    if old.expect == Expect::NotApplicable
+                        && old.reason.as_deref().is_none_or(|r| r.trim().is_empty()) =>
+                {
+                    return Err(format!(
+                        "criterion {} expects none, which needs a nonblank reason",
+                        criterion.id
+                    ))
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Written by `lean-change verify`; the driver appends it as kind `verification`.
@@ -177,6 +315,35 @@ pub struct CheckResult {
     pub exit_code: Option<i32>,
     pub timed_out: bool,
     pub output_tail: String,
+    /// Old-vs-new profiles only: the check's runs on the old tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old: Option<OldResult>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OldResult {
+    pub expect: Expect,
+    pub runs: Vec<OldRun>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OldRun {
+    /// None when the command could not start on the old tree, or was killed by a signal.
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub output_tail: String,
+}
+
+impl OldRun {
+    /// A real failure exits other than 0, 126 or 127 (not executable, or not found), without timeout.
+    pub fn is_real_failure(&self) -> bool {
+        !self.timed_out
+            && self
+                .exit_code
+                .is_some_and(|code| !matches!(code, 0 | 126 | 127))
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

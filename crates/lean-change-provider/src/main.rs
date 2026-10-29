@@ -74,8 +74,12 @@ fn protocol() -> i32 {
                     .map(model::InitialInput::parse)
                     .transpose()
                 {
-                    // Bare describe is topology discovery; the frozen input picks B or C.
-                    Ok(input) => write_json(&workflow::workflow(input.is_none_or(|i| i.review))),
+                    // Bare describe is topology discovery; the frozen input picks B or C and its old-vs-new check.
+                    Ok(Some(input)) => write_json(&workflow::workflow(
+                        input.review,
+                        input.old_vs_new.is_some(),
+                    )),
+                    Ok(None) => write_json(&workflow::workflow(true, false)),
                     Err(message) => protocol_error(message),
                 }
             }

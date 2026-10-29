@@ -3,7 +3,7 @@
 ## Scope and authority
 
 Root `AGENTS.md` governs checkout operations and authority; this guide adds crate-local procedure only.
-Product summary is in [README.md](README.md). Requirements are LE-202 to LE-209 in the root PRD.
+Product summary is in [README.md](README.md). Requirements are LE-202 to LE-210 in the root PRD.
 
 ## Workflow
 
