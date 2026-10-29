@@ -11,7 +11,7 @@ from external_work_driver import engine_call
 PRINCIPLES = '# Principles\n1. Compose small parts.\n'
 GREET_CHECK = 'out=$(sh app.sh Bob)\n[ "$out" = "Hello, Bob!" ] || { echo "got: $out"; exit 1; }\necho ok\n'
 QUESTIONS = ['intent', 'scope', 'edge-cases', 'checks', 'docs', 'principles']
-CHECK_QUESTIONS = ['use', 'edge', 'control', 'terms', 'criteria-gap']
+CHECK_QUESTIONS = ['use', 'edge', 'control', 'terms', 'criteria-gap', 'principles-gap']
 OWNER = {'name': 'owner', 'kind': 'human'}
 WORKER = {'name': 'worker', 'kind': 'script'}
 
@@ -135,6 +135,8 @@ def run_profile(engine, provider, profile, work):
         packet = j.tool('intent-packet', j.show_text())
         assert all(f'- {q}: ' in packet for q in CHECK_QUESTIONS) and 'intent-1' in packet, packet
         assert 'pass every criterion\'s check and still leave the goal' in packet, packet
+        # The intent check also gets the owner's principles and asks which applicable section has no criterion.
+        assert PRINCIPLES in packet and 'yet has no criterion or constraint covering it' in packet, packet
         j.append('chk-own', 'intent-check', intent_check('worker'))
         out = j.refused('intent-ready', 'intent-check-incomplete', 'explore')
         assert 'someone other' in out, out

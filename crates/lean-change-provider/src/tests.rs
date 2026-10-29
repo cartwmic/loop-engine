@@ -1103,13 +1103,20 @@ fn the_question_lists_match_the_prd_text() {
     let intent_ids: Vec<&str> = INTENT_QUESTIONS.iter().map(|(id, _)| *id).collect();
     assert_eq!(
         intent_ids,
-        ["use", "edge", "control", "terms", "criteria-gap"]
+        [
+            "use",
+            "edge",
+            "control",
+            "terms",
+            "criteria-gap",
+            "principles-gap"
+        ]
     );
     let le209 = section("LE-209");
     for (id, text) in INTENT_QUESTIONS {
         assert!(le209.contains(&format!("\"{text}\" ({id})")), "{id}");
     }
-    assert!(le209.contains("five fixed intent-check questions"));
+    assert!(le209.contains("six fixed intent-check questions"));
     let review_ids: Vec<&str> = QUESTIONS.iter().map(|(id, _)| *id).collect();
     assert_eq!(
         review_ids,
@@ -1133,7 +1140,7 @@ fn the_question_lists_match_the_prd_text() {
 }
 
 #[test]
-fn intent_packet_carries_the_five_questions_and_the_draft_intent() {
+fn intent_packet_carries_the_six_questions_the_principles_and_the_draft_intent() {
     let r = repo();
     let draft = vec![record("intent-1", "intent", 1, intent(false))];
     // Needs no verification: the intent is still a draft.
@@ -1143,6 +1150,18 @@ fn intent_packet_carries_the_five_questions_and_the_draft_intent() {
     }
     assert!(packet.contains("\"goal\": \"g\"") && packet.contains("(intent-1)"));
     assert!(packet.contains(&r.display().to_string()));
+    // The frozen principles text and its sha256 sit between the questions and the draft intent.
+    let heading = format!(
+        "## Design principles (sha256 {})",
+        sha256_hex(PRINCIPLES.as_bytes())
+    );
+    let (questions, principles, draft_at) = (
+        packet.find("## Questions").unwrap(),
+        packet.find(&heading).unwrap(),
+        packet.find("## Draft intent").unwrap(),
+    );
+    assert!(questions < principles && principles < draft_at);
+    assert!(packet[principles..draft_at].contains(PRINCIPLES));
     // The latest intent record is the one checked.
     let mut later = draft.clone();
     later.push(record("intent-2", "intent", 2, intent(true)));

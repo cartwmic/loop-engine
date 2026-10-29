@@ -54,6 +54,7 @@ MUTATIONS = [
     ('packet keeps every tracked path', PACKET, 'std::fs::copy(real_index.trim(), &index)', 'Err::<u64, _>(std::io::Error::from(std::io::ErrorKind::NotFound))'),
     ('packet clears assume-unchanged', PACKET, '.and_then(|_| clear("--no-assume-unchanged"))', ''),
     ('packet clears skip-worktree', PACKET, '.and_then(|_| clear("--no-skip-worktree"))', ''),
+    ('intent packet carries the principles', PACKET, '        principles = principles.text,\n        intent =', '        principles = "",\n        intent ='),
     ('packet eligibility', PACKET, 'verification_ready(&records, &input, &tree_identity)', 'Ok::<(), serde_json::Value>(())'),
     ('c has no review state', WORKFLOW, 'if review {\n        states.push', 'if true {\n        states.push'),
     ('old-vs-new intent is checked at intent-ready', EVALUATE, '.check_old(input.old_vs_new.is_some())', '.check_old(false)'),
