@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.33.0] - 2026-10-29
+
+### Changed
+
+- Lean-change profile `b`'s intent check has a sixth fixed question, `principles-gap`, and its packet now carries the owner's design principles (frozen text and sha256): which section applies to what the intent builds, yet has no criterion or constraint covering it (LE-208, LE-209). The skill has the driver list each principles section as applies/n-a in the intent's constraints before `intent-ready`.
+
+### Compatibility
+
+- Profile versions are unchanged. An `intent-check` record evaluated by this release needs one answer for each of the six questions, so a profile `b` run that recorded a five-answer check under 0.31.0 or 0.32.0 is refused at `intent-ready` if continued with this binary. Profile `c` and the engine are unchanged.
+
 ## [0.32.0] - 2026-10-29
 
 ### Added
