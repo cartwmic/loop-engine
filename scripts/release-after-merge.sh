@@ -383,18 +383,21 @@ while :; do
   sleep "$poll_seconds"
 done
 
-# release.yml dispatch runs on the SHA, oldest first: "id status conclusion url".
+# Sets runs: release.yml dispatch runs on the SHA, oldest first, one "id status conclusion url" per line.
+# These helpers set globals rather than print, so stop() exits the script, not a $(...) subshell.
 release_runs() {
-  gh run list --workflow release.yml --event workflow_dispatch --limit 50 \
-    --json databaseId,status,conclusion,headSha,createdAt,url \
-    | python3 -c '
+  local listed
+  listed=$(gh run list --workflow release.yml --event workflow_dispatch --limit 50 \
+    --json databaseId,status,conclusion,headSha,createdAt,url) || stop "gh run list release.yml failed"
+  runs=$(printf '%s' "$listed" | python3 -c '
 import json, sys
 runs = sorted((r for r in json.load(sys.stdin) if r["headSha"] == sys.argv[1]), key=lambda r: r["createdAt"])
 for r in runs:
     print(r["databaseId"], r["status"], r["conclusion"] or "-", r["url"])
-' "$merge_sha"
+' "$merge_sha") || stop "could not read the release.yml run list"
 }
 
+# Sets conclusion once the run completes.
 wait_run() {
   local id=$1 view
   while :; do
@@ -402,37 +405,43 @@ wait_run() {
     [[ $(printf '%s' "$view" | json_get headSha) == "$merge_sha" ]] \
       || stop "release run $(printf '%s' "$view" | json_get url) is on another SHA"
     if [[ $(printf '%s' "$view" | json_get status) == completed ]]; then
-      printf '%s' "$view" | json_get conclusion
+      conclusion=$(printf '%s' "$view" | json_get conclusion)
       return 0
     fi
     sleep "$poll_seconds"
   done
 }
 
+# Sets dispatched_id to the run this invocation started.
 dispatch() {
-  local tag_input=$1 before after new polls=0
+  local tag_input=$1 before new polls=0
   check_main
-  before=$(release_runs | cut -d' ' -f1 | tr '\n' ' ')
+  release_runs
+  before=$(printf '%s\n' "$runs" | cut -d' ' -f1 | tr '\n' ' ')
   say "dispatching release.yml tag=$tag_input on main ($merge_sha)"
   gh workflow run release.yml --ref main -f "tag=$tag_input" || stop "gh workflow run release.yml failed"
   while :; do
-    after=$(release_runs)
-    new=$(printf '%s\n' "$after" | awk -v seen="$before" 'BEGIN { n = split(seen, s, " "); for (i = 1; i <= n; i++) old[s[i]] = 1 } NF && !($1 in old) { print $1, $4 }' | tail -n 1)
+    release_runs
+    new=$(printf '%s\n' "$runs" | awk -v seen="$before" 'BEGIN { n = split(seen, s, " "); for (i = 1; i <= n; i++) old[s[i]] = 1 } NF && !($1 in old) { print $1, $4 }' | tail -n 1)
     [[ -z $new ]] || break
     polls=$((polls + 1))
     [[ $polls -lt $appear_polls ]] || stop "the dispatched release.yml run did not appear for $merge_sha"
     sleep "$poll_seconds"
   done
+  dispatched_id=${new%% *}
   say "dispatched: ${new#* }"
 }
 
+dispatched_id=
+
 while :; do
+  step=release
   existing=$(release_url "$tag")
   if [[ -n $existing ]]; then
     summary "$existing"
     exit 0
   fi
-  runs=$(release_runs) || stop "gh run list failed"
+  release_runs
   # A success without a release is the dry run; runs after it are publishes.
   state=$(printf '%s\n' "$runs" | awk '
     NF { n++; id[n] = $1; st[n] = $2; c[n] = $3; u[n] = $4; if ($2 == "completed" && $3 == "success") ok = n }
@@ -445,10 +454,12 @@ while :; do
     }')
   read -r phase what run_id run_url <<<"$state"
   step=$phase
+  # A run this invocation dispatched that has already failed is a stop, not a retry.
+  [[ $what != failed || $run_id != "$dispatched_id" ]] || stop "$phase run failed: $run_url"
   case $what in
     running)
       say "waiting for $run_url"
-      conclusion=$(wait_run "$run_id")
+      wait_run "$run_id"
       [[ $conclusion == success ]] || stop "$phase run failed: $run_url"
       if [[ $phase == publish ]]; then
         publish_url=$run_url
@@ -465,7 +476,7 @@ while :; do
       dispatch "$tag"
       ;;
     none|failed)
-      # A rerun after a failed dry run or publish dispatches that step again.
+      # A failed run from an earlier invocation: dispatch that step again.
       [[ $what == none ]] || say "the last $phase run failed ($run_url): dispatching it again"
       if [[ $phase == publish ]]; then dispatch "$tag"; else dispatch dry-run; fi
       ;;

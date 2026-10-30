@@ -57,6 +57,13 @@ FAKE_GH = textwrap.dedent(
         state["clock"] += 1
         return "2026-10-30T00:00:%02dZ" % state["clock"]
 
+    def finish(run):
+        kind = "dry_run" if run["tag"] == "dry-run" else "publish"
+        run["status"], run["conclusion"] = "completed", scenario[kind]
+        if run["tag"] != "dry-run" and scenario[kind] == "success":
+            git("--git-dir", origin, "tag", run["tag"], run["headSha"])
+            state["releases"][run["tag"]] = f"{BASE}/releases/tag/{run['tag']}"
+
     cmd = argv[:2]
     if cmd == ["release", "view"]:
         url = state["releases"].get(argv[2])
@@ -120,24 +127,28 @@ FAKE_GH = textwrap.dedent(
             run["status"], run["conclusion"] = "in_progress", ""
         out([run])
     if cmd == ["run", "list"] and opt("--workflow") == "release.yml":
+        state["release_list_calls"] = state.get("release_list_calls", 0) + 1
+        if state["release_list_calls"] == scenario.get("release_list_error_on"):
+            save()
+            print("HTTP 502: Server Error", file=sys.stderr)
+            sys.exit(1)
         out([{k: r[k] for k in ("databaseId", "status", "conclusion", "headSha", "createdAt", "url")}
              for r in reversed(state["runs"])])
     if cmd == ["workflow", "run"] and argv[2] == "release.yml":
         tag = next(a.split("=", 1)[1] for a in argv if a.startswith("tag="))
         run_id = 5000 + len(state["runs"])
-        state["runs"].append({"databaseId": run_id, "status": "in_progress", "conclusion": "", "headSha": main_sha(),
-                              "createdAt": tick(), "url": f"{BASE}/actions/runs/{run_id}", "tag": tag, "views": 0})
+        run = {"databaseId": run_id, "status": "in_progress", "conclusion": "", "headSha": main_sha(),
+               "createdAt": tick(), "url": f"{BASE}/actions/runs/{run_id}", "tag": tag, "views": 0}
+        state["runs"].append(run)
+        if scenario.get("fast_runs"):
+            finish(run)
         save()
         sys.exit(0)
     if cmd == ["run", "view"]:
         run = next(r for r in state["runs"] if r["databaseId"] == int(argv[2]))
         run["views"] += 1
         if run["status"] != "completed" and run["views"] >= 2:
-            kind = "dry_run" if run["tag"] == "dry-run" else "publish"
-            run["status"], run["conclusion"] = "completed", scenario[kind]
-            if run["tag"] != "dry-run" and scenario[kind] == "success":
-                git("--git-dir", origin, "tag", run["tag"], run["headSha"])
-                state["releases"][run["tag"]] = f"{BASE}/releases/tag/{run['tag']}"
+            finish(run)
         out({k: run[k] for k in ("status", "conclusion", "headSha", "url")})
     print("fake gh: unsupported call " + json.dumps(argv), file=sys.stderr)
     sys.exit(2)
@@ -397,6 +408,36 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.h.scenario(publish="failure")
         self.assert_stopped(self.h.run(), "publish", "publish run failed")
         self.assertEqual(self.h.count("dispatch tag=v0.35.0"), 1)
+
+    def test_run_that_failed_before_first_read_stops(self) -> None:
+        for failure, step, dispatches in (
+            ({"dry_run": "failure"}, "dry-run", {"dispatch tag=dry-run": 1, "dispatch tag=v0.35.0": 0}),
+            ({"publish": "failure"}, "publish", {"dispatch tag=dry-run": 1, "dispatch tag=v0.35.0": 1}),
+        ):
+            with self.subTest(failure=failure):
+                self.setUp()
+                self.h.scenario(fast_runs=True, **failure)
+                self.assert_stopped(self.h.run(), step, f"{step} run failed")
+                for label, expected in dispatches.items():
+                    self.assertEqual(self.h.count(label), expected, (label, self.h.events()))
+
+    def test_fast_runs_release(self) -> None:
+        self.h.scenario(fast_runs=True)
+        self.assert_released(self.h.run())
+        self.assertEqual(self.h.count("dispatch tag=dry-run"), 1)
+        self.assertEqual(self.h.count("dispatch tag=v0.35.0"), 1)
+
+    def test_release_run_list_error_stops_with_resume_command(self) -> None:
+        # Call 1 is the state read, 2 the pre-dispatch read, 3 the post-dispatch read.
+        for call, step, dispatches in ((1, "release", 0), (2, "dry-run", 0), (3, "dry-run", 1)):
+            with self.subTest(call=call):
+                self.setUp()
+                self.h.scenario(release_list_error_on=call)
+                result = self.h.run()
+                self.assert_stopped(result, step, "gh run list release.yml failed")
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertIn("resume with: scripts/release-after-merge.sh --version 0.35.0", result.stderr)
+                self.assertEqual(self.h.count("dispatch tag=dry-run"), dispatches)
 
     # l3
     def test_rerun_resumes_after_each_stop(self) -> None:
