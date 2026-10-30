@@ -24,6 +24,7 @@ python3 scripts/research-journey.py
 python3 scripts/lean-change-journey.py
 python3 scripts/lean-change-mutations.py
 python3 scripts/generate-prd-journey.py
+python3 -m unittest scripts/test_release_after_merge.py
 
 # Capture metadata separately so a Cargo failure retains its own exit status.
 metadata="$(cargo metadata --format-version 1 --no-deps)"
