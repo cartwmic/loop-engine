@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.34.0] - 2026-10-30
+
+### Added
+
+- The lean-change skill has a "Parallel builders" recipe: a driver builds independent plan steps at the same time, each in its own git worktree outside the repository, lands them in plan order with `git merge --no-ff`, and runs the full build and test gates once on the joined tree (LE-211). Landing stops and fails on a failed commit or a conflict and leaves the repository as it was; cleanup refuses a worktree that still holds uncommitted work.
+- The lean-change journey has a `parallel` scenario that runs the recipe's shell blocks as written, and an optional `--skill PATH`.
+
+### Compatibility
+
+- Skill text and journey only. The engine, the provider and the profiles are unchanged.
+
 ## [0.33.0] - 2026-10-29
 
 ### Changed
