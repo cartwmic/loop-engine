@@ -140,13 +140,17 @@ events; the engine and the provider never see the steps.
 4. **Land** each finished step, in plan order:
 
    ```sh
-   git -C "$WORK/wt-$STEP" add -A
-   git -C "$WORK/wt-$STEP" commit -q -m "step $STEP"
-   git -C "$REPO" merge -q --no-ff --no-edit "step/$STEP" || { git -C "$REPO" merge --abort; echo "conflict: $STEP" >&2; }
+   if git -C "$WORK/wt-$STEP" add -A && git -C "$WORK/wt-$STEP" commit -q -m "step $STEP"; then
+     git -C "$REPO" merge -q --no-ff --no-edit "step/$STEP" || { git -C "$REPO" merge --abort; echo "conflict: $STEP" >&2; false; }
+   else
+     echo "not committed: $STEP" >&2; false
+   fi
    ```
 
-   On a conflict the repository is back where it was. Resolve the conflict yourself, or build that
-   step again from the landed tree (a new worktree off the new `HEAD`).
+   If it fails, the step has not landed and the repository is as it was. On `not committed`, read
+   git's message (a hook, or a step with no changes), fix it in the worktree and land it again. On
+   `conflict`, resolve the conflict yourself, or build that step again from the landed tree (a new
+   worktree off the new `HEAD`).
 5. **Join, then gate once.** After the last independent step lands, run the full build and the full
    test suite once, in `REPO` (through heavy-gate where the repository uses it). Fix what they find
    in `REPO`, then do the wire-up step, if any. Steps that depend on others are built after the join,
@@ -154,9 +158,11 @@ events; the engine and the provider never see the steps.
 6. **Clean up** each step, then request `ready`:
 
    ```sh
-   git -C "$REPO" worktree remove --force "$WORK/wt-$STEP"
-   git -C "$REPO" branch -q -D "step/$STEP"
+   git -C "$REPO" worktree remove "$WORK/wt-$STEP" && git -C "$REPO" branch -q -D "step/$STEP"
    ```
+
+   Git refuses to remove a worktree that still holds uncommitted work. Land it first, or, if you
+   mean to drop that work, add `--force`.
 
 Verify, the old-vs-new check and the review are unchanged: they judge the merged tree in `REPO`.
 

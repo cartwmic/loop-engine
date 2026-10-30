@@ -407,8 +407,8 @@ def parallel_intent():
 
 
 def parallel_run(engine, provider, blocks, work):
-    """Two steps built at once in worktrees outside the repo, landed, gated in the repo and fixed there; a third, conflicting step stops at landing."""
-    # bookends:LE-211 — the skill's Parallel builders blocks, run as written, build two steps at once, land them, gate in the repo, fix the gate's finding there and gate again, and stop a conflicting step at landing.
+    """Two steps built at once in worktrees outside the repo, landed, gated in the repo and fixed there; a third, conflicting step stops at landing; a fourth, whose commit fails, is kept."""
+    # bookends:LE-211 — the skill's Parallel builders blocks, run as written, build two steps at once, land them, gate in the repo, fix the gate's finding there and gate again, stop a conflicting step at landing, and keep a step whose commit fails.
     start, land, clean = blocks
     j = Journey(engine, provider, work)
     repo, steps, starts, gate_log = work / 'repo', work / 'steps', work / 'starts', work / 'gate.log'
@@ -439,7 +439,7 @@ def parallel_run(engine, provider, blocks, work):
     assert j.state() == 'implement'
 
     # Every step starts from the same HEAD, before any landing, in a worktree outside the repo.
-    for step in ['s1', 's2', 's3']:
+    for step in ['s1', 's2', 's3', 's4']:
         result = run_block(start, repo, steps, step)
         assert result.returncode == 0, (step, result.stderr)
         assert (steps / f'wt-{step}').is_dir() and not (steps / f'wt-{step}').resolve().is_relative_to(repo.resolve())
@@ -450,22 +450,44 @@ def parallel_run(engine, provider, blocks, work):
         alone = subprocess.run(['sh', 'gate.sh'], cwd=steps / f'wt-{step}', env=dict(os.environ, GATE_LOG=str(work / 'step-gate.log')),
                                text=True, capture_output=True)
         assert alone.returncode == 0, (step, alone.stderr)
-    # The third step edits the line s1 changed.
+    # The third step edits the line s1 changed; the fourth adds a file the repository's pre-commit hook will reject.
     (steps / 'wt-s3' / 'one.txt').write_text('one: three\n')
+    (steps / 'wt-s4' / 'four.txt').write_text('four\n')
     landed = []
     for step in ['s1', 's2']:
         result = run_block(land, repo, steps, step)
-        assert result.returncode == 0 and 'conflict' not in result.stderr, (step, result.stderr)
+        assert result.returncode == 0 and 'conflict' not in result.stderr and 'not committed' not in result.stderr, (step, result.stderr)
         landed.append(git_out(repo, 'rev-parse', f'step/{step}').strip())
     head = git_out(repo, 'rev-parse', 'HEAD').strip()
     status = git_out(repo, 'status', '--porcelain', '--untracked-files=all')
     tree = j.verify()['tree']
     result = run_block(land, repo, steps, 's3')
-    assert 'conflict: s3' in result.stderr, (result.returncode, result.stderr)
+    assert result.returncode != 0 and 'conflict: s3' in result.stderr, (result.returncode, result.stderr)
     assert git_out(repo, 'rev-parse', 'HEAD').strip() == head
     assert git_out(repo, 'status', '--porcelain', '--untracked-files=all') == status
     assert j.verify()['tree'] == tree
     assert (repo / 'one.txt').read_text() == 'one: done\n'
+
+    # A pre-commit hook rejects s4's commit: the step does not land, and cleanup refuses to discard its work.
+    hook = Path(git_out(repo, 'rev-parse', '--path-format=absolute', '--git-common-dir').strip()) / 'hooks' / 'pre-commit'
+    hook.parent.mkdir(exist_ok=True)
+    hook.write_text('#!/bin/sh\nif git diff --cached --name-only | grep -qx four.txt; then\n'
+                    '  echo "pre-commit: four.txt is rejected" >&2\n  exit 1\nfi\n')
+    hook.chmod(0o755)
+    result = run_block(land, repo, steps, 's4')
+    hook.unlink()
+    assert result.returncode != 0 and 'not committed: s4' in result.stderr and 'conflict' not in result.stderr, (result.returncode, result.stderr)
+    assert git_out(repo, 'rev-parse', 'HEAD').strip() == head
+    assert git_out(repo, 'status', '--porcelain', '--untracked-files=all') == status
+    assert j.verify()['tree'] == tree
+    assert not (repo / 'four.txt').exists()
+    result = run_block(clean, repo, steps, 's4')
+    assert result.returncode != 0, result.stderr
+    assert (steps / 'wt-s4' / 'four.txt').read_text() == 'four\n'
+    # The driver decides to drop s4's work.
+    git(repo, 'worktree', 'remove', '--force', str(steps / 'wt-s4'))
+    git(repo, 'branch', '-q', '-D', 'step/s4')
+    assert not (steps / 'wt-s4').exists()
 
     # The driver gates in the repository after the last landing; the builders never ran it. The joined tree fails.
     assert not gate_log.exists()
