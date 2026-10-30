@@ -80,7 +80,11 @@ trap finish EXIT
 stop() {
   printf 'STOP [%s] %s\n' "$step" "$*" >&2
   log_line "STOP $*"
-  printf 'rerun scripts/release-after-merge.sh to resume at this step once it is fixed\n' >&2
+  if [[ -n ${version:-} ]]; then
+    printf 'once it is fixed, resume with: scripts/release-after-merge.sh --version %s\n' "$version" >&2
+  else
+    printf 'once it is fixed, rerun scripts/release-after-merge.sh\n' >&2
+  fi
   exit 1
 }
 
@@ -146,6 +150,9 @@ if [[ -z $version ]]; then
     version=$main_version
     say "main is at $main_version with no release yet: releasing it"
   else
+    released_sha=$(git rev-parse --verify --quiet "refs/tags/v$main_version^{commit}" || true)
+    [[ $released_sha != "$(git rev-parse origin/main)" ]] \
+      || stop "nothing merged since v$main_version: main is still its release commit"
     version=$(python3 -c 'import sys; a, b, _ = sys.argv[1].split("."); print(f"{a}.{int(b) + 1}.0")' "$main_version")
     say "main is at released $main_version: next minor is $version"
   fi
@@ -164,6 +171,7 @@ summary() {
   say "release: $url"
   [[ -z ${dry_run_url:-} ]] || say "dry run: $dry_run_url"
   [[ -z ${publish_url:-} ]] || say "publish run: $publish_url"
+  say "resume or check later with: scripts/release-after-merge.sh --version $version"
   say "next (playbook rule 7c57de5a): ~/.local/user_scripts/import_release_skills.py bump $tag"
 }
 
@@ -245,6 +253,25 @@ PY
     unexpected=$(git -C "$worktree" diff --cached --name-only | grep -vxE 'Cargo\.toml|Cargo\.lock|CHANGELOG\.md' || true)
     [[ -z $unexpected ]] || stop "the prepared tree changes more than Cargo.toml, Cargo.lock and CHANGELOG.md: $(echo "$unexpected" | tr '\n' ' ')"
     say "staged: $(git -C "$worktree" diff --cached --name-status | tr '\t\n' ' ;')"
+    # Content check: Cargo files change only version lines; CHANGELOG.md only gains lines.
+    git -C "$worktree" diff --cached >> "$log_file"
+    odd=$(git -C "$worktree" diff --cached -U0 | python3 -c '
+import re, sys
+path = None
+for line in sys.stdin:
+    if line.startswith("+++ b/"):
+        path = line[6:].strip()
+    elif line.startswith(("+++", "---", "diff ", "index ", "@@")):
+        continue
+    elif line[:1] in "+-":
+        if path in ("Cargo.toml", "Cargo.lock"):
+            ok = re.fullmatch(r"[+-]version = \x22[^\x22]+\x22", line.rstrip())
+        else:
+            ok = line.startswith("+")
+        if not ok:
+            print(f"{path}: {line.rstrip()}")
+')
+    [[ -z $odd ]] || stop "the prepared diff has lines other than version bumps and new CHANGELOG text: $odd"
     git -C "$worktree" commit --quiet -m "release: prepare $tag" || stop "git commit failed"
     rm -f "$plan_file"
   fi

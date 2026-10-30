@@ -153,8 +153,11 @@ PREPARE_STUB = textwrap.dedent(
         f.write(json.dumps(["prepare", sys.argv[1]]) + "\n")
     path = Path("Cargo.toml")
     path.write_text(re.sub(r'version = "[^"]+"', f'version = "{sys.argv[1]}"', path.read_text(), count=1))
-    Path("Cargo.lock").write_text(f"# lock for {sys.argv[1]}\n")
+    lock = Path("Cargo.lock")
+    lock.write_text(re.sub(r'version = "[^"]+"', f'version = "{sys.argv[1]}"', lock.read_text()))
     Path(os.environ["RELEASE_PLAN_FILE"]).write_text("{}\n")
+    if os.environ.get("FAKE_PREPARE_EDIT"):
+        path.write_text(path.read_text().replace("members = []", 'members = ["x"]'))
     if os.environ.get("FAKE_PREPARE_EXTRA"):
         Path("stray.txt").write_text("not a release file\n")
     '''
@@ -204,7 +207,7 @@ class Harness:
         git("init", "--quiet", "--initial-branch=main", str(seed))
         (seed / "Cargo.toml").write_text('[workspace]\nmembers = []\n\n[workspace.package]\nversion = "0.34.0"\n')
         (seed / "CHANGELOG.md").write_text("# Changelog\n\n## [0.34.0] - 2026-10-30\n\n- Earlier.\n")
-        (seed / "Cargo.lock").write_text("# lock for 0.34.0\n")
+        (seed / "Cargo.lock").write_text('version = 4\n\n[[package]]\nname = "loop-cli"\nversion = "0.34.0"\n')
         self.git(seed, "add", "-A")
         self.git(seed, "commit", "--quiet", "-m", "base")
         self.git(seed, "push", "--quiet", str(self.origin), "main")
@@ -334,6 +337,25 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.h.env["FAKE_PREPARE_EXTRA"] = "1"
         self.assert_stopped(self.h.run(), "pr", "changes more than Cargo.toml, Cargo.lock and CHANGELOG.md: stray.txt")
         self.assertEqual(self.h.events(), ["prepare"])
+
+    def test_stop_unexpected_prepared_content(self) -> None:
+        self.h.env["FAKE_PREPARE_EDIT"] = "1"
+        result = self.h.run()
+        self.assert_stopped(result, "pr", "lines other than version bumps")
+        self.assertIn('Cargo.toml: +members = ["x"]', result.stderr)
+        self.assertEqual(self.h.events(), ["prepare"])
+
+    def test_default_version_with_nothing_new_on_main_stops(self) -> None:
+        self.assert_released(self.h.run())
+        before = len(self.h.calls())
+        result = self.h.run()
+        self.assert_stopped(result, "version", "nothing merged since v0.35.0")
+        self.assertNotIn(["pr", "create"], [c[:2] for c in self.h.calls()[before:]])
+
+    def test_stop_prints_pinned_resume_command(self) -> None:
+        self.h.scenario(ci="failure")
+        result = self.h.run()
+        self.assertIn("resume with: scripts/release-after-merge.sh --version 0.35.0", result.stderr)
 
     def test_stop_without_notes(self) -> None:
         self.assert_stopped(self.h.run("--version", "0.35.0"), "prepare", "--notes FILE is required")
