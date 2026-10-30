@@ -31,6 +31,8 @@ environment:
                         loop-engine-release-vX.Y.Z)
   RELEASE_POLL_SECONDS  seconds between polls (default 30)
   RELEASE_APPEAR_POLLS  polls to wait for checks or a run to appear (default 20)
+  RELEASE_PLAN_FILE     dist plan path prepare-release.sh writes
+                        (default: /tmp/loop-engine-dist-plan.json)
   RELEASE_LOG           log file (default:
                         $XDG_STATE_HOME/loop-engine/release-after-merge.log)
 EOF
@@ -195,6 +197,7 @@ read -r pr_number pr_state pr_url merge_sha <<<"$(pick_pr)" || true
 if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
   step=prepare
   [[ -n $notes ]] || stop "--notes FILE is required to write the CHANGELOG entry for $version"
+  plan_file=${RELEASE_PLAN_FILE:-/tmp/loop-engine-dist-plan.json}
   main_checkout=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
   worktree=${RELEASE_WORKTREE:-$(dirname "$main_checkout")/loop-engine-release-$tag}
   prepared=
@@ -214,6 +217,9 @@ if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
     git worktree add --quiet -B "$branch" "$worktree" origin/main || stop "git worktree add failed"
   fi
   if [[ -z $prepared ]]; then
+    # prepare-release.sh writes the dist plan here; AGENTS.md keeps another run's plan from being overwritten.
+    [[ ! -e $plan_file ]] \
+      || stop "$plan_file exists; check it is a finished release's plan, remove it, then rerun"
     prepare_cmd=${RELEASE_PREPARE_CMD:-scripts/prepare-release.sh}
     say "running $prepare_cmd $version"
     (cd "$worktree" && $prepare_cmd "$version") || stop "$prepare_cmd $version failed in $worktree"
@@ -236,7 +242,11 @@ path.write_text(heading + f"## [{version}] - {date}\n\n{body}\n\n" + text[len(he
 PY
     step="pr"
     git -C "$worktree" add -A
+    unexpected=$(git -C "$worktree" diff --cached --name-only | grep -vxE 'Cargo\.toml|Cargo\.lock|CHANGELOG\.md' || true)
+    [[ -z $unexpected ]] || stop "the prepared tree changes more than Cargo.toml, Cargo.lock and CHANGELOG.md: $(echo "$unexpected" | tr '\n' ' ')"
+    say "staged: $(git -C "$worktree" diff --cached --name-status | tr '\t\n' ' ;')"
     git -C "$worktree" commit --quiet -m "release: prepare $tag" || stop "git commit failed"
+    rm -f "$plan_file"
   fi
   step="pr"
   say "pushing $branch"

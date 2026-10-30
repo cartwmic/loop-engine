@@ -154,6 +154,9 @@ PREPARE_STUB = textwrap.dedent(
     path = Path("Cargo.toml")
     path.write_text(re.sub(r'version = "[^"]+"', f'version = "{sys.argv[1]}"', path.read_text(), count=1))
     Path("Cargo.lock").write_text(f"# lock for {sys.argv[1]}\n")
+    Path(os.environ["RELEASE_PLAN_FILE"]).write_text("{}\n")
+    if os.environ.get("FAKE_PREPARE_EXTRA"):
+        Path("stray.txt").write_text("not a release file\n")
     '''
 ).lstrip()
 
@@ -189,6 +192,7 @@ class Harness:
             "RELEASE_POLL_SECONDS": "0",
             "RELEASE_APPEAR_POLLS": "3",
             "RELEASE_LOG": str(self.log),
+            "RELEASE_PLAN_FILE": str(root / "dist-plan.json"),
             "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.com",
             "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.com",
             "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
@@ -288,6 +292,8 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         runs = self.h.gh_state()["runs"]
         self.assertEqual([(r["tag"], r["headSha"]) for r in runs], [("dry-run", merge), ("v0.35.0", merge)])
         self.assertFalse(self.h.worktree.exists())
+        self.assertFalse(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
+        self.assertIn("staged: M CHANGELOG.md;M Cargo.lock;M Cargo.toml;", result.stdout)
         log = self.h.log.read_text()
         self.assertRegex(log, r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z release-\S+ step=publish dispatching release.yml tag=v0.35.0")
         self.assertRegex(log, r"step=done end exit=0 duration=\d+s")
@@ -318,6 +324,16 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         result = self.h.run()
         self.assert_stopped(result, "prepare", "dirty tree")
         self.assertEqual(self.h.events(), [])
+
+    def test_stop_existing_plan_file(self) -> None:
+        Path(self.h.env["RELEASE_PLAN_FILE"]).write_text("{}\n")
+        self.assert_stopped(self.h.run(), "prepare", "dist-plan.json exists")
+        self.assertEqual(self.h.events(), [])
+
+    def test_stop_unexpected_prepared_file(self) -> None:
+        self.h.env["FAKE_PREPARE_EXTRA"] = "1"
+        self.assert_stopped(self.h.run(), "pr", "changes more than Cargo.toml, Cargo.lock and CHANGELOG.md: stray.txt")
+        self.assertEqual(self.h.events(), ["prepare"])
 
     def test_stop_without_notes(self) -> None:
         self.assert_stopped(self.h.run("--version", "0.35.0"), "prepare", "--notes FILE is required")
