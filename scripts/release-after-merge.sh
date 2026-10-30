@@ -210,18 +210,30 @@ if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
   main_checkout=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
   worktree=${RELEASE_WORKTREE:-$(dirname "$main_checkout")/loop-engine-release-$tag}
   prepared=
+  # Only a worktree of this repo on $branch is ours to reuse; anything else at the path, or commits on
+  # $branch other than the prep commit, stops so the caller decides (RELEASE_WORKTREE picks another path).
   if [[ -e $worktree ]]; then
+    [[ $(git -C "$worktree" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
+      == "$(git rev-parse --path-format=absolute --git-common-dir)" \
+      && $(git -C "$worktree" branch --show-current) == "$branch" ]] \
+      || stop "$worktree exists and is not this repo's worktree on $branch; move it or set RELEASE_WORKTREE"
     [[ -z $(git -C "$worktree" status --porcelain=v1 --untracked-files=all) ]] \
-      || stop "dirty tree: $worktree has uncommitted changes from an earlier attempt; inspect it, then remove it with git worktree remove --force"
-    if [[ $(git -C "$worktree" branch --show-current) == "$branch" ]] \
-      && [[ $(git -C "$worktree" log -1 --format=%s) == "release: prepare $tag" ]]; then
+      || stop "dirty tree: $worktree has uncommitted changes from an earlier attempt; inspect them, keep what you need, clean the tree, then resume"
+    if [[ $(git -C "$worktree" log -1 --format=%s) == "release: prepare $tag" ]] \
+      && git -C "$worktree" merge-base --is-ancestor HEAD~1 origin/main; then
       prepared=yes
       say "reusing the prepared commit in $worktree"
+    elif git -C "$worktree" merge-base --is-ancestor HEAD origin/main; then
+      say "moving the clean worktree $worktree up to origin/main"
+      git -C "$worktree" merge --quiet --ff-only origin/main || stop "could not fast-forward $worktree"
     else
-      say "resetting the clean worktree $worktree to origin/main"
-      git -C "$worktree" checkout --quiet -B "$branch" origin/main || stop "could not reset $worktree"
+      stop "$worktree has commits on $branch that are not the release prep; inspect them, then move or remove that branch"
     fi
   else
+    if git rev-parse --verify --quiet "refs/heads/$branch" >/dev/null \
+      && ! git merge-base --is-ancestor "refs/heads/$branch" origin/main; then
+      stop "local branch $branch has commits not on main; inspect them, then delete or rename the branch"
+    fi
     say "worktree $worktree on $branch from origin/main"
     git worktree add --quiet -B "$branch" "$worktree" origin/main || stop "git worktree add failed"
   fi

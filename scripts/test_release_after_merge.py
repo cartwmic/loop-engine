@@ -322,7 +322,7 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.assertEqual(self.h.events(), [])
 
     def test_stop_dirty_tree(self) -> None:
-        self.h.git(self.h.checkout, "worktree", "add", "--quiet", str(self.h.worktree), "origin/main")
+        self.h.git(self.h.checkout, "worktree", "add", "--quiet", "-b", "release/v0.35.0", str(self.h.worktree), "origin/main")
         (self.h.worktree / "Cargo.toml").write_text("half prepared\n")
         result = self.h.run()
         self.assert_stopped(result, "prepare", "dirty tree")
@@ -434,11 +434,42 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.assert_stopped(self.h.run("--version", "0.35.0"), "ci", "main moved")
         self.assertEqual(self.h.count("pr merge"), 1)
 
+    def test_stop_unowned_path_at_worktree(self) -> None:
+        self.h.worktree.mkdir()
+        (self.h.worktree / "keep.txt").write_text("someone else's\n")
+        self.assert_stopped(self.h.run(), "prepare", "is not this repo's worktree on release/v0.35.0")
+        self.assertEqual((self.h.worktree / "keep.txt").read_text(), "someone else's\n")
+        self.assertEqual(self.h.count("prepare"), 0)
+
+    def test_stop_worktree_on_another_branch(self) -> None:
+        self.h.git(self.h.checkout, "worktree", "add", "--quiet", "-b", "mine", str(self.h.worktree), "origin/main")
+        self.assert_stopped(self.h.run(), "prepare", "is not this repo's worktree on release/v0.35.0")
+        self.assertEqual(self.h.count("prepare"), 0)
+
+    def test_stop_foreign_commit_on_release_branch(self) -> None:
+        self.h.git(self.h.checkout, "worktree", "add", "--quiet", "-b", "release/v0.35.0", str(self.h.worktree), "origin/main")
+        (self.h.worktree / "work.txt").write_text("work\n")
+        self.h.git(self.h.worktree, "add", "work.txt")
+        self.h.git(self.h.worktree, "commit", "--quiet", "-m", "unrelated work")
+        head = self.h.git(self.h.worktree, "rev-parse", "HEAD")
+        self.assert_stopped(self.h.run(), "prepare", "not the release prep")
+        self.assertEqual(self.h.git(self.h.worktree, "rev-parse", "HEAD"), head)
+        self.assertEqual(self.h.count("prepare"), 0)
+
+    def test_stop_local_release_branch_with_foreign_commit(self) -> None:
+        self.h.git(self.h.checkout, "branch", "release/v0.35.0", "origin/main")
+        self.h.git(self.h.checkout, "worktree", "add", "--quiet", str(self.h.root / "tmp-wt"), "release/v0.35.0")
+        (self.h.root / "tmp-wt" / "work.txt").write_text("work\n")
+        self.h.git(self.h.root / "tmp-wt", "add", "work.txt")
+        self.h.git(self.h.root / "tmp-wt", "commit", "--quiet", "-m", "unrelated work")
+        self.h.git(self.h.checkout, "worktree", "remove", str(self.h.root / "tmp-wt"))
+        self.assert_stopped(self.h.run(), "prepare", "local branch release/v0.35.0 has commits not on main")
+
     def test_rerun_after_dirty_tree_is_cleaned(self) -> None:
-        self.h.git(self.h.checkout, "worktree", "add", "--quiet", str(self.h.worktree), "origin/main")
+        self.h.git(self.h.checkout, "worktree", "add", "--quiet", "-b", "release/v0.35.0", str(self.h.worktree), "origin/main")
         (self.h.worktree / "Cargo.toml").write_text("half prepared\n")
         self.assertEqual(self.h.run().returncode, 1)
-        self.h.git(self.h.checkout, "worktree", "remove", "--force", str(self.h.worktree))
+        self.h.git(self.h.worktree, "checkout", "--", "Cargo.toml")
         self.assert_released(self.h.run())
         self.assertEqual(self.h.count("prepare"), 1)
 
