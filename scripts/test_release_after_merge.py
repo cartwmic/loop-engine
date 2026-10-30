@@ -48,7 +48,8 @@ FAKE_GH = textwrap.dedent(
         return argv[argv.index(name) + 1] if name in argv else default
 
     def git(*args, cwd=None):
-        return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+        env = {k: v for k, v in os.environ.items() if k != "FAKE_GIT_LOG"}  # only the script's git calls are logged
+        return subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout.strip()
 
     def main_sha():
         return git("--git-dir", origin, "rev-parse", "main")
@@ -57,12 +58,16 @@ FAKE_GH = textwrap.dedent(
         state["clock"] += 1
         return "2026-10-30T00:00:%02dZ" % state["clock"]
 
+    def make_release(run):
+        git("--git-dir", origin, "tag", "-f", run["tag"], run["headSha"])
+        state["releases"][run["tag"]] = f"{BASE}/releases/tag/{run['tag']}"
+
     def finish(run):
         kind = "dry_run" if run["tag"] == "dry-run" else "publish"
         run["status"], run["conclusion"] = "completed", scenario[kind]
-        if run["tag"] != "dry-run" and scenario[kind] == "success":
-            git("--git-dir", origin, "tag", run["tag"], run["headSha"])
-            state["releases"][run["tag"]] = f"{BASE}/releases/tag/{run['tag']}"
+        if (run["tag"] != "dry-run" and scenario[kind] == "success" and scenario.get("publish_makes_release", True)
+                and not scenario.get("publish_release_early")):
+            make_release(run)
 
     cmd = argv[:2]
     if cmd == ["release", "view"]:
@@ -144,6 +149,8 @@ FAKE_GH = textwrap.dedent(
         run = {"databaseId": run_id, "status": "in_progress", "conclusion": "", "headSha": main_sha(),
                "createdAt": tick(), "url": f"{BASE}/actions/runs/{run_id}", "tag": tag, "views": 0}
         state["runs"].append(run)
+        if tag != "dry-run" and scenario.get("publish_release_early"):
+            make_release(run)  # release.yml makes the release before its announce job, which can still fail
         if scenario.get("fast_runs"):
             finish(run)
         save()
@@ -178,6 +185,31 @@ PREPARE_STUB = textwrap.dedent(
     '''
 ).lstrip()
 
+FAKE_GIT = textwrap.dedent(
+    r'''
+    #!/bin/sh
+    # Forwarding git: logs the script's mutating git calls (FAKE_GIT_LOG set) next to the gh calls, then runs git.
+    if [ -n "$FAKE_GIT_LOG" ]; then
+      sub= next= skip=
+      for a in "$@"; do
+        if [ -n "$skip" ]; then skip=; continue; fi
+        if [ -z "$sub" ]; then
+          case $a in -C|-c|--git-dir|--work-tree) skip=1 ;; -*) ;; *) sub=$a ;; esac
+          continue
+        fi
+        next=$a; break
+      done
+      label=
+      case $sub in
+        fetch|add|commit|push|merge|tag|reset|checkout|rebase|cherry-pick) label=$sub ;;
+        worktree) case $next in add|remove|prune|move) label="worktree $next" ;; esac ;;
+      esac
+      [ -z "$label" ] || printf '["git", "%s"]\n' "$label" >> "$FAKE_GH_DIR/calls.jsonl"
+    fi
+    exec REAL_GIT "$@"
+    '''
+).lstrip()
+
 GREEN = {"checks": "pass", "ci": "success", "dry_run": "success", "publish": "success"}
 
 
@@ -195,6 +227,8 @@ class Harness:
         bindir.mkdir()
         (bindir / "gh").write_text(FAKE_GH)
         (bindir / "gh").chmod(0o755)
+        (bindir / "git").write_text(FAKE_GIT.replace("REAL_GIT", shutil.which("git")))
+        (bindir / "git").chmod(0o755)
         self.prepare = root / "prepare-stub"
         self.prepare.write_text(PREPARE_STUB)
         self.prepare.chmod(0o755)
@@ -224,12 +258,20 @@ class Harness:
         (seed / "CHANGELOG.md").write_text("# Changelog\n\n## [0.34.0] - 2026-10-30\n\n- Earlier.\n")
         (seed / "Cargo.lock").write_text('version = 4\n\n[[package]]\nname = "loop-cli"\nversion = "0.34.0"\n')
         self.git(seed, "add", "-A")
-        self.git(seed, "commit", "--quiet", "-m", "base")
-        self.git(seed, "push", "--quiet", str(self.origin), "main")
+        self.git(seed, "commit", "--quiet", "-m", "release: prepare v0.34.0")
+        self.git(seed, "tag", "v0.34.0")
+        released = self.git(seed, "rev-parse", "HEAD")
+        (seed / "feature.txt").write_text("merged since v0.34.0\n")
+        self.git(seed, "add", "-A")
+        self.git(seed, "commit", "--quiet", "-m", "a feature")
+        self.git(seed, "push", "--quiet", "--tags", str(self.origin), "main")
         self.checkout = root / "loop-engine"
         self.git(root, "clone", "--quiet", str(self.origin), str(self.checkout))
         self.worktree = root / "loop-engine-release-v0.35.0"
-        self.state = {"prs": [], "runs": [], "clock": 0,
+        old = [{"databaseId": 4000 + i, "status": "completed", "conclusion": "success", "headSha": released,
+                "createdAt": f"2026-10-29T00:00:0{i}Z", "url": f"https://github.com/test/loop-engine/actions/runs/{4000 + i}",
+                "tag": tag, "views": 0} for i, tag in ((1, "dry-run"), (2, "v0.34.0"))]
+        self.state = {"prs": [], "runs": old, "clock": 0,
                       "releases": {"v0.34.0": "https://github.com/test/loop-engine/releases/tag/v0.34.0"}}
         (self.gh / "state.json").write_text(json.dumps(self.state))
         self.scenario(**GREEN)
@@ -243,8 +285,8 @@ class Harness:
 
     def run(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         args = args or ("--notes", str(self.notes))
-        return subprocess.run([str(SCRIPT), *args], cwd=cwd or self.checkout, env=self.env, capture_output=True,
-                              text=True, timeout=120)
+        return subprocess.run([str(SCRIPT), *args], cwd=cwd or self.checkout, env={**self.env, "FAKE_GIT_LOG": "1"},
+                              capture_output=True, text=True, timeout=120)
 
     def resume_runs(self) -> None:
         """Put the last release.yml run back in progress, as if a rerun finds it still running."""
@@ -257,11 +299,14 @@ class Harness:
         path = self.gh / "calls.jsonl"
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
-    def events(self) -> list[str]:
-        """Calls that matter for ordering, as short labels."""
+    def events(self, git: bool = False) -> list[str]:
+        """Calls that matter for ordering, as short labels; git=True adds the script's mutating git calls."""
         labels = []
         for call in self.calls():
-            if call[0] == "prepare":
+            if call[0] == "git":
+                if git:
+                    labels.append("git " + call[1])
+            elif call[0] == "prepare":
                 labels.append("prepare")
             elif call[:2] in (["pr", "create"], ["pr", "checks"], ["pr", "merge"]):
                 labels.append(" ".join(call[:2]))
@@ -279,6 +324,30 @@ class Harness:
 
     def origin_main(self) -> str:
         return git("--git-dir", str(self.origin), "rev-parse", "main")
+
+
+def decisions(result: subprocess.CompletedProcess[str]) -> list[str]:
+    return re.findall(r"^\[[^]]+\] decision: (.*)$", result.stdout, re.M)
+
+
+DRY, PUB = "dispatch tag=dry-run", "dispatch tag=v0.35.0"
+RERUN = ["git fetch", "ci list"]  # a rerun after the merge: read main, check CI again
+STARTS_RELEASED = ["git fetch"]  # a rerun when the release exists: straight to the decision
+
+
+def prep(worktree: str) -> list[str]:
+    """Mutations from the start through the CI read, for a fresh or reused prep worktree."""
+    return ["git fetch", "git worktree add" if worktree == "fresh" else "git merge", "prepare", "git add", "git commit",
+            "git push", "pr create", "pr checks", "pr merge", "git worktree remove", "ci list"]
+
+
+def d(release: str, phase: str, run: str, action: str) -> str:
+    return f"release={release} {phase}={run} -> {action}"
+
+
+GREEN_DECISIONS = [d("no", "dry-run", "none", "dispatch"), d("no", "dry-run", "running", "wait"),
+                   d("no", "publish", "none", "dispatch"), d("no", "publish", "running", "wait"),
+                   d("yes", "publish", "succeeded", "done")]
 
 
 class ReleaseAfterMergeTest(unittest.TestCase):
@@ -314,7 +383,7 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.assertIn('version = "0.35.0"', git("--git-dir", str(self.h.origin), "show", "main:Cargo.toml"))
         self.assertEqual(git("--git-dir", str(self.h.origin), "log", "-1", "--format=%s", "main"),
                          "release: prepare v0.35.0 (#100)")
-        runs = self.h.gh_state()["runs"]
+        runs = self.h.gh_state()["runs"][2:]  # after the seeded v0.34.0 runs
         self.assertEqual([(r["tag"], r["headSha"]) for r in runs], [("dry-run", merge), ("v0.35.0", merge)])
         self.assertFalse(self.h.worktree.exists())
         self.assertFalse(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
@@ -339,7 +408,8 @@ class ReleaseAfterMergeTest(unittest.TestCase):
     def test_already_released_prints_url_and_does_nothing(self) -> None:
         result = self.h.run("--version", "0.34.0")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("v0.34.0 is already released", result.stdout)
+        self.assertEqual(decisions(result), ["release=yes publish=succeeded -> done"])
+        self.assertIn("released v0.34.0", result.stdout)
         self.assertIn("release: https://github.com/test/loop-engine/releases/tag/v0.34.0", result.stdout)
         self.assertEqual(self.h.events(), [])
 
@@ -409,17 +479,6 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.assertNotIn("ci list", self.h.events())
         self.assertFalse([e for e in self.h.events() if e.startswith("dispatch")])
 
-    def test_stop_dry_run_failed_without_publish(self) -> None:
-        self.h.scenario(dry_run="failure")
-        self.assert_stopped(self.h.run(), "dry-run", "dry-run run failed")
-        self.assertEqual(self.h.count("dispatch tag=dry-run"), 1)
-        self.assertEqual(self.h.count("dispatch tag=v0.35.0"), 0)
-
-    def test_stop_publish_failed(self) -> None:
-        self.h.scenario(publish="failure")
-        self.assert_stopped(self.h.run(), "publish", "publish run failed")
-        self.assertEqual(self.h.count("dispatch tag=v0.35.0"), 1)
-
     def test_run_that_failed_before_first_read_stops(self) -> None:
         for failure, step, dispatches in (
             ({"dry_run": "failure"}, "dry-run", {"dispatch tag=dry-run": 1, "dispatch tag=v0.35.0": 0}),
@@ -455,6 +514,139 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.assert_released(self.h.run(cwd=self.h.worktree))
         self.assertFalse(self.h.worktree.exists())
         self.assertEqual(self.h.count("dispatch tag=v0.35.0"), 1)
+
+    # Release decision table (DESIGN.md): one test per row, each with a fresh and a reused prep worktree.
+    # A reused worktree is run from inside, so the script also has to leave it before removing it.
+    def first_run(self, worktree: str, **scenario: object) -> subprocess.CompletedProcess[str]:
+        self.setUp()
+        cwd = None
+        if worktree == "reused":
+            self.h.git(self.h.checkout, "worktree", "add", "--quiet", "-b", "release/v0.35.0", str(self.h.worktree),
+                       "origin/main")
+            cwd = self.h.worktree
+        self.h.scenario(**scenario)
+        result = self.h.run(cwd=cwd)
+        self.assertFalse(self.h.worktree.exists())
+        return result
+
+    def rerun(self, **scenario: object) -> subprocess.CompletedProcess[str]:
+        self.h.scenario(**scenario)
+        return self.h.run("--version", "0.35.0")
+
+    def assert_row(self, result: subprocess.CompletedProcess[str], decided: list[str], mutations: list[str],
+                   stop: tuple[str, str] | None = None) -> None:
+        if stop:
+            self.assert_stopped(result, *stop)
+        else:
+            self.assert_released(result)
+        self.assertEqual(decisions(result), decided, result.stdout + result.stderr)
+        self.assertEqual(self.h.events(git=True), mutations)
+
+    def test_row_01_no_release_no_runs_dispatches_dry_run(self) -> None:
+        for wt in ("fresh", "reused"):
+            with self.subTest(worktree=wt):
+                self.assert_row(self.first_run(wt), GREEN_DECISIONS, prep(wt) + [DRY, PUB])
+
+    def test_row_02_no_release_dry_run_running_waits(self) -> None:
+        for wt in ("fresh", "reused"):
+            with self.subTest(worktree=wt):
+                self.assertEqual(self.first_run(wt, ci="failure").returncode, 1)
+                state = self.h.gh_state()
+                state["runs"].append({"databaseId": 4100, "status": "in_progress", "conclusion": "", "tag": "dry-run",
+                                      "headSha": state["prs"][0]["mergeCommit"]["oid"], "views": 0,
+                                      "createdAt": "2026-10-30T00:00:00Z",
+                                      "url": "https://github.com/test/loop-engine/actions/runs/4100"})
+                (self.h.gh / "state.json").write_text(json.dumps(state))
+                result = self.rerun()
+                self.assert_row(result, GREEN_DECISIONS[1:], prep(wt) + RERUN + [PUB])
+                self.assertIn("waiting for https://github.com/test/loop-engine/actions/runs/4100", result.stdout)
+
+    def test_row_03_no_release_dry_run_failed_here_stops(self) -> None:
+        for wt in ("fresh", "reused"):
+            with self.subTest(worktree=wt):
+                self.assert_row(self.first_run(wt, dry_run="failure"),
+                                GREEN_DECISIONS[:2] + [d("no", "dry-run", "failed (ours)", "stop")],
+                                prep(wt) + [DRY], stop=("dry-run", "dry-run run failed"))
+
+    def test_row_04_no_release_dry_run_failed_earlier_dispatches_again(self) -> None:
+        for wt in ("fresh", "reused"):
+            with self.subTest(worktree=wt):
+                self.assertEqual(self.first_run(wt, dry_run="failure").returncode, 1)
+                self.assert_row(self.rerun(), [d("no", "dry-run", "failed (earlier)", "dispatch")] + GREEN_DECISIONS[1:],
+                                prep(wt) + [DRY] + RERUN + [DRY, PUB])
+
+    def test_row_05_no_release_dry_run_green_dispatches_publish(self) -> None:
+        # The 6th release.yml read is the pre-dispatch read for the publish: the first run stops just before it.
+        for wt in ("fresh", "reused"):
+            with self.subTest(worktree=wt):
+                self.assert_stopped(self.first_run(wt, release_list_error_on=6), "publish", "gh run list release.yml failed")
+                self.assert_row(self.rerun(), GREEN_DECISIONS[2:], prep(wt) + [DRY] + RERUN + [PUB])
+
+    def test_row_06_no_release_publish_running_waits(self) -> None:
+        # The 7th read is just after the publish dispatch: the first run stops with the publish running.
+        for wt in ("fresh", "reused"):
+            with self.subTest(worktree=wt):
+                self.assert_stopped(self.first_run(wt, release_list_error_on=7), "publish", "gh run list release.yml failed")
+                self.assert_row(self.rerun(), GREEN_DECISIONS[3:], prep(wt) + [DRY, PUB] + RERUN)
+
+    def test_row_07_no_release_publish_failed_here_stops(self) -> None:
+        for wt in ("fresh", "reused"):
+            with self.subTest(worktree=wt):
+                self.assert_row(self.first_run(wt, publish="failure"),
+                                GREEN_DECISIONS[:4] + [d("no", "publish", "failed (ours)", "stop")],
+                                prep(wt) + [DRY, PUB], stop=("publish", "publish run failed"))
+
+    def test_row_08_no_release_publish_failed_earlier_dispatches_again(self) -> None:
+        for wt in ("fresh", "reused"):
+            with self.subTest(worktree=wt):
+                self.assertEqual(self.first_run(wt, publish="failure").returncode, 1)
+                self.assert_row(self.rerun(), [d("no", "publish", "failed (earlier)", "dispatch")] + GREEN_DECISIONS[3:],
+                                prep(wt) + [DRY, PUB] + RERUN + [PUB])
+
+    def test_row_09_no_release_publish_succeeded_stops(self) -> None:
+        for wt in ("fresh", "reused"):
+            with self.subTest(worktree=wt):
+                self.assert_row(self.first_run(wt, publish_makes_release=False),
+                                GREEN_DECISIONS[:4] + [d("no", "publish", "succeeded", "stop")],
+                                prep(wt) + [DRY, PUB], stop=("publish", "succeeded but v0.35.0 has no release"))
+
+    def test_row_10_release_without_publish_run_stops(self) -> None:
+        # The release appears (made by hand) after the merge, with no release.yml run on its commit.
+        for wt in ("fresh", "reused"):
+            with self.subTest(worktree=wt):
+                self.assertEqual(self.first_run(wt, ci="failure").returncode, 1)
+                state = self.h.gh_state()
+                git("--git-dir", str(self.h.origin), "tag", "v0.35.0", state["prs"][0]["mergeCommit"]["oid"])
+                state["releases"]["v0.35.0"] = "https://github.com/test/loop-engine/releases/tag/v0.35.0"
+                (self.h.gh / "state.json").write_text(json.dumps(state))
+                self.assert_row(self.rerun(), [d("yes", "publish", "none", "stop")], prep(wt) + STARTS_RELEASED,
+                                stop=("publish", "v0.35.0 has a release but no release.yml publish run"))
+
+    def test_row_11_release_with_publish_running_waits(self) -> None:
+        for wt in ("fresh", "reused"):
+            with self.subTest(worktree=wt):
+                self.assertEqual(self.first_run(wt, publish_release_early=True, release_list_error_on=7).returncode, 1)
+                self.assert_row(self.rerun(publish_release_early=True), [d("yes", "publish", "running", "wait"), d("yes", "publish", "succeeded", "done")],
+                                prep(wt) + [DRY, PUB] + STARTS_RELEASED)
+
+    def test_row_12_release_with_publish_failed_stops(self) -> None:
+        # release.yml makes the release, then its announce job fails: not done, here or on a rerun.
+        for wt in ("fresh", "reused"):
+            with self.subTest(worktree=wt):
+                stop = ("publish", "v0.35.0 has a release but its publish run failed")
+                self.assert_row(self.first_run(wt, publish="failure", publish_release_early=True),
+                                GREEN_DECISIONS[:3] + [d("yes", "publish", "running", "wait"),
+                                                       d("yes", "publish", "failed (ours)", "stop")],
+                                prep(wt) + [DRY, PUB], stop=stop)
+                self.assert_row(self.rerun(), [d("yes", "publish", "failed (earlier)", "stop")],
+                                prep(wt) + [DRY, PUB] + STARTS_RELEASED, stop=stop)
+
+    def test_row_13_release_with_publish_succeeded_is_done(self) -> None:
+        for wt in ("fresh", "reused"):
+            with self.subTest(worktree=wt):
+                self.assert_released(self.first_run(wt))
+                self.assert_row(self.rerun(), [d("yes", "publish", "succeeded", "done")],
+                                prep(wt) + [DRY, PUB] + STARTS_RELEASED)
 
     def test_fast_runs_release(self) -> None:
         self.h.scenario(fast_runs=True)
@@ -548,30 +740,6 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.h.git(self.h.worktree, "checkout", "--", "Cargo.toml")
         self.assert_released(self.h.run())
         self.assertEqual(self.h.count("prepare"), 1)
-
-    def test_rerun_waits_on_a_running_dispatch_instead_of_dispatching(self) -> None:
-        self.h.scenario(ci="failure")
-        self.assertEqual(self.h.run().returncode, 1)
-        state = self.h.gh_state()
-        merge = state["prs"][0]["mergeCommit"]["oid"]
-        state["runs"].append({"databaseId": 4000, "status": "in_progress", "conclusion": "", "headSha": merge,
-                              "createdAt": "2026-10-30T00:00:00Z", "tag": "dry-run", "views": 0,
-                              "url": "https://github.com/test/loop-engine/actions/runs/4000"})
-        (self.h.gh / "state.json").write_text(json.dumps(state))
-        self.h.scenario()
-        result = self.h.run("--version", "0.35.0")
-        self.assert_released(result)
-        self.assertIn("waiting for https://github.com/test/loop-engine/actions/runs/4000", result.stdout)
-        self.assertEqual(self.h.count("dispatch tag=dry-run"), 0)
-        self.assertEqual(self.h.count("dispatch tag=v0.35.0"), 1)
-
-    def test_rerun_after_release_does_nothing(self) -> None:
-        self.assert_released(self.h.run())
-        before = len(self.h.calls())
-        result = self.h.run("--version", "0.35.0")
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("v0.35.0 is already released", result.stdout)
-        self.assertEqual([c[:2] for c in self.h.calls()[before:]], [["release", "view"]])
 
 
 class AgentsContractTest(unittest.TestCase):
