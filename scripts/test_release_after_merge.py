@@ -355,7 +355,7 @@ class ReleaseAfterMergeTest(unittest.TestCase):
     def test_stop_prints_pinned_resume_command(self) -> None:
         self.h.scenario(ci="failure")
         result = self.h.run()
-        self.assertIn("resume with: scripts/release-after-merge.sh --version 0.35.0", result.stderr)
+        self.assertIn(f"resume with: scripts/release-after-merge.sh --version 0.35.0 --notes {self.h.notes}\n", result.stderr)
 
     def test_stop_without_notes(self) -> None:
         self.assert_stopped(self.h.run("--version", "0.35.0"), "prepare", "--notes FILE is required")

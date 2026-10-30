@@ -81,7 +81,8 @@ stop() {
   printf 'STOP [%s] %s\n' "$step" "$*" >&2
   log_line "STOP $*"
   if [[ -n ${version:-} ]]; then
-    printf 'once it is fixed, resume with: scripts/release-after-merge.sh --version %s\n' "$version" >&2
+    printf 'once it is fixed, resume with: scripts/release-after-merge.sh --version %s%s\n' \
+      "$version" "${notes:+ --notes $notes}" >&2
   else
     printf 'once it is fixed, rerun scripts/release-after-merge.sh\n' >&2
   fi
