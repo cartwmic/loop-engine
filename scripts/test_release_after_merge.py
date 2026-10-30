@@ -127,6 +127,10 @@ FAKE_GH = textwrap.dedent(
             run["status"], run["conclusion"] = "in_progress", ""
         out([run])
     if cmd == ["run", "list"] and opt("--workflow") == "release.yml":
+        if scenario.get("finish_on_list"):
+            for run in state["runs"]:
+                if run["status"] != "completed":
+                    finish(run)
         state["release_list_calls"] = state.get("release_list_calls", 0) + 1
         if state["release_list_calls"] == scenario.get("release_list_error_on"):
             save()
@@ -237,10 +241,17 @@ class Harness:
     def scenario(self, **values: object) -> None:
         (self.gh / "scenario.json").write_text(json.dumps({**GREEN, **values}))
 
-    def run(self, *args: str) -> subprocess.CompletedProcess[str]:
+    def run(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         args = args or ("--notes", str(self.notes))
-        return subprocess.run([str(SCRIPT), *args], cwd=self.checkout, env=self.env, capture_output=True,
+        return subprocess.run([str(SCRIPT), *args], cwd=cwd or self.checkout, env=self.env, capture_output=True,
                               text=True, timeout=120)
+
+    def resume_runs(self) -> None:
+        """Put the last release.yml run back in progress, as if a rerun finds it still running."""
+        state = self.gh_state()
+        run = state["runs"][-1]
+        run["status"], run["conclusion"], run["views"] = "in_progress", "", 0
+        (self.gh / "state.json").write_text(json.dumps(state, indent=1))
 
     def calls(self) -> list[list[str]]:
         path = self.gh / "calls.jsonl"
@@ -420,6 +431,30 @@ class ReleaseAfterMergeTest(unittest.TestCase):
                 self.assert_stopped(self.h.run(), step, f"{step} run failed")
                 for label, expected in dispatches.items():
                     self.assertEqual(self.h.count(label), expected, (label, self.h.events()))
+
+    def test_resumed_publish_finishing_between_reads_is_not_dispatched_again(self) -> None:
+        # A rerun finds the publish running; it finishes (and makes the release) during the run-list read.
+        self.h.scenario(publish="failure")
+        self.assertEqual(self.h.run().returncode, 1)
+        self.h.resume_runs()
+        self.h.scenario(finish_on_list=True)
+        self.assert_released(self.h.run("--version", "0.35.0"))
+        self.assertEqual(self.h.count("dispatch tag=v0.35.0"), 1)
+        self.assertEqual(self.h.count("dispatch tag=dry-run"), 1)
+
+    def test_resumed_failed_run_watched_by_this_invocation_stops(self) -> None:
+        # A rerun waits on a running publish from an earlier invocation; when it fails, that is a stop.
+        self.h.scenario(publish="failure")
+        self.assertEqual(self.h.run().returncode, 1)
+        self.h.resume_runs()
+        self.assert_stopped(self.h.run("--version", "0.35.0"), "publish", "publish run failed")
+        self.assertEqual(self.h.count("dispatch tag=v0.35.0"), 1)
+
+    def test_run_from_inside_the_reused_release_worktree(self) -> None:
+        self.h.git(self.h.checkout, "worktree", "add", "--quiet", "-b", "release/v0.35.0", str(self.h.worktree), "origin/main")
+        self.assert_released(self.h.run(cwd=self.h.worktree))
+        self.assertFalse(self.h.worktree.exists())
+        self.assertEqual(self.h.count("dispatch tag=v0.35.0"), 1)
 
     def test_fast_runs_release(self) -> None:
         self.h.scenario(fast_runs=True)

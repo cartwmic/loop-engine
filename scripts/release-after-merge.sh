@@ -126,13 +126,15 @@ print(match.group(1) if match else "")
 ')
 [[ -n $main_version ]] || stop "origin/main Cargo.toml has no [workspace.package] version"
 
-# release_url TAG: the release URL, or nothing when the tag has no release.
+# release_url TAG: sets release to the release URL, or empty when the tag has no release.
+# Any other gh error stops: an unreadable release is never taken for "not released".
 release_url() {
   local out err
+  release=
   err=$(mktemp)
   if out=$(gh release view "$1" --json url 2>"$err"); then
     rm -f "$err"
-    printf '%s' "$out" | json_get url
+    release=$(printf '%s' "$out" | json_get url)
     return 0
   fi
   if grep -q 'release not found' "$err"; then
@@ -146,8 +148,8 @@ release_url() {
 
 step=version
 if [[ -z $version ]]; then
-  main_release=$(release_url "v$main_version")
-  if [[ -z $main_release ]]; then
+  release_url "v$main_version"
+  if [[ -z $release ]]; then
     version=$main_version
     say "main is at $main_version with no release yet: releasing it"
   else
@@ -177,10 +179,10 @@ summary() {
 }
 
 step=release
-existing=$(release_url "$tag")
-if [[ -n $existing ]]; then
+release_url "$tag"
+if [[ -n $release ]]; then
   say "$tag is already released"
-  summary "$existing"
+  summary "$release"
   exit 0
 fi
 
@@ -342,6 +344,7 @@ else:
   merge_sha=$(printf '%s' "$view" | json_get mergeCommit.oid)
   say "merged as $merge_sha"
   if [[ -n ${worktree:-} && -e $worktree ]]; then
+    cd "$main_checkout"  # the caller may be inside the worktree being removed
     git worktree remove "$worktree" || say "could not remove $worktree; remove it by hand"
   fi
 elif [[ ${pr_state:-} == MERGED ]]; then
@@ -397,7 +400,7 @@ for r in runs:
 ' "$merge_sha") || stop "could not read the release.yml run list"
 }
 
-# Sets conclusion once the run completes.
+# Waits until the run completes; the next snapshot reads its result.
 wait_run() {
   local id=$1 view
   while :; do
@@ -405,14 +408,13 @@ wait_run() {
     [[ $(printf '%s' "$view" | json_get headSha) == "$merge_sha" ]] \
       || stop "release run $(printf '%s' "$view" | json_get url) is on another SHA"
     if [[ $(printf '%s' "$view" | json_get status) == completed ]]; then
-      conclusion=$(printf '%s' "$view" | json_get conclusion)
       return 0
     fi
     sleep "$poll_seconds"
   done
 }
 
-# Sets dispatched_id to the run this invocation started.
+# Adds the run it started to ours.
 dispatch() {
   local tag_input=$1 before new polls=0
   check_main
@@ -428,57 +430,61 @@ dispatch() {
     [[ $polls -lt $appear_polls ]] || stop "the dispatched release.yml run did not appear for $merge_sha"
     sleep "$poll_seconds"
   done
-  dispatched_id=${new%% *}
+  ours+=" ${new%% *} "
   say "dispatched: ${new#* }"
 }
 
-dispatched_id=
+# Runs this invocation dispatched or waited on. Only these can fail "now"; a failed run outside
+# this list is from an earlier invocation, and the rerun dispatches that step again.
+ours=" "
 
+# The dispatch decision. Each pass takes one snapshot and keeps no other state between passes:
+# the run list first, then the release. A publish creates the release before its run completes,
+# so any publish that is completed in the run list already has its release in the second read.
+# release.yml runs carry no readable input, so phase comes from order: the first successful run
+# on the SHA is the dry run, and every run after it is a publish.
 while :; do
   step=release
-  existing=$(release_url "$tag")
-  if [[ -n $existing ]]; then
-    summary "$existing"
+  release_runs
+  release_url "$tag"
+  state=$(printf '%s\n' "$runs" | awk '
+    NF { n++; id[n] = $1; st[n] = $2; c[n] = $3; u[n] = $4; if (!dry && $2 == "completed" && $3 == "success") dry = n }
+    END {
+      if (n == 0) { print "dry-run none - - -"; exit }
+      if (st[n] != "completed") what = "running"
+      else if (c[n] != "success") what = "failed"
+      else if (dry == n) what = "ready"
+      else what = "succeeded"
+      print (dry && dry < n ? "publish" : (dry == n ? "publish" : "dry-run")), what, id[n], u[n], (dry ? u[dry] : "-")
+    }')
+  read -r phase what run_id run_url dry_url <<<"$state"
+  [[ $dry_url == - ]] || dry_run_url=$dry_url
+  if [[ -n $release ]]; then
+    [[ $phase != publish || $what == ready ]] || publish_url=$run_url
+    summary "$release"
     exit 0
   fi
-  release_runs
-  # A success without a release is the dry run; runs after it are publishes.
-  state=$(printf '%s\n' "$runs" | awk '
-    NF { n++; id[n] = $1; st[n] = $2; c[n] = $3; u[n] = $4; if ($2 == "completed" && $3 == "success") ok = n }
-    END {
-      if (n == 0) { print "dry-run none"; exit }
-      if (st[n] != "completed") { print (ok ? "publish" : "dry-run"), "running", id[n], u[n]; exit }
-      if (!ok) { print "dry-run failed", id[n], u[n]; exit }
-      if (ok == n) { print "publish ready", id[ok], u[ok]; exit }
-      print "publish failed", id[n], u[n]
-    }')
-  read -r phase what run_id run_url <<<"$state"
   step=$phase
-  # A run this invocation dispatched that has already failed is a stop, not a retry.
-  [[ $what != failed || $run_id != "$dispatched_id" ]] || stop "$phase run failed: $run_url"
   case $what in
     running)
+      ours+="$run_id "
       say "waiting for $run_url"
       wait_run "$run_id"
-      [[ $conclusion == success ]] || stop "$phase run failed: $run_url"
-      if [[ $phase == publish ]]; then
-        publish_url=$run_url
-        existing=$(release_url "$tag")
-        [[ -n $existing ]] || stop "publish run $run_url succeeded but $tag has no release"
-      else
-        dry_run_url=$run_url
-        say "dry run green: $run_url"
-      fi
+      ;;
+    failed)
+      [[ $ours != *" $run_id "* ]] || stop "$phase run failed: $run_url"
+      say "the last $phase run failed ($run_url) before this run: dispatching it again"
+      if [[ $phase == publish ]]; then dispatch "$tag"; else dispatch dry-run; fi
+      ;;
+    none)
+      dispatch dry-run
       ;;
     ready)
-      dry_run_url=$run_url
-      step="publish"
+      say "dry run green: $run_url"
       dispatch "$tag"
       ;;
-    none|failed)
-      # A failed run from an earlier invocation: dispatch that step again.
-      [[ $what == none ]] || say "the last $phase run failed ($run_url): dispatching it again"
-      if [[ $phase == publish ]]; then dispatch "$tag"; else dispatch dry-run; fi
+    succeeded)
+      stop "publish run $run_url succeeded but $tag has no release"
       ;;
   esac
 done
