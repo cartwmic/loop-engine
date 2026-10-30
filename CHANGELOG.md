@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.35.0] - 2026-10-30
+
+### Added
+
+- `scripts/release-after-merge.sh` runs the release sequence after a merge to main as one command. It prepares the release in a worktree with `scripts/prepare-release.sh` and the caller's CHANGELOG text (`--notes FILE`), opens the release-prep PR and merges it once its checks pass, and waits for push-event CI to pass on the exact merge SHA. It then dispatches the release.yml dry run, then the publish. It stops at the first failed gate, names the step and prints a resume command. A rerun reads GitHub and resumes without repeating a merge or a dispatch. An existing release counts as done only when its publish run succeeded.
+
+### Changed
+
+- AGENTS.md "Authorized release sequence" now starts with a choice of path. After a merge, run the script: the owner's standing release grant is the authorization at each step it performs, but not for Loop Engine run starts. Otherwise, use the manual steps, with a fresh owner decision at each authorization point.
+
+### Known limits
+
+- The script tells a dry run from a publish by run order. A release.yml run dispatched by hand on the release commit can make it stop with a misleading message.
+- The script reads only the newest 50 release.yml dispatch runs. `--version` on an old release (v0.4.1 and older today) stops instead of reporting it released.
+
+### Compatibility
+
+- Script and docs only. The engine, the providers and the profiles are unchanged.
+
 ## [0.34.0] - 2026-10-30
 
 ### Added
