@@ -2,9 +2,12 @@
 """Lean-change journey through the real engine CLI: a scripted dummy worker drives profile B (review) and C (no review) to completion."""
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 from external_work_driver import engine_call
 
@@ -14,6 +17,11 @@ QUESTIONS = ['intent', 'scope', 'edge-cases', 'checks', 'docs', 'principles']
 CHECK_QUESTIONS = ['use', 'edge', 'control', 'terms', 'criteria-gap', 'principles-gap']
 OWNER = {'name': 'owner', 'kind': 'human'}
 WORKER = {'name': 'worker', 'kind': 'script'}
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_SKILL = REPO_ROOT / 'crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md'
+PARALLEL_SECTION = '## Parallel builders'
+GATE = 'printf "%s %s\\n" "$(pwd -P)" "$(git rev-parse HEAD)" >> "$GATE_LOG"\n'
+BUILDER_TIMEOUT = 20
 
 
 def intent(hard=False):
@@ -327,10 +335,164 @@ def old_vs_new_run(engine, provider, work):
     assert final['current_state'] == 'end' and final['lifecycle'] == 'final', final
 
 
+def parallel_blocks(skill):
+    """The skill's 'Parallel builders' sh blocks, in order: start a step, land a step, clean up a step."""
+    lines = skill.read_text().splitlines()
+    if PARALLEL_SECTION not in lines:
+        raise SystemExit(f'{skill}: no "{PARALLEL_SECTION}" section')
+    section = []
+    for line in lines[lines.index(PARALLEL_SECTION) + 1:]:
+        if line.startswith('## '):
+            break
+        section.append(line)
+    blocks, block, indent = [], None, 0
+    for line in section:
+        if block is None and line.strip() == '```sh':
+            block, indent = [], len(line) - len(line.lstrip())
+        elif block is not None and line.strip() == '```':
+            blocks.append('\n'.join(block) + '\n')
+            block = None
+        elif block is not None:
+            block.append(line[indent:])
+    if len(blocks) != 3:
+        raise SystemExit(f'{skill}: "{PARALLEL_SECTION}" has {len(blocks)} sh blocks, expected three (start, land, clean up)')
+    return blocks
+
+
+def run_block(block, repo, work, step):
+    env = dict(os.environ, REPO=str(repo), WORK=str(work), STEP=step)
+    return subprocess.run(['sh', '-c', block], env=env, text=True, capture_output=True)
+
+
+def builder(worktree, step, other, name, text, starts):
+    """A scripted builder: records its start, waits until the other builder has started, then writes only its own file."""
+    (starts / step).touch()
+    deadline = time.monotonic() + BUILDER_TIMEOUT
+    while not (starts / other).exists():
+        if time.monotonic() > deadline:
+            raise TimeoutError(f'builder {step}: {other} never started; the builders did not run at the same time')
+        time.sleep(0.05)
+    (worktree / name).write_text(text)
+
+
+def build_together(steps, starts):
+    failures = []
+
+    def guarded(*args):
+        try:
+            builder(*args, starts)
+        except Exception as error:
+            failures.append(repr(error))
+    threads = [threading.Thread(target=guarded, args=step) for step in steps]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert not failures, failures
+
+
+def git_out(repo, *args):
+    return subprocess.run(['git', *args], cwd=repo, check=True, capture_output=True, text=True).stdout
+
+
+def parallel_intent():
+    def check(name, line):
+        return {'argv': ['grep', '-qx', line, name], 'timeout_ms': 10000}
+    return {'author': WORKER, 'goal': 'Finish both steps.', 'constraints': ['Touch only one.txt and two.txt.'], 'hard': False,
+            'criteria': [{'id': 'one', 'statement': 'one.txt says one: done', 'check': check('one.txt', 'one: done'), 'old': {'expect': 'fails'}},
+                         {'id': 'two', 'statement': 'two.txt says two: done', 'check': check('two.txt', 'two: done'), 'old': {'expect': 'fails'}}]}
+
+
+def parallel_run(engine, provider, blocks, work):
+    """Two steps built at once in worktrees outside the repo, landed and gated once; a third, conflicting step stops at landing."""
+    # bookends:LE-211 — the skill's Parallel builders blocks, run as written, build two steps at once, land them, gate once in the repo, and stop a conflicting step at landing.
+    start, land, clean = blocks
+    j = Journey(engine, provider, work)
+    repo, steps, starts, gate_log = work / 'repo', work / 'steps', work / 'starts', work / 'gate.log'
+    for path in (repo, steps, starts):
+        path.mkdir()
+    git(repo, 'init', '-q')
+    git(repo, 'config', 'user.email', 'j@example.invalid')
+    git(repo, 'config', 'user.name', 'j')
+    (repo / 'README.md').write_text('fixture\n')
+    (repo / 'one.txt').write_text('one: todo\n')
+    (repo / 'two.txt').write_text('two: todo\n')
+    (repo / 'gate.sh').write_text(GATE)
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-qm', 'base')
+    principles = work / 'principles.md'
+    principles.write_text(PRINCIPLES)
+    profile_path = work / 'profile.json'
+    profile_path.write_text(subprocess.run([str(provider), 'setup', '--profile', 'b', '--repo', str(repo), '--principles', str(principles)],
+                                           text=True, capture_output=True, check=True).stdout)
+    j.run_id = 'lean-parallel'
+    j.call('start', '--id', j.run_id, 'lean-change', '@' + str(profile_path), 'parallel')
+    j.append('intent-1', 'intent', parallel_intent())
+    j.append('chk-1', 'intent-check', intent_check())
+    j.event('intent-ready')
+    j.append('d-ok', 'owner-decision', {'checkpoint': 'intent', 'subject': 'intent', 'subject_revision': 'intent-1',
+                                      'decision': 'approve', 'text': 'Yes, both steps.', 'actor': OWNER})
+    j.event('approved')
+    assert j.state() == 'implement'
+
+    # Every step starts from the same HEAD, before any landing, in a worktree outside the repo.
+    for step in ['s1', 's2', 's3']:
+        result = run_block(start, repo, steps, step)
+        assert result.returncode == 0, (step, result.stderr)
+        assert (steps / f'wt-{step}').is_dir() and not (steps / f'wt-{step}').resolve().is_relative_to(repo.resolve())
+    build_together([(steps / 'wt-s1', 's1', 's2', 'one.txt', 'one: done\n'),
+                    (steps / 'wt-s2', 's2', 's1', 'two.txt', 'two: done\n')], starts)
+    # The third step edits the line s1 changed.
+    (steps / 'wt-s3' / 'one.txt').write_text('one: three\n')
+    landed = []
+    for step in ['s1', 's2']:
+        result = run_block(land, repo, steps, step)
+        assert result.returncode == 0 and 'conflict' not in result.stderr, (step, result.stderr)
+        landed.append(git_out(repo, 'rev-parse', f'step/{step}').strip())
+    head = git_out(repo, 'rev-parse', 'HEAD').strip()
+    status = git_out(repo, 'status', '--porcelain', '--untracked-files=all')
+    tree = j.verify()['tree']
+    result = run_block(land, repo, steps, 's3')
+    assert 'conflict: s3' in result.stderr, (result.returncode, result.stderr)
+    assert git_out(repo, 'rev-parse', 'HEAD').strip() == head
+    assert git_out(repo, 'status', '--porcelain', '--untracked-files=all') == status
+    assert j.verify()['tree'] == tree
+    assert (repo / 'one.txt').read_text() == 'one: done\n'
+
+    # The driver gates once, in the repository, after the last landing; the builders never ran it.
+    assert not gate_log.exists()
+    subprocess.run(['sh', 'gate.sh'], cwd=repo, env=dict(os.environ, GATE_LOG=str(gate_log)), check=True)
+    assert gate_log.read_text() == f'{repo.resolve()} {head}\n', gate_log.read_text()
+    for commit in landed:
+        git(repo, 'merge-base', '--is-ancestor', commit, head)
+
+    for step in ['s1', 's2', 's3']:
+        result = run_block(clean, repo, steps, step)
+        assert result.returncode == 0, (step, result.stderr)
+        assert not (steps / f'wt-{step}').exists()
+    assert git_out(repo, 'branch', '--list', 'step/*') == ''
+    assert git_out(repo, 'worktree', 'list', '--porcelain').count('worktree ') == 1
+
+    j.event('ready')
+    fresh = j.verify()
+    assert [r['exit_code'] for r in fresh['results']] == [0, 0], fresh
+    j.append('v-1', 'verification', fresh)
+    j.event('verified')
+    assert j.state() == 'review'
+    packet = j.tool('review-packet', j.show_text())
+    diff = packet.split('## Diff against base', 1)[1]
+    assert '+one: done' in diff and '+two: done' in diff and 'one: three' not in diff, diff
+    j.append('rev-1', 'review', review(fresh['tree'], False))
+    j.event('reviewed')
+    final = j.call('show', '--view', 'full', j.run_id)
+    assert final['current_state'] == 'end' and final['lifecycle'] == 'final', final
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--engine')
     parser.add_argument('--provider')
+    parser.add_argument('--skill', default=str(DEFAULT_SKILL))
     parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args()
     # Bare invocation is the recognized CI collection form; full proof uses the parameterized run below.
@@ -343,10 +505,12 @@ def main():
         if not getattr(args, name):
             parser.error(f'--{name} is required')
     engine, provider = Path(args.engine).resolve(), Path(args.provider).resolve()
+    blocks = parallel_blocks(Path(args.skill))
     for name, action in [('b', lambda w: run_profile(engine, provider, 'b', w)),
                          ('c', lambda w: run_profile(engine, provider, 'c', w)),
                          ('hard', lambda w: hard_run(engine, provider, w)),
-                         ('old-vs-new', lambda w: old_vs_new_run(engine, provider, w))]:
+                         ('old-vs-new', lambda w: old_vs_new_run(engine, provider, w)),
+                         ('parallel', lambda w: parallel_run(engine, provider, blocks, w))]:
         with tempfile.TemporaryDirectory(prefix=f'lean-change-{name}-') as temporary:
             action(Path(temporary))
         print(f'lean-change journey {name} passed')
