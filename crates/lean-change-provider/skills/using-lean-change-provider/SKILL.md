@@ -78,7 +78,8 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    Request `approved` (hard false) or `approved-hard` (hard true). If they want changes, request `revise`,
    write `intent-2`, and ask again. A rejection is the same record with `"decision": "reject"`, a `target` of `intent` and a `reason`.
 3. **plan** (hard only). Append `{"intent": "intent-1", "text": "..."}` as kind `plan`, request `planned`.
-4. **implement.** Change the code. Stay inside the approved goal and constraints. Request `ready`.
+4. **implement.** Change the code. Stay inside the approved goal and constraints. When the work has steps
+   that touch different files, build them at once ([Parallel builders](#parallel-builders)). Request `ready`.
 5. **verify.** Run the checks on the current tree and append what they print:
 
    ```sh
@@ -113,6 +114,57 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
 
 `revise` from implement, verify and review goes back (to explore, implement and implement). Going back is free; the
 gates check the records again when you return.
+
+## Parallel builders
+
+When the plan has two or more steps that touch different files, build those steps at the same time,
+each in its own git worktree, and gate the joined tree once. Only you merge, append and request
+events; the engine and the provider never see the steps.
+
+1. **Split.** In the plan (or your own notes, for work that is not hard) name each step, the files it
+   owns, and which steps are independent. A file that two steps need (a CLI dispatch table, a
+   registry, a README) belongs to one of them, or to a last wire-up step done after the join.
+   Commit the repository first: a step starts from `HEAD`, not from uncommitted edits.
+2. **Start** every independent step in its own worktree, outside the repository:
+
+   ```sh
+   # REPO: the run's repository. WORK: your work directory outside it. STEP: a short step id.
+   git -C "$REPO" worktree add -q -b "step/$STEP" "$WORK/wt-$STEP" HEAD
+   ```
+
+3. **Build all at once.** Launch one builder per step together, each with its worktree as its working
+   directory, and wait for all of them. Tell each builder: edit only files in this worktree; run only
+   this step's focused tests (one test file, or one crate with a filter), or none; never run the full
+   test suite, a full or workspace build, a journey or a heavy-gate job; never commit, merge or call
+   `loop-engine`. For Rust, give the builders one shared `CARGO_TARGET_DIR` outside the worktrees.
+4. **Land** each finished step, in plan order:
+
+   ```sh
+   if git -C "$WORK/wt-$STEP" add -A && git -C "$WORK/wt-$STEP" commit -q -m "step $STEP"; then
+     git -C "$REPO" merge -q --no-ff --no-edit "step/$STEP" || { git -C "$REPO" merge --abort; echo "conflict: $STEP" >&2; false; }
+   else
+     echo "not committed: $STEP" >&2; false
+   fi
+   ```
+
+   If it fails, the step has not landed and the repository is as it was. On `not committed`, read
+   git's message (a hook, or a step with no changes), fix it in the worktree and land it again. On
+   `conflict`, resolve the conflict yourself, or build that step again from the landed tree (a new
+   worktree off the new `HEAD`).
+5. **Join, then gate once.** After the last independent step lands, run the full build and the full
+   test suite once, in `REPO` (through heavy-gate where the repository uses it). Fix what they find
+   in `REPO`, then do the wire-up step, if any. Steps that depend on others are built after the join,
+   the same way.
+6. **Clean up** each step, then request `ready`:
+
+   ```sh
+   git -C "$REPO" worktree remove "$WORK/wt-$STEP" && git -C "$REPO" branch -q -D "step/$STEP"
+   ```
+
+   Git refuses to remove a worktree that still holds uncommitted work. Land it first, or, if you
+   mean to drop that work, add `--force`.
+
+Verify, the old-vs-new check and the review are unchanged: they judge the merged tree in `REPO`.
 
 ## The old-vs-new check (on by default)
 
