@@ -20,7 +20,10 @@ WORKER = {'name': 'worker', 'kind': 'script'}
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SKILL = REPO_ROOT / 'crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md'
 PARALLEL_SECTION = '## Parallel builders'
-GATE = 'printf "%s %s\\n" "$(pwd -P)" "$(git rev-parse HEAD)" >> "$GATE_LOG"\n'
+# The stand-in full gate logs every call, then fails when the finished steps word their files differently: each step alone passes, the joined tree does not.
+GATE = ('printf "%s %s\\n" "$(pwd -P)" "$(git rev-parse HEAD)" >> "$GATE_LOG"\n'
+        'words=$(sed "s/^[a-z]*: //" one.txt two.txt | grep -vx todo | sort -u | wc -l)\n'
+        '[ "$words" -le 1 ] || { echo "gate: one.txt and two.txt disagree" >&2; exit 1; }\n')
 BUILDER_TIMEOUT = 20
 
 
@@ -404,8 +407,8 @@ def parallel_intent():
 
 
 def parallel_run(engine, provider, blocks, work):
-    """Two steps built at once in worktrees outside the repo, landed and gated once; a third, conflicting step stops at landing."""
-    # bookends:LE-211 — the skill's Parallel builders blocks, run as written, build two steps at once, land them, gate once in the repo, and stop a conflicting step at landing.
+    """Two steps built at once in worktrees outside the repo, landed, gated in the repo and fixed there; a third, conflicting step stops at landing."""
+    # bookends:LE-211 — the skill's Parallel builders blocks, run as written, build two steps at once, land them, gate in the repo, fix the gate's finding there and gate again, and stop a conflicting step at landing.
     start, land, clean = blocks
     j = Journey(engine, provider, work)
     repo, steps, starts, gate_log = work / 'repo', work / 'steps', work / 'starts', work / 'gate.log'
@@ -441,7 +444,12 @@ def parallel_run(engine, provider, blocks, work):
         assert result.returncode == 0, (step, result.stderr)
         assert (steps / f'wt-{step}').is_dir() and not (steps / f'wt-{step}').resolve().is_relative_to(repo.resolve())
     build_together([(steps / 'wt-s1', 's1', 's2', 'one.txt', 'one: done\n'),
-                    (steps / 'wt-s2', 's2', 's1', 'two.txt', 'two: done\n')], starts)
+                    (steps / 'wt-s2', 's2', 's1', 'two.txt', 'two: finished\n')], starts)
+    # Each step alone passes the gate (logged apart from the driver's gate log); only the joined tree fails it.
+    for step in ['s1', 's2']:
+        alone = subprocess.run(['sh', 'gate.sh'], cwd=steps / f'wt-{step}', env=dict(os.environ, GATE_LOG=str(work / 'step-gate.log')),
+                               text=True, capture_output=True)
+        assert alone.returncode == 0, (step, alone.stderr)
     # The third step edits the line s1 changed.
     (steps / 'wt-s3' / 'one.txt').write_text('one: three\n')
     landed = []
@@ -459,12 +467,28 @@ def parallel_run(engine, provider, blocks, work):
     assert j.verify()['tree'] == tree
     assert (repo / 'one.txt').read_text() == 'one: done\n'
 
-    # The driver gates once, in the repository, after the last landing; the builders never ran it.
+    # The driver gates in the repository after the last landing; the builders never ran it. The joined tree fails.
     assert not gate_log.exists()
-    subprocess.run(['sh', 'gate.sh'], cwd=repo, env=dict(os.environ, GATE_LOG=str(gate_log)), check=True)
-    assert gate_log.read_text() == f'{repo.resolve()} {head}\n', gate_log.read_text()
+    gate_env = dict(os.environ, GATE_LOG=str(gate_log))
+    branches = {step: git_out(repo, 'rev-parse', f'step/{step}').strip() for step in ['s1', 's2', 's3']}
+    first = subprocess.run(['sh', 'gate.sh'], cwd=repo, env=gate_env, text=True, capture_output=True)
+    assert first.returncode != 0 and 'disagree' in first.stderr, (first.returncode, first.stderr)
     for commit in landed:
         git(repo, 'merge-base', '--is-ancestor', commit, head)
+
+    # The driver fixes the finding in the repository, commits it on the run branch, and gates again: it passes.
+    (repo / 'two.txt').write_text('two: done\n')
+    git(repo, 'commit', '-qam', 'fix gate finding: two.txt wording')
+    fix = git_out(repo, 'rev-parse', 'HEAD').strip()
+    assert git_out(repo, 'rev-parse', f'{fix}^@').split() == [head]
+    second = subprocess.run(['sh', 'gate.sh'], cwd=repo, env=gate_env, text=True, capture_output=True)
+    assert second.returncode == 0, second.stderr
+    assert gate_log.read_text() == f'{repo.resolve()} {head}\n{repo.resolve()} {fix}\n', gate_log.read_text()
+    # The fix touched no step worktree or branch: step/s2 still holds the original wording.
+    assert {step: git_out(repo, 'rev-parse', f'step/{step}').strip() for step in ['s1', 's2', 's3']} == branches
+    assert git_out(repo, 'show', 'step/s2:two.txt') == 'two: finished\n'
+    assert (steps / 'wt-s2' / 'two.txt').read_text() == 'two: finished\n'
+    assert subprocess.run(['git', 'merge-base', '--is-ancestor', fix, 'step/s2'], cwd=repo).returncode == 1
 
     for step in ['s1', 's2', 's3']:
         result = run_block(clean, repo, steps, step)
@@ -481,7 +505,7 @@ def parallel_run(engine, provider, blocks, work):
     assert j.state() == 'review'
     packet = j.tool('review-packet', j.show_text())
     diff = packet.split('## Diff against base', 1)[1]
-    assert '+one: done' in diff and '+two: done' in diff and 'one: three' not in diff, diff
+    assert '+one: done' in diff and '+two: done' in diff and 'one: three' not in diff and 'two: finished' not in diff, diff
     j.append('rev-1', 'review', review(fresh['tree'], False))
     j.event('reviewed')
     final = j.call('show', '--view', 'full', j.run_id)
