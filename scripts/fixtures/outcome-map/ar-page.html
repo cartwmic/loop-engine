@@ -1,0 +1,2930 @@
+<title>lean-change: parallel builders recipe, journey scenario and LE-211 (#88) Review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  accountable-review · review-map page template
+
+  Copy this file, fill in the content, delete unused component examples and any
+  section the diff does not earn. Everything below is verified working: no
+  horizontal overflow, wide blocks scroll in their own container, and all three
+  theme states resolve.
+
+  Design language: "PR review interface redesign", in one of three themes —
+  Daylight (the default), Workshop or Field Notes — chosen by review_map.theme
+  in the repository's .accountable-review.yml. A theme decides typefaces, radii,
+  hues and a few label treatments; every theme keeps FOUR semantic colour
+  families over one shared five-slot ramp — slate for navigation, ochre for a stated gap, teal for code
+  the diff does not touch, plum for provenance. Each one means one thing and the
+  token block says which; a family used outside its rule stops carrying meaning
+  everywhere else. A fifth ramp, --primer-*, is the exception that proves that
+  rule: it means nothing at all. It frames aside.primer and nothing else, in
+  Rails red (graphite on a Rust primer, through aside.primer.pr-rust), and the
+  token block says why a page with no severity vocabulary can afford one. The structural idea is that a checkpoint is NOT a card — it
+  is a question, the two or three sentences that make it one, and where to look;
+  a hairline separates one from the next. Cards are reserved for the few things
+  that genuinely are objects: a chain figure, the impact panel.
+
+  THEME RULE, do not break it: every colour is a token defined on bare :root and
+  redefined in BOTH dark blocks. The four families are derived rather than picked,
+  so a dark value is the light ramp's own slot at the reflected lightness — which
+  is why there is no second set of hand-tuned hex values to keep in step. Never
+  declare a colour only inside a media or [data-theme] block — that is the
+  classic unreadable-artifact bug. The three
+  states are: explicit dark, explicit light, and the unstamped default that most
+  viewers actually get, where only prefers-color-scheme applies.
+  The source designs are light-only; each theme's dark half is ours, and the pair
+  that inverts (.ip-out, the filled node that ends a chain) is written against
+  tokens precisely so it keeps inverting relative to the page.
+
+  NO SEVERITY VOCABULARY, by design: this system has no chip that grades the PR.
+  Claims carry an evidence tier (span.tier) where the diff does not show them
+  directly, and that is the whole vocabulary. The checkpoints are ORDERED by
+  what a reviewer would most regret misunderstanding, and an order is not a
+  scale: no number beside a question, no "blocking", no "watch". The one line
+  that names an unresolved thing is p.open, labelled "Open question".
+
+  AND NO VERIFICATION BADGE, for the same reason and in the same place so the two
+  cannot come back separately. A run at --effort high sends an adversarial pass at
+  its own analysis before any of this is written (SKILL.md steps 6 and 8); nothing
+  about that reaches the page. There is no "verified" chip, no "checked" marker,
+  no count of corrected claims. An evidence tier says how a claim is known; a
+  badge saying how hard someone looked is the clean bill of health this page must
+  never read as.
+
+  AND NO STACK BADGE, in the same place for the same reason. This template serves
+  Rails, Phoenix, Rust and React pages alike. What differs between them is the content of the
+  sentences, the nodes in a figure.chain and the command inside a pre.probe —
+  never a chip, a marker or a section. A reader should not be able to tell which
+  lens file produced the page except by reading what it says about their
+  repository.
+
+  AND NO MENTOR BADGE, which is the fourth of these and the one with the best
+  excuse. --mentor DOES change what is on the page: it admits aside.primer, which
+  is visible by existing. That is exactly why it needs no chip — the reader can
+  see which page they got, which a flag naming a second document could not
+  offer. A "mentor mode" banner, a count of the primers, an "onboarding" eyebrow:
+  each one is the badge shape coming back through the one door that looks open.
+
+  AND NOTHING MARKS A CODING-DECISION OR AN ARCHITECTURAL CHECKPOINT AS ONE, which
+  is the fifth and the one that hides inside a component rather than beside it. A
+  checkpoint that judges how the change was built — report-format.md § Coding
+  decisions — or what it made true of the system's structure — § Architectural
+  questions — rather than what it now does is an ordinary section.cp in the
+  positions § Ranking by delta gives it. No label, no eyebrow, no section of its
+  own, and no sentence announcing that the page also checks conventions or the
+  architecture. Announcing it is how it turns into a style review or a design
+  review: a reader who is told such a section exists expects it filled every
+  time, and a run that knows the reader expects it will fill it.
+
+  AND NO CARRY BADGE, which is the sixth and now the one with the best excuse of
+  all. --update re-reads only the commits since the previous map (SKILL.md
+  § Re-running over new commits), so a real difference exists between the parts of
+  the page and a marker for it feels owed. It is not. The page says WHICH REVISION
+  its content describes, once, in the masthead cell and one sentence in *What changed* — and
+  never which checkpoints were re-derived. No "new" flag on a checkpoint, no
+  "carried" tag, no "3 of 5 updated" line: three ordered states beside a question
+  is the severity chip above, rebuilt out of words that sound like provenance.
+
+  The page carries no tick state and no "n of m" counter anywhere, because a
+  count of cleared items reads as progress toward approval. See report-format.md.
+
+  Placeholders are written as {{LIKE_THIS}}.
+
+  MAP — the style block first, then the body skeleton at the bottom of the file.
+
+    :root tokens .......... colours, fonts. Declared three times: bare :root,
+                            prefers-color-scheme dark, [data-theme="dark"].
+                            --nav-* / --gap-* / --unchanged-* / --prov-* are the
+                            four semantic families; the rule for each is in the
+                            block itself and it is the design, not a convention.
+                            --primer-* is the fifth ramp and the only one that
+                            means nothing: it is one component's frame
+    shell, rail ........... .wrap, main, .progress, and the sticky numbered rail
+    type .................. headings, .lede, .note, .lbl, .path, .cite, code
+    section furniture ..... .eyebrow — a label and a rule that fills the row
+    before / after ........ dl.ba — two rows, never one paragraph. Section 01
+                            only, and only when a workflow fundamentally changed
+    context ............... dl.ctx — section 02, earned per concept: what a
+                            piece of THIS repository is, a citation, and
+                            span.ctx-used pointing at the checkpoints that rely
+                            on it. No tier, no grade, and one figure at most:
+                            figure.lifecycle.lc-shift, the request sequence
+                            before and after, when the change moved which
+                            request does what; at --context collapsed,
+                            all of it inside one shut details.ctx-fold
+    evidence tier ......... .tier — neutral by default, .tier-unc teal for
+                            `from unchanged code`, .tier-inf ochre for an
+                            inference. .tag is an excerpt's state, in plum,
+                            because what the bytes ARE is provenance
+    gaps .................. .gap (ochre, a stated absence), details.searched (what was
+                            grepped — collapsed, and plum: provenance, never a claim)
+    source excerpts ....... details.excerpt -- generated by scripts/excerpt.sh, and
+                            it sits BESIDE the claim or the .lookat entry it
+                            confirms. The --source variant is syntax-tinted at
+                            runtime from its data-lang; --diff is not, its colour
+                            means +/-
+    framework anchors ..... a.doc (a link from references/rails-docs.md, never a
+                            constructed URL) and pre.probe (a command the reviewer
+                            runs; the page never shows its output). At most one of
+                            each per checkpoint, and a probe carries a THREE-part
+                            label whose last part says what the output would settle
+    primer callout ........ aside.primer — the THIRD anchor, and the only component
+                            a flag admits. --mentor only, inside a checkpoint, at
+                            most one per checkpoint and three per page. It holds the
+                            checkpoint's one a.doc and a pre.demo, which is the one
+                            block on this page that may show a result line, because
+                            its receiver is a class this repository does not have.
+                            Its header names the stack in words — "Understanding
+                            Ruby on Rails" — and its frame is --primer-*;
+                            a Rust primer adds .pr-rust, nothing else
+    review checkpoint ..... section.cp — THE PRIMITIVE. An h3 question, 2-4
+                            sentences, at most one figure, ul.lookat (1-4
+                            places to look, each a title, a clause and its
+                            citation, in that order), an optional p.open
+    start here ............ ol.begin — one list: the route through the code, 3-7
+                            stops. Entries link into the checkpoint that owns them
+    chains ................ figure.chain inside a checkpoint — mechanism INSIDE the
+                            change, and therefore no .ip-aff node. .ip-step is the
+                            neutral hop, and exists only here
+    topology figures ...... figure.converge (paths onto one invariant), .lifecycle
+                            (states and the actions between them), .structure (an
+                            entity and its relationships) — the shapes a chain
+                            cannot draw. Converge and structure MAY hold .ip-aff:
+                            an unchanged writer of an invariant is upstream of the
+                            change, not a consequence of it
+    impact paths .......... .impact — section 05. 1-3 directed chains + .legend,
+                            ONE PATH PER .ip-card, so three diagrams read as three.
+                            Each node past a path's first carries its INCOMING
+                            relation in .ip-rel, so an edge is labelled or it is
+                            missing. Lane comes from the kind: .ip-chg left,
+                            .ip-aff right and teal, .ip-out spans and ends the path
+    path preamble ......... p.ip-why — one per .ip-card, above the lanes. What goes
+                            wrong and to whom, then the checkpoint. Never the hops
+    node locator .......... a.path.ip-loc — last line of an .ip-box, in both figure
+                            vocabularies. Required on .ip-chg and .ip-aff, optional
+                            on .ip-step, never on .ip-out. Carries NO data-path:
+                            coverage-gate.sh greps that page-wide
+    grid tables ........... .gt (gap:1px over --rule), .gt-meta, .gt-paths — the
+                            inventory, paths with no classification. data-path stays
+                            on a div.c, so the gate runs wherever the inventory sits
+    evidence foot ......... details.evidence — section 06, below the last section.
+                            Not a section: no number, no rail entry, shut
+    build state ........... .buildstate banner and .pending markers — deleted at the
+                            final publish, never left on a finished page
+    body skeleton ......... rail, sections 01 -> 05, two checkpoints assembled whole
+                            and one pending stub, the impact panel, the evidence foot
+    script ................ scroll progress, rail scroll-spy, and the syntax tint on
+                            unchanged excerpts. Nothing else — no state, no
+                            localStorage, no counters. All three are presentation:
+                            delete the block and the page still reads
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+<style>
+/* ============================================================
+   Tokens. NONE ARE DECLARED IN THIS BLOCK: every token — the
+   neutrals, the type stacks, the radii and the colour families —
+   comes from the theme page-skeleton.sh writes in at the theme
+   marker below this style block. What a theme may not
+   change is the rule that follows. Every theme carries FOUR
+   SEMANTIC FAMILIES that share one ramp shape: each family is a
+   single hue at fixed lightness and chroma per slot, so no two can
+   drift apart in weight, and the dark half is a reflection of the
+   light rather than a second hand-picked set. The hue numbers below
+   are approximate and move a few degrees between themes; what each
+   family means does not move at all.
+
+   WHAT EACH FAMILY IS ALLOWED TO MEAN. The rule is the system —
+   a family used outside it stops carrying meaning everywhere
+   else on the page, which is the only thing colour is doing here.
+
+     --nav-*        slate        You can click it. Rail links,
+                                citations, paths, the progress bar,
+                                in-page anchors. Nothing that is not
+                                a link may be slate, which is why
+                                there is no separate underline or
+                                selection colour any more: they were
+                                two off-system hex values doing what
+                                two slots of this ramp already do.
+     --gap-*        ochre        Something is missing and the page is
+                                saying so: p.open, the inferred tier,
+                                the build-state banner. NEVER a
+                                severity and never a grade.
+     --unchanged-*  teal         This code is not in the diff. The
+                                `from unchanged code` tier, the
+                                dashed .ip-aff node and its legend
+                                key, the "Affected, not changed"
+                                lists. It is a fact about the
+                                repository, so it cannot be read as a
+                                verdict — which is what makes it safe
+                                to add to a page with no severity
+                                vocabulary. Never on a link, so it
+                                never competes with slate.
+     --prov-*       plum         How a thing is known, never what it
+                                means: the excerpt .tag, the searches
+                                block, the evidence foot, the probe
+                                label. The quietest family on purpose
+                                — a border and an ink, never a fill
+                                you notice before the prose.
+
+   AND ONE RAMP THAT IS NOT A FAMILY, because it has no meaning to
+   spend:
+
+     --primer-*     red          The frame of aside.primer, and of
+                                nothing else on this page. Not a
+                                fifth meaning — a reminder of which
+                                framework is speaking, in the red
+                                that framework uses, so a reader new
+                                to the stack recognises the block
+                                that exists for them before reading
+                                a word of it.
+
+   THAT IS THE ONLY THING RED DOES OUTSIDE AN EXCERPT, and the test
+   it passes is the one teal passed: it cannot be read as a verdict,
+   because it is not attached to a claim at all. It frames a
+   quotation of the manual. A red for risk, for confidence, or on
+   anything the page asserts about THIS change is the severity chip
+   arriving as a palette — which is why this ramp is named for its
+   component and not for a meaning. A token called --primer-* has
+   nowhere else to go.
+
+   Green and red inside an excerpt stay exactly what they were:
+   added and removed lines, there and nowhere else. What keeps them
+   apart from the frame is not the hue, it is the container — one is
+   a panel border around a lesson, the other a row stripe inside
+   quoted code, and the two never abut.
+
+     --primer-rust-*  graphite   The same frame for a Rust primer,
+                                reached by one class on the aside,
+                                aside.primer.pr-rust, which re-points
+                                --primer-* at this ramp and changes
+                                nothing else. Rust's own mark is
+                                black, so its frame is iron: the red
+                                ramp's lightness per slot at almost
+                                no chroma, and a near-black top rule
+                                where Rails draws a red one.
+
+   A RUST PRIMER IN RAILS RED WOULD BE WRONG, and that was the open
+   question this block used to record. The answer is the one it
+   predicted: a variant class, never a colour a run types and never
+   a second component. Graphite rather than Ferris orange because
+   orange sits between the red frame and the ochre that means
+   something is missing, and would read as the second. Phoenix still
+   has no frame of its own because elixir-docs.md withholds every
+   link and a primer is gated on one; when it opens, the same shape
+   applies. rails-anchors.rb § 8 checks that the class and the doc
+   link's host agree.
+   ============================================================ */
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font-family: var(--body); font-size: 15.5px; line-height: 1.68;
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: var(--nav-bg-2); }
+
+a { color: var(--nav-ink); text-decoration-color: var(--nav-rule-2); text-underline-offset: 2px; }
+a:hover { color: var(--nav-ink-hi); text-decoration-color: currentColor; }
+a:focus-visible, button:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--nav-ink); outline-offset: 3px;
+}
+
+/* ============================================================
+   Type. The faces are the theme's — --display, --body, --mono —
+   and so is the display weight: each theme sets its own on the
+   headings in its overrides. The variation settings below are
+   for a variable display face with SOFT and WONK axes (WONK gives
+   a swashy single-storey g, the wrong register for a review
+   document); a theme whose face has neither resets them to
+   normal. opsz follows the size wherever the face has it.
+   ============================================================ */
+h1, h2, h3, h4 {
+  font-family: var(--display); font-weight: 400; margin: 0; text-wrap: pretty;
+  font-optical-sizing: auto; font-variation-settings: 'SOFT' 0, 'WONK' 0;
+}
+h1 { font-size: clamp(36px, 5vw, 58px); line-height: 1.04; letter-spacing: -.016em; max-width: 19ch; }
+h2 { font-size: clamp(27px, 3.2vw, 34px); line-height: 1.14; letter-spacing: -.012em; }
+h3 { font-size: clamp(24px, 2.6vw, 30px); line-height: 1.16; letter-spacing: -.01em; }
+h4 { font-size: 22px; line-height: 1.24; letter-spacing: -.008em; }
+p { margin: 0; }
+strong { font-weight: 600; }
+em { font-style: italic; }
+
+/* PROSE RUNS THE FULL WIDTH OF THE COLUMN. It was capped at a 64ch measure, and
+   the cap is gone: the column is already bounded by .wrap's 1240px and main's
+   padding, so the measure was a second, narrower column drawn inside the first.
+   What it cost is visible on any published page -- a paragraph stopping a third of
+   the way short of the .lookat list, the impact card and the excerpt beneath it,
+   which all run the whole row. A paragraph that ends where nothing else does reads
+   as a different column rather than as a comfortable line length. The blocks still
+   capped are the ones inside a grid cell, where the cell is the measure.
+
+   Prose flow, and the one piece of spacing a run types rather than copies.
+   p is margin:0 because inside a collapsed block and a .lookat clause the gap
+   belongs to the container's own padding or flex gap, and a paragraph bringing
+   its own would double it. Every BLOCK below carries a top margin instead —
+   .ba 40, figure.chain 26, .lookat 22, .open 20 — so the only gap with no owner
+   is the one after a paragraph, and a run writing two of them in a row got a
+   wall of text with nothing between the sentences. A published page shipped
+   exactly that: section 1's two intro paragraphs set solid, and the block below
+   them starting on the line where the prose stopped.
+
+   So the paragraph carries a bottom margin where prose actually flows, which is
+   a section's own children and nowhere else. This is the idiom the markup half
+   already used by hand — style="margin-bottom:22px" on the paragraph above a
+   .gt — moved here so it stops being something to remember. Adjacent margins
+   collapse, so a component's own larger top margin still decides the gap and
+   nothing that was 22 or 26 becomes 44. :not(:last-child) because a section has
+   no bottom padding to collapse against: a trailing paragraph would push the
+   next section's 58 out to 76, and only sometimes. */
+section > p:not(:last-child) { margin-bottom: 18px; }
+
+.lede { margin-top: 22px; font-size: 15.5px; line-height: 1.68; color: var(--ink-3); }
+.note { font-size: 14px; line-height: 1.6; color: var(--muted); }
+
+code, .mono { font-family: var(--mono); font-variant-ligatures: none; }
+code {
+  font-size: .84em; background: var(--chip); padding: 1px 5px; border-radius: 3px;
+  color: var(--ink-2); overflow-wrap: break-word;
+}
+code.bare, h1 code, h2 code, h3 code, h4 code { background: none; padding: 0; }
+h3 code, h4 code { font-size: .72em; }
+
+.path { font-family: var(--mono); font-size: 13px; color: var(--ink); overflow-wrap: anywhere; }
+.cite { font-family: var(--mono); font-size: 12.5px; color: var(--faint); }
+/* A citation keeps its own ink — dense monospace in full slate is noise — but the
+   underline is slate, because the underline is the part that says "clickable" and
+   an off-family hairline here is exactly what --accent-line was. */
+a.path, a.cite { text-decoration-color: var(--nav-rule); }
+
+/* The uppercase mono micro-label. The most-used device in this system:
+   it is how a field, a section and a legend all announce themselves. */
+.lbl {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--faint);
+}
+.lbl-a { color: var(--nav-ink); font-size: 10.5px; letter-spacing: .2em; }
+.lbl-ink { color: var(--ink); }
+.lbl-wide { font-size: 10.5px; letter-spacing: .2em; }
+
+/* ============================================================
+   Shell and rail
+   ============================================================ */
+.wrap { display: flex; align-items: flex-start; max-width: 1240px; margin: 0 auto; }
+main { flex: 1 1 auto; min-width: 0; padding: 0 56px 140px; }
+@media (max-width: 1000px) { main { padding: 0 24px 100px; } }
+
+.progress { position: fixed; inset: 0 0 auto 0; height: 2px; z-index: 60; }
+.progress > i { display: block; height: 2px; width: 0; background: var(--nav-ink); transition: width 90ms linear; }
+
+.rail {
+  position: sticky; top: 0; flex: 0 0 232px; height: 100vh;
+  padding: 38px 24px 38px 32px; display: flex; flex-direction: column; gap: 22px;
+  border-right: 1px solid var(--rule);
+}
+@media (max-width: 1000px) { .rail { display: none; } }
+.rail-id { display: flex; flex-direction: column; gap: 6px; }
+.rail-id .tick { font-family: var(--display); font-weight: 400; font-size: 19px; line-height: 1.2; }
+.rail-links { display: flex; flex-direction: column; gap: 1px; }
+/* A RAIL ENTRY IS INLINE FLOW, NOT A FLEX ROW, and that is not a preference. A
+   checkpoint's short form routinely carries a code chip -- "Nil location and its
+   readers", with the middle word in code -- and under display:flex every element
+   and every run of text around it becomes its own flex item: three items, three
+   10px gaps, and with nowrap in force the text items shrink and wrap mid-phrase.
+   A published page rendered that entry as a ragged block of three fragments.
+
+   So the number is an inline-block of a fixed width and the hanging indent is
+   padding plus a negative text-indent, which also puts a wrapped second line under
+   the label rather than under the number. A sub-entry carries no number and so has
+   no indent to hang. */
+.rail-links a {
+  display: block; padding: 6px 0 6px 24px; text-indent: -24px;
+  font-size: 13px; text-decoration: none; color: var(--ink-3);
+}
+.rail-links a > .n {
+  display: inline-block; width: 14px; margin-right: 10px; text-indent: 0;
+  font-family: var(--mono); font-size: 10px; color: var(--fainter);
+}
+.rail-links a.sub { padding: 5px 0 5px 24px; text-indent: 0; font-size: 12.5px; color: var(--muted); }
+.rail-links a.on { color: var(--ink); font-weight: 600; }
+.rail-links a:hover { color: var(--nav-ink); }
+/* The chip is right in running prose and wrong in a 232px rail, where a background
+   and 5px of padding make one word of a title look like a button. */
+.rail-links a code { background: none; padding: 0; font-size: .92em; color: inherit; }
+
+/* ============================================================
+   Section furniture. A section announces itself with a label and
+   a rule that fills the rest of the row.
+   ============================================================ */
+section { padding: 58px 0 0; scroll-margin-top: 20px; }
+/* An eyebrow carries a .lbl span in a section head, and bare text where it labels a
+   list inside one — "Affected, not changed", which searches.rb opens its scope on and
+   therefore has to sit directly after the class attribute. So the label typography
+   lives on the eyebrow itself and a .lbl child still overrides it, being matched
+   directly rather than inherited. */
+.eyebrow { display: flex; align-items: center; gap: 14px; margin-bottom: 26px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink); }
+.eyebrow > i { flex: 1; height: 1px; background: var(--rule); }
+
+/* before / after — two rows, never one paragraph.
+
+   Its spacing is deliberately asymmetric, and the reason is its top hairline.
+   That rule is the block announcing itself, so it needs room ABOVE to read as a
+   new thing starting rather than as the bottom border of whatever sat there
+   before — 40, the widest gap in the section, where figure.chain takes 26. It
+   needs almost nothing BELOW: the last row's own 22px of padding was landing on
+   top of the next component's margin or the next section's 58, and the pair read
+   as a hole. The block ends at its last line and the gap after it belongs to
+   whatever comes next. */
+.ba { display: grid; grid-template-columns: 132px 1fr; gap: 0 28px; margin-top: 40px; border-top: 1px solid var(--rule); }
+.ba > dt { padding: 20px 0 0; font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
+.ba > dd { margin: 0; padding: 20px 0 22px; max-width: 62ch; font-size: 15.5px; line-height: 1.66; color: var(--ink-3); }
+.ba > dd:last-of-type { padding-bottom: 6px; }
+.ba > dt.now { color: var(--ink); }
+.ba > dt.now, .ba > dd.now { border-top: 1px solid var(--rule); }
+.ba > dd.now { color: var(--ink-2); }
+@media (max-width: 700px) {
+  .ba { grid-template-columns: minmax(0, 1fr); }
+  .ba > dd { padding-top: 0; border-top: 0; }
+}
+
+/* Context — section 02. The repository concepts a checkpoint relies on,
+   one dt/dd pair each. It borrows dl.ba's grid on purpose: both are a term
+   beside its explanation, and a second grid geometry for the same shape
+   would be a decision nobody made. What differs is that every row is equal
+   — there is no "now" row — and that each dd ends in span.ctx-used, which
+   names the checkpoints the entry was earned by. That pointer is set small
+   and quiet, like a reading-path .ptr, because it is navigation rather than
+   content. No colour of its own: Context is not a meaning, and slate on the
+   link already says "you can click it". */
+.ctx { display: grid; grid-template-columns: 180px 1fr; gap: 0 28px; margin-top: 8px; border-top: 1px solid var(--rule); }
+.ctx > dt { min-width: 0; overflow-wrap: anywhere; padding: 18px 0 0; font-size: 14.5px; font-weight: 600; line-height: 1.5; color: var(--ink); }
+.ctx > dd { min-width: 0; overflow-wrap: anywhere; margin: 0; padding: 18px 0 20px; max-width: 62ch; font-size: 15.5px; line-height: 1.66; color: var(--ink-2); }
+.ctx > dt:not(:first-of-type), .ctx > dd:not(:first-of-type) { border-top: 1px solid var(--rule); }
+.ctx .ctx-used, .lc-shift .ctx-used { display: block; margin-top: 6px; font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.ctx .ctx-used a, .lc-shift .ctx-used a { color: inherit; }
+/* --context collapsed: the same section, its entries (and shift) behind one shut
+   details.ctx-fold whose summary is the fixed label and the entry names. Neutral
+   rules, no family colour: plum would say "how a thing is known", and Context is
+   what a thing is. The one fold allowed to hold content rather than provenance —
+   report-format.md § How much Context says why that is safe. */
+details.ctx-fold { margin-top: 8px; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+details.ctx-fold > summary { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; padding: 12px 0; cursor: pointer; list-style: none; font-size: 14px; color: var(--ink-2); }
+details.ctx-fold > summary::-webkit-details-marker { display: none; }
+details.ctx-fold > summary::marker { content: ""; }
+.ctx-fold-lbl { font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+details.ctx-fold > .ctx { margin-top: 0; }
+@media (max-width: 700px) {
+  .ctx { grid-template-columns: minmax(0, 1fr); }
+  .ctx > dd { padding-top: 4px; }
+  .ctx > dd:not(:first-of-type) { border-top: 0; }
+}
+
+/* ============================================================
+/* ============================================================
+   Evidence tier and the neutral tag. Neither grades the change.
+   A claim the diff shows directly carries NO tier: silence is
+   the first tier, and labelling everything is noise.
+   ============================================================ */
+.tier, .tag {
+  display: inline-flex; align-items: center; padding: 2px 7px;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em;
+  text-transform: uppercase; white-space: nowrap; vertical-align: 2px;
+}
+.tier { border: 1px solid var(--rule-strong); background: var(--surface-2); color: var(--muted); }
+/* Two tiers carry a hue, and they carry the hue of what they are made of rather
+   than of how much they worry: teal because the evidence is code outside the
+   diff, ochre because something is missing. The remaining tiers stay neutral,
+   and "explicitly changed" stays silent — that is still the first tier. */
+.tier-unc { border-color: var(--unchanged-rule-2); background: var(--unchanged-bg); color: var(--unchanged-ink); }
+.tier-inf { border-color: var(--gap-rule-2); background: var(--gap-bg-2); color: var(--gap-ink); }
+/* An excerpt's state tag is provenance — what the bytes are, not what they mean —
+   so it is plum, and it takes the border .tier already had so the two line up. */
+.tag { border: 1px solid var(--prov-rule); background: var(--prov-bg); color: var(--prov-ink); }
+
+/* A stated absence. Ochre, deliberately not the accent: a gap is
+   evidence, not a feature, and never a severity. */
+.gap { display: flex; gap: 12px; padding: 14px 16px; background: var(--gap-bg-2); border: 1px solid var(--gap-rule); }
+.gap > b { flex: 0 0 auto; font-family: var(--mono); font-size: 11px; font-weight: 400; letter-spacing: .1em; color: var(--gap-ink); }
+.gap > span { font-size: 14.5px; line-height: 1.6; color: var(--ink-3); }
+/* What was grepped, including the searches that came up empty — collapsed, and the
+   second component on the page that is. It is provenance, not a claim: the entries it
+   backs are the div.item rows above it, so the page must read complete with it shut.
+   See report-format.md § What was searched.
+
+   A row is a command and a result clause, never a paragraph. The block was a single
+   run-on div and real pages filled it with three-sentence explanations of entries the
+   reader had just read; the two-part row is what makes a long one scannable and a
+   verbose one look wrong.
+
+   The row STACKS: the command on its own line, the clause under it. It was a wrapping
+   flex line, on the theory that a short command keeps its clause alongside and a long
+   one pushes it down — but the width a clause needs is not the width it is given, so
+   the bad case is the middle one, and the middle one is the common one. A 60-character
+   command leaves 24ch of tail, enough for the clause to stay on the line and not
+   enough to read: a published page ran four-word clauses down a narrow ragged column
+   beside the command, one word per line at the worst of it. A grid had the same defect
+   from the other side. Stacking has no middle case — every clause gets the full width,
+   at the cost of a line per row in a block that is shut by default.
+
+   Two things say which command a clause belongs to, and both are load-bearing because
+   nothing else does: a hanging indent (16px of padding on the row, pulled back off the
+   command) and a row gap of 11px against the 2px between a command and its own clause.
+   Take either away and a clause reads as the start of the next search. */
+details.searched { border: 1px solid var(--prov-rule); background: var(--prov-bg); margin: 12px 0; }
+details.searched > summary { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px; cursor: pointer; list-style: none; font-size: 13.5px; color: var(--prov-ink); }
+details.searched > summary::-webkit-details-marker { display: none; }
+details.searched > summary::marker { content: ""; }
+.searched .chev { font-family: var(--mono); font-size: 10px; color: var(--faint); transition: transform 120ms ease; }
+details.searched[open] .chev { transform: rotate(90deg); }
+.searched .sr-body { padding: 0 14px 12px; border-top: 1px solid var(--prov-rule); }
+.searched .sr-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 11px; }
+.searched .sr-list > li { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding-left: 16px; }
+.searched .sr-list code { min-width: 0; max-width: 100%; font-family: var(--mono); font-size: 12px; color: var(--ink-2); overflow-wrap: anywhere; }
+/* The hanging indent belongs to the LEADING command alone. As a descendant rule the
+   -16px reached every code in the row, including one inside the clause, and pulled it
+   16px left — over the words before it. A published page showed the overlap. Same
+   shape as .pending's text-indent: a rule about a row's first child, written as though
+   the row had only one. */
+.searched .sr-list > li > code:first-child { margin-left: -16px; }
+.searched .sr-r { align-self: stretch; min-width: 0; font-size: 13.5px; line-height: 1.5; color: var(--muted); }
+.searched .sr-limit { margin: 12px 0 0; font-size: 13.5px; line-height: 1.55; color: var(--muted); max-width: 72ch; }
+
+/* ============================================================
+   Framework anchors — a documentation link and a runtime probe.
+   NEITHER IS EVIDENCE. The claim still rests on a file:line; see
+   report-format.md § Framework anchors, which owns the rules and
+   the budget. Both are built out of tokens that already exist,
+   deliberately: an anchor that introduced a colour would be a new
+   thing to declare in all three theme blocks and forget in one.
+   ============================================================ */
+a.doc { font-family: var(--mono); font-size: 12px; white-space: nowrap; text-decoration-color: var(--nav-rule); }
+a.doc::after { content: "\2197"; margin-left: 2px; font-size: .9em; color: var(--faint); }
+
+/* A command the reviewer runs, not a quotation of this repo: no
+   generator behind it, and NO OUTPUT BENEATH IT, because the skill
+   never ran it.
+
+   IT WRAPS, and that is the one place it parts company with an excerpt.
+   An excerpt must never be re-wrapped, because re-flowing a quotation
+   changes what the author wrote; a probe is not a quotation, so nothing
+   is lost. It was white-space:pre with overflow-x:auto, and since every
+   probe in this system runs to about ninety characters, that meant every
+   probe on every page was cut off at the right edge of the column with
+   the reviewer scrolling a box to read the thing they were being asked
+   to paste. pre-wrap breaks at the spaces the command already has and
+   leaves the text node alone, so it still copies byte for byte.
+
+   The hanging indent is what says a second line is a continuation and
+   not a second command — the idiom details.searched already uses on a
+   long grep, for exactly the same reason. overflow-x stays for the one
+   case wrapping cannot help: an unbroken token wider than the column. */
+pre.probe {
+  margin: 10px 0; padding: 12px 14px 12px 32px; overflow-x: auto;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+  white-space: pre-wrap; text-indent: -18px; color: var(--ink-2);
+  background: var(--prov-bg); border-left: 2px solid var(--prov-rule-2);
+}
+/* The probe's own label, matched through the pre it introduces because it sits
+   BEFORE it and rails-anchors.rb requires that adjacency. Where :has() is not
+   supported the label falls back to the ordinary .lbl ink, which is the whole
+   degradation: the probe still reads and still says what it would settle. */
+.lbl:has(+ pre.probe) { color: var(--prov-ink); }
+
+/* ============================================================
+   The primer callout — THE THIRD FRAMEWORK ANCHOR, and the only
+   component on this page that a flag admits. It appears at
+   --mentor and nowhere else, only inside a section.cp, and it is
+   what a doc link escalates into when the reviewer would judge
+   better knowing the framework's rule itself rather than only
+   where it is written down. report-format.md § Mentor mode owns
+   the budget and what earns one.
+
+   IT IS FRAMED IN RAILS RED, on --primer-*, and that ramp exists
+   for this component alone. A Rust primer carries .pr-rust, which
+   re-points the same tokens at the graphite --primer-rust-* ramp.
+   The reason is the reader it is for: someone new to the stack, who needs to recognise the block that
+   was written for them before reading a word of it. A hue does
+   that and a heading does not. The Tokens comment owns why a page
+   with no severity vocabulary can afford a red — it is attached to
+   no claim, so it cannot be read as a verdict — and the rule that
+   keeps it honest is that the frame may never spread. Red on
+   anything this page ASSERTS is the severity chip arriving as a
+   palette.
+
+   The ramp is declared in all three theme states like every other
+   colour here, which is the defect the tint tokens are counted by
+   name to catch, and tests/run.rb counts --primer-ink the same way
+   for the same reason.
+
+   THE HEADER IS THE STACK, IN WORDS — "Understanding Ruby on
+   Rails". It replaced "Rails | Primer", which spent its widest
+   line saying what kind of component this is; a reader can see
+   that. What they cannot see is what the block is going to teach
+   them, and the header now says it. It is set in the display serif
+   at the page's own ink, near black, which is as close to a
+   logotype as this page gets: there is no <svg> here, and
+   rails-anchors.rb fails a primer that grows one.
+
+   NO MARK, AND THEREFORE NO TRADEMARK LINE. With no logotype on
+   display there is nothing for a notice to disclaim, so the two
+   went together — and with them the branded/unbranded variant
+   split, which existed only to say who drew the mark. One shape
+   still serves a framework, a gem and a hex package alike; only
+   the words in the header change with them.
+
+   Three things it must not become, all of which look like
+   diligence on the way:
+     · a probe. pre.demo quotes documented framework behaviour on
+       a GENERIC receiver, so it may carry a result line: it is a
+       quotation of the manual, and the manual states results.
+       pre.probe asks THIS application and may never show output,
+       because the run did not boot it. So a demo lives only
+       inside a primer, and a probe never inside one — adjacent,
+       never nested.
+     · a tutorial. A behaviour every developer in the stack
+       already knows earns nothing, at any flag. --mentor lowers
+       the bar from "cannot decide without this" to "would decide
+       better knowing it"; it does not remove it, and a mentor run
+       that earns no primer writes none.
+     · an unevidenced claim. It cites the line in THIS repository
+       that earned it and carries the pinned link it escalated
+       from. Two paragraphs of framework prose read as
+       self-justifying, which is why both halves are checked.
+   ============================================================ */
+.primer {
+  margin: 16px 0 6px; background: var(--primer-bg);
+  border: 1px solid var(--primer-rule); border-top: 2px solid var(--primer-rule-2);
+}
+/* A Rust primer: same component, the frame re-pointed at the graphite ramp. The
+   class is the stack's, chosen by which catalogue the doc link came from, and
+   rails-anchors.rb fails a primer whose class and link disagree. */
+.primer.pr-rust {
+  --primer-bg: var(--primer-rust-bg); --primer-bg-2: var(--primer-rust-bg-2);
+  --primer-rule: var(--primer-rust-rule); --primer-rule-2: var(--primer-rust-rule-2);
+  --primer-ink: var(--primer-rust-ink); --primer-ink-hi: var(--primer-rust-ink-hi);
+}
+.pr-head {
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  padding: 12px 20px; border-bottom: 1px solid var(--primer-rule);
+}
+/* What the block teaches, said in words, in the display serif at the page's own
+   ink, and never in the frame ink. The frame is the reminder of which framework is
+   speaking, and a red title as well would make the header the loudest thing in a
+   checkpoint whose h3 is the question the reader is actually there to answer.
+   Near-black is also the closest this page comes to a logotype, which is on
+   purpose — there is no <svg> anywhere here, and a primer that grows one fails
+   rails-anchors.rb. */
+.pr-title {
+  font-family: var(--display); font-weight: 400; font-size: 19px;
+  line-height: 1; letter-spacing: -.01em; color: var(--ink);
+}
+.pr-api { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--faint); overflow-wrap: anywhere; }
+
+.pr-body { display: grid; grid-template-columns: minmax(0, 1fr) 340px; }
+.pr-main { min-width: 0; padding: 18px 20px 20px; display: flex; flex-direction: column; gap: 11px; }
+.pr-main > b { font-family: var(--mono); font-size: 14px; font-weight: 500; color: var(--ink); overflow-wrap: anywhere; }
+.pr-main > p { max-width: 56ch; font-size: 14.5px; line-height: 1.62; color: var(--ink-3); text-wrap: pretty; }
+.pr-main > .item { font-size: 14.5px; line-height: 1.62; color: var(--ink-3); }
+.pr-main > a.doc { align-self: flex-start; margin-top: 3px; white-space: normal; }
+
+.pr-side {
+  min-width: 0; padding: 18px 20px 20px;
+  background: var(--primer-bg-2); border-left: 1px solid var(--primer-rule);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.pr-side > .lbl { font-size: 9.5px; color: var(--primer-ink); }
+.pr-side > .note { font-size: 13px; line-height: 1.58; }
+
+/* The manual, quoted. It SCROLLS rather than wrapping, which is the opposite of
+   what it started as: a wrapped result line puts the answer on a line of its own,
+   where it reads as another statement instead of as the answer to the one above
+   it. Code that wraps says something different from the code that was written,
+   and a quotation may not do that. This is the same rule an excerpt follows and
+   the opposite of pre.probe's, which wraps because a command is not a quotation.
+   Keep the lines short — under about 38 characters and nothing scrolls at all. */
+pre.demo {
+  margin: 0; overflow-x: auto;
+  font-family: var(--mono); font-size: 12px; line-height: 1.75;
+  color: var(--ink-2); white-space: pre;
+}
+@media (max-width: 700px) {
+  .pr-body { grid-template-columns: minmax(0, 1fr); }
+  .pr-side { border-left: 0; border-top: 1px solid var(--primer-rule); }
+}
+
+/* ============================================================
+   Source excerpts — generated by scripts/excerpt.sh, never typed.
+   The page must read complete with EVERY excerpt closed, which is
+   why the why-line lives in the summary and not in the body — and
+   why the link does too: .ex-loc is the excerpt's one citation, linked
+   when the rung allows, so the closed block is still a followable
+   citation and nothing below the code repeats it.
+   The pre grows to max-content and .ex-body scrolls, so the add/del
+   stripes span the whole scroll width instead of stopping at the fold.
+   data-src, never data-path: coverage-gate.sh greps data-path page-wide.
+   ============================================================ */
+details.excerpt { border: 1px solid var(--rule); background: var(--surface-hi); margin: 12px 0; }
+details.excerpt > summary { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: center; padding: 12px 14px; cursor: pointer; list-style: none; }
+details.excerpt > summary::-webkit-details-marker { display: none; }
+details.excerpt > summary::marker { content: ""; }
+.excerpt .chev { font-family: var(--mono); font-size: 10px; color: var(--faint); transition: transform 120ms ease; }
+details.excerpt[open] .chev { transform: rotate(90deg); }
+.excerpt .ex-loc { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); overflow-wrap: anywhere; }
+.excerpt .ex-loc > a.cite { font-size: inherit; color: inherit; }
+.excerpt .ex-why { grid-column: 2 / -1; font-size: 13.5px; line-height: 1.55; color: var(--muted); max-width: 66ch; }
+.excerpt .ex-body { padding: 0 14px 14px; border-top: 1px solid var(--rule); overflow-x: auto; }
+.excerpt .ex-body > pre {
+  margin: 12px 0 0; padding: 0; font-family: var(--mono); font-size: 12px; line-height: 1.6;
+  color: var(--ink-2); white-space: normal; width: max-content; min-width: 100%;
+}
+.excerpt .ex-body .l { display: block; white-space: pre; position: relative; padding-left: 4.4em; min-width: max-content; counter-increment: exl; }
+.excerpt .ex-body .l::before {
+  content: counter(exl); position: absolute; left: 0; width: 3.3em; text-align: right;
+  color: var(--fainter); font-variant-numeric: tabular-nums; user-select: none;
+}
+/* A blank line in the quoted range is still a row. An empty block box is zero
+   tall, so without this the blank line vanishes and its number lands on top of
+   the next one — visible as two digits stacked in the gutter. Generated content
+   is not copied, so the excerpt still copies as the code and nothing else. */
+.excerpt .ex-body .l:empty::after { content: "\200B"; }
+.excerpt .ex-body .l.add { background: var(--ex-add); }
+.excerpt .ex-body .l.del { background: var(--ex-del); counter-increment: none; }
+.excerpt .ex-body .l.del::before { content: ""; }
+.excerpt .ex-body .sig { color: var(--fainter); user-select: text; }
+.excerpt .ex-body .l.add .sig { color: var(--add-sig); }
+.excerpt .ex-body .l.del .sig { color: var(--del-sig); }
+
+/* Syntax tint, --source only. The script at the bottom of this file rewrites the
+   text nodes inside each .l into these classes; with the script gone, or the CDN
+   blocked, every line stays one plain text node and the block renders as it did
+   before highlighting existed. The class names are highlight.js's, so this is the
+   library's theme — written against our tokens because an external stylesheet is
+   not loadable here and a theme file would declare colour in one state only.
+   Everything unlisted inherits the excerpt's own --ink-2, which is the point: a
+   short slice of code has a handful of things worth pointing at, not thirty. */
+.excerpt--source .hljs-keyword,
+.excerpt--source .hljs-literal,
+.excerpt--source .hljs-built_in,
+.excerpt--source .hljs-selector-tag,
+.excerpt--source .hljs-operator     { color: var(--syn-key); }
+.excerpt--source .hljs-string,
+.excerpt--source .hljs-regexp,
+.excerpt--source .hljs-char.escape_,
+.excerpt--source .hljs-meta .hljs-string { color: var(--syn-str); }
+.excerpt--source .hljs-comment,
+.excerpt--source .hljs-quote        { color: var(--syn-com); font-style: italic; }
+.excerpt--source .hljs-title,
+.excerpt--source .hljs-title.class_,
+.excerpt--source .hljs-title.function_,
+.excerpt--source .hljs-section,
+.excerpt--source .hljs-name,
+.excerpt--source .hljs-type,
+.excerpt--source .hljs-class        { color: var(--syn-name); }
+.excerpt--source .hljs-number,
+.excerpt--source .hljs-symbol,
+.excerpt--source .hljs-attr,
+.excerpt--source .hljs-attribute,
+.excerpt--source .hljs-variable,
+.excerpt--source .hljs-template-variable,
+.excerpt--source .hljs-property,
+.excerpt--source .hljs-meta,
+.excerpt--source .hljs-bullet       { color: var(--syn-num); }
+/* A tinted span must never change the shape of the line: no weight, no size, no
+   background. The quotation is the bytes, and bold code reads as emphasis the
+   author of that code never wrote. */
+.excerpt--source .ex-body span[class^="hljs-"] { font-weight: inherit; background: none; }
+
+/* ============================================================
+   Section 4 · start here. ONE list: the route through the code
+   and what on it needs judgment are the same question.
+   ============================================================ */
+.begin { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+.begin li { display: grid; grid-template-columns: 26px 1fr auto; gap: 6px 16px; padding: 18px 0; border-bottom: 1px solid var(--rule); align-items: start; }
+.begin .n { font-family: var(--mono); font-size: 11px; color: var(--fainter); padding-top: 4px; font-variant-numeric: tabular-nums; }
+.begin .t { min-width: 0; }
+.begin .t > .path { display: block; margin-bottom: 5px; }
+.begin .t > .why { display: block; font-size: 14.5px; line-height: 1.62; color: var(--ink-3); max-width: 64ch; }
+.begin .ptr { font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); text-decoration: none; padding-top: 4px; white-space: nowrap; }
+/* A stop may carry an excerpt, so the li has a fourth child and the li is a grid.
+   With no span it auto-places into the 26px number column, where .ex-loc's
+   overflow-wrap: anywhere renders the path one character per line. 2 / -1 puts it
+   under the path it confirms, and holds under the 700px grid below where column 2
+   is the last one. min-width: 0 is the other half: a grid item cannot shrink past
+   its min-content, which here is the pre's longest line, so the span alone widens
+   the column past the viewport and the PAGE scrolls sideways instead of .ex-body.
+   .lookat > li carries the same reset, which is why its excerpts never showed it. */
+.begin li > .excerpt { grid-column: 2 / -1; min-width: 0; margin: 10px 0 0; }
+@media (max-width: 700px) { .begin li { grid-template-columns: 26px 1fr; } .begin .ptr { grid-column: 2; padding-top: 0; } }
+
+/* ============================================================
+   Section 03 · THE REVIEW CHECKPOINT. One judgment the reviewer
+   has to make: the question as the h3, why it is a question in
+   the paragraph, and where to look below that. It is NOT a card
+   — a hairline between checkpoints is the whole frame, because a
+   box drawn around each of five judgments reads as five reports,
+   which is the shape this page replaced.
+
+   .cp is a <section> so the rail can spy on it and so a pending
+   stub is the same element as a written one.
+   ============================================================ */
+.cp { padding: 44px 0 0; scroll-margin-top: 20px; }
+.cp + .cp { margin-top: 10px; border-top: 1px solid var(--rule); }
+.cp > .lbl { display: block; margin-bottom: 12px; }
+.cp > h3 { max-width: 38ch; }
+.cp > p { margin-top: 14px; }
+
+/* Where to look — one to four locations. THREE PARTS, IN THIS ORDER: a title
+   naming what is at that location, the clause saying what to see in it, and the
+   citation last. The clause is not optional furniture: a bare citation is a
+   location the reader has to open to find out why it is on the list, which is the
+   deleted-field defect wearing a link. The title is not optional either, and
+   report-format.md § The review checkpoint owns what makes one good.
+
+   THE TITLE EXISTS BECAUSE A LIST OF FOUR PATHS CANNOT BE SCANNED. Every entry
+   used to open with a 60-character monospace address, so finding the entry you
+   wanted meant reading all four clauses: the entry carried an address and an
+   explanation and no name. A title is the line a reader's eye stops on, which is
+   why it goes first and why the address — the thing they act on only after
+   deciding to open it — goes last.
+
+   Entries are separated by 26px of gap and nothing else. No hairline per entry:
+   rules between four short paragraphs draw a table around prose, and a row is what
+   this component stopped being. Inside an entry the parts sit 0 to 4px apart, so
+   the three lines group as one thing before the next gap arrives; that ratio is
+   the whole separation, and shrinking the gap towards the internal spacing is what
+   makes four entries read as one block. The list's own top rule stays — it is what
+   separates the list from the explanation above it. An excerpt sits under the
+   entry it confirms, full width.
+
+   The clause span is a block and a tier chip is not, so the selector excludes
+   .tier. The markup nests the tier inside the clause, but a run that places it
+   as a sibling of the path is legal markup too, and a bare li > span rule turned
+   that chip into a full-width bar on a published page. */
+.lookat { list-style: none; margin: 22px 0 24px; padding: 18px 0 0; border-top: 1px solid var(--rule); display: grid; gap: 26px; }
+.lookat > li { min-width: 0; font-size: 14.5px; line-height: 1.62; color: var(--ink-3); }
+.lookat > li > b { display: block; font-weight: 600; color: var(--ink); }
+.lookat > li > span:not(.tier) { display: block; }
+.lookat > li > .path { display: block; margin-top: 4px; }
+.lookat .excerpt { margin: 10px 0 0; }
+
+/* An open question. Ochre like .gap and for the same reason: a stated absence
+   is evidence, never a severity. The label is fixed at "Open question" —
+   "Watch" and "Blocking" are a severity vocabulary with the chip taken off,
+   and page-invariants.rb warns on both. */
+/* Full width, like the prose and the list above it: an open line ending short of
+   both read as an aside, where it is in fact the one thing in the checkpoint the
+   code could not settle. */
+.open { margin-top: 20px; padding: 14px 16px; background: var(--gap-bg-2); border-left: 2px solid var(--gap-rule); font-size: 14.5px; line-height: 1.62; color: var(--ink-3); }
+.open > b { display: block; margin-bottom: 5px; font-family: var(--mono); font-size: 11px; font-weight: 400; letter-spacing: .1em; color: var(--gap-ink); }
+
+
+/* ============================================================
+   Section 5 · IMPACT PATHS. Replaces the .blast box grid, which
+   carried membership of two sets and nothing else — so it read
+   as a word cloud, and the one thing it could not express is the
+   one thing this section is about: a directed edge.
+
+   A path runs from changed code, through the affected-but-
+   unchanged code that gives the change its consequence, to an
+   observable behaviour. Every node past the first carries its
+   INCOMING relation in .ip-rel, so an unlabelled edge is a
+   missing element rather than an empty one.
+
+   THE LANE IS DERIVED FROM THE NODE KIND, NEVER AUTHORED:
+   .ip-chg sits left, .ip-aff right, .ip-out spans both. So the
+   boundary between "in this PR's files" and "outside the diff"
+   is structurally true, and there is no lane class for a run to
+   get backwards. The split is by file: an untouched line of a
+   changed file sits left, because that is where the reader
+   opens it.
+
+   ONE PATH PER .ip-card, AND THE FIGURE IS A GROUP RATHER THAN
+   A BOX. It began as five paths stacked inside one bordered
+   panel under five .ip-hd headers, and at that length they stop
+   being read as diagrams: a reader on the third chain has the
+   first one's geometry behind them, a 34px gap is the only thing
+   saying where one path ends, and a shared frame invites a
+   sixth. So the frame is now the card, which is the thing a
+   reader actually holds, and .impact carries only the label, the
+   legend and the note.
+
+   The lane labels repeat in every card, deliberately. That is
+   both the price of separating the diagrams and the reason to: a
+   card is a whole figure, so a reader arriving at the third one
+   must not scroll back for what its two columns mean.
+
+   Under 780px the lanes collapse to one column and the lane
+   rule goes. Nothing is lost: the three node kinds still carry
+   changed / affected / behaviour, so the boundary is
+   reinforcement rather than the only encoding.
+
+   The component, the causal verb vocabulary, the shape rules
+   and the caps live in report-format.md § Impact paths, and
+   ONLY there — the way an excerpt's do in § Source excerpts.
+   ============================================================ */
+/* The figure itself gets no box, no padding and no background — deliberately: it is a GROUP,
+   and every visible edge belongs to a card. Its children are laid out by adjacent-sibling
+   margins the way .decision + .decision is, rather than by a grid gap, so the label above and
+   the legend below can set their own distances.
+
+   --ip-drop is how far a lane crossing descends before it turns, and it lives here because
+   FOUR rules have to agree on it — see THE LANE CROSSING below. */
+.impact { --ip-drop: 11px; }
+.impact > .lbl { display: block; margin-bottom: 14px; }
+.ip-card { padding: 20px 24px 24px; background: var(--surface-hi); border: 1px solid var(--rule); }
+.ip-card + .ip-card { margin-top: 14px; }
+.ip-lanes { display: grid; grid-template-columns: 1fr 1fr; column-gap: 40px; margin: 0 0 18px; }
+.ip-lanes > span { font-family: var(--mono); font-size: 9.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--faint); }
+
+/* The lane rule, one per card, so the path inside it aligns to the lane labels above. Painted
+   as a BACKGROUND, not an absolutely positioned overlay: a background sits behind child
+   content for free, and the overlay version drew the line straight across the filled .ip-out
+   node, splitting the one box that spans both lanes into two.
+
+   IT IS DASHED, AND IT IS NOT --rule-strong. It began as a 1px solid --rule-strong hairline,
+   which is byte-for-byte what a connector and an elbow are drawn in — so the one line on the
+   figure that carries no direction looked exactly like the lines that do, and a path crossing
+   it read as joining it. Dashed --rule-dash is the treatment .ip-aff already uses for "outside
+   the diff", so the vocabulary is now consistent across the whole card: SOLID HAIRLINES
+   FLOW, DASHES BOUND. Anything drawn in --rule-strong is part of a chain.
+
+   DOTTED RATHER THAN DASHED, and that is the second half of it. At 3-on-5-off in the same ink
+   as an .ip-aff border, a divider running the whole height of the card carried more ink than
+   the chain did, and the boundary outweighed the thing the figure is about. 2 on, 9 off keeps
+   every dot legible — which is why the colour stays --rule-dash rather than going a step
+   lighter — while dropping the total ink far enough that it reads as ground, not as figure. */
+.ip-body {
+  background-image: repeating-linear-gradient(to bottom, var(--rule-dash) 0 2px, transparent 2px 9px);
+  background-size: 1px 100%;
+  background-position: calc(50% - 0.5px) 0;
+  background-repeat: no-repeat;
+}
+
+/* The card's head. It carries the gap down to the body itself rather than leaving it to a top
+   margin on .ip-lanes, because the lanes are display:none under 780px and the head would then
+   sit flat on the first node. */
+.ip-hd { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 14px; }
+
+/* What the path is about, in one or two sentences, before the reader traces anything. Set in the
+   body face rather than the mono the rest of the card uses, because it is prose and that contrast
+   is what stops it reading as another node. A card without it is a diagram the reader has to
+   decode in order to find out whether it was worth decoding. */
+.ip-why { font-size: 14px; line-height: 1.6; color: var(--muted); margin: 0 0 16px; }
+.ip-path { list-style: none; margin: 0; padding: 0; }
+
+/* Each node is its own row; the lane is a column inside that row. */
+.ip-n { display: grid; grid-template-columns: 1fr 1fr; column-gap: 40px; }
+.ip-n > * { grid-column: 1; }
+.ip-aff > * { grid-column: 2; }
+.ip-out > * { grid-column: 1 / -1; }
+
+.ip-box { padding: 12px 14px; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.ip-chg > .ip-box { border: 1px solid var(--ink); background: var(--ground); }
+.ip-aff > .ip-box { border: 1px dashed var(--unchanged-rule-2); background: var(--unchanged-bg); }
+.ip-out > .ip-box { border: 1px solid var(--ink); background: var(--ink); }
+.ip-box b { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--ink); overflow-wrap: anywhere; }
+.ip-box .ip-d { font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+/* The dash says "not in the diff" and the ink says it a second time, in the one
+   place a reader is deciding whether a node is the change or the system it lands
+   in. The node's own name stays --ink: it is a symbol, not a claim. */
+.ip-aff > .ip-box .ip-d { color: var(--unchanged-ink); }
+.ip-out > .ip-box b { color: var(--ground); }
+.ip-out > .ip-box .ip-d { color: var(--ground); opacity: .72; }
+
+/* The locator: where this node’s code lives, last line of the box and quiet enough that the label
+   still reads first. A node naming a symbol and nothing else leaves the reader to guess which file
+   it is in, which is the one question a figure of identifiers reliably raises. align-self keeps the
+   underline the width of the path rather than of the box, and wrapping is anywhere because a deep
+   Rails path offers a browser no break it will take. .ip-out never carries one — a behaviour has no
+   file — so there is deliberately no rule for it here. */
+.ip-loc { font-family: var(--mono); font-size: 10px; color: var(--faint); text-decoration: none; border-bottom: 1px solid var(--nav-rule); align-self: start; overflow-wrap: anywhere; }
+.ip-loc:hover { color: var(--ink); border-bottom-color: var(--ink); }
+
+/* The edge: a labelled connector. <i> is the gutter that draws
+   the hairline and the arrowhead, the way a numbered spine does. */
+.ip-rel { display: flex; align-items: center; gap: 10px; min-height: 44px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.ip-rel > i { flex: 0 0 22px; align-self: stretch; position: relative; }
+.ip-rel > i::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 7px; width: 1px; background: var(--rule-strong); }
+.ip-rel > i::after { content: ""; position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 6px solid var(--rule-strong); }
+
+/* THE LANE CROSSING, drawn rather than implied. Without it a path that changes lane reads as
+   two disconnected halves: the chain simply reappears in the other column with no line back to
+   the node it descends from, and a reader cannot tell which one that was. The adjacent-sibling
+   selector is what makes it possible with no extra markup and nothing for a run to place — a
+   lane change IS `.ip-chg + .ip-aff` or its reverse, because the lane comes from the kind.
+   The elbow runs the whole way between the two rails — from the centre of the previous node's
+   22px rail, across the 40px gutter, to the centre of this connector's own — so it reads as
+   starting underneath the node it descends from. Stopping it at the lane boundary was the first
+   attempt, and it left the chain looking like it reappeared in the other column from nowhere.
+
+   AND IT DESCENDS --ip-drop BEFORE IT TURNS. Turning flush against the source box was the
+   second attempt, and a horizontal leaving a box's bottom edge reads as a line going sideways
+   OUT of it; the short vertical says the chain drops out of the node the way every other hop
+   does and then changes lane, which is the same thing the arrowhead says at the far end.
+
+   Four rules have to agree on --ip-drop, and the fourth is the one that breaks silently: the
+   DESTINATION rail has to start at the corner rather than at the row's top edge, or a hairline
+   the length of the drop dangles above it in the other lane. The other three are the stub
+   (::after), the horizontal (::before), and the reset under 780px, where the lanes collapse
+   and there is no crossing left to draw.
+
+   The x arithmetic, once, because all three cases are the same two numbers: a lane is 100% of
+   a single-lane .ip-rel and the gutter is 40px, so the far rail is one lane plus the gutter
+   away, ±11px for the 22px rail's own centre. The .ip-out case spans both lanes, which makes
+   its own 50% the lane boundary rather than 100% the lane. */
+.ip-chg + .ip-aff > .ip-rel, .ip-aff + .ip-chg > .ip-rel, .ip-aff + .ip-out > .ip-rel { position: relative; }
+.ip-chg + .ip-aff > .ip-rel::before, .ip-aff + .ip-chg > .ip-rel::before,
+.ip-aff + .ip-out > .ip-rel::before {
+  content: ""; position: absolute; top: var(--ip-drop); height: 1px; background: var(--rule-strong);
+}
+.ip-chg + .ip-aff > .ip-rel::after, .ip-aff + .ip-chg > .ip-rel::after,
+.ip-aff + .ip-out > .ip-rel::after {
+  content: ""; position: absolute; top: 0; height: var(--ip-drop); width: 1px; background: var(--rule-strong);
+}
+/* Left to right: the origin rail is a lane and a gutter back from this connector's own. */
+.ip-chg + .ip-aff > .ip-rel::before { left: calc(-100% - 29px); width: calc(100% + 40px); }
+.ip-chg + .ip-aff > .ip-rel::after  { left: calc(-100% - 29px); }
+/* Right to left: the same distance the other way, so the stub is out past this element's edge. */
+.ip-aff + .ip-chg > .ip-rel::before { left: 11px; width: calc(100% + 40px); }
+.ip-aff + .ip-chg > .ip-rel::after  { left: calc(100% + 51px); }
+/* And the last hop, where an .ip-aff node is followed by the .ip-out that spans both lanes: the
+   outcome's rail sits in lane 1, so without this the chain drops out of the right lane and the
+   arrow into the behaviour appears on the left with nothing joining them. */
+.ip-aff + .ip-out > .ip-rel::before { left: 11px; width: calc(50% + 20px); }
+.ip-aff + .ip-out > .ip-rel::after  { left: calc(50% + 31px); }
+/* The fourth rule: the destination rail starts at the corner. */
+.ip-chg + .ip-aff > .ip-rel > i::before, .ip-aff + .ip-chg > .ip-rel > i::before,
+.ip-aff + .ip-out > .ip-rel > i::before { top: var(--ip-drop); }
+
+/* The group's foot: one legend for every card, because the three node kinds mean the same thing
+   in all of them. It sits on the page ground rather than inside a card now, so the rule above it
+   is --rule — --rule-soft is a surface hairline and all but vanishes on the ground. */
+.legend { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--rule); }
+.legend > span { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.key-chg { flex: 0 0 auto; width: 14px; height: 10px; border: 1px solid var(--ink); background: var(--ground); }
+.key-aff { flex: 0 0 auto; width: 14px; height: 10px; border: 1px dashed var(--unchanged-rule-2); background: var(--unchanged-bg); }
+.key-out { flex: 0 0 auto; width: 14px; height: 10px; border: 1px solid var(--ink); background: var(--ink); }
+@media (max-width: 780px) {
+  .ip-card { padding: 18px 16px 20px; }
+  .ip-lanes { display: none; }
+  .ip-body { background-image: none; }
+  /* One lane, so no crossing: the elbow and its stub go, and --ip-drop going with them is what
+     puts every rail back on the row's top edge without a rule per selector. */
+  .impact { --ip-drop: 0px; }
+  .ip-chg + .ip-aff > .ip-rel::before, .ip-aff + .ip-chg > .ip-rel::before,
+  .ip-aff + .ip-out > .ip-rel::before,
+  .ip-chg + .ip-aff > .ip-rel::after, .ip-aff + .ip-chg > .ip-rel::after,
+  .ip-aff + .ip-out > .ip-rel::after { display: none; }
+  .ip-n { grid-template-columns: minmax(0, 1fr); }
+  .ip-n > *, .ip-aff > *, .ip-out > * { grid-column: 1; }
+}
+
+
+/* ============================================================
+   figure.chain — the same vertical chain inside a CHECKPOINT,
+   where the job is different. Section 05 shows a consequence
+   crossing into code the change did not touch; a chain in a
+   checkpoint shows a mechanism INSIDE the change — a request
+   path, a value derived over several hops, the order guards run
+   in. So it reuses every node and edge rule above and drops the
+   two-lane apparatus: no lanes, no legend, no card header, and
+   NO .ip-aff.
+
+   That last one is a rule rather than a style. A hop that lands
+   in unchanged code whose meaning the change altered IS an impact
+   path: it belongs in section 05, drawn once, and the checkpoint
+   that turns on it says so in a clause. Drawing it here as well
+   is the same consequence drawn twice at conversational distance,
+   which reads as thoroughness.
+
+   .ip-step is the kind that exists only here — a hop that claims
+   nothing about the diff, drawn as the plain solid box so a
+   reader is never asked to decide whether it means "changed".
+   report-format.md § Chains owns all of it.
+   ============================================================ */
+figure.chain { margin-top: 26px; padding: 20px 24px 22px; background: var(--surface-hi); border: 1px solid var(--rule); }
+figure.chain .ip-n { grid-template-columns: minmax(0, 1fr); }
+figure.chain .ip-n > * { grid-column: 1; }
+figure.chain > figcaption { margin-top: 14px; }
+.ip-step > .ip-box { border: 1px solid var(--rule-strong); background: var(--surface-3); }
+
+/* ============================================================
+   Three more checkpoint figures, for the shapes a chain cannot
+   draw because it has one successor per node: a FAN-IN onto one
+   invariant (figure.converge), STATES and the actions between
+   them (figure.lifecycle), and an ENTITY with its relationships
+   (figure.structure). report-format.md § Figures owns when each
+   is earned; this block owns only how they sit.
+
+   All three share the chain's card and its node boxes, so the
+   kinds keep their meaning: solid ink is changed code, dashed
+   teal is code the diff did not touch. NONE OF THEM HAS AN
+   .ip-rel BETWEEN .ip-n NODES. The impact panel's lane crossing
+   hangs off `.ip-chg + .ip-aff > .ip-rel`, and a converge alternates
+   exactly those kinds — a connector there would fire an elbow
+   into a lane this figure does not have.
+   ============================================================ */
+figure.converge, figure.lifecycle, figure.structure { margin-top: 26px; padding: 20px 24px 22px; background: var(--surface-hi); border: 1px solid var(--rule); }
+figure.converge > figcaption, figure.lifecycle > figcaption, figure.structure > figcaption { margin-top: 14px; }
+figure.converge .ip-n, figure.structure .ip-n { grid-template-columns: minmax(0, 1fr); }
+figure.converge .ip-n > *, figure.structure .ip-n > * { grid-column: 1; }
+
+/* CONVERGE. Paths on the left, the invariant on the right, and between them a bus: each path
+   row draws its own tick out to the right edge and its own slice of the vertical, so the bus
+   is continuous across rows with no geometry a run has to place. The first row's slice starts
+   at its middle and the last row's ends at its middle, which is what makes it read as a
+   bracket rather than a rail. The target is centred on the paths column, so its arrow always
+   lands inside the bracket — given at least two paths, which is the figure's floor anyway. */
+.cv-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); align-items: center; }
+.cv-paths { list-style: none; margin: 0; padding: 0; }
+.cv-paths > li { position: relative; padding: 5px 22px 5px 0; }
+.cv-paths > li::after { content: ""; position: absolute; right: 0; top: 50%; width: 22px; height: 1px; background: var(--rule-strong); }
+.cv-paths > li::before { content: ""; position: absolute; right: 0; top: 0; bottom: 0; width: 1px; background: var(--rule-strong); }
+.cv-paths > li:first-child::before { top: 50%; }
+.cv-paths > li:last-child::before { bottom: 50%; }
+/* What the path skips — a fact about the code, never why it matters. Ochre because it is the
+   page saying something is missing on this path; it is not a severity, and it has no label. */
+.cv-note { font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--gap-ink); }
+.cv-target { position: relative; padding-left: 30px; }
+.cv-target::before { content: ""; position: absolute; left: 0; top: 50%; width: 24px; height: 1px; background: var(--rule-strong); }
+.cv-target::after { content: ""; position: absolute; left: 24px; top: 50%; transform: translateY(-50%); border-top: 4px solid transparent; border-bottom: 4px solid transparent; border-left: 6px solid var(--rule-strong); }
+.cv-target > .ip-box { border: 1px solid var(--ink); background: var(--ink); }
+.cv-target > .ip-box b { color: var(--ground); }
+.cv-target > .ip-box .ip-d { color: var(--ground); opacity: .72; }
+
+/* LIFECYCLE. A chain of states rather than of code: each state after the first carries its
+   INCOMING transition as the same .ip-rel connector, named for the domain action, with the
+   line that performs it as a locator inside the connector. A new state is drawn in ink; a
+   state that already existed in the plain step box. A transition back to an earlier state is
+   a line of text, not a curve — the one thing a vertical list cannot draw, said in words. */
+.lc-states { list-style: none; margin: 0; padding: 0; }
+.lc-s > .ip-box { border: 1px solid var(--rule-strong); background: var(--surface-3); }
+.lc-s.lc-new > .ip-box { border-color: var(--ink); background: var(--ground); }
+.lc-states .ip-rel .ip-loc, .st-rel .ip-loc { text-transform: none; letter-spacing: 0; align-self: center; }
+.st-rel .ip-loc { align-self: start; }
+.lc-back { margin-top: 12px; padding-top: 10px; border-top: 1px dotted var(--rule-dash); font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; color: var(--muted); }
+.lc-back .ip-loc { margin-left: 8px; }
+
+/* THE SHIFT — figure.lifecycle.lc-shift, Context's one figure. The same states drawn twice, a
+   BEFORE column and an AFTER column, so that the one state that moved (lc-moved: the request
+   that creates the account, now one step later) is seen moving by alignment rather than read.
+   The pair is one grid and each column is a subgrid over its rows, so state n of one column sits
+   level with state n of the other however long a locator wraps — which is the comparison the
+   figure exists to make. Six tracks: the column label plus the lifecycle's cap of five states;
+   an unused track is auto and collapses to nothing.
+   The moved state is FILLED in ink in both columns, like the outcome a chain ends at, and that
+   is what keeps the shift readable on a phone, where the columns stack and alignment is gone:
+   the filled box is found in each column on its own. Not ochre — nothing is missing — and not a
+   new hue, because "moved" is a fact about the sequence, not a meaning. */
+.lc-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: repeat(6, auto); column-gap: 28px; }
+.lc-row { display: grid; grid-row: 1 / span 6; grid-template-rows: subgrid; align-content: start; min-width: 0; }
+.lc-row > .lc-states { display: contents; }
+.lc-when { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); padding-bottom: 8px; border-bottom: 1px solid var(--rule); margin-bottom: 4px; }
+.lc-s.lc-moved > .ip-box { border-color: var(--ink); background: var(--ink); }
+.lc-s.lc-moved > .ip-box b { color: var(--ground); }
+.lc-cases { list-style: none; margin: 14px 0 0; padding: 10px 0 0; border-top: 1px dotted var(--rule-dash); font-size: 13.5px; line-height: 1.55; color: var(--ink-2); }
+.lc-cases > li + li { margin-top: 4px; }
+.lc-cases .path { margin-left: 6px; }
+
+/* STRUCTURE. The entity the change is about on top, and a spine down from it with one
+   relationship per row: the relation and its cardinality, then the entity at the other end.
+   Hub and spoke rather than a grid of tables, because the question is what this entity is now
+   attached to — a full schema is the ERD this figure exists to refuse. An ABSENT relationship
+   is drawn where the absence is the point, in ochre, the page's colour for "missing". */
+.st-fields { list-style: none; margin: 2px 0 0; padding: 0; font-family: var(--mono); font-size: 11px; line-height: 1.5; color: var(--muted); }
+.st-fields > li::before { content: "\00B7\00A0"; }
+.st-edges { list-style: none; margin: 0 0 0 11px; padding: 0 0 0 22px; }
+.st-e { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 14px; align-items: center; padding-top: 12px; }
+figure.structure .st-e > * { grid-column: auto; }
+.st-e::before { content: ""; position: absolute; left: -22px; top: 0; bottom: 0; width: 1px; background: var(--rule-strong); }
+.st-e:last-child::before { bottom: auto; height: calc(50% + 6px); }
+.st-e::after { content: ""; position: absolute; left: -22px; top: calc(50% + 6px); width: 18px; height: 1px; background: var(--rule-strong); }
+.st-rel { display: flex; flex-direction: column; gap: 3px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.st-card { font-size: 10px; letter-spacing: .04em; text-transform: none; color: var(--ink-3); }
+.st-none > .st-rel { color: var(--gap-ink); }
+.st-none::after { background: none; border-top: 1px dashed var(--gap-rule); }
+
+@media (max-width: 780px) {
+  figure.converge, figure.lifecycle, figure.structure { padding: 18px 16px 20px; }
+  /* One column: the bracket moves to the left edge and the target sits under it. */
+  .cv-grid { grid-template-columns: minmax(0, 1fr); }
+  .cv-paths > li { padding: 5px 0 5px 22px; }
+  .cv-paths > li::after, .cv-paths > li::before { right: auto; left: 0; }
+  .cv-paths > li:last-child::before { bottom: 0; }
+  .cv-target { padding: 22px 0 0 22px; }
+  .cv-target::before { left: 0; top: 0; width: 1px; height: 16px; }
+  .cv-target::after { left: 0; top: 16px; transform: translateX(-50%); border: 4px solid transparent; border-top: 6px solid var(--rule-strong); border-bottom: 0; }
+  .st-e { grid-template-columns: minmax(0, 1fr); row-gap: 6px; }
+  /* The shift stacks: Before above After, and the filled box carries the comparison alone. */
+  .lc-pair { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; row-gap: 22px; }
+  .lc-row { display: block; grid-row: auto; }
+  .lc-row > .lc-states { display: block; }
+}
+
+/* PRINT. Browsers drop backgrounds when printing, and the filled outcome and target boxes are
+   ground-coloured text on an ink fill — so without this they print as white on white, and the
+   one box that names what the figure is FOR disappears. And a figure split across a page break
+   is two half-figures, neither of which says what it shows. */
+@media print {
+  figure.chain, figure.converge, figure.lifecycle, figure.structure, .ip-card { break-inside: avoid; }
+  .ip-box, .cv-target, .ip-rel > i, .key-out { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+
+/* ============================================================
+   Grid tables. gap:1px over --rule, so every seam is a rule at
+   any wrap point and there is no border-collapse to fight.
+   Column widths are tuned for Roboto Mono; the container scrolls
+   rather than crushing the path column.
+   ============================================================ */
+.gt { display: grid; gap: 1px; background: var(--rule); border: 1px solid var(--rule); overflow-x: auto; }
+.gt > .h { background: var(--surface-2); padding: 11px 16px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.gt > .c { background: var(--surface); padding: 12px 16px; min-width: 0; }
+.gt .path { font-size: 11.5px; line-height: 1.5; color: var(--ink-2); }
+.gt-meta   { grid-template-columns: 2fr repeat(4, minmax(0, 1fr)); }
+/* .gt-paths is the diff inventory: paths only, no classification. It is what
+   details.evidence below holds. Still a .gt cell, because data-path has to sit
+   on a `div class="c"` for the coverage gate to keep running. Two columns,
+   since a path is the whole cell. */
+.gt-paths  { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.gt-paths > .c { padding: 9px 14px; }
+/* .gt paints its gaps by showing --rule through a 1px grid gap, which needs every row
+   full. An odd number of paths leaves the last row half empty and the container's own
+   rule colour renders there as a solid slab — a filled box that reads as a cell with
+   nothing in it. The final odd cell spans instead. Harmless in the one-column query
+   below, where 1 / -1 is that column.  */
+.gt-paths > .c:last-child:nth-child(odd) { grid-column: 1 / -1; }
+@media (max-width: 900px) {
+  .gt-meta   { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .gt-paths  { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ============================================================
+   The evidence foot — section 06, and not a section: no number,
+   no rail entry, shut. It holds the diff inventory, what was
+   grepped, and the affected code no checkpoint turns on.
+
+   It is PROVENANCE, not a claim, which is what makes collapsing
+   it legal under the hard rule that the page reads complete with
+   every collapsed block shut. A finding must never end up here:
+   anything in the foot that is a judgment the reviewer has to
+   make is a checkpoint that was mis-filed.
+
+   coverage-gate.sh greps data-path page-wide on the raw bytes,
+   so it neither knows nor cares that the carrier sits in here.
+   ============================================================ */
+details.evidence { margin-top: 62px; padding-top: 24px; border-top: 1px solid var(--rule); }
+details.evidence > summary { display: flex; gap: 9px; align-items: center; cursor: pointer; list-style: none; font-family: var(--mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--prov-ink); }
+details.evidence > summary::-webkit-details-marker { display: none; }
+details.evidence > summary::marker { content: ""; }
+.evidence .chev { font-family: var(--mono); font-size: 10px; color: var(--faint); transition: transform 120ms ease; }
+details.evidence[open] .chev { transform: rotate(90deg); }
+.evidence .gt { margin-top: 20px; }
+.evidence .eyebrow { margin: 30px 0 14px; }
+/* NOT scoped to .evidence: this list appears twice, once beside the impact panel
+   in section 05 and once in the foot, and the scoped version left the first one
+   unstyled. The teal rule is the third place the page says "not in the diff", and
+   it is the same hue as the .ip-aff node the entry is often standing in for. */
+.ev-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.ev-list > li { padding-left: 13px; border-left: 2px solid var(--unchanged-rule); font-size: 14.5px; line-height: 1.6; color: var(--ink-3); }
+
+
+/* ============================================================
+   Build state. A staged page must never look finished. Four
+   states have to stay distinguishable: written, pending, NOT
+   written because the run stopped, and omitted because the diff
+   did not earn it. Both of these are DELETED at the final publish;
+   leaving a .pending behind is worse than publishing late.
+
+   .pending attaches at two granularities: a whole <section>, and a
+   CHECKPOINT, since section 03 is delivered one checkpoint at a
+   time. The second needs no markup of its own — a checkpoint is
+   already its own <section class="cp" id="cp-x">, so the generic
+   pending section IS the checkpoint stub with the question on it,
+   and the rail carries a per-checkpoint marker below.
+   ============================================================ */
+.buildstate {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin: 24px 0 0; padding: 12px 18px;
+  background: var(--gap-bg-2); border: 1px solid var(--gap-rule);
+  font-size: 14px; color: var(--ink-3);
+}
+.buildstate strong { font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; color: var(--gap-ink); }
+/* TEXT-INDENT: 0 IS LOAD-BEARING. text-indent inherits, and an inline-flex box
+   lays out its own line, so the rail entry's -24px hanging indent (.rail-links a)
+   reached inside this chip and pulled the word 24px left of its own border --
+   over the entry's title on one line, off the box on a wrapped one. The box sat
+   where it belonged and its contents did not, which is why a published page read
+   as broken rendering rather than as a layout rule nobody had written. .n carries
+   the same reset for being an inline-block in that line; the chip arrived later
+   and without it. It belongs on the base rule and not on the rail override,
+   because the next indented context to carry a chip will not know to reset it. */
+.pending {
+  display: inline-flex; align-items: center; padding: 1px 6px;
+  font-family: var(--mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase;
+  background: var(--gap-bg-2); border: 1px solid var(--gap-rule); color: var(--gap-ink);
+  vertical-align: 1px; text-indent: 0;
+}
+.rail-links .pending { font-size: 8.5px; padding: 0 4px; letter-spacing: .08em; }
+
+/* ============================================================
+   Figures. None of them is a drawing: figure.chain, .converge,
+   .lifecycle and .structure inside a checkpoint, figure.impact in
+   section 05, all built out of the same .ip-* boxes. Nothing on
+   this page is an <svg>.
+   ============================================================ */
+figure { margin: 0; }
+figcaption { font-size: 14px; line-height: 1.6; color: var(--muted); margin-top: 10px; max-width: 70ch; }
+figcaption strong { color: var(--ink-3); }
+
+/* ============================================================
+   The appearance menu. Built by the tail script into the masthead's
+   first line, never typed by a run: a reader's control over how
+   the page looks — which theme, and light, dark or the system's
+   choice. It changes no content, and it is not a badge: it names
+   the three looks because it offers them, the way a font menu names
+   fonts. Hidden in print, absent without JavaScript.
+
+   The swatches are the one place colour literals sit outside a
+   theme file, and deliberately: each previews ONE theme and must
+   look the same whichever theme is active and in either mode, so a
+   token — which changes with both — is exactly the wrong tool.
+   ============================================================ */
+.rc { margin-left: auto; position: relative; text-transform: none; letter-spacing: 0; }
+.rc-btn { display: inline-flex; align-items: center; gap: 8px; padding: 7px 11px; font-family: var(--body); font-size: 13px; line-height: 1; color: var(--ink); background: var(--surface-hi); border: 1px solid var(--rule-strong); border-radius: var(--r); cursor: pointer; }
+.rc-btn b { font-weight: 700; }
+.rc-btn .rc-i { color: var(--ink-3); font-size: 12px; }
+.rc-btn:hover { background: var(--surface-2); }
+.rc-pop { position: absolute; right: 0; top: calc(100% + 8px); z-index: 90; width: 260px; max-width: calc(100vw - 32px); padding: 12px; display: none; flex-direction: column; gap: 10px; background: var(--surface-hi); border: 1px solid var(--rule-strong); border-radius: var(--r); box-shadow: 0 12px 32px rgba(0,0,0,.16); }
+.rc.rc-on .rc-pop { display: flex; }
+.rc-h { font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+.rc-styles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.rc-styles button { display: flex; flex-direction: column; gap: 6px; padding: 6px; font-family: var(--body); font-size: 12px; line-height: 1.2; text-align: left; color: var(--ink-3); background: none; border: 1px solid var(--rule); border-radius: var(--r); cursor: pointer; }
+.rc-styles button:hover { border-color: var(--ink-3); color: var(--ink); }
+.rc-styles button.on { border: 2px solid var(--ink); padding: 5px; color: var(--ink); font-weight: 600; }
+.rc-sw { display: block; height: 30px; }
+.rc-sw[data-sw="daylight"] { background: linear-gradient(135deg, #f7f8fa 50%, #3b6ef5 50%); border-radius: 5px; box-shadow: inset 0 0 0 1px #d3d9e2; }
+.rc-sw[data-sw="workshop"] { background: linear-gradient(135deg, #fdfdfb 50%, oklch(0.91 0.15 95) 50%); box-shadow: inset 0 0 0 1.5px #0a0a0a; }
+.rc-sw[data-sw="field-notes"] { background: linear-gradient(135deg, #f5efe0 50%, oklch(0.84 0.09 340) 50%); border-radius: 3px; box-shadow: inset 0 0 0 1px #cfc3a6; }
+.rc-seg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--rule-strong); border-radius: var(--r); overflow: hidden; }
+.rc-seg button { padding: 8px 0; font-family: var(--body); font-size: 12px; line-height: 1; color: var(--ink-3); background: none; border: 0; cursor: pointer; }
+.rc-seg button + button { border-left: 1px solid var(--rule); }
+.rc-seg button:hover { color: var(--ink); background: var(--surface-2); }
+.rc-seg button[aria-pressed="true"] { background: var(--ink); color: var(--ground); }
+@media print { .rc { display: none; } }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<!--
+  THE THEMES. The next line is replaced by every file in references/themes/:
+  each a font link and one style block holding its tokens and its overrides.
+  They sit AFTER the base styles because an override has to win the cascade,
+  and tokens resolve wherever they are declared. ONE is active — the
+  repository's choice: --theme, else ACCOUNTABLE_REVIEW_THEME, else
+  review_map.theme in its .accountable-review.yml, else daylight — and the
+  others arrive with media="not all", which keeps their bytes on the page and
+  their rules off it. The appearance menu switches the attribute, so a reader
+  can change the look without a second file. A theme file must keep every rule
+  above: each colour on bare :root and in both dark blocks, the five families
+  meaning what this file says they mean, and no hue, glyph or label treatment
+  that reads as a grade. A theme changes how the page looks, never what is on it.
+-->
+<!-- Theme · Daylight. Emitted into the page by page-skeleton.sh in place of the template's
+     theme marker line; never read by a run, never typed. Fonts, tokens in all three theme
+     states, then the overrides that give the direction its shape. Every page carries all
+     three; the ones not chosen arrive switched off (media="not all") and the appearance menu
+     switches them. data-style names this file, data-style-label is what the menu calls it.
+     The rules every theme keeps are written beside that line in page-template.html. -->
+<link rel="stylesheet" data-style="daylight" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style data-style="daylight" data-style-label="Daylight">
+/* Tokens · Daylight direction. Same five ramps and the same rule about what each
+   may mean (nav = clickable, gap = stated absence, unchanged = not in the diff,
+   prov = how it is known, primer = the framework's own frame); only hue, ramp
+   lightness and the neutrals change. Declared in all three theme states. */
+:root {
+  --display: 'Instrument Sans', system-ui, sans-serif;
+  --body: 'Instrument Sans', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --r: 12px;
+  --r-sm: 5px;
+  --r-tag: 999px;
+  --r-box: 10px;
+  --ground: #f7f8fa;
+  --surface: #fbfbfc;
+  --surface-hi: #ffffff;
+  --surface-2: #f0f2f5;
+  --surface-3: #fafbfc;
+  --chip: #eceff3;
+  --ink: #161a22;
+  --ink-2: #232833;
+  --ink-3: #3a404c;
+  --muted: #6a7180;
+  --faint: #858b97;
+  --fainter: #a6abb5;
+  --on-ink: #f7f8fa;
+  --on-ink-code: #d5d9e0;
+  --rule: #e3e6ec;
+  --rule-soft: #eceef2;
+  --rule-strong: #c9ced8;
+  --rule-dash: #b3b9c4;
+  --rule-card: #d6dae2;
+  --ex-add: oklch(0.96 0.04 150);
+  --add-sig: oklch(0.45 0.12 150);
+  --ex-del: oklch(0.96 0.03 25);
+  --del-sig: oklch(0.50 0.15 25);
+  --syn-key: oklch(0.45 0.13 330);
+  --syn-str: oklch(0.46 0.10 150);
+  --syn-com: oklch(0.62 0.02 260);
+  --syn-name: oklch(0.47 0.12 262);
+  --syn-num: oklch(0.52 0.11 55);
+  --nav-bg: oklch(0.975 0.018 262);
+  --nav-bg-2: oklch(0.955 0.035 262);
+  --nav-rule: oklch(0.885 0.055 262);
+  --nav-rule-2: oklch(0.78 0.08 262);
+  --nav-ink: oklch(0.47 0.13 262);
+  --nav-ink-hi: oklch(0.38 0.14 262);
+  --gap-bg: oklch(0.975 0.018 70);
+  --gap-bg-2: oklch(0.955 0.035 70);
+  --gap-rule: oklch(0.885 0.055 70);
+  --gap-rule-2: oklch(0.78 0.08 70);
+  --gap-ink: oklch(0.47 0.13 70);
+  --gap-ink-hi: oklch(0.38 0.14 70);
+  --unchanged-bg: oklch(0.975 0.018 195);
+  --unchanged-bg-2: oklch(0.955 0.035 195);
+  --unchanged-rule: oklch(0.885 0.055 195);
+  --unchanged-rule-2: oklch(0.78 0.08 195);
+  --unchanged-ink: oklch(0.47 0.13 195);
+  --unchanged-ink-hi: oklch(0.38 0.14 195);
+  --prov-bg: oklch(0.975 0.018 330);
+  --prov-bg-2: oklch(0.955 0.035 330);
+  --prov-rule: oklch(0.885 0.055 330);
+  --prov-rule-2: oklch(0.78 0.08 330);
+  --prov-ink: oklch(0.47 0.13 330);
+  --prov-ink-hi: oklch(0.38 0.14 330);
+  --primer-bg: oklch(0.975 0.018 25);
+  --primer-bg-2: oklch(0.955 0.035 25);
+  --primer-rule: oklch(0.885 0.055 25);
+  --primer-rule-2: oklch(0.78 0.08 25);
+  --primer-ink: oklch(0.47 0.13 25);
+  --primer-ink-hi: oklch(0.38 0.14 25);
+  --primer-rust-bg: oklch(0.975 0.004 60);
+  --primer-rust-bg-2: oklch(0.955 0.007 60);
+  --primer-rust-rule: oklch(0.885 0.012 60);
+  --primer-rust-rule-2: oklch(0.36 0.018 60);
+  --primer-rust-ink: oklch(0.47 0.022 60);
+  --primer-rust-ink-hi: oklch(0.38 0.022 60);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+  --ground: #0f1217;
+  --surface: #13171d;
+  --surface-hi: #161a21;
+  --surface-2: #1b2029;
+  --surface-3: #12161c;
+  --chip: #222833;
+  --ink: #e8ebf0;
+  --ink-2: #d2d7df;
+  --ink-3: #b9c0cc;
+  --muted: #8f98a7;
+  --faint: #79828f;
+  --fainter: #5c6472;
+  --on-ink: #0f1217;
+  --on-ink-code: #3a404c;
+  --rule: #262c36;
+  --rule-soft: #1f242d;
+  --rule-strong: #363d49;
+  --rule-dash: #475060;
+  --rule-card: #2c333e;
+  --ex-add: oklch(0.26 0.05 150);
+  --add-sig: oklch(0.80 0.12 150);
+  --ex-del: oklch(0.26 0.05 25);
+  --del-sig: oklch(0.80 0.11 25);
+  --syn-key: oklch(0.80 0.11 330);
+  --syn-str: oklch(0.80 0.10 150);
+  --syn-com: oklch(0.62 0.02 260);
+  --syn-name: oklch(0.80 0.09 262);
+  --syn-num: oklch(0.80 0.10 55);
+  --nav-bg: oklch(0.23 0.035 262);
+  --nav-bg-2: oklch(0.27 0.05 262);
+  --nav-rule: oklch(0.4 0.07 262);
+  --nav-rule-2: oklch(0.52 0.09 262);
+  --nav-ink: oklch(0.82 0.1 262);
+  --nav-ink-hi: oklch(0.88 0.08 262);
+  --gap-bg: oklch(0.23 0.035 70);
+  --gap-bg-2: oklch(0.27 0.05 70);
+  --gap-rule: oklch(0.4 0.07 70);
+  --gap-rule-2: oklch(0.52 0.09 70);
+  --gap-ink: oklch(0.82 0.1 70);
+  --gap-ink-hi: oklch(0.88 0.08 70);
+  --unchanged-bg: oklch(0.23 0.035 195);
+  --unchanged-bg-2: oklch(0.27 0.05 195);
+  --unchanged-rule: oklch(0.4 0.07 195);
+  --unchanged-rule-2: oklch(0.52 0.09 195);
+  --unchanged-ink: oklch(0.82 0.1 195);
+  --unchanged-ink-hi: oklch(0.88 0.08 195);
+  --prov-bg: oklch(0.23 0.035 330);
+  --prov-bg-2: oklch(0.27 0.05 330);
+  --prov-rule: oklch(0.4 0.07 330);
+  --prov-rule-2: oklch(0.52 0.09 330);
+  --prov-ink: oklch(0.82 0.1 330);
+  --prov-ink-hi: oklch(0.88 0.08 330);
+  --primer-bg: oklch(0.23 0.035 25);
+  --primer-bg-2: oklch(0.27 0.05 25);
+  --primer-rule: oklch(0.4 0.07 25);
+  --primer-rule-2: oklch(0.52 0.09 25);
+  --primer-ink: oklch(0.82 0.1 25);
+  --primer-ink-hi: oklch(0.88 0.08 25);
+  --primer-rust-bg: oklch(0.23 0.006 60);
+  --primer-rust-bg-2: oklch(0.27 0.008 60);
+  --primer-rust-rule: oklch(0.4 0.012 60);
+  --primer-rust-rule-2: oklch(0.74 0.016 60);
+  --primer-rust-ink: oklch(0.82 0.014 60);
+  --primer-rust-ink-hi: oklch(0.88 0.012 60);
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0f1217;
+  --surface: #13171d;
+  --surface-hi: #161a21;
+  --surface-2: #1b2029;
+  --surface-3: #12161c;
+  --chip: #222833;
+  --ink: #e8ebf0;
+  --ink-2: #d2d7df;
+  --ink-3: #b9c0cc;
+  --muted: #8f98a7;
+  --faint: #79828f;
+  --fainter: #5c6472;
+  --on-ink: #0f1217;
+  --on-ink-code: #3a404c;
+  --rule: #262c36;
+  --rule-soft: #1f242d;
+  --rule-strong: #363d49;
+  --rule-dash: #475060;
+  --rule-card: #2c333e;
+  --ex-add: oklch(0.26 0.05 150);
+  --add-sig: oklch(0.80 0.12 150);
+  --ex-del: oklch(0.26 0.05 25);
+  --del-sig: oklch(0.80 0.11 25);
+  --syn-key: oklch(0.80 0.11 330);
+  --syn-str: oklch(0.80 0.10 150);
+  --syn-com: oklch(0.62 0.02 260);
+  --syn-name: oklch(0.80 0.09 262);
+  --syn-num: oklch(0.80 0.10 55);
+  --nav-bg: oklch(0.23 0.035 262);
+  --nav-bg-2: oklch(0.27 0.05 262);
+  --nav-rule: oklch(0.4 0.07 262);
+  --nav-rule-2: oklch(0.52 0.09 262);
+  --nav-ink: oklch(0.82 0.1 262);
+  --nav-ink-hi: oklch(0.88 0.08 262);
+  --gap-bg: oklch(0.23 0.035 70);
+  --gap-bg-2: oklch(0.27 0.05 70);
+  --gap-rule: oklch(0.4 0.07 70);
+  --gap-rule-2: oklch(0.52 0.09 70);
+  --gap-ink: oklch(0.82 0.1 70);
+  --gap-ink-hi: oklch(0.88 0.08 70);
+  --unchanged-bg: oklch(0.23 0.035 195);
+  --unchanged-bg-2: oklch(0.27 0.05 195);
+  --unchanged-rule: oklch(0.4 0.07 195);
+  --unchanged-rule-2: oklch(0.52 0.09 195);
+  --unchanged-ink: oklch(0.82 0.1 195);
+  --unchanged-ink-hi: oklch(0.88 0.08 195);
+  --prov-bg: oklch(0.23 0.035 330);
+  --prov-bg-2: oklch(0.27 0.05 330);
+  --prov-rule: oklch(0.4 0.07 330);
+  --prov-rule-2: oklch(0.52 0.09 330);
+  --prov-ink: oklch(0.82 0.1 330);
+  --prov-ink-hi: oklch(0.88 0.08 330);
+  --primer-bg: oklch(0.23 0.035 25);
+  --primer-bg-2: oklch(0.27 0.05 25);
+  --primer-rule: oklch(0.4 0.07 25);
+  --primer-rule-2: oklch(0.52 0.09 25);
+  --primer-ink: oklch(0.82 0.1 25);
+  --primer-ink-hi: oklch(0.88 0.08 25);
+  --primer-rust-bg: oklch(0.23 0.006 60);
+  --primer-rust-bg-2: oklch(0.27 0.008 60);
+  --primer-rust-rule: oklch(0.4 0.012 60);
+  --primer-rust-rule-2: oklch(0.74 0.016 60);
+  --primer-rust-ink: oklch(0.82 0.014 60);
+  --primer-rust-ink-hi: oklch(0.88 0.012 60);
+}
+
+/* ---- Daylight overrides ---- */
+.tier,.tag,.pending{border-radius:var(--r-tag)}
+code{border-radius:var(--r-sm)}
+.gap,.open,details.searched,details.excerpt,.ip-card,figure.chain,.gt,pre.probe,.buildstate,.primer{border-radius:var(--r)}
+.ip-box{border-radius:var(--r-box)}
+.key-chg,.key-aff,.key-out{border-radius:3px}
+
+h1,h2,h3,h4{font-weight:600;letter-spacing:-0.022em;font-variation-settings:normal}
+h1{letter-spacing:-0.032em;max-width:20ch}
+.rail-id .tick{font-weight:600;letter-spacing:-0.01em}
+.tier,.tag{font-family:var(--body);font-size:11.5px;font-weight:500;letter-spacing:0;text-transform:none;padding:2px 10px;border-color:transparent;vertical-align:1px}
+.open{border:1px solid var(--gap-rule)}
+.open>b,.gap>b{font-family:var(--body);font-weight:600;font-size:12.5px;letter-spacing:0}
+details.searched>summary,details.evidence>summary{font-weight:500}
+</style>
+<!-- Theme · Workshop. Emitted into the page by page-skeleton.sh in place of the template's
+     theme marker line; never read by a run, never typed. Fonts, tokens in all three theme
+     states, then the overrides that give the direction its shape. Every page carries all
+     three; the ones not chosen arrive switched off (media="not all") and the appearance menu
+     switches them. data-style names this file, data-style-label is what the menu calls it.
+     The rules every theme keeps are written beside that line in page-template.html. -->
+<link rel="stylesheet" data-style="workshop" media="not all" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" data-style="workshop" media="not all" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&display=swap">
+<style data-style="workshop" media="not all" data-style-label="Workshop">
+/* Tokens · Workshop direction. Same five ramps and the same rule about what each
+   may mean (nav = clickable, gap = stated absence, unchanged = not in the diff,
+   prov = how it is known, primer = the framework's own frame); only hue, ramp
+   lightness and the neutrals change. Declared in all three theme states. */
+:root {
+  --display: 'Geist', system-ui, sans-serif;
+  --body: 'Geist', system-ui, sans-serif;
+  --mono: 'Geist Mono', ui-monospace, Menlo, monospace;
+  --r: 12px;
+  --r-sm: 4px;
+  --r-tag: 6px;
+  --r-box: 8px;
+  --ground: #fafafa;
+  --surface: #fcfcfc;
+  --surface-hi: #ffffff;
+  --surface-2: #f4f4f4;
+  --surface-3: #fbfbfb;
+  --chip: #f0f0f0;
+  --ink: #0a0a0a;
+  --ink-2: #1f1f1f;
+  --ink-3: #404040;
+  --muted: #666666;
+  --faint: #808080;
+  --fainter: #a3a3a3;
+  --on-ink: #fafafa;
+  --on-ink-code: #d4d4d4;
+  --rule: #e6e6e6;
+  --rule-soft: #efefef;
+  --rule-strong: #cfcfcf;
+  --rule-dash: #b5b5b5;
+  --rule-card: #dcdcdc;
+  --badge: oklch(0.80 0.14 75);
+  --ex-add: oklch(0.97 0.035 150);
+  --add-sig: oklch(0.46 0.13 150);
+  --ex-del: oklch(0.97 0.025 25);
+  --del-sig: oklch(0.50 0.16 25);
+  --syn-key: oklch(0.47 0.15 300);
+  --syn-str: oklch(0.47 0.11 150);
+  --syn-com: oklch(0.62 0 0);
+  --syn-name: oklch(0.50 0.15 255);
+  --syn-num: oklch(0.53 0.13 55);
+  --nav-bg: oklch(0.98 0.015 255);
+  --nav-bg-2: oklch(0.97 0.03 255);
+  --nav-rule: oklch(0.89 0.06 255);
+  --nav-rule-2: oklch(0.78 0.1 255);
+  --nav-ink: oklch(0.48 0.15 255);
+  --nav-ink-hi: oklch(0.4 0.17 255);
+  --gap-bg: oklch(0.98 0.015 75);
+  --gap-bg-2: oklch(0.97 0.03 75);
+  --gap-rule: oklch(0.89 0.06 75);
+  --gap-rule-2: oklch(0.78 0.1 75);
+  --gap-ink: oklch(0.48 0.15 75);
+  --gap-ink-hi: oklch(0.4 0.17 75);
+  --unchanged-bg: oklch(0.98 0.015 190);
+  --unchanged-bg-2: oklch(0.97 0.03 190);
+  --unchanged-rule: oklch(0.89 0.06 190);
+  --unchanged-rule-2: oklch(0.78 0.1 190);
+  --unchanged-ink: oklch(0.48 0.15 190);
+  --unchanged-ink-hi: oklch(0.4 0.17 190);
+  --prov-bg: oklch(0.98 0.015 300);
+  --prov-bg-2: oklch(0.97 0.03 300);
+  --prov-rule: oklch(0.89 0.06 300);
+  --prov-rule-2: oklch(0.78 0.1 300);
+  --prov-ink: oklch(0.48 0.15 300);
+  --prov-ink-hi: oklch(0.4 0.17 300);
+  --primer-bg: oklch(0.98 0.015 25);
+  --primer-bg-2: oklch(0.97 0.03 25);
+  --primer-rule: oklch(0.89 0.06 25);
+  --primer-rule-2: oklch(0.78 0.1 25);
+  --primer-ink: oklch(0.48 0.15 25);
+  --primer-ink-hi: oklch(0.4 0.17 25);
+  --primer-rust-bg: oklch(0.98 0.004 60);
+  --primer-rust-bg-2: oklch(0.97 0.007 60);
+  --primer-rust-rule: oklch(0.89 0.012 60);
+  --primer-rust-rule-2: oklch(0.36 0.018 60);
+  --primer-rust-ink: oklch(0.48 0.022 60);
+  --primer-rust-ink-hi: oklch(0.4 0.022 60);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+  --ground: #0a0a0a;
+  --surface: #0e0e0e;
+  --surface-hi: #111111;
+  --surface-2: #171717;
+  --surface-3: #0d0d0d;
+  --chip: #1c1c1c;
+  --ink: #ededed;
+  --ink-2: #d4d4d4;
+  --ink-3: #a8a8a8;
+  --muted: #8f8f8f;
+  --faint: #777777;
+  --fainter: #5a5a5a;
+  --on-ink: #0a0a0a;
+  --on-ink-code: #404040;
+  --rule: #262626;
+  --rule-soft: #1c1c1c;
+  --rule-strong: #3a3a3a;
+  --rule-dash: #4a4a4a;
+  --rule-card: #2e2e2e;
+  --badge: oklch(0.80 0.14 75);
+  --ex-add: oklch(0.25 0.06 150);
+  --add-sig: oklch(0.84 0.12 150);
+  --ex-del: oklch(0.25 0.06 25);
+  --del-sig: oklch(0.82 0.11 25);
+  --syn-key: oklch(0.80 0.12 300);
+  --syn-str: oklch(0.82 0.11 150);
+  --syn-com: oklch(0.60 0 0);
+  --syn-name: oklch(0.80 0.10 255);
+  --syn-num: oklch(0.82 0.11 60);
+  --nav-bg: oklch(0.22 0.03 255);
+  --nav-bg-2: oklch(0.24 0.045 255);
+  --nav-rule: oklch(0.38 0.07 255);
+  --nav-rule-2: oklch(0.52 0.1 255);
+  --nav-ink: oklch(0.83 0.11 255);
+  --nav-ink-hi: oklch(0.9 0.08 255);
+  --gap-bg: oklch(0.22 0.03 75);
+  --gap-bg-2: oklch(0.24 0.045 75);
+  --gap-rule: oklch(0.38 0.07 75);
+  --gap-rule-2: oklch(0.52 0.1 75);
+  --gap-ink: oklch(0.83 0.11 75);
+  --gap-ink-hi: oklch(0.9 0.08 75);
+  --unchanged-bg: oklch(0.22 0.03 190);
+  --unchanged-bg-2: oklch(0.24 0.045 190);
+  --unchanged-rule: oklch(0.38 0.07 190);
+  --unchanged-rule-2: oklch(0.52 0.1 190);
+  --unchanged-ink: oklch(0.83 0.11 190);
+  --unchanged-ink-hi: oklch(0.9 0.08 190);
+  --prov-bg: oklch(0.22 0.03 300);
+  --prov-bg-2: oklch(0.24 0.045 300);
+  --prov-rule: oklch(0.38 0.07 300);
+  --prov-rule-2: oklch(0.52 0.1 300);
+  --prov-ink: oklch(0.83 0.11 300);
+  --prov-ink-hi: oklch(0.9 0.08 300);
+  --primer-bg: oklch(0.22 0.03 25);
+  --primer-bg-2: oklch(0.24 0.045 25);
+  --primer-rule: oklch(0.38 0.07 25);
+  --primer-rule-2: oklch(0.52 0.1 25);
+  --primer-ink: oklch(0.83 0.11 25);
+  --primer-ink-hi: oklch(0.9 0.08 25);
+  --primer-rust-bg: oklch(0.22 0.006 60);
+  --primer-rust-bg-2: oklch(0.24 0.008 60);
+  --primer-rust-rule: oklch(0.38 0.012 60);
+  --primer-rust-rule-2: oklch(0.74 0.016 60);
+  --primer-rust-ink: oklch(0.83 0.014 60);
+  --primer-rust-ink-hi: oklch(0.9 0.012 60);
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0a0a0a;
+  --surface: #0e0e0e;
+  --surface-hi: #111111;
+  --surface-2: #171717;
+  --surface-3: #0d0d0d;
+  --chip: #1c1c1c;
+  --ink: #ededed;
+  --ink-2: #d4d4d4;
+  --ink-3: #a8a8a8;
+  --muted: #8f8f8f;
+  --faint: #777777;
+  --fainter: #5a5a5a;
+  --on-ink: #0a0a0a;
+  --on-ink-code: #404040;
+  --rule: #262626;
+  --rule-soft: #1c1c1c;
+  --rule-strong: #3a3a3a;
+  --rule-dash: #4a4a4a;
+  --rule-card: #2e2e2e;
+  --badge: oklch(0.80 0.14 75);
+  --ex-add: oklch(0.25 0.06 150);
+  --add-sig: oklch(0.84 0.12 150);
+  --ex-del: oklch(0.25 0.06 25);
+  --del-sig: oklch(0.82 0.11 25);
+  --syn-key: oklch(0.80 0.12 300);
+  --syn-str: oklch(0.82 0.11 150);
+  --syn-com: oklch(0.60 0 0);
+  --syn-name: oklch(0.80 0.10 255);
+  --syn-num: oklch(0.82 0.11 60);
+  --nav-bg: oklch(0.22 0.03 255);
+  --nav-bg-2: oklch(0.24 0.045 255);
+  --nav-rule: oklch(0.38 0.07 255);
+  --nav-rule-2: oklch(0.52 0.1 255);
+  --nav-ink: oklch(0.83 0.11 255);
+  --nav-ink-hi: oklch(0.9 0.08 255);
+  --gap-bg: oklch(0.22 0.03 75);
+  --gap-bg-2: oklch(0.24 0.045 75);
+  --gap-rule: oklch(0.38 0.07 75);
+  --gap-rule-2: oklch(0.52 0.1 75);
+  --gap-ink: oklch(0.83 0.11 75);
+  --gap-ink-hi: oklch(0.9 0.08 75);
+  --unchanged-bg: oklch(0.22 0.03 190);
+  --unchanged-bg-2: oklch(0.24 0.045 190);
+  --unchanged-rule: oklch(0.38 0.07 190);
+  --unchanged-rule-2: oklch(0.52 0.1 190);
+  --unchanged-ink: oklch(0.83 0.11 190);
+  --unchanged-ink-hi: oklch(0.9 0.08 190);
+  --prov-bg: oklch(0.22 0.03 300);
+  --prov-bg-2: oklch(0.24 0.045 300);
+  --prov-rule: oklch(0.38 0.07 300);
+  --prov-rule-2: oklch(0.52 0.1 300);
+  --prov-ink: oklch(0.83 0.11 300);
+  --prov-ink-hi: oklch(0.9 0.08 300);
+  --primer-bg: oklch(0.22 0.03 25);
+  --primer-bg-2: oklch(0.24 0.045 25);
+  --primer-rule: oklch(0.38 0.07 25);
+  --primer-rule-2: oklch(0.52 0.1 25);
+  --primer-ink: oklch(0.83 0.11 25);
+  --primer-ink-hi: oklch(0.9 0.08 25);
+  --primer-rust-bg: oklch(0.22 0.006 60);
+  --primer-rust-bg-2: oklch(0.24 0.008 60);
+  --primer-rust-rule: oklch(0.38 0.012 60);
+  --primer-rust-rule-2: oklch(0.74 0.016 60);
+  --primer-rust-ink: oklch(0.83 0.014 60);
+  --primer-rust-ink-hi: oklch(0.9 0.012 60);
+}
+
+/* ---- Workshop overrides ---- */
+.tier,.tag,.pending{border-radius:var(--r-tag)}
+code{border-radius:var(--r-sm)}
+.gap,.open,details.searched,details.excerpt,.ip-card,figure.chain,.gt,pre.probe,.buildstate,.primer{border-radius:var(--r)}
+.ip-box{border-radius:var(--r-box)}
+.key-chg,.key-aff,.key-out{border-radius:3px}
+
+h1,h2,h3,h4{font-weight:600;letter-spacing:-0.03em;font-variation-settings:normal}
+h1{letter-spacing:-0.045em;line-height:1.02}
+.rail-id .tick{font-weight:600;letter-spacing:-0.02em}
+.tier,.tag{font-size:10.5px;letter-spacing:0;text-transform:none;border-color:transparent;padding:2px 8px}
+.open,.gap{position:relative;margin-left:16px;border:1px solid var(--gap-rule);padding:16px 18px 16px 28px}
+.gap{margin-top:16px}
+.open::before,.gap::before{content:"?";position:absolute;left:-16px;top:-14px;width:32px;height:32px;box-sizing:border-box;border-radius:50%;background:var(--badge);border:3px solid var(--ground);display:flex;align-items:center;justify-content:center;font:700 15px/1 var(--body);color:#0a0a0a}
+.gap::before{content:"!"}
+.open>b,.gap>b{font-family:var(--body);font-weight:600;font-size:13.5px;letter-spacing:0}
+details.searched>summary,details.evidence>summary{font-weight:500}
+
+/* ---- Highlighter accents. Tints for the two labelled tiers and the excerpt tag, never a grade ---- */
+:root{--hl-yellow:oklch(0.91 0.15 95);--hl-sky:oklch(0.91 0.08 205);--hl-pink:oklch(0.91 0.07 340);--hl-lime:oklch(0.92 0.13 130);--hl-ink:#0a0a0a;--hl-soft:oklch(0.95 0.08 95);--badge:oklch(0.88 0.16 95);--nav-ink:oklch(0.50 0.20 265);--nav-ink-hi:oklch(0.42 0.21 265);--nav-rule-2:oklch(0.80 0.10 265);--unchanged-bg:oklch(0.96 0.035 205);--unchanged-rule-2:oklch(0.62 0.09 205);--gap-bg-2:oklch(0.97 0.05 95);--gap-rule:oklch(0.86 0.12 95);--prov-ink:oklch(0.48 0.15 340);--prov-bg:oklch(0.975 0.02 340);--prov-rule:oklch(0.88 0.06 340);--prov-rule-2:oklch(0.75 0.10 340);--primer-ink:oklch(0.50 0.17 25);}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--hl-yellow:oklch(0.88 0.16 95);--hl-sky:oklch(0.84 0.09 205);--hl-pink:oklch(0.84 0.09 340);--hl-lime:oklch(0.88 0.15 130);--hl-ink:#0a0a0a;--hl-soft:oklch(0.40 0.08 95);--badge:oklch(0.88 0.16 95);--nav-ink:oklch(0.80 0.13 265);--nav-ink-hi:oklch(0.88 0.09 265);--nav-rule-2:oklch(0.45 0.10 265);--unchanged-bg:oklch(0.22 0.04 205);--unchanged-rule-2:oklch(0.60 0.09 205);--gap-bg-2:oklch(0.24 0.05 95);--gap-rule:oklch(0.55 0.12 95);--prov-ink:oklch(0.84 0.09 340);--prov-bg:oklch(0.21 0.03 340);--prov-rule:oklch(0.38 0.06 340);--prov-rule-2:oklch(0.55 0.09 340);}}
+:root[data-theme="dark"]{--hl-yellow:oklch(0.88 0.16 95);--hl-sky:oklch(0.84 0.09 205);--hl-pink:oklch(0.84 0.09 340);--hl-lime:oklch(0.88 0.15 130);--hl-ink:#0a0a0a;--hl-soft:oklch(0.40 0.08 95);--badge:oklch(0.88 0.16 95);--nav-ink:oklch(0.80 0.13 265);--nav-ink-hi:oklch(0.88 0.09 265);--nav-rule-2:oklch(0.45 0.10 265);--unchanged-bg:oklch(0.22 0.04 205);--unchanged-rule-2:oklch(0.60 0.09 205);--gap-bg-2:oklch(0.24 0.05 95);--gap-rule:oklch(0.55 0.12 95);--prov-ink:oklch(0.84 0.09 340);--prov-bg:oklch(0.21 0.03 340);--prov-rule:oklch(0.38 0.06 340);--prov-rule-2:oklch(0.55 0.09 340);}
+
+.tier{background:var(--chip);color:var(--ink-2)}
+.tier-unc{background:var(--hl-sky);color:var(--hl-ink)}
+.tier-inf{background:var(--hl-yellow);color:var(--hl-ink)}
+.tag{background:var(--hl-pink);color:var(--hl-ink);border-color:transparent}
+.ip-aff>.ip-box{border-color:var(--unchanged-rule-2)}
+main section > p strong{background:linear-gradient(transparent 58%,var(--hl-soft) 58%)}
+::selection{background:var(--hl-yellow);color:var(--hl-ink)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .tier-unc,:root:not([data-theme="light"]) .tier-inf,:root:not([data-theme="light"]) .tag{background:transparent;border:1px solid currentColor}
+:root:not([data-theme="light"]) .tier-unc{color:var(--hl-sky)}:root:not([data-theme="light"]) .tier-inf{color:var(--hl-yellow)}:root:not([data-theme="light"]) .tag{color:var(--hl-pink)}}
+:root[data-theme="dark"] .tier-unc,:root[data-theme="dark"] .tier-inf,:root[data-theme="dark"] .tag{background:transparent;border:1px solid currentColor}
+:root[data-theme="dark"] .tier-unc{color:var(--hl-sky)}:root[data-theme="dark"] .tier-inf{color:var(--hl-yellow)}:root[data-theme="dark"] .tag{color:var(--hl-pink)}
+
+/* ---- Square frames and hard shadows: what reads Workshop apart from Daylight ---- */
+:root{--display:'Bricolage Grotesque', 'Geist', sans-serif;--r:0px;--r-box:0px;--r-tag:0px;--r-sm:2px;--frame:#0a0a0a;--shadow:#0a0a0a;--ground:#fdfdfb;--surface:#fdfdfb;--surface-3:#fbfbf8;}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--frame:#3d3d3d;--shadow:#3d3d3d;}}
+:root[data-theme="dark"]{--frame:#3d3d3d;--shadow:#3d3d3d;}
+
+h1,h2,h3,h4{font-family:var(--display);font-weight:800;letter-spacing:-0.03em;font-variation-settings:normal}
+h1{letter-spacing:-0.04em;line-height:1}
+.rail-id .tick{font-family:var(--display);font-weight:800}
+.rail{border-right:2px solid var(--frame)}
+.eyebrow > i{height:2px;background:var(--frame)}
+.lbl-a{background:var(--hl-yellow);color:var(--hl-ink);padding:3px 7px}
+.cp + .cp{border-top:2px dashed var(--rule-strong)}
+.ip-card,figure.chain{border:2px solid var(--frame);box-shadow:5px 5px 0 var(--shadow)}
+details.excerpt,details.searched,.gt,.primer{border:2px solid var(--frame)}
+.gt{background:var(--frame)}
+.open,.gap{border:2px solid var(--frame);box-shadow:4px 4px 0 var(--shadow)}
+.open::before,.gap::before{border-radius:0;border:2px solid var(--frame);width:30px;height:30px}
+.tier,.tag{border:1.5px solid var(--frame)}
+.ip-box{border-width:2px !important}
+
+/* ---- The appearance menu, framed like everything else here ---- */
+.rc-btn{border:2px solid var(--frame);box-shadow:3px 3px 0 var(--shadow);font-weight:600}
+.rc-btn:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--shadow)}
+.rc-pop{border:2px solid var(--frame);box-shadow:5px 5px 0 var(--shadow)}
+.rc-h{display:inline-block;align-self:flex-start;background:var(--hl-yellow);color:var(--hl-ink);padding:3px 6px;font-weight:600}
+.rc-styles button.on{border-color:var(--frame)}
+.rc-seg{border:2px solid var(--frame)}
+.rc-seg button[aria-pressed="true"]{background:var(--hl-yellow);color:var(--hl-ink);font-weight:600}
+</style>
+<!-- Theme · Field Notes. Emitted into the page by page-skeleton.sh in place of the template's
+     theme marker line; never read by a run, never typed. Fonts, tokens in all three theme
+     states, then the overrides that give the direction its shape. Every page carries all
+     three; the ones not chosen arrive switched off (media="not all") and the appearance menu
+     switches them. data-style names this file, data-style-label is what the menu calls it.
+     The rules every theme keeps are written beside that line in page-template.html. -->
+<link rel="stylesheet" data-style="field-notes" media="not all" href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Nunito+Sans:opsz,wght@6..12,400;6..12,600;6..12,700&family=Fira+Code:wght@400;500;600&family=Kalam:wght@400;700&display=swap">
+<style data-style="field-notes" media="not all" data-style-label="Field Notes">
+/* Tokens · Field Notes direction. Same five ramps and the same rule about what each
+   may mean (nav = clickable, gap = stated absence, unchanged = not in the diff,
+   prov = how it is known, primer = the framework's own frame); only hue, ramp
+   lightness and the neutrals change. Declared in all three theme states. */
+:root {
+  --display: 'Young Serif', Georgia, serif;
+  --body: 'Nunito Sans', system-ui, sans-serif;
+  --mono: 'Fira Code', ui-monospace, Menlo, monospace;
+  --hand: 'Kalam', cursive;
+  --r: 6px;
+  --r-sm: 4px;
+  --r-tag: 0;
+  --r-box: 16px;
+  --ground: #fbf8f1;
+  --surface: #fcfaf4;
+  --surface-hi: #fffdf8;
+  --surface-2: #f4eee2;
+  --surface-3: #fdfbf6;
+  --chip: #f1eadb;
+  --ink: #2a2420;
+  --ink-2: #352e29;
+  --ink-3: #4a423a;
+  --muted: #73695f;
+  --faint: #8a7f72;
+  --fainter: #aaa092;
+  --on-ink: #fbf8f1;
+  --on-ink-code: #ddd3c3;
+  --rule: #e8e0cf;
+  --rule-soft: #efe9dc;
+  --rule-strong: #d3c8b2;
+  --rule-dash: #bfb39c;
+  --rule-card: #ddd3bf;
+  --note-bg: #fff6d9;
+  --note-border: #2a2420;
+  --note-shadow: #2a2420;
+  --hand-ink: oklch(0.53 0.14 40);
+  --highlight: oklch(0.91 0.10 90);
+  --ex-add: oklch(0.95 0.04 150);
+  --add-sig: oklch(0.46 0.11 150);
+  --ex-del: oklch(0.95 0.03 30);
+  --del-sig: oklch(0.50 0.14 30);
+  --syn-key: oklch(0.48 0.11 295);
+  --syn-str: oklch(0.47 0.09 150);
+  --syn-com: oklch(0.62 0.03 70);
+  --syn-name: oklch(0.48 0.10 245);
+  --syn-num: oklch(0.53 0.12 45);
+  --nav-bg: oklch(0.965 0.025 245);
+  --nav-bg-2: oklch(0.95 0.04 245);
+  --nav-rule: oklch(0.87 0.06 245);
+  --nav-rule-2: oklch(0.62 0.08 245);
+  --nav-ink: oklch(0.45 0.1 245);
+  --nav-ink-hi: oklch(0.37 0.11 245);
+  --gap-bg: oklch(0.965 0.025 85);
+  --gap-bg-2: oklch(0.95 0.04 85);
+  --gap-rule: oklch(0.87 0.06 85);
+  --gap-rule-2: oklch(0.62 0.08 85);
+  --gap-ink: oklch(0.45 0.1 85);
+  --gap-ink-hi: oklch(0.37 0.11 85);
+  --unchanged-bg: oklch(0.965 0.025 160);
+  --unchanged-bg-2: oklch(0.95 0.04 160);
+  --unchanged-rule: oklch(0.87 0.06 160);
+  --unchanged-rule-2: oklch(0.62 0.08 160);
+  --unchanged-ink: oklch(0.45 0.1 160);
+  --unchanged-ink-hi: oklch(0.37 0.11 160);
+  --prov-bg: oklch(0.965 0.025 295);
+  --prov-bg-2: oklch(0.95 0.04 295);
+  --prov-rule: oklch(0.87 0.06 295);
+  --prov-rule-2: oklch(0.62 0.08 295);
+  --prov-ink: oklch(0.45 0.1 295);
+  --prov-ink-hi: oklch(0.37 0.11 295);
+  --primer-bg: oklch(0.965 0.025 30);
+  --primer-bg-2: oklch(0.95 0.04 30);
+  --primer-rule: oklch(0.87 0.06 30);
+  --primer-rule-2: oklch(0.62 0.08 30);
+  --primer-ink: oklch(0.45 0.1 30);
+  --primer-ink-hi: oklch(0.37 0.11 30);
+  --primer-rust-bg: oklch(0.965 0.004 60);
+  --primer-rust-bg-2: oklch(0.95 0.007 60);
+  --primer-rust-rule: oklch(0.87 0.012 60);
+  --primer-rust-rule-2: oklch(0.36 0.018 60);
+  --primer-rust-ink: oklch(0.45 0.022 60);
+  --primer-rust-ink-hi: oklch(0.37 0.022 60);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+  --ground: #1d1a17;
+  --surface: #201d19;
+  --surface-hi: #24201c;
+  --surface-2: #2a2621;
+  --surface-3: #211e1a;
+  --chip: #2e2924;
+  --ink: #f1ebe1;
+  --ink-2: #e2dbcf;
+  --ink-3: #d0c7b9;
+  --muted: #a89d8b;
+  --faint: #8f8474;
+  --fainter: #6f665a;
+  --on-ink: #1d1a17;
+  --on-ink-code: #4a423a;
+  --rule: #3a342d;
+  --rule-soft: #2f2a24;
+  --rule-strong: #4a433a;
+  --rule-dash: #5a5247;
+  --rule-card: #403a32;
+  --note-bg: #3a3220;
+  --note-border: #e9d9a8;
+  --note-shadow: #0f0d0b;
+  --hand-ink: oklch(0.78 0.11 45);
+  --highlight: oklch(0.42 0.08 90);
+  --ex-add: oklch(0.27 0.05 150);
+  --add-sig: oklch(0.82 0.11 150);
+  --ex-del: oklch(0.27 0.05 30);
+  --del-sig: oklch(0.82 0.11 30);
+  --syn-key: oklch(0.80 0.09 295);
+  --syn-str: oklch(0.80 0.09 150);
+  --syn-com: oklch(0.62 0.03 70);
+  --syn-name: oklch(0.80 0.08 245);
+  --syn-num: oklch(0.80 0.10 50);
+  --nav-bg: oklch(0.26 0.03 245);
+  --nav-bg-2: oklch(0.29 0.045 245);
+  --nav-rule: oklch(0.42 0.06 245);
+  --nav-rule-2: oklch(0.65 0.08 245);
+  --nav-ink: oklch(0.82 0.09 245);
+  --nav-ink-hi: oklch(0.88 0.07 245);
+  --gap-bg: oklch(0.26 0.03 85);
+  --gap-bg-2: oklch(0.29 0.045 85);
+  --gap-rule: oklch(0.42 0.06 85);
+  --gap-rule-2: oklch(0.65 0.08 85);
+  --gap-ink: oklch(0.82 0.09 85);
+  --gap-ink-hi: oklch(0.88 0.07 85);
+  --unchanged-bg: oklch(0.26 0.03 160);
+  --unchanged-bg-2: oklch(0.29 0.045 160);
+  --unchanged-rule: oklch(0.42 0.06 160);
+  --unchanged-rule-2: oklch(0.65 0.08 160);
+  --unchanged-ink: oklch(0.82 0.09 160);
+  --unchanged-ink-hi: oklch(0.88 0.07 160);
+  --prov-bg: oklch(0.26 0.03 295);
+  --prov-bg-2: oklch(0.29 0.045 295);
+  --prov-rule: oklch(0.42 0.06 295);
+  --prov-rule-2: oklch(0.65 0.08 295);
+  --prov-ink: oklch(0.82 0.09 295);
+  --prov-ink-hi: oklch(0.88 0.07 295);
+  --primer-bg: oklch(0.26 0.03 30);
+  --primer-bg-2: oklch(0.29 0.045 30);
+  --primer-rule: oklch(0.42 0.06 30);
+  --primer-rule-2: oklch(0.65 0.08 30);
+  --primer-ink: oklch(0.82 0.09 30);
+  --primer-ink-hi: oklch(0.88 0.07 30);
+  --primer-rust-bg: oklch(0.26 0.006 60);
+  --primer-rust-bg-2: oklch(0.29 0.008 60);
+  --primer-rust-rule: oklch(0.42 0.012 60);
+  --primer-rust-rule-2: oklch(0.74 0.016 60);
+  --primer-rust-ink: oklch(0.82 0.014 60);
+  --primer-rust-ink-hi: oklch(0.88 0.012 60);
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #1d1a17;
+  --surface: #201d19;
+  --surface-hi: #24201c;
+  --surface-2: #2a2621;
+  --surface-3: #211e1a;
+  --chip: #2e2924;
+  --ink: #f1ebe1;
+  --ink-2: #e2dbcf;
+  --ink-3: #d0c7b9;
+  --muted: #a89d8b;
+  --faint: #8f8474;
+  --fainter: #6f665a;
+  --on-ink: #1d1a17;
+  --on-ink-code: #4a423a;
+  --rule: #3a342d;
+  --rule-soft: #2f2a24;
+  --rule-strong: #4a433a;
+  --rule-dash: #5a5247;
+  --rule-card: #403a32;
+  --note-bg: #3a3220;
+  --note-border: #e9d9a8;
+  --note-shadow: #0f0d0b;
+  --hand-ink: oklch(0.78 0.11 45);
+  --highlight: oklch(0.42 0.08 90);
+  --ex-add: oklch(0.27 0.05 150);
+  --add-sig: oklch(0.82 0.11 150);
+  --ex-del: oklch(0.27 0.05 30);
+  --del-sig: oklch(0.82 0.11 30);
+  --syn-key: oklch(0.80 0.09 295);
+  --syn-str: oklch(0.80 0.09 150);
+  --syn-com: oklch(0.62 0.03 70);
+  --syn-name: oklch(0.80 0.08 245);
+  --syn-num: oklch(0.80 0.10 50);
+  --nav-bg: oklch(0.26 0.03 245);
+  --nav-bg-2: oklch(0.29 0.045 245);
+  --nav-rule: oklch(0.42 0.06 245);
+  --nav-rule-2: oklch(0.65 0.08 245);
+  --nav-ink: oklch(0.82 0.09 245);
+  --nav-ink-hi: oklch(0.88 0.07 245);
+  --gap-bg: oklch(0.26 0.03 85);
+  --gap-bg-2: oklch(0.29 0.045 85);
+  --gap-rule: oklch(0.42 0.06 85);
+  --gap-rule-2: oklch(0.65 0.08 85);
+  --gap-ink: oklch(0.82 0.09 85);
+  --gap-ink-hi: oklch(0.88 0.07 85);
+  --unchanged-bg: oklch(0.26 0.03 160);
+  --unchanged-bg-2: oklch(0.29 0.045 160);
+  --unchanged-rule: oklch(0.42 0.06 160);
+  --unchanged-rule-2: oklch(0.65 0.08 160);
+  --unchanged-ink: oklch(0.82 0.09 160);
+  --unchanged-ink-hi: oklch(0.88 0.07 160);
+  --prov-bg: oklch(0.26 0.03 295);
+  --prov-bg-2: oklch(0.29 0.045 295);
+  --prov-rule: oklch(0.42 0.06 295);
+  --prov-rule-2: oklch(0.65 0.08 295);
+  --prov-ink: oklch(0.82 0.09 295);
+  --prov-ink-hi: oklch(0.88 0.07 295);
+  --primer-bg: oklch(0.26 0.03 30);
+  --primer-bg-2: oklch(0.29 0.045 30);
+  --primer-rule: oklch(0.42 0.06 30);
+  --primer-rule-2: oklch(0.65 0.08 30);
+  --primer-ink: oklch(0.82 0.09 30);
+  --primer-ink-hi: oklch(0.88 0.07 30);
+  --primer-rust-bg: oklch(0.26 0.006 60);
+  --primer-rust-bg-2: oklch(0.29 0.008 60);
+  --primer-rust-rule: oklch(0.42 0.012 60);
+  --primer-rust-rule-2: oklch(0.74 0.016 60);
+  --primer-rust-ink: oklch(0.82 0.014 60);
+  --primer-rust-ink-hi: oklch(0.88 0.012 60);
+}
+
+/* ---- Field Notes overrides ---- */
+.tier,.tag,.pending{border-radius:var(--r-tag)}
+code{border-radius:var(--r-sm)}
+.gap,.open,details.searched,details.excerpt,.ip-card,figure.chain,.gt,pre.probe,.buildstate,.primer{border-radius:var(--r)}
+.ip-box{border-radius:var(--r-box)}
+.key-chg,.key-aff,.key-out{border-radius:3px}
+
+h1,h2,h3,h4{font-weight:400;letter-spacing:-0.005em;font-variation-settings:normal}
+h1{line-height:1.1}
+.tier{font-family:var(--body);font-size:12.5px;font-weight:700;letter-spacing:0;text-transform:none;border:0;background:none;padding:0 2px;gap:6px;color:var(--muted);vertical-align:0}
+.tier::before{content:"";flex:0 0 auto;width:10px;height:10px;box-sizing:border-box;border-radius:50%;border:2px solid currentColor}
+.tier-unc{background:none;color:var(--unchanged-ink)}
+.tier-unc::before{border-style:dashed}
+.tier-inf{background:none;color:var(--gap-ink)}
+.tier-inf::before{background:linear-gradient(90deg,currentColor 50%,transparent 50%)}
+.tag{font-family:var(--body);font-size:12px;font-weight:600;letter-spacing:0;text-transform:none;border-radius:999px;padding:1px 9px}
+.open{background:var(--note-bg);border:1.5px solid var(--note-border);border-radius:4px;box-shadow:3px 3px 0 var(--note-shadow);transform:rotate(-0.3deg);color:var(--ink)}
+.open>b{font-family:var(--hand);font-weight:700;font-size:18px;letter-spacing:0;color:var(--gap-ink);margin-bottom:2px}
+.gap>b{font-family:var(--hand);font-size:16px;letter-spacing:0;font-weight:700}
+.lbl-a{font-family:var(--hand);font-size:19px;letter-spacing:0;text-transform:none;color:var(--hand-ink);font-weight:700}
+.cp > .lbl{font-family:var(--hand);font-size:17px;letter-spacing:0;text-transform:none;color:var(--hand-ink)}
+.ip-rel{font-family:var(--hand);font-size:15px;letter-spacing:0;text-transform:none;color:var(--hand-ink)}
+.ip-chg>.ip-box,.ip-out>.ip-box,.ip-aff>.ip-box{border-width:1.5px}
+main p a:not(.doc){text-decoration-style:wavy;text-underline-offset:4px}
+main section > p strong{background:linear-gradient(transparent 58%,var(--highlight) 58%)}
+details.searched>summary,details.evidence>summary{font-weight:700}
+
+/* ---- Highlighter accents. Tints for the two labelled tiers and the excerpt tag, never a grade ---- */
+:root{--hl-yellow:oklch(0.91 0.15 95);--hl-sky:oklch(0.90 0.08 205);--hl-pink:oklch(0.90 0.08 345);--highlight:oklch(0.91 0.15 95);--note-bg:oklch(0.96 0.09 95);--hand-ink:oklch(0.55 0.17 350);--nav-ink:oklch(0.48 0.16 260);--nav-ink-hi:oklch(0.40 0.17 260);--nav-rule-2:oklch(0.78 0.08 260);--unchanged-ink:oklch(0.42 0.09 205);--unchanged-rule-2:oklch(0.58 0.09 205);--unchanged-bg:oklch(0.95 0.035 205);--prov-ink:oklch(0.48 0.13 345);--prov-bg:oklch(0.97 0.02 345);--prov-rule:oklch(0.88 0.05 345);}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--hl-yellow:oklch(0.50 0.10 95);--hl-sky:oklch(0.45 0.07 205);--hl-pink:oklch(0.45 0.08 345);--highlight:oklch(0.50 0.10 95);--note-bg:#3d3418;--hand-ink:oklch(0.80 0.12 350);--nav-ink:oklch(0.80 0.11 260);--nav-ink-hi:oklch(0.88 0.08 260);--nav-rule-2:oklch(0.50 0.08 260);--unchanged-ink:oklch(0.84 0.08 205);--unchanged-rule-2:oklch(0.65 0.08 205);--unchanged-bg:oklch(0.27 0.035 205);--prov-ink:oklch(0.84 0.08 345);--prov-bg:oklch(0.26 0.03 345);--prov-rule:oklch(0.42 0.06 345);}}
+:root[data-theme="dark"]{--hl-yellow:oklch(0.50 0.10 95);--hl-sky:oklch(0.45 0.07 205);--hl-pink:oklch(0.45 0.08 345);--highlight:oklch(0.50 0.10 95);--note-bg:#3d3418;--hand-ink:oklch(0.80 0.12 350);--nav-ink:oklch(0.80 0.11 260);--nav-ink-hi:oklch(0.88 0.08 260);--nav-rule-2:oklch(0.50 0.08 260);--unchanged-ink:oklch(0.84 0.08 205);--unchanged-rule-2:oklch(0.65 0.08 205);--unchanged-bg:oklch(0.27 0.035 205);--prov-ink:oklch(0.84 0.08 345);--prov-bg:oklch(0.26 0.03 345);--prov-rule:oklch(0.42 0.06 345);}
+
+.tier-unc{background:linear-gradient(transparent 45%,var(--hl-sky) 45%);color:var(--ink)}
+.tier-inf{background:linear-gradient(transparent 45%,var(--hl-yellow) 45%);color:var(--ink)}
+.tier-unc::before{border-color:var(--unchanged-rule-2)}
+.tier-inf::before{color:var(--gap-ink)}
+.tag{background:linear-gradient(transparent 40%,var(--hl-pink) 40%);color:var(--ink);border-color:transparent;border-radius:0}
+.cp > h3{text-decoration:underline;text-decoration-color:var(--hl-yellow);text-decoration-thickness:.32em;text-underline-offset:-.12em;text-decoration-skip-ink:none}
+::selection{background:var(--hl-yellow);color:var(--ink)}
+
+/* ---- The appearance menu, in this theme's hand ---- */
+.rc-h{font-family:var(--hand);font-size:15px;letter-spacing:0;text-transform:none;color:var(--ink-3)}
+.rc-btn b{font-family:var(--hand);font-size:15px}
+.rc-pop{transform:rotate(-.4deg)}
+.rc-seg button[aria-pressed="true"]{background:var(--hl-yellow);color:#2a2620;font-weight:600}
+</style>
+<!--
+  The reader's saved appearance, applied here rather than in the tail script
+  so the page never paints in one look and then jumps to another. Two keys,
+  both a viewer's own convenience: which theme (only if this page carries a
+  file of that name) and light or dark (absent means follow the system).
+  Every storage call is guarded — a private window or blocked site data
+  throws, and then the page is simply the repository's choice.
+-->
+<script>
+(function () {
+  function get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  var s = get('review-style'), els = document.querySelectorAll('[data-style]'), i, known = false;
+  for (i = 0; i < els.length; i++) { if (els[i].getAttribute('data-style') === s) { known = true; } }
+  if (known) {
+    for (i = 0; i < els.length; i++) {
+      if (els[i].getAttribute('data-style') === s) { els[i].removeAttribute('media'); }
+      else { els[i].setAttribute('media', 'not all'); }
+    }
+  }
+  var t = get('review-theme');
+  if (t === 'light' || t === 'dark') { document.documentElement.setAttribute('data-theme', t); }
+})();
+</script>
+
+<!-- Scroll progress. The only decoration on the page that moves. -->
+<div class="progress"><i id="bar"></i></div>
+
+<div class="wrap">
+  <nav class="rail" aria-label="Sections">
+    <div class="rail-id">
+      <div class="lbl" style="letter-spacing:.18em">Review map</div>
+      <div class="tick">parallel-builders</div>
+      <div class="cite"><a class="cite" href="https://github.com/cartwmic/loop-engine/pull/88">PR #88</a> &middot; 3 files</div>
+    </div>
+
+    <div class="rail-links">
+      <a data-rail="changed" href="#changed"><span class="n">01</span>What changed</a>
+      <a data-rail="context" href="#context"><span class="n">02</span>Context</a>
+      <a data-rail="attention" href="#attention"><span class="n">03</span>Needs your attention</a>
+      <a class="sub" data-rail="cp-a" href="#cp-a">Cleanup drops an unlanded commit?</a>
+      <a class="sub" data-rail="cp-b" href="#cp-b">Is every merge failure a conflict?</a>
+      <a class="sub" data-rail="cp-c" href="#cp-c">Is the scenario the LE-211 proof?</a>
+      <a class="sub" data-rail="cp-d" href="#cp-d">Crate requirement range</a>
+      <a data-rail="start" href="#start"><span class="n">04</span>Read in this order</a>
+      <a data-rail="impact" href="#impact"><span class="n">05</span>Impact outside the diff</a>
+    </div>
+  </nav>
+
+  <main>
+
+
+    <header style="padding:64px 0 44px;border-bottom:1px solid var(--rule)">
+      <div class="lbl lbl-wide" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:34px">
+        <span>cartwmic</span><span style="color:var(--rule-strong)">/</span><span>loop-engine</span><span style="color:var(--rule-strong)">&middot;</span><a style="color:var(--nav-ink)" href="https://github.com/cartwmic/loop-engine/pull/88">PR #88</a><span style="color:var(--rule-strong)">&middot;</span><span>cartwmic</span>
+      </div>
+
+      <h1>The lean-change skill tells the driver to build independent steps at once, in worktrees, and gate the joined tree once</h1>
+
+      <p style="margin-top:24px;font-size:16.5px;color:var(--ink-3)">A new <code>## Parallel builders</code> section in the
+        lean-change skill, three shell blocks a driver runs to start, land and clean up a step, a journey
+        scenario that runs those blocks as written, and live requirement LE-211. No engine or provider code
+        changes.</p>
+
+      <div class="gt gt-meta" style="margin-top:44px">
+        <div class="c"><div class="lbl" style="font-size:9.5px;margin-bottom:7px">Revision</div><div class="path" style="font-size:12px">parallel-builders <span style="color:var(--fainter)">&rarr;</span> main</div><div class="path" style="font-size:11px;color:var(--fainter);margin-top:3px">b9a5e3e <span>&rarr;</span> 4cabf88</div></div>
+        <div class="c"><div class="lbl" style="font-size:9.5px;margin-bottom:7px">Shape</div><div class="path" style="font-size:12px">behavioural</div></div>
+        <div class="c"><div class="lbl" style="font-size:9.5px;margin-bottom:7px">Commits</div><div style="font-family:var(--display);font-size:22px;line-height:1;color:var(--ink-2)">7</div></div>
+        <div class="c"><div class="lbl" style="font-size:9.5px;margin-bottom:7px">Files</div><div style="font-family:var(--display);font-size:22px;line-height:1;color:var(--ink-2)">3</div></div>
+        <div class="c"><div class="lbl" style="font-size:9.5px;margin-bottom:7px">By kind</div><div class="path" style="font-size:12px">1 prod &middot; 1 test &middot; 1 docs</div></div>
+      </div>
+    </header>
+
+    <section id="changed">
+      <div class="eyebrow"><span class="lbl lbl-a">What changed</span><i></i></div>
+      <h2 style="max-width:30ch;margin-bottom:18px">A driver can now build steps in parallel worktrees and land them by merge</h2>
+
+      <p>In <code>implement</code>, the lean-change skill now tells the driver to build steps that touch
+        different files at the same time, each in a git worktree outside the repository, land each into the
+        repository with <code>git merge --no-ff</code> in plan order, run the full build and suite once on
+        the joined tree, then remove the worktrees and step branches
+        <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-d602a5f91ccd9fd8516419759688c377c7e8e100c608c55515191efc56807b3aR118-R167">crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md:118-167</a>.
+        The engine and the provider are untouched: the recipe is prose plus three shell blocks the driver runs.</p>
+      <p>The journey extracts those three blocks from the skill and runs them against a fixture repository
+        with two scripted builders, a conflicting step and a hook-rejected step
+        <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-ca6fa538aaf503192833b115dc476a1af2b48119cb1490a0947f8e8140abb424R409-R534">scripts/lean-change-journey.py:409-534</a>.
+        The PRD records the recipe as live requirement LE-211
+        <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-487b79d1751c30f1530aa326b1d31d6062b4244d4e08bc4bbabb2777ca6e5e6bR2266-R2273">docs/PRD.md:2266-2273</a>.
+        The PR description cites a driver-model evaluation kept outside the repository; nothing in the diff
+        carries it.</p>
+    </section>
+
+    <section id="context">
+      <div class="eyebrow"><span class="lbl lbl-a">Context</span><i></i></div>
+      <h2 style="margin-bottom:18px">What the judgments below rely on</h2>
+      <dl class="ctx">
+        <dt>Bookends marker</dt>
+        <dd>A <code># bookends:LE-&hellip;</code> comment in a file of a class that bookends.toml lists; the
+          bookends-check gate ties each live PRD requirement to a marker in a file of its coverage class
+          <span class="tier tier-inf">inferred</span>
+          <a class="path" href="https://github.com/cartwmic/loop-engine/blob/b9a5e3ea59cbd9428974c77e66cea70f03d706be/bookends.toml#L1-L8">bookends.toml:1-8</a>
+          <span class="ctx-used">Used by <a href="#cp-c">Checkpoint C</a></span></dd>
+      </dl>
+    </section>
+
+    <section id="attention" style="padding-top:48px">
+      <div class="eyebrow"><span class="lbl lbl-a">Attention</span><i></i></div>
+      <h2 style="margin-bottom:18px">What needs your attention</h2>
+      <p>The first two turn on what the recipe's shell blocks do to a step that does not land cleanly,
+        because that is where a driver following the text loses or mislabels work. The third is whether the
+        journey scenario is the proof LE-211 claims, and what it costs. The last is a documentation range.</p>
+
+      <section class="cp" id="cp-a">
+        <span class="lbl lbl-wide">Checkpoint A</span>
+        <h3>Should cleanup delete a step that committed but never landed?</h3>
+
+        <p>The land block commits in the step's worktree before it merges, so a step that stops at
+          <code>conflict</code> leaves a commit on <code>step/$STEP</code> that is not in the repository
+          <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-d602a5f91ccd9fd8516419759688c377c7e8e100c608c55515191efc56807b3aR143-R144">crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md:143-144</a>.
+          Cleanup removes the worktree, which is clean, then runs <code>branch -D</code>; the warning beneath it
+          speaks only of uncommitted work. The journey cleans its conflicting step s3 this way and asserts that
+          no <code>step/*</code> branch is left. The reviewer decides whether losing that commit is the
+          intended end of a conflict.</p>
+
+        <ul class="lookat">
+          <li>
+            <b>Cleanup block and its warning</b>
+            <span><code>-D</code> on the step branch, and a warning that covers uncommitted work only.</span>
+<details class="excerpt excerpt--source">
+  <summary>
+    <span class="chev">&#9656;</span>
+    <span class="ex-loc"><a class="cite" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-d602a5f91ccd9fd8516419759688c377c7e8e100c608c55515191efc56807b3aR158-R165">crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md:158-165</a></span>
+    <span class="tag">At head</span>
+  </summary>
+  <div class="ex-body">
+<pre data-src="crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md" data-lang="markdown" style="counter-reset: exl 157"><span class="l">6. **Clean up** each step, then request `ready`:</span>
+<span class="l"></span>
+<span class="l">   ```sh</span>
+<span class="l">   git -C "$REPO" worktree remove "$WORK/wt-$STEP" &amp;&amp; git -C "$REPO" branch -q -D "step/$STEP"</span>
+<span class="l">   ```</span>
+<span class="l"></span>
+<span class="l">   Git refuses to remove a worktree that still holds uncommitted work. Land it first, or, if you</span>
+<span class="l">   mean to drop that work, add `--force`.</span>
+</pre>
+  </div>
+</details>
+          </li>
+          <li>
+            <b>What a conflict tells the driver</b>
+            <span>Resolve, or rebuild from the landed tree; nothing says to keep the unlanded commit.</span>
+            <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-d602a5f91ccd9fd8516419759688c377c7e8e100c608c55515191efc56807b3aR150-R153">crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md:150-153</a>
+          </li>
+          <li>
+            <b>Journey cleanup of s3</b>
+            <span>s3 committed and failed to land at :464-465; here cleanup succeeds and its branch is gone.</span>
+<details class="excerpt excerpt--source">
+  <summary>
+    <span class="chev">&#9656;</span>
+    <span class="ex-loc"><a class="cite" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-ca6fa538aaf503192833b115dc476a1af2b48119cb1490a0947f8e8140abb424R515-R519">scripts/lean-change-journey.py:515-519</a></span>
+    <span class="tag">At head</span>
+  </summary>
+  <div class="ex-body">
+<pre data-src="scripts/lean-change-journey.py" data-lang="python" style="counter-reset: exl 514"><span class="l">    for step in ['s1', 's2', 's3']:</span>
+<span class="l">        result = run_block(clean, repo, steps, step)</span>
+<span class="l">        assert result.returncode == 0, (step, result.stderr)</span>
+<span class="l">        assert not (steps / f'wt-{step}').exists()</span>
+<span class="l">    assert git_out(repo, 'branch', '--list', 'step/*') == ''</span>
+</pre>
+  </div>
+</details>
+          </li>
+        </ul>
+
+        <p class="open"><b>Open question</b>Is <code>branch -D</code> deliberate, or should cleanup refuse a
+          step branch the repository has not merged?</p>
+      </section>
+
+      <section class="cp" id="cp-b">
+        <span class="lbl lbl-wide">Checkpoint B</span>
+        <h3>Does the land block's &ldquo;conflict&rdquo; mean a conflict whenever the merge fails?</h3>
+
+        <p>When <code>git merge</code> fails for any reason, the fallback runs <code>merge --abort</code> and
+          prints <code>conflict: $STEP</code>, and the prose then sends the driver to resolve a conflict
+          <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-d602a5f91ccd9fd8516419759688c377c7e8e100c608c55515191efc56807b3aR150-R153">crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md:150-153</a>.
+          The recipe also has the driver fix gate findings in <code>REPO</code>
+          <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-d602a5f91ccd9fd8516419759688c377c7e8e100c608c55515191efc56807b3aR155-R156">crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md:155-156</a>.
+          A merge refused before it starts, over an uncommitted edit in <code>REPO</code>, leaves nothing to
+          abort and still prints <code>conflict</code> <span class="tier">uncertain</span>; running the land
+          block against a repository with an uncommitted edit to a file the step changes would settle it. The
+          journey's one conflict is a real conflict on a clean repository.</p>
+
+        <ul class="lookat">
+          <li>
+            <b>Land block</b>
+            <span>One label for every way the merge can fail.</span>
+<details class="excerpt excerpt--source">
+  <summary>
+    <span class="chev">&#9656;</span>
+    <span class="ex-loc"><a class="cite" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-d602a5f91ccd9fd8516419759688c377c7e8e100c608c55515191efc56807b3aR143-R147">crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md:143-147</a></span>
+    <span class="tag">At head</span>
+  </summary>
+  <div class="ex-body">
+<pre data-src="crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md" data-lang="markdown" style="counter-reset: exl 142"><span class="l">   if git -C "$WORK/wt-$STEP" add -A &amp;&amp; git -C "$WORK/wt-$STEP" commit -q -m "step $STEP"; then</span>
+<span class="l">     git -C "$REPO" merge -q --no-ff --no-edit "step/$STEP" || { git -C "$REPO" merge --abort; echo "conflict: $STEP" &gt;&amp;2; false; }</span>
+<span class="l">   else</span>
+<span class="l">     echo "not committed: $STEP" &gt;&amp;2; false</span>
+<span class="l">   fi</span>
+</pre>
+  </div>
+</details>
+          </li>
+          <li>
+            <b>The conflict case the journey pins</b>
+            <span>s3 edits a line s1 landed, on a clean repository; HEAD, status and tree identity hold.</span>
+            <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-ca6fa538aaf503192833b115dc476a1af2b48119cb1490a0947f8e8140abb424R464-R469">scripts/lean-change-journey.py:464-469</a>
+          </li>
+        </ul>
+
+        <p class="open"><b>Open question</b>Should the fallback tell a merge that never started apart from a
+          conflict?</p>
+      </section>
+
+      <section class="cp" id="cp-c">
+        <span class="lbl lbl-wide">Checkpoint C</span>
+        <h3>Is the parallel scenario the proof LE-211 needs, at the cost it adds to every full journey run?</h3>
+
+        <p>LE-211 is live with coverage e2e/journey, and its <code>bookends:LE-211</code> marker sits on the
+          scenario <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-ca6fa538aaf503192833b115dc476a1af2b48119cb1490a0947f8e8140abb424R411">scripts/lean-change-journey.py:411</a>. The scenario runs
+          the skill's blocks as written, with scripted builders that wait up to 20 seconds for each other. It
+          shows the blocks do what the prose says; it does not show a model driver following the recipe, which
+          the requirement's known limits leave to a small fixture
+          <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-487b79d1751c30f1530aa326b1d31d6062b4244d4e08bc4bbabb2777ca6e5e6bR2273">docs/PRD.md:2273</a>. Every full run now parses the skill first and
+          exits unless the section holds exactly three <code>sh</code> blocks, so a wording edit to the skill
+          can stop the b, c, hard and old-vs-new profiles too.</p>
+
+        <ul class="lookat">
+          <li>
+            <b>Builder start barrier</b>
+            <span>A builder fails if the other has not started within 20 seconds.</span>
+<details class="excerpt excerpt--source">
+  <summary>
+    <span class="chev">&#9656;</span>
+    <span class="ex-loc"><a class="cite" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-ca6fa538aaf503192833b115dc476a1af2b48119cb1490a0947f8e8140abb424R370-R378">scripts/lean-change-journey.py:370-378</a></span>
+    <span class="tag">At head</span>
+  </summary>
+  <div class="ex-body">
+<pre data-src="scripts/lean-change-journey.py" data-lang="python" style="counter-reset: exl 369"><span class="l">def builder(worktree, step, other, name, text, starts):</span>
+<span class="l">    """A scripted builder: records its start, waits until the other builder has started, then writes only its own file."""</span>
+<span class="l">    (starts / step).touch()</span>
+<span class="l">    deadline = time.monotonic() + BUILDER_TIMEOUT</span>
+<span class="l">    while not (starts / other).exists():</span>
+<span class="l">        if time.monotonic() &gt; deadline:</span>
+<span class="l">            raise TimeoutError(f'builder {step}: {other} never started; the builders did not run at the same time')</span>
+<span class="l">        time.sleep(0.05)</span>
+<span class="l">    (worktree / name).write_text(text)</span>
+</pre>
+  </div>
+</details>
+          </li>
+          <li>
+            <b>Skill parse before every profile</b>
+            <span>Exactly three blocks, else <code>SystemExit</code>; called before the profile loop.</span>
+            <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-ca6fa538aaf503192833b115dc476a1af2b48119cb1490a0947f8e8140abb424R341-R362">scripts/lean-change-journey.py:341-362</a>
+          </li>
+          <li>
+            <b>Mutation runner</b>
+            <span>Each mutant runs the full journey, so any scenario failure reads as a kill
+              <span class="tier tier-unc">from unchanged code</span></span>
+<details class="excerpt excerpt--source">
+  <summary>
+    <span class="chev">&#9656;</span>
+    <span class="ex-loc"><a class="cite" href="https://github.com/cartwmic/loop-engine/blob/b9a5e3ea59cbd9428974c77e66cea70f03d706be/scripts/lean-change-mutations.py#L157-L160">scripts/lean-change-mutations.py:157-160</a></span>
+    <span class="tag">Unchanged</span>
+  </summary>
+  <div class="ex-body">
+<pre data-src="scripts/lean-change-mutations.py" data-lang="python" style="counter-reset: exl 156"><span class="l">            journey = run([sys.executable, 'scripts/lean-change-journey.py', '--engine', str(engine), '--provider', str(provider)], source, env=env)</span>
+<span class="l">            if journey.returncode:</span>
+<span class="l">                print(f'{name}: killed by the journey')</span>
+<span class="l">                continue</span>
+</pre>
+  </div>
+</details>
+          </li>
+        </ul>
+
+        <p class="open"><b>Open question</b>Is 20 seconds enough on a loaded runner and inside the mutation
+          loop?</p>
+      </section>
+
+      <section class="cp" id="cp-d">
+        <span class="lbl lbl-wide">Checkpoint D</span>
+        <h3>Should the crate's own requirement range move with the PRD?</h3>
+
+        <p>The PRD now says lean-change is governed by LE-202&ndash;LE-211
+          <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-487b79d1751c30f1530aa326b1d31d6062b4244d4e08bc4bbabb2777ca6e5e6bR18">docs/PRD.md:18</a>. The crate's README and AGENTS file, which this
+          change does not touch, still say LE-202 to LE-210
+          <a class="path" href="https://github.com/cartwmic/loop-engine/blob/b9a5e3ea59cbd9428974c77e66cea70f03d706be/crates/lean-change-provider/README.md#L20">crates/lean-change-provider/README.md:20</a>
+          <span class="tier tier-unc">from unchanged code</span>. At the base the PRD said LE-209 while those
+          files said LE-210, so the two have disagreed before.</p>
+
+        <ul class="lookat">
+          <li>
+            <b>Crate README range</b>
+            <span>Still ends at LE-210 <span class="tier tier-unc">from unchanged code</span></span>
+<details class="excerpt excerpt--source">
+  <summary>
+    <span class="chev">&#9656;</span>
+    <span class="ex-loc"><a class="cite" href="https://github.com/cartwmic/loop-engine/blob/b9a5e3ea59cbd9428974c77e66cea70f03d706be/crates/lean-change-provider/README.md#L20-L20">crates/lean-change-provider/README.md:20-20</a></span>
+    <span class="tag">Unchanged</span>
+  </summary>
+  <div class="ex-body">
+<pre data-src="crates/lean-change-provider/README.md" data-lang="markdown" style="counter-reset: exl 19"><span class="l">describe/evaluate on stdin for the engine. Requirements: LE-202 to LE-210 in docs/PRD.md at the checkout root.</span>
+</pre>
+  </div>
+</details>
+          </li>
+          <li>
+            <b>Crate AGENTS range</b>
+            <span>Still ends at LE-210 <span class="tier tier-unc">from unchanged code</span></span>
+            <a class="path" href="https://github.com/cartwmic/loop-engine/blob/b9a5e3ea59cbd9428974c77e66cea70f03d706be/crates/lean-change-provider/AGENTS.md#L6">crates/lean-change-provider/AGENTS.md:6</a>
+          </li>
+        </ul>
+      </section>
+    </section>
+
+    <section id="start" style="padding-top:62px">
+      <div class="eyebrow"><span class="lbl lbl-a">Where to begin</span><i></i></div>
+      <h2 style="margin-bottom:22px">Read the code in this order</h2>
+      <ol class="begin">
+        <li>
+          <span class="n">01</span>
+          <span class="t">
+            <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-487b79d1751c30f1530aa326b1d31d6062b4244d4e08bc4bbabb2777ca6e5e6bR2266-R2273">docs/PRD.md:2266-2273</a>
+            <span class="why">The requirement, with what it claims and the limits it admits, before the recipe it describes.</span>
+          </span>
+          <a class="ptr" href="#cp-c">Checkpoint C &rarr;</a>
+        </li>
+        <li>
+          <span class="n">02</span>
+          <span class="t">
+            <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-d602a5f91ccd9fd8516419759688c377c7e8e100c608c55515191efc56807b3aR118-R153">crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md:118-153</a>
+            <span class="why">Split, start, build and land: the land block and what each failure tells the driver.</span>
+          </span>
+          <a class="ptr" href="#cp-b">Checkpoint B &rarr;</a>
+        </li>
+        <li>
+          <span class="n">03</span>
+          <span class="t">
+            <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-d602a5f91ccd9fd8516419759688c377c7e8e100c608c55515191efc56807b3aR154-R167">crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md:154-167</a>
+            <span class="why">Gate once, then clean up; read it with the land block still in mind.</span>
+          </span>
+          <a class="ptr" href="#cp-a">Checkpoint A &rarr;</a>
+        </li>
+        <li>
+          <span class="n">04</span>
+          <span class="t">
+            <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-ca6fa538aaf503192833b115dc476a1af2b48119cb1490a0947f8e8140abb424R341-R378">scripts/lean-change-journey.py:341-378</a>
+            <span class="why">How the journey pulls the three blocks out of the skill and runs them, and the builder barrier.</span>
+          </span>
+          <a class="ptr" href="#cp-c">Checkpoint C &rarr;</a>
+        </li>
+        <li>
+          <span class="n">05</span>
+          <span class="t">
+            <a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-ca6fa538aaf503192833b115dc476a1af2b48119cb1490a0947f8e8140abb424R441-R534">scripts/lean-change-journey.py:441-534</a>
+            <span class="why">The scenario: four steps, one conflict, one rejected commit, two gates, cleanup and review.</span>
+          </span>
+          <a class="ptr" href="#cp-a">Checkpoint A &rarr;</a>
+        </li>
+        <li>
+          <span class="n">06</span>
+          <span class="t">
+            <a class="path" href="https://github.com/cartwmic/loop-engine/blob/b9a5e3ea59cbd9428974c77e66cea70f03d706be/crates/lean-change-provider/README.md#L20">crates/lean-change-provider/README.md:20</a>
+            <span class="why">The crate's own statement of its requirement range. <span class="tier tier-unc">from unchanged code</span></span>
+          </span>
+          <a class="ptr" href="#cp-d">Checkpoint D &rarr;</a>
+        </li>
+      </ol>
+    </section>
+
+    <section id="impact" style="padding-top:62px">
+      <div class="eyebrow"><span class="lbl lbl-a">Beyond the diff</span><i></i></div>
+      <h2 style="margin-bottom:22px">Impact outside the diff</h2>
+
+      <figure class="impact">
+        <span class="lbl">Impact paths</span>
+        <div class="ip-card">
+          <span class="ip-hd">A &middot; Mutation results now include the parallel scenario</span>
+          <p class="ip-why">An operator reading mutation results sees &ldquo;killed by the journey&rdquo; when the
+            parallel scenario fails for any reason, a barrier timeout included, not only when the mutant is
+            caught <span class="tier tier-inf">inferred</span> <a href="#cp-c">Checkpoint C</a></p>
+          <div class="ip-lanes"><span>In this PR's files</span><span>Outside the diff</span></div>
+          <div class="ip-body">
+            <ol class="ip-path">
+              <li class="ip-n ip-chg"><span class="ip-box"><b>journey main</b><span class="ip-d">parses the skill, runs five scenarios</span><a class="path ip-loc" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-ca6fa538aaf503192833b115dc476a1af2b48119cb1490a0947f8e8140abb424R554-R559">scripts/lean-change-journey.py:554-559</a></span></li>
+              <li class="ip-n ip-aff"><span class="ip-rel"><i></i>is run per mutant by</span><span class="ip-box"><b>lean-change-mutations</b><span class="ip-d">any non-zero exit is a kill</span><a class="path ip-loc" href="https://github.com/cartwmic/loop-engine/blob/b9a5e3ea59cbd9428974c77e66cea70f03d706be/scripts/lean-change-mutations.py#L157-L160">scripts/lean-change-mutations.py:157-160</a></span></li>
+              <li class="ip-n ip-out"><span class="ip-rel"><i></i>reports</span><span class="ip-box"><b>&ldquo;killed by the journey&rdquo;</b><span class="ip-d">observable behaviour</span></span></li>
+            </ol>
+          </div>
+        </div>
+        <div class="legend">
+          <span><i class="key-chg"></i>In this PR's files</span>
+          <span><i class="key-aff"></i>Affected, not changed</span>
+          <span><i class="key-out"></i>Behaviour</span>
+        </div>
+      </figure>
+
+      <p class="eyebrow" style="margin:34px 0 14px">Affected, not changed<i></i></p>
+      <ul class="ev-list">
+        <li><a class="path" href="https://github.com/cartwmic/loop-engine/blob/b9a5e3ea59cbd9428974c77e66cea70f03d706be/scripts/packaged-smoke.py#L114-L115">scripts/packaged-smoke.py:114-115</a> &mdash; runs the full journey against packaged binaries, reading the skill from the source checkout <span class="tier tier-unc">from unchanged code</span> <a href="#cp-c">Checkpoint C</a></li>
+        <li><a class="path" href="https://github.com/cartwmic/loop-engine/blob/b9a5e3ea59cbd9428974c77e66cea70f03d706be/.github/workflows/journeys.yml#L88-L90">.github/workflows/journeys.yml:88-90</a> &mdash; the source journey job runs the full journey, so the scenario runs there <span class="tier tier-unc">from unchanged code</span> <a href="#cp-c">Checkpoint C</a></li>
+      </ul>
+    </section>
+
+    <details class="evidence">
+      <summary><span class="chev">&#9656;</span> Evidence &amp; diff coverage &middot; all 3 changed paths</summary>
+
+      <div class="gt gt-paths">
+<!-- M +53/-1 -->
+<div class="c" data-path="crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md"><a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-d602a5f91ccd9fd8516419759688c377c7e8e100c608c55515191efc56807b3a">crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md</a></div>
+<!-- M +10/-2 -->
+<div class="c" data-path="docs/PRD.md"><a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-487b79d1751c30f1530aa326b1d31d6062b4244d4e08bc4bbabb2777ca6e5e6b">docs/PRD.md</a></div>
+<!-- M +211/-1 -->
+<div class="c" data-path="scripts/lean-change-journey.py"><a class="path" href="https://github.com/cartwmic/loop-engine/pull/88/files#diff-ca6fa538aaf503192833b115dc476a1af2b48119cb1490a0947f8e8140abb424">scripts/lean-change-journey.py</a></div>
+<!-- 3 rows, generated from git diff --numstat 4cabf88f12b1756f18ae0213e933521b785f0127...b9a5e3ea59cbd9428974c77e66cea70f03d706be -->
+      </div>
+
+      <details class="searched">
+        <summary><span class="chev">&#9656;</span> Searches run, and what they could not reach</summary>
+        <div class="sr-body">
+          <ul class="sr-list">
+            <li><code>rg -n 'lean-change-journey' -g '!docs/PRD.md' .</code> <span class="sr-r">baseline.sh:24, packaged-smoke.py:114, lean-change-mutations.py:157, external-work-journey.py:59, docs and bookends.toml:8</span></li>
+            <li><code>rg -n 'lean-change' .github/workflows/journeys.yml .github/workflows/ci.yml</code> <span class="sr-r">journeys.yml:88-90 full journey; ci.yml:64 bare form, which is the self-test</span></li>
+            <li><code>rg -n 'fn repository_proof_identity' -A40 crates</code> <span class="sr-r">one definition, proof_metadata.rs:42</span></li>
+            <li><code>rg -n -i 'worktree' crates/lean-change-provider/src docs/PRD.md</code> <span class="sr-r">provider code only resolves the worktree root, run.rs:21 and packet.rs:75</span></li>
+            <li><code>rg -n 'LE-202 to LE-21' crates</code> <span class="sr-r">crates/lean-change-provider/AGENTS.md:6 and README.md:20</span></li>
+            <li><code>rg -n 'LE-211' .</code> <span class="sr-r">docs/PRD.md:18, :738, :2266 and the journey marker at :411</span></li>
+          </ul>
+          <p class="sr-limit"><strong>Out of reach.</strong> Name-based searches do not find a driver that runs the
+            blocks from a copy of the skill text, and no search can show how a model driver reads the recipe.</p>
+        </div>
+      </details>
+
+      <p class="eyebrow" style="margin:30px 0 14px">Affected, not changed<i></i></p>
+      <ul class="ev-list">
+        <li><a class="path" href="https://github.com/cartwmic/loop-engine/blob/b9a5e3ea59cbd9428974c77e66cea70f03d706be/crates/loop-integrations/src/proof_metadata.rs#L42-L53">crates/loop-integrations/src/proof_metadata.rs:42-53</a> &mdash; tree identity hashes HEAD, the index and the status of <code>REPO</code> only, so worktrees outside it do not move it and every landed merge does <span class="tier tier-unc">from unchanged code</span></li>
+        <li><a class="path" href="https://github.com/cartwmic/loop-engine/blob/b9a5e3ea59cbd9428974c77e66cea70f03d706be/crates/lean-change-provider/src/packet.rs#L207">crates/lean-change-provider/src/packet.rs:207</a> &mdash; the review packet's diff against base now spans the step merges and the gate fix <span class="tier tier-unc">from unchanged code</span></li>
+        <li><a class="path" href="https://github.com/cartwmic/loop-engine/blob/b9a5e3ea59cbd9428974c77e66cea70f03d706be/scripts/external-work-journey.py#L58-L62">scripts/external-work-journey.py:58-62</a> &mdash; imports the journey as a module and calls none of the parallel code</li>
+        <li><a class="path" href="https://github.com/cartwmic/loop-engine/blob/b9a5e3ea59cbd9428974c77e66cea70f03d706be/crates/lean-change-provider/src/tests.rs#L1095-L1101">crates/lean-change-provider/src/tests.rs:1095-1101</a> &mdash; reads PRD sections up to the next heading, so LE-210's section now ends at LE-211</li>
+        <li><a class="path" href="https://github.com/cartwmic/loop-engine/blob/b9a5e3ea59cbd9428974c77e66cea70f03d706be/scripts/baseline.sh#L24">scripts/baseline.sh:24</a> &mdash; runs the journey bare, which is the self-test and skips the scenario</li>
+      </ul>
+    </details>
+
+  </main>
+</div>
+
+<!-- Scroll progress, rail scroll-spy, opening off-page links in a new tab, the
+     appearance menu, and the syntax tint on unchanged excerpts.
+     Apart from the few lines in the head that apply a saved appearance before
+     first paint, this is the ONLY script the page carries, and its one piece of
+     state is that appearance: two localStorage keys, a viewer's own convenience,
+     never anything about the change. No counters. All five jobs are presentation,
+     and the page reads correctly with the whole block removed — the excerpts simply render in one ink, as they did
+     before the tint existed, and a citation lands in the tab it was clicked from.
+
+     highlight.js comes from cdnjs because that is the one script host a published
+     artifact may load; its stylesheets are NOT loadable, which is why the theme
+     for it lives in the theme's token block above. Two grammars are loaded beside the
+     core bundle because neither is in it and both are code this page quotes:
+     erb for Rails views, elixir for Elixir modules. Carry all three lines.
+     Rust needs no fourth: rust is in the core bundle, and TOML tints as ini.
+     There is deliberately no heex grammar — highlight.js ships none, and
+     excerpt.sh emits no data-lang for .heex for that reason. Loaded plainly, before the inline
+     script, so it is defined by the time that runs. If it 404s or is blocked,
+     window.hljs is undefined and the tint is skipped. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/erb.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/elixir.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var bar = document.getElementById('bar');
+  if (bar) {
+    var onScroll = function () {
+      var h = document.documentElement.scrollHeight - window.innerHeight;
+      bar.style.width = (h > 0 ? Math.min(100, (window.scrollY / h) * 100) : 0) + '%';
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+  }
+
+  var rails = Array.prototype.slice.call(document.querySelectorAll('[data-rail]'));
+  var secs = rails
+    .map(function (a) { return document.getElementById(a.getAttribute('data-rail')); })
+    .filter(Boolean);
+
+  if (secs.length && 'IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function (entries) {
+      var vis = entries
+        .filter(function (e) { return e.isIntersecting; })
+        .sort(function (a, b) { return a.boundingClientRect.top - b.boundingClientRect.top; });
+      if (!vis[0]) { return; }
+      var id = vis[0].target.id;
+      rails.forEach(function (a) {
+        var on = a.getAttribute('data-rail') === id;
+        a.classList.toggle('on', on);
+        if (on) { a.setAttribute('aria-current', 'true'); } else { a.removeAttribute('aria-current'); }
+      });
+    }, { rootMargin: '-15% 0px -70% 0px', threshold: 0 });
+    secs.forEach(function (s) { io.observe(s); });
+  }
+
+  /* ---- Off-page links open in a new tab ---------------------------------
+     Applied, never authored, for the same reason the tint is. A run types
+     dozens of citations per page and would have to remember an attribute on
+     every one of them; here it is one rule that cannot be forgotten, cannot
+     be typed wrong, and does not have to be added to the template's every
+     anchor before a new component can carry one.
+
+     Why the page wants it: a citation is followed from the MIDDLE of an
+     agenda the reader has not finished. Replacing the page with GitHub costs
+     them their place, the rail's position, every excerpt they had opened and
+     every checkpoint they had read — and the way back is a browser Back that
+     lands at the top. The page is the thing being read; the diff is the thing
+     being consulted.
+
+     The exception is this page pointing at itself — the rail, a checkpoint
+     pointer, an impact card's back-reference — and those must NOT move,
+     because a new tab there is the same lost place with an extra window.
+     The test is therefore "same document, differing only by fragment",
+     computed from the resolved href rather than from a class list, so a
+     component added later is covered without anyone remembering this block.
+
+     rel is set WITH target and never apart from it: target="_blank" hands
+     the opened page a window.opener handle back to this one, and every link
+     this touches goes to a host the page does not control.
+
+     Presentation, like everything else in this script: with the block
+     removed the links still work, they simply land in the same tab. */
+  Array.prototype.forEach.call(document.querySelectorAll('a[href]'), function (a) {
+    var here = location.href.split('#')[0], there;
+    try { there = new URL(a.getAttribute('href'), location.href).href.split('#')[0]; }
+    catch (e) { return; }
+    if (there === here) { return; }
+    a.setAttribute('target', '_blank');
+    a.setAttribute('rel', 'noopener noreferrer');
+  });
+
+  /* ---- The appearance menu ------------------------------------------------
+     Built here, into the right end of the masthead's first line, so the markup
+     half carries no control for a run to copy. Its styles are the style
+     elements page-skeleton.sh emitted, read off the page rather than listed
+     here, so a theme added under references/themes/ appears without touching
+     this block. Choosing one switches media between "all" and "not all"; the
+     light/dark/auto segment sets or clears data-theme, which every theme's
+     tokens already answer. Both choices are saved for the next visit by the
+     head script's two keys. With one theme or no masthead there is nothing to
+     offer, and nothing is drawn. */
+  (function () {
+    var line = document.querySelector('main > header > .lbl-wide');
+    var sheets = document.querySelectorAll('style[data-style]');
+    if (!line || sheets.length < 2) { return; }
+    var root = document.documentElement;
+    function save(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+    function el(tag, cls, text) {
+      var e = document.createElement(tag);
+      if (cls) { e.className = cls; }
+      if (text) { e.textContent = text; }
+      return e;
+    }
+
+    var rc = el('div', 'rc'), btn = el('button', 'rc-btn'), icon = el('span', 'rc-i');
+    btn.type = 'button';
+    btn.title = 'Appearance';
+    btn.setAttribute('aria-haspopup', 'true');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.setAttribute('aria-controls', 'rc-pop');
+    btn.appendChild(el('b', '', 'Aa'));
+    icon.setAttribute('aria-hidden', 'true');
+    btn.appendChild(icon);
+    var pop = el('div', 'rc-pop');
+    pop.id = 'rc-pop';
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', 'Appearance');
+
+    pop.appendChild(el('div', 'rc-h', 'Style'));
+    var list = el('div', 'rc-styles'), choices = [];
+    function active() {
+      for (var i = 0; i < sheets.length; i++) {
+        if (sheets[i].getAttribute('media') !== 'not all') { return sheets[i].getAttribute('data-style'); }
+      }
+      return '';
+    }
+    function useStyle(name) {
+      var all = document.querySelectorAll('[data-style]');
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].getAttribute('data-style') === name) { all[i].removeAttribute('media'); }
+        else { all[i].setAttribute('media', 'not all'); }
+      }
+      choices.forEach(function (c) {
+        var on = c.getAttribute('data-s') === name;
+        c.classList.toggle('on', on);
+        c.setAttribute('aria-pressed', String(on));
+      });
+    }
+    Array.prototype.forEach.call(sheets, function (sh) {
+      var name = sh.getAttribute('data-style');
+      var b = el('button'), sw = el('span', 'rc-sw');
+      b.type = 'button';
+      b.setAttribute('data-s', name);
+      sw.setAttribute('data-sw', name);
+      b.appendChild(sw);
+      b.appendChild(document.createTextNode(sh.getAttribute('data-style-label') || name));
+      b.onclick = function () { useStyle(name); save('review-style', name); };
+      list.appendChild(b);
+      choices.push(b);
+    });
+    pop.appendChild(list);
+
+    pop.appendChild(el('div', 'rc-h', 'Theme'));
+    var seg = el('div', 'rc-seg'), modes = [];
+    seg.setAttribute('role', 'group');
+    seg.setAttribute('aria-label', 'Theme');
+    var glyph = { light: '\u2600', auto: '\u25D0', dark: '\u263E' };
+    function useMode(m) {
+      if (m === 'auto') { root.removeAttribute('data-theme'); } else { root.setAttribute('data-theme', m); }
+      icon.textContent = glyph[m];
+      modes.forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-t') === m)); });
+    }
+    [['light', 'Light'], ['auto', 'Auto'], ['dark', 'Dark']].forEach(function (m) {
+      var b = el('button', '', glyph[m[0]] + ' ' + m[1]);
+      b.type = 'button';
+      b.setAttribute('data-t', m[0]);
+      b.onclick = function () { useMode(m[0]); save('review-theme', m[0]); };
+      seg.appendChild(b);
+      modes.push(b);
+    });
+    pop.appendChild(seg);
+
+    rc.appendChild(btn);
+    rc.appendChild(pop);
+    line.appendChild(rc);
+    useStyle(active());
+    var t = root.getAttribute('data-theme');
+    useMode(t === 'light' || t === 'dark' ? t : 'auto');
+
+    function close() { rc.classList.remove('rc-on'); btn.setAttribute('aria-expanded', 'false'); }
+    btn.onclick = function () { btn.setAttribute('aria-expanded', String(rc.classList.toggle('rc-on'))); };
+    document.addEventListener('click', function (e) { if (!rc.contains(e.target)) { close(); } });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && rc.classList.contains('rc-on')) { close(); btn.focus(); }
+    });
+  })();
+
+  /* ---- Syntax tint, .excerpt--source only -------------------------------
+     The rule this obeys: an excerpt is a quotation, so the script may change
+     how the characters look and nothing else. It highlights the whole slice as
+     one stream (per-line highlighting mis-reads a multi-line string or a
+     heredoc), splits the result back onto the original lines so the CSS line
+     counter still seeds from the file, and then compares the reconstruction to
+     the text it started with, line by line. Any difference at all and the line
+     is left exactly as the generator wrote it: a wrong tint is a small lie, a
+     changed character is a false quotation.
+
+     .excerpt--diff carries no data-lang and so never reaches here. Its rows
+     already use colour to mean added and removed, and a hunk is not one
+     lexical stream in the first place. */
+  function tint(pre) {
+    var lang = pre.getAttribute('data-lang');
+    if (!lang || !window.hljs || !hljs.getLanguage(lang)) { return; }
+
+    var lines = pre.querySelectorAll('span.l');
+    if (!lines.length) { return; }
+
+    var src = [], i;
+    for (i = 0; i < lines.length; i++) {
+      if (lines[i].querySelector('span')) { return; }   // a signed row: not ours
+      src.push(lines[i].textContent);
+    }
+
+    var html;
+    try {
+      html = hljs.highlight(src.join('\n'), { language: lang, ignoreIllegals: true }).value;
+    } catch (e) { return; }
+
+    // Flatten the highlighted tree into [[classChain, text], ...] per line.
+    var holder = document.createElement('div');
+    holder.innerHTML = html;
+    var rows = [[]];
+    (function walk(node, chain) {
+      for (var c = node.firstChild; c; c = c.nextSibling) {
+        if (c.nodeType === 3) {
+          var parts = c.nodeValue.split('\n');
+          for (var j = 0; j < parts.length; j++) {
+            if (j) { rows.push([]); }
+            if (parts[j]) { rows[rows.length - 1].push([chain, parts[j]]); }
+          }
+        } else if (c.nodeType === 1) {
+          walk(c, c.className ? chain.concat([c.className]) : chain);
+        }
+      }
+    })(holder, []);
+
+    // Verify before touching the page: same number of lines, same characters.
+    if (rows.length !== lines.length) { return; }
+    for (i = 0; i < rows.length; i++) {
+      var t = '';
+      for (var k = 0; k < rows[i].length; k++) { t += rows[i][k][1]; }
+      if (t !== src[i]) { return; }
+    }
+
+    for (i = 0; i < lines.length; i++) {
+      var frag = document.createDocumentFragment();
+      for (var m = 0; m < rows[i].length; m++) {
+        var chain = rows[i][m][0], node = document.createTextNode(rows[i][m][1]);
+        for (var d = chain.length - 1; d >= 0; d--) {
+          var wrap = document.createElement('span');
+          wrap.className = chain[d];
+          wrap.appendChild(node);
+          node = wrap;
+        }
+        frag.appendChild(node);
+      }
+      lines[i].textContent = '';
+      lines[i].appendChild(frag);
+    }
+  }
+
+  Array.prototype.forEach.call(
+    document.querySelectorAll('.excerpt--source .ex-body > pre[data-lang]'), tint);
+})();
+</script>
