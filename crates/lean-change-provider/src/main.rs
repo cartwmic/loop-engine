@@ -1,3 +1,4 @@
+mod outcome_map;
 mod packet;
 mod run;
 #[cfg(test)]
@@ -8,6 +9,7 @@ use lean_change_provider::{evaluate, model, workflow};
 use serde::Serialize;
 use serde_json::Value;
 use std::io::{self, Read, Write};
+use std::path::PathBuf;
 
 fn main() {
     std::process::exit(dispatch());
@@ -31,6 +33,7 @@ fn dispatch() -> i32 {
         ),
         Some("intent-packet") => report(stdin_json().and_then(|show| packet::intent_packet(&show))),
         Some("review-packet") => report(stdin_json().and_then(|show| packet::review_packet(&show))),
+        Some("outcome-map") => report_page(outcome_map_command(&args[1..])),
         Some(other) => {
             eprintln!("unsupported command `{other}`");
             2
@@ -44,6 +47,50 @@ fn report(result: Result<String, String>) -> i32 {
         Ok(text) => {
             println!("{text}");
             0
+        }
+        Err(message) => {
+            eprintln!("{message}");
+            1
+        }
+    }
+}
+
+/// `outcome-map [--into AR_PAGE]`: the section for the run's latest intent, alone as a page or inserted into AR's page.
+fn outcome_map_command(args: &[String]) -> Result<String, String> {
+    let into = match args {
+        [] => None,
+        [flag, path] if flag.as_str() == "--into" => Some(PathBuf::from(path)),
+        _ => return Err("usage: lean-change outcome-map [--into AR_PAGE]".into()),
+    };
+    let show = stdin_json()?;
+    let (input, intent_id, intent) = run::from_show(&show)?;
+    let tree = run::tree_identity(&input);
+    let section = outcome_map::section(&show, &input, &intent_id, &intent, &tree);
+    match into {
+        None => Ok(outcome_map::page(&show, &section)),
+        Some(path) => {
+            let ar_page = std::fs::read_to_string(&path)
+                .map_err(|e| format!("--into {}: {e}", path.display()))?;
+            outcome_map::splice(&ar_page, &section)
+        }
+    }
+}
+
+/// Prints a page as it is built: no newline is added, so a spliced AR page is byte for byte its input plus the two
+/// insertions.
+fn report_page(result: Result<String, String>) -> i32 {
+    match result {
+        Ok(page) => {
+            let mut out = io::stdout().lock();
+            let written = out.write_all(page.as_bytes());
+            let flushed = out.flush();
+            match written.and(flushed) {
+                Ok(()) => 0,
+                Err(e) => {
+                    eprintln!("could not write the page: {e}");
+                    1
+                }
+            }
         }
         Err(message) => {
             eprintln!("{message}");
