@@ -822,7 +822,7 @@ def outcome_map_scenario(engine, provider, work):
     page = outcome_page(provider, j.show_text())
     self_contained_checks(page, OUTCOME_GOAL, LABEL_CRITERIA)
     section = section_of(page)
-    assert first_paragraph(section).startswith('These results are current: the last run of all the checks (v-1) used the code as it is now.'), first_paragraph(section)
+    assert first_paragraph(section).startswith('These results are current: the last run of the checks (v-1) used the code as it is now.'), first_paragraph(section)
     assert labels(section) == LABELS, labels(section)
     old_wording_checks(section)
     assert all(field in visible(section) for field in PAGE_FIELDS), [field for field in PAGE_FIELDS if field not in visible(section)]
@@ -845,7 +845,7 @@ def outcome_map_scenario(engine, provider, work):
     assert labels(stale) == {name: f'out of date: {label}' for name, label in LABELS.items()}, labels(stale)
     old_wording_checks(stale)
     (repo / 'notes.txt').unlink()
-    assert first_paragraph(section_of(outcome_page(provider, j.show_text()))).startswith('These results are current: the last run of all the checks (v-1)')
+    assert first_paragraph(section_of(outcome_page(provider, j.show_text()))).startswith('These results are current: the last run of the checks (v-1)')
     # A second verification without the tool's result, and with another readme check hash: both rows are unknown.
     partial = json.loads(json.dumps(fresh))
     partial['results'] = [r for r in partial['results'] if r['criterion'] != 'tool']
@@ -854,7 +854,7 @@ def outcome_map_scenario(engine, provider, work):
             result['check_sha256'] = '0' * 64
     j.append('v-2', 'verification', partial)
     unknown = section_of(outcome_page(provider, j.show_text()))
-    assert first_paragraph(unknown).startswith('These results are current: the last run of all the checks (v-2)'), first_paragraph(unknown)
+    assert first_paragraph(unknown).startswith('These results are current: the last run of the checks (v-2)'), first_paragraph(unknown)
     assert labels(unknown) == dict(LABELS, tool='not run yet', readme='not run yet'), labels(unknown)
     old_wording_checks(unknown)
     # The readme result for another check still shows what ran: its current exit and output, and its old run.

@@ -186,7 +186,7 @@ fn freshness(
     };
     match current_tree {
         Ok(tree) if *tree == verification.tree => (
-            format!("These results are current: the last run of all the checks ({id}) used the code as it is now."),
+            format!("These results are current: the last run of the checks ({id}) used the code as it is now."),
             false,
         ),
         Ok(tree) => (
@@ -750,7 +750,7 @@ mod tests {
         );
         assert_eq!(
             freshness_of(&html),
-            "These results are current: the last run of all the checks (verification-2) used the code as it is now."
+            "These results are current: the last run of the checks (verification-2) used the code as it is now."
         );
         assert!(!html.contains("out of date: "));
     }
@@ -1199,7 +1199,7 @@ mod tests {
             STALE,
         ];
         let first_lines = [
-            "These results are current: the last run of all the checks (<verification id>) used the code as it is now.",
+            "These results are current: the last run of the checks (<verification id>) used the code as it is now.",
             "These results are out of date: the code changed after the last run of the checks (<verification id>). Code fingerprint now <tree>; when checked <tree>.",
             "The checks have not run yet for the latest goal (<intent id>).",
             "The last run of the checks (<verification id>) could not be read: <error>",

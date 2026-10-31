@@ -41,7 +41,7 @@ The labels are:
 
 The section's first line is one of:
 
-- `These results are current: the last run of all the checks (<verification id>) used the code as it is now.`
+- `These results are current: the last run of the checks (<verification id>) used the code as it is now.`
 - `These results are out of date: the code changed after the last run of the checks (<verification id>). Code fingerprint now <tree>; when checked <tree>.` Each row with a recorded result then starts with `out of date: `.
 - `The checks have not run yet for the latest goal (<intent id>).`
 - `The last run of the checks (<verification id>) could not be read: <error>`

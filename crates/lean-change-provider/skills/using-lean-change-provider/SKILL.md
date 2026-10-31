@@ -211,7 +211,7 @@ Each criterion row has one of these labels, from the latest verification of the 
 
 The section's first paragraph is one of these sentences:
 
-- `These results are current: the last run of all the checks (<verification id>) used the code as it is now.`: the tree is the one verified.
+- `These results are current: the last run of the checks (<verification id>) used the code as it is now.`: the tree is the one verified.
 - `These results are out of date: the code changed after the last run of the checks (<verification id>). Code fingerprint now <tree>; when checked <tree>.`: the tree changed since then. Each row with a recorded result starts with `out of date: `, even one recorded for another check.
 - `The checks have not run yet for the latest goal (<intent id>).`: no verification names the latest intent. Every row is `not run yet`.
 - `The last run of the checks (<verification id>) could not be read: <error>`: the latest verification does not parse. Every row is `not run yet`.
