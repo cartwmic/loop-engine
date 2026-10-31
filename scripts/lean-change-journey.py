@@ -889,13 +889,29 @@ def blank_external_links(markup):
     return sum(1 for tag in re.findall(r'<a\b[^>]*>', markup) if re.search(r'\bhref="https?://', tag) and 'target="_blank"' in tag)
 
 
+def dump_dom(chromium, path):
+    """The DOM headless Chromium prints for a file after its scripts run.
+
+    On a loaded machine Chromium can print the whole DOM and then fail to shut down ("Teardown watchdog expired",
+    exit 2, or no exit before the timeout). The DOM is what the check reads, so a complete DOM counts whatever the exit.
+    """
+    command = [chromium, '--headless=new', '--disable-gpu', '--virtual-time-budget=3000', '--dump-dom', 'file://' + str(path)]
+    try:
+        done = subprocess.run(command, capture_output=True, timeout=120)
+        out, err, ended = done.stdout, done.stderr, f'exit {done.returncode}'
+    except subprocess.TimeoutExpired as expired:
+        out, err, ended = expired.stdout or b'', expired.stderr or b'', 'timed out'
+    dom = out.decode('utf-8')
+    assert dom.rstrip().endswith('</html>'), (ended, err.decode('utf-8', 'replace')[-2000:], dom[-200:])
+    return dom
+
+
 def outcome_map_browser_scenario(provider, chromium, work):
     # bookends:LE-212 — headless Chromium opens the spliced page from file://: the section comes first and AR's script runs.
     page = outcome_page(provider, json.dumps(fixture_show(work / 'gone' / 'repo')), '--into', str(AR_PAGE))
     spliced = work / 'spliced.html'
     spliced.write_bytes(page.encode('utf-8'))
-    dumped = subprocess.run([chromium, '--headless=new', '--disable-gpu', '--virtual-time-budget=3000', '--dump-dom', 'file://' + str(spliced)],
-                            capture_output=True, timeout=60, check=True).stdout.decode('utf-8')
+    dumped = dump_dom(chromium, spliced)
     assert dumped.index('id="evidence"') < dumped.index('id="changed"')
     tags = re.findall(r'<([a-zA-Z0-9]+)\b[^>]*\bclass="[^"]*\bom-criterion\b', dumped)
     assert tags and set(tags) == {'details'}, tags
