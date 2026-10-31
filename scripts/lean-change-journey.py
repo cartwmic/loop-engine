@@ -765,7 +765,7 @@ def refusal_checks(provider, show):
 
 
 def status_unchanged_run(engine, provider, work):
-    """bookends:LE-212 — the command leaves the repository as it was, and the next event is still accepted."""
+    # bookends:LE-212 — the command leaves the repository as it was, and the next event is still accepted.
     j, repo = greet_run(engine, provider, work, 'c', 'lean-status')
     j.append('intent-1', 'intent', greet_intent(PASSING_CRITERIA, ['Touch only app.sh.']))
     j.event('intent-ready')
@@ -782,7 +782,7 @@ def status_unchanged_run(engine, provider, work):
 
 
 def outcome_map_scenario(engine, provider, work):
-    """bookends:LE-212 — labels, freshness, findings, --into, refusals and a profile C page."""
+    # bookends:LE-212 — labels, freshness, findings, --into, refusals and a profile C page.
     j, repo, fresh = labels_run(engine, provider, work)
     page = outcome_page(provider, j.show_text())
     self_contained_checks(page, OUTCOME_GOAL, LABEL_CRITERIA)
@@ -840,7 +840,7 @@ def fixture_show(repo):
 
 
 def outcome_map_fixture_scenario(provider, work):
-    """bookends:LE-212 — the saved LE-211 show with no repository: freshness unknown, labels unprefixed, fixed findings, AR's sections kept."""
+    # bookends:LE-212 — the saved LE-211 show with no repository: freshness unknown, labels unprefixed, fixed findings, AR's sections kept.
     show = fixture_show(work / 'gone' / 'repo')
     page = outcome_page(provider, json.dumps(show), '--into', str(AR_PAGE))
     section = section_of(page)
@@ -863,7 +863,7 @@ def blank_external_links(markup):
 
 
 def outcome_map_browser_scenario(provider, chromium, work):
-    """bookends:LE-212 — headless Chromium opens the spliced page from file://: the section comes first and AR's script runs."""
+    # bookends:LE-212 — headless Chromium opens the spliced page from file://: the section comes first and AR's script runs.
     page = outcome_page(provider, json.dumps(fixture_show(work / 'gone' / 'repo')), '--into', str(AR_PAGE))
     spliced = work / 'spliced.html'
     spliced.write_bytes(page.encode('utf-8'))
@@ -877,7 +877,7 @@ def outcome_map_browser_scenario(provider, chromium, work):
 
 
 def outcome_map_skill_scenario(engine, provider, skill, work):
-    """bookends:LE-212 — the skill's Outcome map blocks, run as written with stub open and viz."""
+    # bookends:LE-212 — the skill's Outcome map blocks, run as written with stub open and viz.
     default, link = section_blocks(skill, OUTCOME_SECTION, 2)
     text = '\n'.join(skill_section(skill, OUTCOME_SECTION))
     for needle in [REVIEW_MAP, 'status --porcelain', '--output "$WORK/ar"']:
