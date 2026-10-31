@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.36.0] - 2026-10-31
+
+### Changed
+
+- Release builds and archive checks for `aarch64-apple-darwin` run on the `macos-15` runner instead of `macos-14`, which GitHub retires on 2026-11-02 (#92). Archive and installer names are unchanged.
+
+### Compatibility
+
+- Release configuration only. The engine, the providers and the profiles are unchanged.
+
 ## Unreleased
 
 ### Changed
