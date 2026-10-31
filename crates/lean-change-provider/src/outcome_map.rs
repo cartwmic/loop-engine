@@ -88,7 +88,7 @@ pub fn section(
             html.push_str(&finding_html(row));
         }
     }
-    html.push_str("</section>\n");
+    html.push_str("</section>");
     html
 }
 
@@ -105,7 +105,7 @@ pub fn page(show: &Value, section: &str) -> String {
         format!("Outcome map: {name}")
     };
     format!(
-        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n</head>\n<body>\n<main>\n{section}</main>\n</body>\n</html>\n",
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n</head>\n<body>\n<main>\n{section}\n</main>\n</body>\n</html>\n",
         esc(&title)
     )
 }
@@ -813,7 +813,7 @@ mod tests {
     }
 
     const AR_PAGE: &str = "<!doctype html>\n<html>\n<body>\n<header>site</header>\n<main>\n<header class=\"masthead\">Title</header>\n<nav><div class=\"rail-links\">\n<a href=\"#01\">What changed</a>\n</div></nav>\n<section id=\"01\">What changed</section>\n</main>\n</body>\n</html>\n";
-    const MARKER: &str = "<section id=\"evidence\" class=\"om\"></section>\n";
+    const MARKER: &str = "<section id=\"evidence\" class=\"om\"></section>";
 
     #[test]
     fn into_inserts_two_strings_and_keeps_every_other_byte() {
