@@ -128,7 +128,7 @@ def main() -> int:
     if re.search(r"^    if:|^        (if|continue-on-error):", archive, re.MULTILINE):
         fail("archive checker jobs and steps must be mandatory")
     for token in ('x86_64-unknown-linux-gnu', 'ubuntu-22.04', 'aarch64-apple-darwin',
-                  'macos-14', 'scripts/archive-version-check.py', '--plan', '--target'):
+                  'macos-15', 'scripts/archive-version-check.py', '--plan', '--target'):
         if token not in archive:
             fail(f"archive workflow missing {token}")
     if "matrix: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix }}" not in local:
