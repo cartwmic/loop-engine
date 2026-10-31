@@ -824,6 +824,13 @@ def outcome_map_scenario(engine, provider, work):
     unknown = section_of(outcome_page(provider, j.show_text()))
     assert first_paragraph(unknown).startswith('verification current: v-2'), first_paragraph(unknown)
     assert labels(unknown) == dict(LABELS, tool='unknown: not run', readme='unknown: not run'), labels(unknown)
+    # The readme result for another check still shows what ran: its current exit and output, and its old run.
+    readme = visible(rows(unknown, 'om-criterion')['readme'])
+    recorded = next(r for r in partial['results'] if r['criterion'] == 'readme')
+    assert 'another check' in readme and recorded['output_tail'].strip() in readme, readme
+    for run in recorded['old']['runs']:
+        assert run['output_tail'].strip() in readme, (run, readme)
+    assert 'Old run 1' in readme, readme
     check_findings(unknown, j.show_text())
     # A latest verification that cannot be read is not replaced by the older one: every row is unknown.
     broken = json.loads(j.show_text())

@@ -206,18 +206,23 @@ fn criterion_row(
     }
     let argv = serde_json::to_string(&criterion.check.argv).expect("argv serializes");
     let mut body = format!("<p><b>Check:</b></p>\n<pre>{}</pre>\n", esc(&argv));
-    match (recorded, counted) {
-        (None, _) => body.push_str("<p><b>Current:</b> no result is recorded for this check.</p>\n"),
-        (Some(_), None) => body.push_str(
-            "<p><b>Current:</b> the recorded result is for another check, so it does not count.</p>\n",
-        ),
-        (Some(_), Some(result)) => body.push_str(&format!(
-            "<p><b>Current:</b> {}.</p>\n<pre>{}</pre>\n",
-            exit_text(result.timed_out, result.exit_code),
-            esc(&result.output_tail)
-        )),
+    match recorded {
+        None => body.push_str("<p><b>Current:</b> no result is recorded for this check.</p>\n"),
+        Some(result) => {
+            if counted.is_none() {
+                body.push_str(&format!(
+                    "<p>This result was recorded for another check (sha256 {}), so it does not count. It is shown as recorded.</p>\n",
+                    esc(&result.check_sha256)
+                ));
+            }
+            body.push_str(&format!(
+                "<p><b>Current:</b> {}.</p>\n<pre>{}</pre>\n",
+                exit_text(result.timed_out, result.exit_code),
+                esc(&result.output_tail)
+            ));
+        }
     }
-    match (&criterion.old, counted) {
+    match (&criterion.old, recorded) {
         (None, _) => body.push_str(&format!("<p><b>Not compared:</b> {NO_OLD_CHECK}.</p>\n")),
         (Some(old), _) if old.expect == Expect::NotApplicable => body.push_str(&format!(
             "<p><b>Not compared:</b> {}</p>\n",
@@ -635,6 +640,11 @@ mod tests {
         assert!(row(&html, "c1").contains("<pre>no feature</pre>"));
         assert!(row(&html, "c10").contains("no result is recorded"));
         assert!(row(&html, "c11").contains("another check"));
+        assert!(
+            row(&html, "c11").contains("<b>Current:</b> exit 0.</p>\n<pre>ok</pre>"),
+            "{}",
+            row(&html, "c11")
+        );
     }
 
     #[test]
