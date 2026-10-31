@@ -579,13 +579,23 @@ LABEL_CRITERIA = [
 # The first two pass once app.sh says Hello, Bob!.
 PASSING_CRITERIA = LABEL_CRITERIA[:2]
 LABELS = {
-    'greets': 'changed as intended (tested)',
-    'readme': 'kept (same output before and after)',
-    'tool': 'new: nothing before to compare',
-    'app': 'old tree did not match: expected fails',
-    'guard': f'not compared: {GUARD_REASON}',
-    'release-notes': 'failed now',
+    'greets': 'changed as intended: failed on the old code, passes now',
+    'readme': 'kept: same output on the old and new code',
+    'tool': 'new: the old code did not have this',
+    'app': 'old code did not behave as expected: expected it to fail',
+    'guard': f'not run on the old code: {GUARD_REASON}',
+    'release-notes': 'fails on the new code',
 }
+# The 0.37.0 wording of the page: no section of this journey prints any of it.
+OLD_WORDING = ['changed as intended (tested)', 'kept (same output before and after)', 'new: nothing before to compare',
+               'old tree did not match', 'not compared:', 'failed now', 'unknown: not run', 'stale: ', 'verification current:',
+               'verification stale', 'no verification for', 'verification unreadable', 'verification freshness unknown',
+               '<b>Check:</b>', '<b>Current:</b>', '<b>Old tree</b>', '<b>Old run ', '<h3>Findings</h3>', '<b>Text:</b>',
+               '<b>Consequence:</b>', '<b>Reason:</b>', 'Criteria:']
+# The fields and headings the page prints where they apply: the outcome-map scenario's page must show each one.
+PAGE_FIELDS = ['The approved goal, as written:', 'Command that checks it:', 'On the new code:', 'On the old code (expected: it fails):',
+               'Old code, run 1:', 'Why the old code did not match:', 'Not run on the old code:',
+               'Issues raised, and how each was settled', 'Issue:', 'Evidence:', 'Why it mattered:', 'How it was settled:']
 
 
 def greet_run(engine, provider, work, profile, run_id):
@@ -704,6 +714,17 @@ def summary_text(row):
     return visible(re.search(r'<summary\b.*?</summary>', row, re.S).group(0))
 
 
+def summary_of(section):
+    """The summary paragraph of the section, as visible text."""
+    return visible(re.search(r'<p class="om-summary">.*?</p>', section, re.S).group(0))
+
+
+def old_wording_checks(section):
+    """The section prints none of the 0.37.0 wording."""
+    for old in OLD_WORDING:
+        assert old not in section, old
+
+
 def check_findings(section, show):
     """Each finding row shows its question, text, evidence and consequence, names its disposition and reason, and the summary links to it."""
     expected = {'chk-1-f1': ('rejected', REJECT_REASON), 'chk-1-f2': ('fixed', FIX_REASON), 'rev-1-f1': ('open', None)}
@@ -716,8 +737,10 @@ def check_findings(section, show):
         for field in ('question', 'text', 'evidence', 'consequence'):
             assert fields[field] in text, (finding, field, text)
     assert set(findings) == set(expected), sorted(findings)
-    assert re.search(r'<h3[^>]*>Findings</h3>', section), 'no Findings heading'
+    assert '<h3>Issues raised, and how each was settled</h3>' in section, 'no findings heading'
     for finding, (disposition, reason) in expected.items():
+        for label in ('Issue:', 'Evidence:', 'Why it mattered:', 'How it was settled:'):
+            assert label in visible(findings[finding]), (finding, label)
         assert re.search(rf'\b{disposition}\b', summary_text(findings[finding])), (finding, summary_text(findings[finding]))
         assert f'href="#{finding}"' in section, finding
         if reason:
@@ -799,8 +822,12 @@ def outcome_map_scenario(engine, provider, work):
     page = outcome_page(provider, j.show_text())
     self_contained_checks(page, OUTCOME_GOAL, LABEL_CRITERIA)
     section = section_of(page)
-    assert first_paragraph(section).startswith('verification current: v-1'), first_paragraph(section)
+    assert first_paragraph(section).startswith('These results are current: the last run of all the checks (v-1) used the code as it is now.'), first_paragraph(section)
     assert labels(section) == LABELS, labels(section)
+    old_wording_checks(section)
+    assert all(field in visible(section) for field in PAGE_FIELDS), [field for field in PAGE_FIELDS if field not in visible(section)]
+    assert summary_of(section).startswith('6 checks were approved. 1 changed as intended: failed on the old code, passes now: greets'), summary_of(section)
+    assert '3 issues were raised: 1 fixed, 1 rejected, 1 open.' in summary_of(section), summary_of(section)
     criteria = rows(section, 'om-criterion')
     # greets shows its check, the current pass and two old runs that print their output and exit 1.
     greets = visible(criteria['greets'])
@@ -810,10 +837,11 @@ def outcome_map_scenario(engine, provider, work):
     # An untracked file makes the tree differ from the verified one: every row with a result is stale.
     (repo / 'notes.txt').write_text('late edit\n')
     stale = section_of(outcome_page(provider, j.show_text()))
-    assert first_paragraph(stale).startswith('verification stale'), first_paragraph(stale)
-    assert labels(stale) == {name: f'stale: {label}' for name, label in LABELS.items()}, labels(stale)
+    assert first_paragraph(stale).startswith('These results are out of date: the code changed after the last run of the checks (v-1).'), first_paragraph(stale)
+    assert labels(stale) == {name: f'out of date: {label}' for name, label in LABELS.items()}, labels(stale)
+    old_wording_checks(stale)
     (repo / 'notes.txt').unlink()
-    assert first_paragraph(section_of(outcome_page(provider, j.show_text()))).startswith('verification current: v-1')
+    assert first_paragraph(section_of(outcome_page(provider, j.show_text()))).startswith('These results are current: the last run of all the checks (v-1)')
     # A second verification without the tool's result, and with another readme check hash: both rows are unknown.
     partial = json.loads(json.dumps(fresh))
     partial['results'] = [r for r in partial['results'] if r['criterion'] != 'tool']
@@ -822,31 +850,33 @@ def outcome_map_scenario(engine, provider, work):
             result['check_sha256'] = '0' * 64
     j.append('v-2', 'verification', partial)
     unknown = section_of(outcome_page(provider, j.show_text()))
-    assert first_paragraph(unknown).startswith('verification current: v-2'), first_paragraph(unknown)
-    assert labels(unknown) == dict(LABELS, tool='unknown: not run', readme='unknown: not run'), labels(unknown)
+    assert first_paragraph(unknown).startswith('These results are current: the last run of all the checks (v-2)'), first_paragraph(unknown)
+    assert labels(unknown) == dict(LABELS, tool='not run yet', readme='not run yet'), labels(unknown)
+    old_wording_checks(unknown)
     # The readme result for another check still shows what ran: its current exit and output, and its old run.
     readme = visible(rows(unknown, 'om-criterion')['readme'])
     recorded = next(r for r in partial['results'] if r['criterion'] == 'readme')
-    assert 'another check' in readme and recorded['output_tail'].strip() in readme, readme
+    assert 'a different check command' in readme and recorded['output_tail'].strip() in readme, readme
     for run in recorded['old']['runs']:
         assert run['output_tail'].strip() in readme, (run, readme)
-    assert 'Old run 1' in readme, readme
+    assert 'Old code, run 1:' in readme, readme
     check_findings(unknown, j.show_text())
     # Stale and recorded for another check: readme has a result, so it is stale too; tool has none, so it is not.
     (repo / 'notes.txt').write_text('late edit\n')
     stale_unknown = section_of(outcome_page(provider, j.show_text()))
     (repo / 'notes.txt').unlink()
-    assert first_paragraph(stale_unknown).startswith('verification stale'), first_paragraph(stale_unknown)
-    assert labels(stale_unknown) == dict({name: f'stale: {label}' for name, label in LABELS.items()},
-                                         tool='unknown: not run', readme='stale: unknown: not run'), labels(stale_unknown)
+    assert first_paragraph(stale_unknown).startswith('These results are out of date: the code changed after the last run of the checks (v-2).'), first_paragraph(stale_unknown)
+    assert labels(stale_unknown) == dict({name: f'out of date: {label}' for name, label in LABELS.items()},
+                                         tool='not run yet', readme='out of date: not run yet'), labels(stale_unknown)
     # A latest verification that cannot be read is not replaced by the older one: every row is unknown.
     broken = json.loads(j.show_text())
     context = broken['result']['context']
     context.append({'id': 'v-bad', 'kind': 'verification', 'sequence': max(r['sequence'] for r in context) + 1,
                     'data': {'intent': 'intent-2', 'tree': fresh['tree'], 'results': None}})
     unreadable = section_of(outcome_page(provider, json.dumps(broken)))
-    assert first_paragraph(unreadable).startswith('verification unreadable: v-bad: '), first_paragraph(unreadable)
-    assert set(labels(unreadable).values()) == {'unknown: not run'}, labels(unreadable)
+    assert first_paragraph(unreadable).startswith('The last run of the checks (v-bad) could not be read: '), first_paragraph(unreadable)
+    assert set(labels(unreadable).values()) == {'not run yet'}, labels(unreadable)
+    old_wording_checks(unreadable)
     show = j.show_text()
     into_checks(provider, show)
     missing_anchor_checks(provider, show, work)
@@ -855,7 +885,7 @@ def outcome_map_scenario(engine, provider, work):
     (work / 'profile-c').mkdir()
     c_page = outcome_page(provider, run_profile(engine, provider, 'c', work / 'profile-c').show_text())
     assert set(labels(section_of(c_page))) == {'says-hello', 'exists'}, labels(section_of(c_page))
-    assert 'om-finding' not in re.sub(r'<style\b.*?</style>', '', c_page, flags=re.S) and not re.search(r'<h3[^>]*>Findings</h3>', c_page)
+    assert 'om-finding' not in re.sub(r'<style\b.*?</style>', '', c_page, flags=re.S) and 'Issues raised' not in c_page
     (work / 'status').mkdir()
     status_unchanged_run(engine, provider, work / 'status')
 
@@ -881,8 +911,9 @@ def outcome_map_fixture_scenario(provider, work):
     context = show['result']['context']
     latest = max((r for r in context if r['kind'] == 'intent'), key=lambda r: r['sequence'])
     c2_reason = next(c for c in latest['data']['criteria'] if c['id'] == 'c2')['old']['reason']
-    assert first_paragraph(section).startswith('verification freshness unknown'), first_paragraph(section)
-    assert labels(section) == {'c1': 'changed as intended (tested)', 'c2': f'not compared: {c2_reason}', 'c3': 'changed as intended (tested)'}, labels(section)
+    assert first_paragraph(section).startswith('It is unknown whether these results are current: '), first_paragraph(section)
+    assert labels(section) == {'c1': 'changed as intended: failed on the old code, passes now', 'c2': f'not run on the old code: {c2_reason}',
+                               'c3': 'changed as intended: failed on the old code, passes now'}, labels(section)
     findings = rows(section, 'om-finding')
     for finding, review_id in [('intent-check-1-f1', 'intent-check-1'), ('review-1-f1', 'review-1')]:
         reason = disposition_reason(context, review_id, 'f1')

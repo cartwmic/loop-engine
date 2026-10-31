@@ -22,12 +22,30 @@ Driving procedure: [skill](skills/using-lean-change-provider/SKILL.md).
 
 `outcome-map` makes one page for the owner from a finished run. It reads `show --view full` on stdin and prints HTML
 on stdout. It writes no file. The section "What was approved and what ran" shows the goal, each criterion with one
-label, and each finding with its disposition. The labels are `changed as intended (tested)`, `kept (same output before
-and after)`, `new: nothing before to compare`, `old tree did not match: expected <fails|same|absent>`, `not compared:
-<reason>`, `failed now` and `unknown: not run`. The section's first paragraph says whether the verification is current,
-stale, missing, unreadable or unknown; when it is stale, each row with a recorded result starts with `stale: `. With `--into AR_PAGE` the section goes into
-Accountable Review's page at its two anchors and every other byte is kept; a page without the anchors exits 1. Exit 0
-on success. Exit 1 on any error, with the message on stderr and nothing on stdout.
+label, and each issue with how it was settled. With `--into AR_PAGE` the section goes into Accountable Review's page at
+its two anchors and every other byte is kept; a page without the anchors exits 1. Exit 0 on success. Exit 1 on any
+error, with the message on stderr and nothing on stdout.
+
+The labels are:
+
+- `changed as intended: failed on the old code, passes now`
+- `kept: same output on the old and new code`
+- `new: the old code did not have this`
+- `old code did not behave as expected: expected it to fail`
+- `old code did not behave as expected: expected the same output`
+- `old code did not behave as expected: expected the feature to be missing`
+- `not run on the old code: <reason>`
+- `not run on the old code: this run has no old-code check`
+- `fails on the new code`
+- `not run yet`
+
+The section's first line is one of:
+
+- `These results are current: the last run of all the checks (<verification id>) used the code as it is now.`
+- `These results are out of date: the code changed after the last run of the checks (<verification id>). Code fingerprint now <tree>; when checked <tree>.` Each row with a recorded result then starts with `out of date: `.
+- `The checks have not run yet for the latest goal (<intent id>).`
+- `The last run of the checks (<verification id>) could not be read: <error>`
+- `It is unknown whether these results are current: <reason>`
 
 ## Build and test
 
