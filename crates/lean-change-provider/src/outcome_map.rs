@@ -37,8 +37,9 @@ pub fn section(
     let context = show["result"]["context"]
         .as_array()
         .map_or(&[][..], Vec::as_slice);
-    let verified = latest_verification(context, intent_id);
-    let (freshness, stale) = freshness(verified.as_ref(), intent_id, current_tree);
+    let latest = latest_verification(context, intent_id);
+    let (freshness, stale) = freshness(latest.as_ref(), intent_id, current_tree);
+    let verified = latest.and_then(|(id, parsed)| parsed.ok().map(|v| (id, v)));
     let rows: Vec<CriterionRow> = intent
         .criteria
         .iter()
@@ -116,10 +117,13 @@ pub fn splice(ar_page: &str, section: &str) -> Result<String, String> {
     let main = ar_page
         .find("<main")
         .ok_or("--into: the page has no <main>")?;
-    let header_end = ar_page[main..]
+    let main_end = ar_page[main..]
+        .find("</main>")
+        .map_or(ar_page.len(), |offset| main + offset);
+    let header_end = ar_page[main..main_end]
         .find("</header>")
         .map(|offset| main + offset + "</header>".len())
-        .ok_or("--into: the page has no </header> after <main>")?;
+        .ok_or("--into: the page has no </header> inside <main>")?;
     let rail_end = ar_page
         .find(RAIL_TAG)
         .map(|at| at + RAIL_TAG.len())
@@ -137,29 +141,36 @@ pub fn splice(ar_page: &str, section: &str) -> Result<String, String> {
     Ok(out)
 }
 
-/// The latest verification of the intent, by sequence. A record that does not parse is skipped.
-fn latest_verification(context: &[Value], intent_id: &str) -> Option<(String, Verification)> {
+/// The latest verification of the intent, by sequence, and its data if it parses. An unreadable latest record is
+/// returned as an error, never replaced by an older one.
+fn latest_verification(
+    context: &[Value],
+    intent_id: &str,
+) -> Option<(String, Result<Verification, String>)> {
     context
         .iter()
         .filter(|r| r["kind"] == "verification" && r["data"]["intent"] == intent_id)
-        .filter_map(|r| {
-            let sequence = r["sequence"].as_u64()?;
-            let id = r["id"].as_str()?;
-            let verification = serde_json::from_value::<Verification>(r["data"].clone()).ok()?;
-            Some((sequence, id.to_owned(), verification))
+        .max_by_key(|r| r["sequence"].as_u64())
+        .map(|r| {
+            let id = r["id"].as_str().unwrap_or("verification").to_owned();
+            let parsed = serde_json::from_value::<Verification>(r["data"].clone())
+                .map_err(|e| e.to_string());
+            (id, parsed)
         })
-        .max_by_key(|(sequence, _, _)| *sequence)
-        .map(|(_, id, verification)| (id, verification))
 }
 
 /// The freshness paragraph, and whether the rows with a counted result carry the stale prefix.
 fn freshness(
-    verified: Option<&(String, Verification)>,
+    latest: Option<&(String, Result<Verification, String>)>,
     intent_id: &str,
     current_tree: &Result<String, String>,
 ) -> (String, bool) {
-    let Some((id, verification)) = verified else {
+    let Some((id, parsed)) = latest else {
         return (format!("no verification for {intent_id}"), false);
+    };
+    let verification = match parsed {
+        Ok(verification) => verification,
+        Err(error) => return (format!("verification unreadable: {id}: {error}"), false),
     };
     match current_tree {
         Ok(tree) if *tree == verification.tree => (format!("verification current: {id}"), false),
@@ -672,6 +683,26 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_latest_verification_is_not_replaced_by_an_older_one() {
+        let mut context = labelled_context(TREE);
+        context.push(record(
+            "verification-3",
+            "verification",
+            3,
+            json!({"intent": "intent-1", "tree": TREE, "results": null}),
+        ));
+        let html = render(&show(false, true, context), Ok(TREE.to_owned()));
+        assert!(
+            freshness_of(&html).starts_with("verification unreadable: verification-3: "),
+            "{}",
+            freshness_of(&html)
+        );
+        for id in ["c1", "c2", "c3", "c7"] {
+            assert_eq!(label_of(&html, id), "unknown: not run", "row {id}");
+        }
+    }
+
+    #[test]
     fn unreadable_tree_leaves_labels_unprefixed() {
         let html = render(
             &show(false, true, labelled_context(TREE)),
@@ -834,6 +865,9 @@ mod tests {
         assert!(error.contains("<main"), "{error}");
         let no_header = "<main><p>x</p><div class=\"rail-links\"></div></main>";
         let error = splice(no_header, MARKER).expect_err("no header");
+        assert!(error.contains("</header>"), "{error}");
+        let header_after_main = "<main><p>x</p></main><footer><header>f</header></footer><div class=\"rail-links\"></div>";
+        let error = splice(header_after_main, MARKER).expect_err("header outside main");
         assert!(error.contains("</header>"), "{error}");
         let no_rail = "<main><header>x</header><p>y</p></main>";
         let error = splice(no_rail, MARKER).expect_err("no rail");

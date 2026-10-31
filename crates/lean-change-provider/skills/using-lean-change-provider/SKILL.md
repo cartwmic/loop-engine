@@ -205,8 +205,9 @@ Each criterion row has one of these labels, from the latest verification of the 
 The section's first paragraph is one of these freshness lines:
 
 - `verification current: <verification id>`: the tree is the one verified.
-- `verification stale`: the tree changed since then. Each row with a result starts with `stale: `.
+- `verification stale`: the tree changed since then. Each row with a counted result starts with `stale: `.
 - `no verification for <intent id>`: no verification names the latest intent. Every row is `unknown: not run`.
+- `verification unreadable: <verification id>: <error>`: the latest verification does not parse. Every row is `unknown: not run`.
 - `verification freshness unknown: <reason>`: the repository cannot be read. Labels carry no prefix.
 
 An AR page without the anchors is refused with exit 1. Then run the command without `--into` for the standalone page.

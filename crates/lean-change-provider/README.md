@@ -25,7 +25,7 @@ on stdout. It writes no file. The section "What was approved and what ran" shows
 label, and each finding with its disposition. The labels are `changed as intended (tested)`, `kept (same output before
 and after)`, `new: nothing before to compare`, `old tree did not match: expected <fails|same|absent>`, `not compared:
 <reason>`, `failed now` and `unknown: not run`. The section's first paragraph says whether the verification is current,
-stale, missing or unknown; when it is stale, each label starts with `stale: `. With `--into AR_PAGE` the section goes into
+stale, missing, unreadable or unknown; when it is stale, each row with a counted result starts with `stale: `. With `--into AR_PAGE` the section goes into
 Accountable Review's page at its two anchors and every other byte is kept; a page without the anchors exits 1. Exit 0
 on success. Exit 1 on any error, with the message on stderr and nothing on stdout.
 

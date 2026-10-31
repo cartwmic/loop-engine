@@ -704,10 +704,17 @@ def summary_text(row):
     return visible(re.search(r'<summary\b.*?</summary>', row, re.S).group(0))
 
 
-def check_findings(section):
-    """Each finding row names its disposition and reason, and the summary links to it."""
+def check_findings(section, show):
+    """Each finding row shows its question, text, evidence and consequence, names its disposition and reason, and the summary links to it."""
     expected = {'chk-1-f1': ('rejected', REJECT_REASON), 'chk-1-f2': ('fixed', FIX_REASON), 'rev-1-f1': ('open', None)}
     findings = rows(section, 'om-finding')
+    recorded = {f"{record['id']}-{finding['id']}": finding for record in json.loads(show)['result']['context']
+                if record['kind'] in ('intent-check', 'review') for finding in record['data']['findings']}
+    assert set(recorded) == set(expected), sorted(recorded)
+    for finding, fields in recorded.items():
+        text = visible(findings[finding])
+        for field in ('question', 'text', 'evidence', 'consequence'):
+            assert fields[field] in text, (finding, field, text)
     assert set(findings) == set(expected), sorted(findings)
     assert re.search(r'<h3[^>]*>Findings</h3>', section), 'no Findings heading'
     for finding, (disposition, reason) in expected.items():
@@ -746,6 +753,11 @@ def missing_anchor_checks(provider, show, work):
     damaged = {'main': page.replace(b'<main>', b'', 1),
                'header': page.replace(b'</header>', b'', 1),
                'rail': page.replace(b'<div class="rail-links">', b'<div class="rail">', 1)}
+    # A </header> after </main> is not the masthead's: the page still has no anchor inside <main>.
+    main = page.index(b'<main')
+    masthead_end = page.index(b'</header>', main)
+    outside = page[:masthead_end] + page[masthead_end + len(b'</header>'):]
+    damaged['header'] = outside + b'<footer><header>f</header></footer>\n'
     for name, content in damaged.items():
         path = work / f'ar-without-{name}.html'
         path.write_bytes(content)
@@ -794,7 +806,7 @@ def outcome_map_scenario(engine, provider, work):
     greets = visible(criteria['greets'])
     assert 'journeys/greet.sh' in greets and 'got: hello, Bob' in greets and len(re.findall(r'\bexit', greets, re.I)) >= 3, greets
     assert 'readme-ok' in visible(criteria['readme']) and 'RELEASE.md' in visible(criteria['release-notes'])
-    check_findings(section)
+    check_findings(section, j.show_text())
     # An untracked file makes the tree differ from the verified one: every row with a result is stale.
     (repo / 'notes.txt').write_text('late edit\n')
     stale = section_of(outcome_page(provider, j.show_text()))
@@ -812,7 +824,15 @@ def outcome_map_scenario(engine, provider, work):
     unknown = section_of(outcome_page(provider, j.show_text()))
     assert first_paragraph(unknown).startswith('verification current: v-2'), first_paragraph(unknown)
     assert labels(unknown) == dict(LABELS, tool='unknown: not run', readme='unknown: not run'), labels(unknown)
-    check_findings(unknown)
+    check_findings(unknown, j.show_text())
+    # A latest verification that cannot be read is not replaced by the older one: every row is unknown.
+    broken = json.loads(j.show_text())
+    context = broken['result']['context']
+    context.append({'id': 'v-bad', 'kind': 'verification', 'sequence': max(r['sequence'] for r in context) + 1,
+                    'data': {'intent': 'intent-2', 'tree': fresh['tree'], 'results': None}})
+    unreadable = section_of(outcome_page(provider, json.dumps(broken)))
+    assert first_paragraph(unreadable).startswith('verification unreadable: v-bad: '), first_paragraph(unreadable)
+    assert set(labels(unreadable).values()) == {'unknown: not run'}, labels(unreadable)
     show = j.show_text()
     into_checks(provider, show)
     missing_anchor_checks(provider, show, work)
