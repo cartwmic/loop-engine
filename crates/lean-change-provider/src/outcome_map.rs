@@ -8,9 +8,9 @@ use serde_json::Value;
 const RAIL_TAG: &str = "<div class=\"rail-links\">";
 const RAIL_LINK: &str =
     "<a data-rail=\"evidence\" href=\"#evidence\">What was approved and what ran</a>";
-const UNKNOWN: &str = "unknown: not run";
-const NO_OLD_CHECK: &str = "no old-vs-new check in this run";
-const STALE: &str = "stale: ";
+const UNKNOWN: &str = "not run yet";
+const NO_OLD_CHECK: &str = "this run has no old-code check";
+const STALE: &str = "out of date: ";
 const CSS: &str = "\
 #evidence { background: var(--surface, #ffffff); color: var(--ink, #1a1a1a); font-family: var(--body, system-ui, sans-serif); margin: 0 0 2rem; padding: 1rem 0; }
 #evidence .om-title { font-size: 1.25rem; margin: 0 0 .5rem; }
@@ -59,24 +59,28 @@ pub fn section(
             None => groups.push((row.label.clone(), vec![criterion.id.as_str()])),
         }
     }
-    let criteria_part: Vec<String> = groups
-        .iter()
-        .map(|(label, ids)| {
-            let links: Vec<String> = ids.iter().map(|id| link(id)).collect();
-            format!("{} {}: {}.", ids.len(), esc(label), links.join(", "))
-        })
-        .collect();
-    let summary = match &findings {
-        Some(rows) => format!(
-            "Criteria: {} {}",
-            criteria_part.join(" "),
-            findings_part(rows)
-        ),
-        None => format!("Criteria: {}", criteria_part.join(" ")),
-    };
+    let checks = intent.criteria.len();
+    let mut sentences = vec![if checks == 1 {
+        "1 check was approved.".to_owned()
+    } else {
+        format!("{checks} checks were approved.")
+    }];
+    for (label, ids) in &groups {
+        let links: Vec<String> = ids.iter().map(|id| link(id)).collect();
+        sentences.push(format!(
+            "{} {}: {}.",
+            ids.len(),
+            esc(label),
+            links.join(", ")
+        ));
+    }
+    if let Some(findings) = &findings {
+        sentences.push(findings_sentence(findings));
+    }
+    let summary = sentences.join(" ");
 
     let mut html = format!(
-        "<section id=\"evidence\" class=\"om\">\n<style>\n{CSS}</style>\n<h2 class=\"om-title\">What was approved and what ran</h2>\n<p class=\"om-freshness\">{}</p>\n<p class=\"om-goal\">{}</p>\n<p class=\"om-summary\">{summary}</p>\n",
+        "<section id=\"evidence\" class=\"om\">\n<style>\n{CSS}</style>\n<h2 class=\"om-title\">What was approved and what ran</h2>\n<p class=\"om-freshness\">{}</p>\n<p class=\"om-goal\"><b>The approved goal, as written:</b> {}</p>\n<p class=\"om-summary\">{summary}</p>\n",
         esc(&freshness),
         esc(&intent.goal),
     );
@@ -84,7 +88,7 @@ pub fn section(
         html.push_str(&row.html);
     }
     if let Some(findings) = &findings {
-        html.push_str("<h3>Findings</h3>\n");
+        html.push_str("<h3>Issues raised, and how each was settled</h3>\n");
         for row in findings {
             html.push_str(&finding_html(row));
         }
@@ -166,22 +170,36 @@ fn freshness(
     current_tree: &Result<String, String>,
 ) -> (String, bool) {
     let Some((id, parsed)) = latest else {
-        return (format!("no verification for {intent_id}"), false);
+        return (
+            format!("The checks have not run yet for the latest goal ({intent_id})."),
+            false,
+        );
     };
     let verification = match parsed {
         Ok(verification) => verification,
-        Err(error) => return (format!("verification unreadable: {id}: {error}"), false),
+        Err(error) => {
+            return (
+                format!("The last run of the checks ({id}) could not be read: {error}"),
+                false,
+            )
+        }
     };
     match current_tree {
-        Ok(tree) if *tree == verification.tree => (format!("verification current: {id}"), false),
+        Ok(tree) if *tree == verification.tree => (
+            format!("These results are current: the last run of the checks ({id}) used the code as it is now."),
+            false,
+        ),
         Ok(tree) => (
             format!(
-                "verification stale: the repository tree is {tree}, but {id} verified {}.",
+                "These results are out of date: the code changed after the last run of the checks ({id}). Code fingerprint now {tree}; when checked {}.",
                 verification.tree
             ),
             true,
         ),
-        Err(reason) => (format!("verification freshness unknown: {reason}"), false),
+        Err(reason) => (
+            format!("It is unknown whether these results are current: {reason}"),
+            false,
+        ),
     }
 }
 
@@ -205,51 +223,65 @@ fn criterion_row(
         label.insert_str(0, STALE);
     }
     let argv = serde_json::to_string(&criterion.check.argv).expect("argv serializes");
-    let mut body = format!("<p><b>Check:</b></p>\n<pre>{}</pre>\n", esc(&argv));
+    let mut body = format!(
+        "<p><b>Command that checks it:</b></p>\n<pre>{}</pre>\n",
+        esc(&argv)
+    );
     match recorded {
-        None => body.push_str("<p><b>Current:</b> no result is recorded for this check.</p>\n"),
+        None => {
+            body.push_str("<p><b>On the new code:</b> no result is recorded for this check.</p>\n")
+        }
         Some(result) => {
             if counted.is_none() {
                 body.push_str(&format!(
-                    "<p>This result was recorded for another check (sha256 {}), so it does not count. It is shown as recorded.</p>\n",
+                    "<p>This result was recorded for a different check command (sha256 {}), so it does not count. It is shown as recorded.</p>\n",
                     esc(&result.check_sha256)
                 ));
             }
             body.push_str(&format!(
-                "<p><b>Current:</b> {}.</p>\n<pre>{}</pre>\n",
-                exit_text(result.timed_out, result.exit_code),
+                "<p><b>On the new code:</b> {}</p>\n<pre>{}</pre>\n",
+                run_text(result.timed_out, result.exit_code),
                 esc(&result.output_tail)
             ));
         }
     }
     match (&criterion.old, recorded) {
-        (None, _) => body.push_str(&format!("<p><b>Not compared:</b> {NO_OLD_CHECK}.</p>\n")),
+        (None, _) => body.push_str(&format!(
+            "<p><b>Not run on the old code:</b> {NO_OLD_CHECK}.</p>\n"
+        )),
         (Some(old), _) if old.expect == Expect::NotApplicable => body.push_str(&format!(
-            "<p><b>Not compared:</b> {}</p>\n",
+            "<p><b>Not run on the old code:</b> {}</p>\n",
             esc(old.reason.as_deref().unwrap_or_default())
         )),
-        (Some(old), Some(result)) => {
+        (Some(old), recorded) => {
             body.push_str(&format!(
-                "<p><b>Old tree</b> (expect {}):</p>\n",
-                old.expect.name()
+                "<p><b>On the old code ({}):</b></p>\n",
+                old_expectation_text(old.expect)
             ));
-            if let Some(record) = result.old.as_ref().filter(|record| !record.runs.is_empty()) {
-                for (index, run) in record.runs.iter().enumerate() {
+            if let Some(reason) = &old.reason {
+                body.push_str(&format!("<p><b>Reason given:</b> {}</p>\n", esc(reason)));
+            }
+            if let Some(result) = recorded {
+                if let Some(record) = result.old.as_ref().filter(|record| !record.runs.is_empty()) {
+                    for (index, run) in record.runs.iter().enumerate() {
+                        body.push_str(&format!(
+                            "<p><b>Old code, run {}:</b> {}</p>\n<pre>{}</pre>\n",
+                            index + 1,
+                            run_text(run.timed_out, run.exit_code),
+                            esc(&run.output_tail)
+                        ));
+                    }
+                } else {
+                    body.push_str("<p>No runs on the old code are recorded.</p>\n");
+                }
+                if let Some(problem) = judgement {
                     body.push_str(&format!(
-                        "<p><b>Old run {}:</b> {}.</p>\n<pre>{}</pre>\n",
-                        index + 1,
-                        exit_text(run.timed_out, run.exit_code),
-                        esc(&run.output_tail)
+                        "<p><b>Why the old code did not match:</b> {}</p>\n",
+                        esc(&problem)
                     ));
                 }
-            } else {
-                body.push_str("<p>No old runs are recorded.</p>\n");
-            }
-            if let Some(problem) = judgement {
-                body.push_str(&format!("<p><b>Judged:</b> {}</p>\n", esc(&problem)));
             }
         }
-        (Some(_), None) => {}
     }
     let html = format!(
         "<details id=\"{id}\" class=\"om-criterion\">\n<summary><span class=\"om-id\">{id}</span> <span class=\"om-label\">{label}</span> <span class=\"om-statement\">{statement}</span></summary>\n{body}</details>\n",
@@ -263,41 +295,65 @@ fn criterion_row(
 /// The label of a counted result, and the old-run judge's words when the old runs do not show the expectation.
 fn judge(criterion: &Criterion, result: &CheckResult) -> (String, Option<String>) {
     if result.timed_out || result.exit_code != Some(0) {
-        return ("failed now".into(), None);
+        return ("fails on the new code".into(), None);
     }
     let Some(old) = &criterion.old else {
-        return (format!("not compared: {NO_OLD_CHECK}"), None);
+        return (format!("not run on the old code: {NO_OLD_CHECK}"), None);
     };
     match (old.expect, old_problem(old, result)) {
         (Expect::NotApplicable, _) => (
             format!(
-                "not compared: {}",
+                "not run on the old code: {}",
                 old.reason.as_deref().unwrap_or_default()
             ),
             None,
         ),
-        (expect, Some(problem)) => (
-            format!("old tree did not match: expected {}", expect.name()),
+        (Expect::Fails, Some(problem)) => (
+            "old code did not behave as expected: expected it to fail".into(),
             Some(problem),
         ),
-        (Expect::Fails, None) => ("changed as intended (tested)".into(), None),
-        (Expect::Same, None) => ("kept (same output before and after)".into(), None),
-        (Expect::Absent, None) => ("new: nothing before to compare".into(), None),
+        (Expect::Same, Some(problem)) => (
+            "old code did not behave as expected: expected the same output".into(),
+            Some(problem),
+        ),
+        (Expect::Absent, Some(problem)) => (
+            "old code did not behave as expected: expected the feature to be missing".into(),
+            Some(problem),
+        ),
+        (Expect::Fails, None) => (
+            "changed as intended: failed on the old code, passes now".into(),
+            None,
+        ),
+        (Expect::Same, None) => ("kept: same output on the old and new code".into(), None),
+        (Expect::Absent, None) => ("new: the old code did not have this".into(), None),
     }
 }
 
-fn exit_text(timed_out: bool, exit_code: Option<i32>) -> String {
+/// What one run shows, in the page's words: a pass, a fail, a timeout or no exit code.
+fn run_text(timed_out: bool, exit_code: Option<i32>) -> String {
     match (timed_out, exit_code) {
-        (true, _) => "timed out".into(),
-        (false, Some(code)) => format!("exit {code}"),
-        (false, None) => "no exit code".into(),
+        (true, _) => "timed out.".into(),
+        (false, Some(0)) => "exit 0 (pass).".into(),
+        (false, Some(code)) => format!("exit {code} (fail)."),
+        (false, None) => "no exit code.".into(),
     }
 }
 
-/// A finding of an intent check or a review, with the latest disposition recorded for it.
+/// The words of the old-code heading for an expectation.
+fn old_expectation_text(expect: Expect) -> &'static str {
+    match expect {
+        Expect::Fails => "expected: it fails",
+        Expect::Same => "expected: the same output",
+        Expect::Absent => "expected: the feature is missing",
+        Expect::NotApplicable => "expected: none",
+    }
+}
+
+/// A finding of an intent check or a review, with its question as model.rs words it and the latest disposition recorded for it.
 struct FindingRow {
     id: String,
     finding: Finding,
+    question: Option<&'static str>,
     disposition: Option<Disposition>,
 }
 
@@ -325,6 +381,10 @@ fn finding_rows(context: &[Value]) -> Vec<FindingRow> {
                 .map(|(_, d)| d.clone());
             rows.push(FindingRow {
                 id: format!("{record_id}-{}", finding.id),
+                question: question_text(
+                    record["kind"].as_str().unwrap_or_default(),
+                    &finding.question,
+                ),
                 finding,
                 disposition,
             });
@@ -347,6 +407,20 @@ fn findings_of(record: &Value) -> Vec<Finding> {
     parsed.unwrap_or_default()
 }
 
+/// The question a finding answers, as model.rs words it: INTENT_QUESTIONS for an intent check, QUESTIONS for a review.
+/// An id that is not in the list has no text.
+fn question_text(record_kind: &str, question: &str) -> Option<&'static str> {
+    let questions: &[(&str, &str)] = match record_kind {
+        "intent-check" => &INTENT_QUESTIONS,
+        "review" => &QUESTIONS,
+        _ => &[],
+    };
+    questions
+        .iter()
+        .find(|(id, _)| *id == question)
+        .map(|(_, text)| *text)
+}
+
 fn disposition_name(row: &FindingRow) -> &'static str {
     match &row.disposition {
         None => "open",
@@ -357,33 +431,42 @@ fn disposition_name(row: &FindingRow) -> &'static str {
     }
 }
 
-fn findings_part(rows: &[FindingRow]) -> String {
+/// The summary's sentence on the issues: how many were raised and how each was settled, with a link to each.
+fn findings_sentence(rows: &[FindingRow]) -> String {
+    if rows.is_empty() {
+        return "No issues were raised.".into();
+    }
     let count = |state: &str| rows.iter().filter(|r| disposition_name(r) == state).count();
+    let (issues, verb) = if rows.len() == 1 {
+        ("issue", "was")
+    } else {
+        ("issues", "were")
+    };
     let counts = format!(
-        "Findings: {} ({} fixed, {} rejected, {} open).",
+        "{} {issues} {verb} raised: {} fixed, {} rejected, {} open.",
         rows.len(),
         count("fixed"),
         count("rejected"),
         count("open")
     );
     let links: Vec<String> = rows.iter().map(|r| link(&r.id)).collect();
-    if links.is_empty() {
-        counts
-    } else {
-        format!("{counts} {}", links.join(", "))
-    }
+    format!("{counts} {}", links.join(", "))
 }
 
 fn finding_html(row: &FindingRow) -> String {
     let finding = &row.finding;
-    let reason = row.disposition.as_ref().map_or(String::new(), |d| {
-        format!("<p><b>Reason:</b> {}</p>\n", esc(&d.reason))
-    });
+    let question = match row.question {
+        Some(text) => format!("{}: {}", esc(&finding.question), esc(text)),
+        None => esc(&finding.question),
+    };
+    let state = disposition_name(row);
+    let settled = match &row.disposition {
+        None => "still open.".to_owned(),
+        Some(d) => format!("{state}: {}", esc(&d.reason)),
+    };
     format!(
-        "<details id=\"{id}\" class=\"om-finding\">\n<summary><span class=\"om-id\">{id}</span> <span class=\"om-question\">{question}</span> <span class=\"om-disposition\">{state}</span></summary>\n<p><b>Text:</b> {text}</p>\n<p><b>Evidence:</b> {evidence}</p>\n<p><b>Consequence:</b> {consequence}</p>\n{reason}</details>\n",
+        "<details id=\"{id}\" class=\"om-finding\">\n<summary><span class=\"om-id\">{id}</span> <span class=\"om-question\">{question}</span> <span class=\"om-disposition\">{state}</span></summary>\n<p><b>Issue:</b> {text}</p>\n<p><b>Evidence:</b> {evidence}</p>\n<p><b>Why it mattered:</b> {consequence}</p>\n<p><b>How it was settled:</b> {settled}</p>\n</details>\n",
         id = esc(&row.id),
-        question = esc(&finding.question),
-        state = disposition_name(row),
         text = esc(&finding.text),
         evidence = esc(&finding.evidence),
         consequence = esc(&finding.consequence),
@@ -621,27 +704,39 @@ mod tests {
             Ok(TREE.to_owned()),
         );
         let expected = [
-            ("c1", "changed as intended (tested)"),
-            ("c2", "kept (same output before and after)"),
-            ("c3", "new: nothing before to compare"),
-            ("c4", "old tree did not match: expected fails"),
-            ("c5", "old tree did not match: expected same"),
-            ("c6", "old tree did not match: expected absent"),
-            ("c7", "not compared: a guard over the gate"),
-            ("c8", "failed now"),
-            ("c9", "failed now"),
-            ("c10", "unknown: not run"),
-            ("c11", "unknown: not run"),
+            (
+                "c1",
+                "changed as intended: failed on the old code, passes now",
+            ),
+            ("c2", "kept: same output on the old and new code"),
+            ("c3", "new: the old code did not have this"),
+            (
+                "c4",
+                "old code did not behave as expected: expected it to fail",
+            ),
+            (
+                "c5",
+                "old code did not behave as expected: expected the same output",
+            ),
+            (
+                "c6",
+                "old code did not behave as expected: expected the feature to be missing",
+            ),
+            ("c7", "not run on the old code: a guard over the gate"),
+            ("c8", "fails on the new code"),
+            ("c9", "fails on the new code"),
+            ("c10", "not run yet"),
+            ("c11", "not run yet"),
         ];
         for (id, label) in expected {
             assert_eq!(label_of(&html, id), label, "row {id}");
         }
-        assert!(row(&html, "c4").contains("old run 1 exited 0"));
+        assert!(row(&html, "c4").contains("<p><b>Old code, run 1:</b> exit 0 (pass).</p>"));
         assert!(row(&html, "c1").contains("<pre>no feature</pre>"));
         assert!(row(&html, "c10").contains("no result is recorded"));
-        assert!(row(&html, "c11").contains("another check"));
+        assert!(row(&html, "c11").contains("a different check command"));
         assert!(
-            row(&html, "c11").contains("<b>Current:</b> exit 0.</p>\n<pre>ok</pre>"),
+            row(&html, "c11").contains("<b>On the new code:</b> exit 0 (pass).</p>\n<pre>ok</pre>"),
             "{}",
             row(&html, "c11")
         );
@@ -653,8 +748,11 @@ mod tests {
             &show(false, true, labelled_context(TREE)),
             Ok(TREE.to_owned()),
         );
-        assert_eq!(freshness_of(&html), "verification current: verification-2");
-        assert!(!html.contains("stale: "));
+        assert_eq!(
+            freshness_of(&html),
+            "These results are current: the last run of the checks (verification-2) used the code as it is now."
+        );
+        assert!(!html.contains("out of date: "));
     }
 
     #[test]
@@ -663,18 +761,21 @@ mod tests {
             &show(false, true, labelled_context(TREE)),
             Ok("tree-later".to_owned()),
         );
-        assert!(freshness_of(&html).starts_with("verification stale"));
-        assert_eq!(label_of(&html, "c1"), "stale: changed as intended (tested)");
+        assert!(freshness_of(&html).starts_with("These results are out of date: the code changed after the last run of the checks (verification-2)."));
+        assert_eq!(
+            label_of(&html, "c1"),
+            "out of date: changed as intended: failed on the old code, passes now"
+        );
         assert_eq!(
             label_of(&html, "c2"),
-            "stale: kept (same output before and after)"
+            "out of date: kept: same output on the old and new code"
         );
-        assert_eq!(label_of(&html, "c8"), "stale: failed now");
-        assert_eq!(label_of(&html, "c10"), "unknown: not run");
+        assert_eq!(label_of(&html, "c8"), "out of date: fails on the new code");
+        assert_eq!(label_of(&html, "c10"), "not run yet");
         // c11's result is for another check: it does not count, but it is a result, so it is stale too.
-        assert_eq!(label_of(&html, "c11"), "stale: unknown: not run");
+        assert_eq!(label_of(&html, "c11"), "out of date: not run yet");
         assert!(!html.contains("<span class=\"om-label\">changed as intended"));
-        assert!(!html.contains("<span class=\"om-label\">kept (same"));
+        assert!(!html.contains("<span class=\"om-label\">kept:"));
     }
 
     #[test]
@@ -687,9 +788,12 @@ mod tests {
             ),
             Ok(TREE.to_owned()),
         );
-        assert_eq!(freshness_of(&html), "no verification for intent-1");
+        assert_eq!(
+            freshness_of(&html),
+            "The checks have not run yet for the latest goal (intent-1)."
+        );
         for id in ["c1", "c4", "c7", "c11"] {
-            assert_eq!(label_of(&html, id), "unknown: not run", "row {id}");
+            assert_eq!(label_of(&html, id), "not run yet", "row {id}");
         }
     }
 
@@ -704,12 +808,13 @@ mod tests {
         ));
         let html = render(&show(false, true, context), Ok(TREE.to_owned()));
         assert!(
-            freshness_of(&html).starts_with("verification unreadable: verification-3: "),
+            freshness_of(&html)
+                .starts_with("The last run of the checks (verification-3) could not be read: "),
             "{}",
             freshness_of(&html)
         );
         for id in ["c1", "c2", "c3", "c7"] {
-            assert_eq!(label_of(&html, id), "unknown: not run", "row {id}");
+            assert_eq!(label_of(&html, id), "not run yet", "row {id}");
         }
     }
 
@@ -721,10 +826,13 @@ mod tests {
         );
         assert_eq!(
             freshness_of(&html),
-            "verification freshness unknown: repo /nonexistent/outcome-map-test: No such file or directory"
+            "It is unknown whether these results are current: repo /nonexistent/outcome-map-test: No such file or directory"
         );
-        assert_eq!(label_of(&html, "c1"), "changed as intended (tested)");
-        assert_eq!(label_of(&html, "c8"), "failed now");
+        assert_eq!(
+            label_of(&html, "c1"),
+            "changed as intended: failed on the old code, passes now"
+        );
+        assert_eq!(label_of(&html, "c8"), "fails on the new code");
     }
 
     #[test]
@@ -771,15 +879,26 @@ mod tests {
             ),
         ];
         let html = render(&show(true, false, context), Ok(TREE.to_owned()));
-        assert!(html.contains("Findings: 4 (2 fixed, 1 rejected, 1 open)."));
+        assert!(html.contains("<h3>Issues raised, and how each was settled</h3>"));
+        assert!(html.contains("4 issues were raised: 2 fixed, 1 rejected, 1 open."));
         assert!(html.contains("<a href=\"#intent-check-1-f1\">intent-check-1-f1</a>"));
         let state = |id: &str| text_in(row(&html, id), "om-disposition").to_owned();
         assert_eq!(state("intent-check-1-f1"), "fixed");
         assert_eq!(state("intent-check-1-f2"), "rejected");
         assert_eq!(state("intent-check-1-f3"), "open");
         assert_eq!(state("review-1-f1"), "fixed");
-        assert!(row(&html, "intent-check-1-f1").contains("<p><b>Reason:</b> added the test</p>"));
-        assert!(row(&html, "intent-check-1-f1").contains("<p><b>Text:</b> text of f1</p>"));
+        assert!(row(&html, "intent-check-1-f1")
+            .contains("<p><b>How it was settled:</b> fixed: added the test</p>"));
+        assert!(row(&html, "intent-check-1-f1").contains("<p><b>Issue:</b> text of f1</p>"));
+        assert!(row(&html, "intent-check-1-f1")
+            .contains("<span class=\"om-question\">use: Once this exists, what will the owner"));
+        assert!(row(&html, "review-1-f1").contains(
+            "<span class=\"om-question\">scope: Does the diff do only what the intent asks?"
+        ));
+        assert!(row(&html, "intent-check-1-f2")
+            .contains("<p><b>How it was settled:</b> rejected: the goal is silent</p>"));
+        assert!(row(&html, "intent-check-1-f3")
+            .contains("<p><b>How it was settled:</b> still open.</p>"));
         assert!(!row(&html, "intent-check-1-f1").contains("not in scope"));
         assert!(html.find("id=\"intent-check-1-f1\"") < html.find("id=\"review-1-f1\""));
     }
@@ -796,12 +915,24 @@ mod tests {
             ),
         ];
         let html = render(&show(false, false, context), Ok(TREE.to_owned()));
-        assert!(!html.contains("Findings"));
+        assert!(!html.contains("Issues raised"));
+        assert!(!html.contains("No issues were raised"));
         assert!(!html.contains("om-finding"));
-        assert_eq!(label_of(&html, "c1"), "unknown: not run");
+        assert_eq!(label_of(&html, "c1"), "not run yet");
         assert!(html.contains(
-            "<p class=\"om-summary\">Criteria: 1 unknown: not run: <a href=\"#c1\">c1</a>.</p>"
+            "<p class=\"om-summary\">1 check was approved. 1 not run yet: <a href=\"#c1\">c1</a>.</p>"
         ));
+    }
+
+    #[test]
+    fn profile_b_without_findings_says_none_were_raised() {
+        let context = vec![intent_record(
+            "Ship the thing.",
+            vec![criterion("c1", None)],
+        )];
+        let html = render(&show(true, false, context), Ok(TREE.to_owned()));
+        assert!(html.contains("<h3>Issues raised, and how each was settled</h3>"));
+        assert!(html.contains("No issues were raised."));
     }
 
     #[test]
@@ -816,9 +947,11 @@ mod tests {
         let html = render(&show(false, false, context), Ok(TREE.to_owned()));
         assert_eq!(
             label_of(&html, "c1"),
-            format!("not compared: {NO_OLD_CHECK}")
+            format!("not run on the old code: {NO_OLD_CHECK}")
         );
-        assert!(row(&html, "c1").contains(&format!("<p><b>Not compared:</b> {NO_OLD_CHECK}.</p>")));
+        assert!(row(&html, "c1").contains(&format!(
+            "<p><b>Not run on the old code:</b> {NO_OLD_CHECK}.</p>"
+        )));
     }
 
     #[test]
@@ -841,8 +974,157 @@ mod tests {
     fn record_text_is_escaped() {
         let context = vec![intent_record("Ship <b>&\"'", vec![criterion("c1", None)])];
         let html = render(&show(false, false, context), Ok(TREE.to_owned()));
-        assert!(html.contains("<p class=\"om-goal\">Ship &lt;b&gt;&amp;&quot;&#39;</p>"));
+        assert!(html.contains("<p class=\"om-goal\"><b>The approved goal, as written:</b> Ship &lt;b&gt;&amp;&quot;&#39;</p>"));
         assert!(!html.contains("<b>&"));
+    }
+
+    /// The text a reader sees: the page's entities undone. `&amp;` goes last, so an escaped `&lt;` stays as written.
+    fn unescape(html: &str) -> String {
+        html.replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&amp;", "&")
+    }
+
+    #[test]
+    fn record_text_is_printed_verbatim() {
+        let goal = "Ship <tree 4b825dc> & \"LE-212\" 'as is' for verification-7";
+        let argv = json!(["sh", "-c", "test \"$X\" = '<LE-212>' & echo tree 4b825dc"]);
+        let not_applicable = json!({"id": "c1", "statement": "c1 says <intent-check-1> & \"tree 4b825dc\" 'verification-7'", "check": {"argv": argv, "timeout_ms": 1000}, "old": {"expect": "none", "reason": "tree 4b825dc is <not> checked & \"LE-212\" 'guards' it"}});
+        let fails = json!({"id": "c2", "statement": "c2 says LE-212 & <verification-7> \"quoted\" 'x'", "check": {"argv": ["sh", "-c", "echo verification-7 & <LE-212>"], "timeout_ms": 1000}, "old": {"expect": "fails", "reason": "the old & <LE-212> command printed 'tree 4b825dc' \"lowercase\""}});
+        let results = vec![
+            result(
+                &not_applicable,
+                Some(0),
+                "verification-7 output: a < b & c > d \"e\" 'f'",
+                None,
+            ),
+            result(
+                &fails,
+                Some(0),
+                "new & <output> 'tree 4b825dc'",
+                Some(old_record(
+                    "fails",
+                    vec![
+                        run(Some(1), "old & <run> \"tail\" 'LE-212'"),
+                        run(Some(1), "old run two <verification-7>"),
+                    ],
+                )),
+            ),
+        ];
+        let reviewer = json!({"name": "fresh <reviewer> & \"LE-212\"", "kind": "agent"});
+        let context = vec![
+            intent_record(goal, vec![not_applicable.clone(), fails.clone()]),
+            record(
+                "verification-7",
+                "verification",
+                2,
+                json!({"intent": "intent-1", "tree": TREE, "results": results}),
+            ),
+            record(
+                "intent-check-1",
+                "intent-check",
+                3,
+                json!({"intent": "intent-1", "reviewer": reviewer, "fresh_context": true, "answers": [], "findings": [{"id": "f1", "question": "use", "text": "Text <one> & \"two\" 'three' LE-212", "evidence": "Evidence & <tree 4b825dc> 'verification-7'", "consequence": "Consequence \"A\" & <B> intent-check-1"}]}),
+            ),
+            record(
+                "disp-1",
+                "finding-disposition",
+                4,
+                json!({"review": "intent-check-1", "finding": "f1", "disposition": "fixed", "reason": "Reason <LE-212> & \"tree 4b825dc\" 'fixed'"}),
+            ),
+            record(
+                "review-1",
+                "review",
+                5,
+                json!({"intent": "intent-1", "tree": TREE, "reviewer": reviewer, "fresh_context": true, "answers": [], "findings": [{"id": "f1", "question": "scope", "text": "Review <text> & 'LE-212'", "evidence": "Review & \"evidence\" verification-7", "consequence": "Review <consequence> & intent-check-1"}]}),
+            ),
+            record(
+                "disp-2",
+                "finding-disposition",
+                6,
+                json!({"review": "review-1", "finding": "f1", "disposition": "rejected", "reason": "Rejected <tree 4b825dc> & \"verification-7\" 'LE-212'"}),
+            ),
+        ];
+        let html = render(&show(true, true, context), Ok(TREE.to_owned()));
+        let text = unescape(&html);
+        let recorded = [
+            goal.to_owned(),
+            "c1 says <intent-check-1> & \"tree 4b825dc\" 'verification-7'".to_owned(),
+            "c2 says LE-212 & <verification-7> \"quoted\" 'x'".to_owned(),
+            "the old & <LE-212> command printed 'tree 4b825dc' \"lowercase\"".to_owned(),
+            serde_json::to_string(&argv).expect("argv serializes"),
+            serde_json::to_string(&fails["check"]["argv"]).expect("argv serializes"),
+            "tree 4b825dc is <not> checked & \"LE-212\" 'guards' it".to_owned(),
+            "verification-7 output: a < b & c > d \"e\" 'f'".to_owned(),
+            "new & <output> 'tree 4b825dc'".to_owned(),
+            "old & <run> \"tail\" 'LE-212'".to_owned(),
+            "old run two <verification-7>".to_owned(),
+            "Text <one> & \"two\" 'three' LE-212".to_owned(),
+            "Evidence & <tree 4b825dc> 'verification-7'".to_owned(),
+            "Consequence \"A\" & <B> intent-check-1".to_owned(),
+            "Reason <LE-212> & \"tree 4b825dc\" 'fixed'".to_owned(),
+            "Review <text> & 'LE-212'".to_owned(),
+            "Review & \"evidence\" verification-7".to_owned(),
+            "Review <consequence> & intent-check-1".to_owned(),
+            "Rejected <tree 4b825dc> & \"verification-7\" 'LE-212'".to_owned(),
+        ];
+        for recorded_text in &recorded {
+            assert!(
+                text.contains(recorded_text.as_str()),
+                "not printed as recorded: {recorded_text}"
+            );
+        }
+    }
+
+    /// The old-code reason follows the old-code heading for fails, same and absent, with or without a recorded result.
+    #[test]
+    fn old_reason_follows_the_old_code_heading() {
+        let criteria = vec![
+            criterion(
+                "c1",
+                Some(json!({"expect": "fails", "reason": "fails <&> 'LE-212'"})),
+            ),
+            criterion(
+                "c2",
+                Some(json!({"expect": "same", "reason": "same & \"tree 4b825dc\""})),
+            ),
+            criterion(
+                "c3",
+                Some(json!({"expect": "absent", "reason": "absent <verification-7>"})),
+            ),
+            criterion("c4", Some(expect("fails"))),
+        ];
+        let context = vec![
+            intent_record("Ship the thing.", criteria.clone()),
+            verification_record(
+                TREE,
+                vec![result(
+                    &criteria[0],
+                    Some(0),
+                    "ok",
+                    Some(old_record(
+                        "fails",
+                        vec![run(Some(1), "no"), run(Some(1), "no")],
+                    )),
+                )],
+            ),
+        ];
+        let html = render(&show(false, true, context), Ok(TREE.to_owned()));
+        assert!(
+            row(&html, "c1").contains("<p><b>On the old code (expected: it fails):</b></p>\n<p><b>Reason given:</b> fails &lt;&amp;&gt; &#39;LE-212&#39;</p>\n<p><b>Old code, run 1:</b>"),
+            "{}",
+            row(&html, "c1")
+        );
+        assert!(row(&html, "c2").ends_with("<p><b>On the old code (expected: the same output):</b></p>\n<p><b>Reason given:</b> same &amp; &quot;tree 4b825dc&quot;</p>\n</details>"), "{}", row(&html, "c2"));
+        assert!(row(&html, "c3").ends_with("<p><b>On the old code (expected: the feature is missing):</b></p>\n<p><b>Reason given:</b> absent &lt;verification-7&gt;</p>\n</details>"), "{}", row(&html, "c3"));
+        assert!(
+            row(&html, "c4")
+                .ends_with("<p><b>On the old code (expected: it fails):</b></p>\n</details>"),
+            "{}",
+            row(&html, "c4")
+        );
     }
 
     #[test]
@@ -885,8 +1167,16 @@ mod tests {
         assert!(error.contains("rail-links"), "{error}");
     }
 
-    /// The written contract (LE-212 and the provider README) names every label, freshness line, anchor and check that
-    /// this command and its journeys implement. c9's grep only finds the headings; this keeps the content.
+    /// The text of one `## ` section of the skill, from its heading to the next one.
+    fn skill_section<'a>(skill: &'a str, heading: &str) -> &'a str {
+        let start = skill.find(heading).expect("skill section heading");
+        let rest = &skill[start + heading.len()..];
+        let end = rest.find("\n## ").unwrap_or(rest.len());
+        &skill[start..start + heading.len() + end]
+    }
+
+    /// The written contract (LE-212, the provider README and the skill) names every label, first line, field, anchor and
+    /// check that this command and its journeys implement. c9's grep only finds the headings; this keeps the content.
     #[test]
     fn docs_state_the_whole_contract() {
         let prd = include_str!("../../../docs/PRD.md");
@@ -894,23 +1184,39 @@ mod tests {
         let le212 = &prd[start..];
         let le212 = &le212[..le212[1..].find("\n### ").map_or(le212.len(), |end| end + 1)];
         let readme = include_str!("../README.md");
+        let skill = include_str!("../skills/using-lean-change-provider/SKILL.md");
         let labels = [
-            "changed as intended (tested)",
-            "kept (same output before and after)",
-            "new: nothing before to compare",
-            "old tree did not match: expected <fails|same|absent>",
-            "not compared: <reason>",
-            "not compared: no old-vs-new check in this run",
-            "failed now",
+            "changed as intended: failed on the old code, passes now",
+            "kept: same output on the old and new code",
+            "new: the old code did not have this",
+            "old code did not behave as expected: expected it to fail",
+            "old code did not behave as expected: expected the same output",
+            "old code did not behave as expected: expected the feature to be missing",
+            "not run on the old code: <reason>",
+            "not run on the old code: this run has no old-code check",
+            "fails on the new code",
             UNKNOWN,
-        ];
-        let freshness = [
-            "verification current: <verification id>",
-            "verification stale",
-            "no verification for <intent id>",
-            "verification unreadable: <verification id>: <error>",
-            "verification freshness unknown: <reason>",
             STALE,
+        ];
+        let first_lines = [
+            "These results are current: the last run of the checks (<verification id>) used the code as it is now.",
+            "These results are out of date: the code changed after the last run of the checks (<verification id>). Code fingerprint now <tree>; when checked <tree>.",
+            "The checks have not run yet for the latest goal (<intent id>).",
+            "The last run of the checks (<verification id>) could not be read: <error>",
+            "It is unknown whether these results are current: <reason>",
+        ];
+        let fields = [
+            "The approved goal, as written:",
+            "Command that checks it:",
+            "On the new code:",
+            "On the old code (expected: it fails):",
+            "Old code, run N:",
+            "Not run on the old code:",
+            "Issues raised, and how each was settled",
+            "Issue:",
+            "Evidence:",
+            "Why it mattered:",
+            "How it was settled:",
         ];
         let anchors = [
             "</header>",
@@ -928,14 +1234,46 @@ mod tests {
         ];
         for text in labels
             .iter()
-            .chain(&freshness)
+            .chain(&first_lines)
+            .chain(&fields)
             .chain(&anchors)
             .chain(&checks)
         {
             assert!(le212.contains(text), "LE-212 does not state {text:?}");
         }
-        for text in ["outcome-map", "--into", STALE, UNKNOWN] {
+        for text in labels.iter().chain(&first_lines) {
             assert!(readme.contains(text), "the README does not state {text:?}");
+            assert!(skill.contains(text), "the skill does not state {text:?}");
+        }
+        for text in ["outcome-map", "--into"] {
+            assert!(readme.contains(text), "the README does not state {text:?}");
+        }
+        let intent_step = skill_section(skill, "## The loop");
+        for text in [
+            "technical reader who does not know this project, the change or Loop Engine",
+            "Say what the change does before how it is checked.",
+            "Explain a project name the first time it appears, or leave it out.",
+            "Use short sentences.",
+            "A command, path or string a check depends on stays exact.",
+            "Apply the no-ai-slop skill to every sentence before `intent-ready`.",
+            "If that skill is not installed, tell the owner and write plainly without it.",
+        ] {
+            assert!(
+                intent_step.contains(text),
+                "the skill's intent step does not state {text:?}"
+            );
+        }
+        let outcome_map = skill_section(skill, "## Outcome map");
+        for text in [
+            "Write every sentence of Accountable Review's page for that same reader",
+            "Apply the no-ai-slop skill to every sentence of its prose before AR's coverage gate and lint.",
+            "If that skill is not installed, tell the owner and write plainly without it.",
+            "AR's own text and rules stay as they are.",
+        ] {
+            assert!(
+                outcome_map.contains(text),
+                "the skill's Outcome map step does not state {text:?}"
+            );
         }
     }
 }

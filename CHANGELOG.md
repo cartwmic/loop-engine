@@ -18,6 +18,10 @@
 - Lean-change has `outcome-map`, which makes one page for the owner from a finished run: Accountable Review's page for the change with a section, "What was approved and what ran". The section shows each criterion's label, its check results and old-tree runs, and each finding with its disposition. The command prints HTML and writes no file; `--into` puts the section into AR's page at its anchors (LE-212).
 - The lean-change skill's end step makes that page. It runs AR's review-map skill when it is installed and the tree is clean, then opens the local file. It publishes the file with `viz` only when the owner asks for a link.
 
+### Changed
+
+- lean-change outcome-map: plain-English labels, first line, field names and findings heading (LE-212). The skill tells the driver to write the intent and Accountable Review's page for a reader new to the project and to apply the no-ai-slop skill.
+
 ## [0.36.0] - 2026-10-31
 
 ### Changed

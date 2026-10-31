@@ -49,6 +49,8 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
 
    Every criterion also needs `old`, the old-vs-new expectation described in its section below.
 
+   Write the goal, each criterion statement and each `old` reason for a technical reader who does not know this project, the change or Loop Engine: the outcome map at the end shows them exactly as written. Say what the change does before how it is checked. Explain a project name the first time it appears, or leave it out. Use short sentences. A command, path or string a check depends on stays exact. Apply the no-ai-slop skill to every sentence before `intent-ready`. If that skill is not installed, tell the owner and write plainly without it.
+
    Every criterion needs a command that fails when the criterion is not met and passes when it is.
    Before `intent-ready` (profile b, whose setup froze a principles file), add one constraint per section of that file: "§N applies: cN" or "§N n/a: reason".
    Cover edge cases with extra criteria, not prose. Set `hard` true only when the work needs a plan.
@@ -174,6 +176,8 @@ Write the show first: `loop-engine ... --json show --view full RUN > "$WORK/show
 
 When `$HOME/.local/share/agent-harness/external-skills/accountable-review/review-map/SKILL.md` exists and `git -C "$REPO" status --porcelain` prints nothing, read that SKILL.md and run review-map on the run's change: `review-map BASE..HEAD --base-sha BASE --head-sha HEAD --output "$WORK/ar"`. BASE is the run's base commit. HEAD is `git -C "$REPO" rev-parse HEAD`. Use its default effort. AR writes `$WORK/ar/index.html`. Otherwise skip AR and tell the owner why: AR is not installed, or the tree has uncommitted changes, which AR's diffs leave out. The end step does not commit.
 
+Write every sentence of Accountable Review's page for that same reader: a technical reader who does not know the project, the change or Loop Engine. Apply the no-ai-slop skill to every sentence of its prose before AR's coverage gate and lint. If that skill is not installed, tell the owner and write plainly without it. AR's own text and rules stay as they are.
+
 The default block makes the page and opens the local file. It does not call `viz`.
 
 ```sh
@@ -194,21 +198,24 @@ viz publish "$WORK/outcome-map.html"
 
 Each criterion row has one of these labels, from the latest verification of the latest intent:
 
-- `changed as intended (tested)`
-- `kept (same output before and after)`
-- `new: nothing before to compare`
-- `old tree did not match: expected <fails|same|absent>`
-- `not compared: <reason>`
-- `failed now`
-- `unknown: not run`
+- `changed as intended: failed on the old code, passes now`
+- `kept: same output on the old and new code`
+- `new: the old code did not have this`
+- `old code did not behave as expected: expected it to fail`
+- `old code did not behave as expected: expected the same output`
+- `old code did not behave as expected: expected the feature to be missing`
+- `not run on the old code: <reason>`
+- `not run on the old code: this run has no old-code check`
+- `fails on the new code`
+- `not run yet`
 
-The section's first paragraph is one of these freshness lines:
+The section's first paragraph is one of these sentences:
 
-- `verification current: <verification id>`: the tree is the one verified.
-- `verification stale`: the tree changed since then. Each row with a recorded result starts with `stale: `, even one recorded for another check.
-- `no verification for <intent id>`: no verification names the latest intent. Every row is `unknown: not run`.
-- `verification unreadable: <verification id>: <error>`: the latest verification does not parse. Every row is `unknown: not run`.
-- `verification freshness unknown: <reason>`: the repository cannot be read. Labels carry no prefix.
+- `These results are current: the last run of the checks (<verification id>) used the code as it is now.`: the tree is the one verified.
+- `These results are out of date: the code changed after the last run of the checks (<verification id>). Code fingerprint now <tree>; when checked <tree>.`: the tree changed since then. Each row with a recorded result starts with `out of date: `, even one recorded for another check.
+- `The checks have not run yet for the latest goal (<intent id>).`: no verification names the latest intent. Every row is `not run yet`.
+- `The last run of the checks (<verification id>) could not be read: <error>`: the latest verification does not parse. Every row is `not run yet`.
+- `It is unknown whether these results are current: <reason>`: the repository cannot be read. Labels carry no prefix.
 
 An AR page without the anchors is refused with exit 1. Then run the command without `--into` for the standalone page.
 
