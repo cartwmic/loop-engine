@@ -253,31 +253,35 @@ fn criterion_row(
             "<p><b>Not run on the old code:</b> {}</p>\n",
             esc(old.reason.as_deref().unwrap_or_default())
         )),
-        (Some(old), Some(result)) => {
+        (Some(old), recorded) => {
             body.push_str(&format!(
                 "<p><b>On the old code ({}):</b></p>\n",
                 old_expectation_text(old.expect)
             ));
-            if let Some(record) = result.old.as_ref().filter(|record| !record.runs.is_empty()) {
-                for (index, run) in record.runs.iter().enumerate() {
+            if let Some(reason) = &old.reason {
+                body.push_str(&format!("<p><b>Reason given:</b> {}</p>\n", esc(reason)));
+            }
+            if let Some(result) = recorded {
+                if let Some(record) = result.old.as_ref().filter(|record| !record.runs.is_empty()) {
+                    for (index, run) in record.runs.iter().enumerate() {
+                        body.push_str(&format!(
+                            "<p><b>Old code, run {}:</b> {}</p>\n<pre>{}</pre>\n",
+                            index + 1,
+                            run_text(run.timed_out, run.exit_code),
+                            esc(&run.output_tail)
+                        ));
+                    }
+                } else {
+                    body.push_str("<p>No runs on the old code are recorded.</p>\n");
+                }
+                if let Some(problem) = judgement {
                     body.push_str(&format!(
-                        "<p><b>Old code, run {}:</b> {}</p>\n<pre>{}</pre>\n",
-                        index + 1,
-                        run_text(run.timed_out, run.exit_code),
-                        esc(&run.output_tail)
+                        "<p><b>Why the old code did not match:</b> {}</p>\n",
+                        esc(&problem)
                     ));
                 }
-            } else {
-                body.push_str("<p>No runs on the old code are recorded.</p>\n");
-            }
-            if let Some(problem) = judgement {
-                body.push_str(&format!(
-                    "<p><b>Why the old code did not match:</b> {}</p>\n",
-                    esc(&problem)
-                ));
             }
         }
-        (Some(_), None) => {}
     }
     let html = format!(
         "<details id=\"{id}\" class=\"om-criterion\">\n<summary><span class=\"om-id\">{id}</span> <span class=\"om-label\">{label}</span> <span class=\"om-statement\">{statement}</span></summary>\n{body}</details>\n",
@@ -988,7 +992,7 @@ mod tests {
         let goal = "Ship <tree 4b825dc> & \"LE-212\" 'as is' for verification-7";
         let argv = json!(["sh", "-c", "test \"$X\" = '<LE-212>' & echo tree 4b825dc"]);
         let not_applicable = json!({"id": "c1", "statement": "c1 says <intent-check-1> & \"tree 4b825dc\" 'verification-7'", "check": {"argv": argv, "timeout_ms": 1000}, "old": {"expect": "none", "reason": "tree 4b825dc is <not> checked & \"LE-212\" 'guards' it"}});
-        let fails = json!({"id": "c2", "statement": "c2 says LE-212 & <verification-7> \"quoted\" 'x'", "check": {"argv": ["sh", "-c", "echo verification-7 & <LE-212>"], "timeout_ms": 1000}, "old": {"expect": "fails"}});
+        let fails = json!({"id": "c2", "statement": "c2 says LE-212 & <verification-7> \"quoted\" 'x'", "check": {"argv": ["sh", "-c", "echo verification-7 & <LE-212>"], "timeout_ms": 1000}, "old": {"expect": "fails", "reason": "the old & <LE-212> command printed 'tree 4b825dc' \"lowercase\""}});
         let results = vec![
             result(
                 &not_applicable,
@@ -1049,6 +1053,7 @@ mod tests {
             goal.to_owned(),
             "c1 says <intent-check-1> & \"tree 4b825dc\" 'verification-7'".to_owned(),
             "c2 says LE-212 & <verification-7> \"quoted\" 'x'".to_owned(),
+            "the old & <LE-212> command printed 'tree 4b825dc' \"lowercase\"".to_owned(),
             serde_json::to_string(&argv).expect("argv serializes"),
             serde_json::to_string(&fails["check"]["argv"]).expect("argv serializes"),
             "tree 4b825dc is <not> checked & \"LE-212\" 'guards' it".to_owned(),
@@ -1071,6 +1076,55 @@ mod tests {
                 "not printed as recorded: {recorded_text}"
             );
         }
+    }
+
+    /// The old-code reason follows the old-code heading for fails, same and absent, with or without a recorded result.
+    #[test]
+    fn old_reason_follows_the_old_code_heading() {
+        let criteria = vec![
+            criterion(
+                "c1",
+                Some(json!({"expect": "fails", "reason": "fails <&> 'LE-212'"})),
+            ),
+            criterion(
+                "c2",
+                Some(json!({"expect": "same", "reason": "same & \"tree 4b825dc\""})),
+            ),
+            criterion(
+                "c3",
+                Some(json!({"expect": "absent", "reason": "absent <verification-7>"})),
+            ),
+            criterion("c4", Some(expect("fails"))),
+        ];
+        let context = vec![
+            intent_record("Ship the thing.", criteria.clone()),
+            verification_record(
+                TREE,
+                vec![result(
+                    &criteria[0],
+                    Some(0),
+                    "ok",
+                    Some(old_record(
+                        "fails",
+                        vec![run(Some(1), "no"), run(Some(1), "no")],
+                    )),
+                )],
+            ),
+        ];
+        let html = render(&show(false, true, context), Ok(TREE.to_owned()));
+        assert!(
+            row(&html, "c1").contains("<p><b>On the old code (expected: it fails):</b></p>\n<p><b>Reason given:</b> fails &lt;&amp;&gt; &#39;LE-212&#39;</p>\n<p><b>Old code, run 1:</b>"),
+            "{}",
+            row(&html, "c1")
+        );
+        assert!(row(&html, "c2").ends_with("<p><b>On the old code (expected: the same output):</b></p>\n<p><b>Reason given:</b> same &amp; &quot;tree 4b825dc&quot;</p>\n</details>"), "{}", row(&html, "c2"));
+        assert!(row(&html, "c3").ends_with("<p><b>On the old code (expected: the feature is missing):</b></p>\n<p><b>Reason given:</b> absent &lt;verification-7&gt;</p>\n</details>"), "{}", row(&html, "c3"));
+        assert!(
+            row(&html, "c4")
+                .ends_with("<p><b>On the old code (expected: it fails):</b></p>\n</details>"),
+            "{}",
+            row(&html, "c4")
+        );
     }
 
     #[test]
@@ -1195,7 +1249,15 @@ mod tests {
             assert!(readme.contains(text), "the README does not state {text:?}");
         }
         let intent_step = skill_section(skill, "## The loop");
-        for text in ["technical reader who does not know", "no-ai-slop"] {
+        for text in [
+            "technical reader who does not know this project, the change or Loop Engine",
+            "Say what the change does before how it is checked.",
+            "Explain a project name the first time it appears, or leave it out.",
+            "Use short sentences.",
+            "A command, path or string a check depends on stays exact.",
+            "Apply the no-ai-slop skill to every sentence before `intent-ready`.",
+            "If that skill is not installed, tell the owner and write plainly without it.",
+        ] {
             assert!(
                 intent_step.contains(text),
                 "the skill's intent step does not state {text:?}"
@@ -1203,9 +1265,10 @@ mod tests {
         }
         let outcome_map = skill_section(skill, "## Outcome map");
         for text in [
-            "Accountable Review",
-            "technical reader who does not know",
-            "no-ai-slop",
+            "Write every sentence of Accountable Review's page for that same reader",
+            "Apply the no-ai-slop skill to every sentence of its prose before AR's coverage gate and lint.",
+            "If that skill is not installed, tell the owner and write plainly without it.",
+            "AR's own text and rules stay as they are.",
         ] {
             assert!(
                 outcome_map.contains(text),

@@ -830,8 +830,12 @@ def outcome_map_scenario(engine, provider, work):
     assert '3 issues were raised: 1 fixed, 1 rejected, 1 open.' in summary_of(section), summary_of(section)
     criteria = rows(section, 'om-criterion')
     # greets shows its check, the current pass and two old runs that print their output and exit 1.
-    greets = visible(criteria['greets'])
-    assert 'journeys/greet.sh' in greets and 'got: hello, Bob' in greets and len(re.findall(r'\bexit', greets, re.I)) >= 3, greets
+    greets = criteria['greets']
+    assert 'journeys/greet.sh' in visible(greets) and 'got: hello, Bob' in visible(greets), visible(greets)
+    assert '<b>On the new code:</b> exit 0 (pass).' in greets, greets
+    assert '<b>Old code, run 1:</b> exit 1 (fail).' in greets and '<b>Old code, run 2:</b> exit 1 (fail).' in greets, greets
+    # release-notes has no RELEASE.md, so its current result is a fail.
+    assert '<b>On the new code:</b> exit 1 (fail).' in criteria['release-notes'], criteria['release-notes']
     assert 'readme-ok' in visible(criteria['readme']) and 'RELEASE.md' in visible(criteria['release-notes'])
     check_findings(section, j.show_text())
     # An untracked file makes the tree differ from the verified one: every row with a result is stale.
