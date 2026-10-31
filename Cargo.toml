@@ -34,6 +34,10 @@ global-artifacts-jobs = ["./archive-check"]
 # The checked wrapper replaces only stock CI comparison, not other generation checks.
 allow-dirty = ["ci"]
 
+# GitHub retires the macos-14 image dist 0.32.0 picks by default (2026-11-02).
+[workspace.metadata.dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
+
 [profile.dist]
 inherits = "release"
 lto = "thin"
