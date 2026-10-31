@@ -884,4 +884,58 @@ mod tests {
         let error = splice(no_rail, MARKER).expect_err("no rail");
         assert!(error.contains("rail-links"), "{error}");
     }
+
+    /// The written contract (LE-212 and the provider README) names every label, freshness line, anchor and check that
+    /// this command and its journeys implement. c9's grep only finds the headings; this keeps the content.
+    #[test]
+    fn docs_state_the_whole_contract() {
+        let prd = include_str!("../../../docs/PRD.md");
+        let start = prd.find("### LE-212:").expect("LE-212 heading");
+        let le212 = &prd[start..];
+        let le212 = &le212[..le212[1..].find("\n### ").map_or(le212.len(), |end| end + 1)];
+        let readme = include_str!("../README.md");
+        let labels = [
+            "changed as intended (tested)",
+            "kept (same output before and after)",
+            "new: nothing before to compare",
+            "old tree did not match: expected <fails|same|absent>",
+            "not compared: <reason>",
+            "not compared: no old-vs-new check in this run",
+            "failed now",
+            UNKNOWN,
+        ];
+        let freshness = [
+            "verification current: <verification id>",
+            "verification stale",
+            "no verification for <intent id>",
+            "verification unreadable: <verification id>: <error>",
+            "verification freshness unknown: <reason>",
+            STALE,
+        ];
+        let anchors = [
+            "</header>",
+            "<main",
+            "</main>",
+            RAIL_TAG,
+            RAIL_LINK,
+            "<section id=\"evidence\">",
+        ];
+        let checks = [
+            "--only outcome-map` (criteria c1–c6)",
+            "--only outcome-map-skill` (c7)",
+            "--only outcome-map-fixture` (c8)",
+            "--only outcome-map-browser --chromium PATH` (c11",
+        ];
+        for text in labels
+            .iter()
+            .chain(&freshness)
+            .chain(&anchors)
+            .chain(&checks)
+        {
+            assert!(le212.contains(text), "LE-212 does not state {text:?}");
+        }
+        for text in ["outcome-map", "--into", STALE, UNKNOWN] {
+            assert!(readme.contains(text), "the README does not state {text:?}");
+        }
+    }
 }
