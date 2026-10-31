@@ -3,12 +3,12 @@
 ## Scope and authority
 
 Root `AGENTS.md` governs checkout operations and authority; this guide adds crate-local procedure only.
-Product summary is in [README.md](README.md). Requirements are LE-202 to LE-210 in the root PRD.
+Product summary is in [README.md](README.md). Requirements are LE-202 to LE-212 in the root PRD.
 
 ## Workflow
 
 Load the [skill](skills/using-lean-change-provider/SKILL.md) before driving a run. The supported
-commands are `setup`, `verify`, `intent-packet`, `review-packet` and stdin describe/evaluate; there is no `data-dump`
+commands are `setup`, `verify`, `intent-packet`, `review-packet`, `outcome-map` and stdin describe/evaluate; there is no `data-dump`
 and no shipped data.
 
 Profiles b and c share one code base. Do not fork the code for c: c is the review flag off. A new gate needs a

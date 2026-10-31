@@ -113,7 +113,7 @@ driver's statement, not a verified model identity.
 
 ## Provider tools
 
-Each provider lists its own commands (`research --help`, and the provider `AGENTS.md`). Lean-change has `setup`, `verify`, `intent-packet` and `review-packet`; research has `commission`, `review-candidates`, `author-counts` and `data-dump`; policy-document is described in its operator guide. Tools prepare or evaluate data, not external execution. Keep frozen run obligations and original runtime; no active-run migration is authorized.
+Each provider lists its own commands (`research --help`, and the provider `AGENTS.md`). Lean-change has `setup`, `verify`, `intent-packet`, `review-packet` and `outcome-map`; research has `commission`, `review-candidates`, `author-counts` and `data-dump`; policy-document is described in its operator guide. Tools prepare or evaluate data, not external execution. Keep frozen run obligations and original runtime; no active-run migration is authorized.
 
 ## Workspace validation
 

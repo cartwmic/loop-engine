@@ -16,9 +16,18 @@ explore -> intent-approval -> (plan if hard) -> implement -> verify -> review ->
   checks, docs, the owner's design principles). Every finding gets a disposition.
 - Profile `c` is the same code with the intent check and the review state absent.
 
-Binary: `lean-change` (not released). Commands: `setup`, `verify`, `intent-packet`, `review-packet`, and
-describe/evaluate on stdin for the engine. Requirements: LE-202 to LE-210 in docs/PRD.md at the checkout root.
+Binary: `lean-change` (not released). Commands: `setup`, `verify`, `intent-packet`, `review-packet`, `outcome-map`,
+and describe/evaluate on stdin for the engine. Requirements: LE-202 to LE-212 in docs/PRD.md at the checkout root.
 Driving procedure: [skill](skills/using-lean-change-provider/SKILL.md).
+
+`outcome-map` makes one page for the owner from a finished run. It reads `show --view full` on stdin and prints HTML
+on stdout. It writes no file. The section "What was approved and what ran" shows the goal, each criterion with one
+label, and each finding with its disposition. The labels are `changed as intended (tested)`, `kept (same output before
+and after)`, `new: nothing before to compare`, `old tree did not match: expected <fails|same|absent>`, `not compared:
+<reason>`, `failed now` and `unknown: not run`. The section's first paragraph says whether the verification is current,
+stale, missing, unreadable or unknown; when it is stale, each row with a recorded result starts with `stale: `. With `--into AR_PAGE` the section goes into
+Accountable Review's page at its two anchors and every other byte is kept; a page without the anchors exits 1. Exit 0
+on success. Exit 1 on any error, with the message on stderr and nothing on stdout.
 
 ## Build and test
 

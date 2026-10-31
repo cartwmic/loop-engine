@@ -110,7 +110,7 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
 
    If you changed code, run verify again and append the new verification. Request `reviewed`. There is one
    review; do not ask for a second.
-7. **end.** Report the criteria, their results, and each finding with its disposition.
+7. **end.** Report the criteria, their results, and each finding with its disposition. Then make the owner's page: see [Outcome map](#outcome-map).
 
 `revise` from implement, verify and review goes back (to explore, implement and implement). Going back is free; the
 gates check the records again when you return.
@@ -165,6 +165,52 @@ events; the engine and the provider never see the steps.
    mean to drop that work, add `--force`.
 
 Verify, the old-vs-new check and the review are unchanged: they judge the merged tree in `REPO`.
+
+## Outcome map
+
+At the end, make one page for the owner. It is Accountable Review's (AR) page for the run's change, with the section "What was approved and what ran" added at the top. The section comes from the run's records. `lean-change outcome-map` makes it from the show and prints HTML to stdout. It writes no file.
+
+Write the show first: `loop-engine ... --json show --view full RUN > "$WORK/show-full.json"`.
+
+When `$HOME/.local/share/agent-harness/external-skills/accountable-review/review-map/SKILL.md` exists and `git -C "$REPO" status --porcelain` prints nothing, read that SKILL.md and run review-map on the run's change: `review-map BASE..HEAD --base-sha BASE --head-sha HEAD --output "$WORK/ar"`. BASE is the run's base commit. HEAD is `git -C "$REPO" rev-parse HEAD`. Use its default effort. AR writes `$WORK/ar/index.html`. Otherwise skip AR and tell the owner why: AR is not installed, or the tree has uncommitted changes, which AR's diffs leave out. The end step does not commit.
+
+The default block makes the page and opens the local file. It does not call `viz`.
+
+```sh
+# REPO: the run's repository. WORK: your work directory outside it.
+if [ -f "$WORK/ar/index.html" ] && [ -z "$(git -C "$REPO" status --porcelain)" ]; then
+  set -- --into "$WORK/ar/index.html"
+else
+  set --
+fi
+lean-change outcome-map "$@" < "$WORK/show-full.json" > "$WORK/outcome-map.html" && open "$WORK/outcome-map.html"
+```
+
+Run the link block only when the owner asks for a link:
+
+```sh
+viz publish "$WORK/outcome-map.html"
+```
+
+Each criterion row has one of these labels, from the latest verification of the latest intent:
+
+- `changed as intended (tested)`
+- `kept (same output before and after)`
+- `new: nothing before to compare`
+- `old tree did not match: expected <fails|same|absent>`
+- `not compared: <reason>`
+- `failed now`
+- `unknown: not run`
+
+The section's first paragraph is one of these freshness lines:
+
+- `verification current: <verification id>`: the tree is the one verified.
+- `verification stale`: the tree changed since then. Each row with a recorded result starts with `stale: `, even one recorded for another check.
+- `no verification for <intent id>`: no verification names the latest intent. Every row is `unknown: not run`.
+- `verification unreadable: <verification id>: <error>`: the latest verification does not parse. Every row is `unknown: not run`.
+- `verification freshness unknown: <reason>`: the repository cannot be read. Labels carry no prefix.
+
+An AR page without the anchors is refused with exit 1. Then run the command without `--into` for the standalone page.
 
 ## The old-vs-new check (on by default)
 

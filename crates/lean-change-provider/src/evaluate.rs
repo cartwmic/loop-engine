@@ -210,7 +210,7 @@ fn verification(records: &[ContextRecord], input: &InitialInput, tree: TreeIdent
 /// What the record's old runs must show for the intent's expectation. The record's `old` must exist and name that
 /// expectation too; its runs are judged against the intent's expectation, not the record's. None when all of that
 /// holds; otherwise the problem names the criterion's old runs.
-fn old_problem(expectation: &OldExpectation, current: &CheckResult) -> Option<String> {
+pub fn old_problem(expectation: &OldExpectation, current: &CheckResult) -> Option<String> {
     let expect = expectation.expect;
     let Some(old) = current.old.as_ref() else {
         return Some(format!(

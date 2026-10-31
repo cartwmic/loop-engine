@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Lean-change has `outcome-map`, which makes one page for the owner from a finished run: Accountable Review's page for the change with a section, "What was approved and what ran". The section shows each criterion's label, its check results and old-tree runs, and each finding with its disposition. The command prints HTML and writes no file; `--into` puts the section into AR's page at its anchors (LE-212).
+- The lean-change skill's end step makes that page. It runs AR's review-map skill when it is installed and the tree is clean, then opens the local file. It publishes the file with `viz` only when the owner asks for a link.
+
 ## [0.36.0] - 2026-10-31
 
 ### Changed
@@ -9,12 +16,6 @@
 ### Compatibility
 
 - Release configuration only. The engine, the providers and the profiles are unchanged.
-
-## Unreleased
-
-### Changed
-
-- Release builds and archive checks for `aarch64-apple-darwin` run on the `macos-15` runner instead of `macos-14`, which GitHub retires on 2026-11-02. Archive and installer names are unchanged.
 
 ## [0.35.0] - 2026-10-30
 
