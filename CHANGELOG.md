@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.38.0] - 2026-10-31
+
+### Changed
+
+- Lean-change `outcome-map` uses plain-English labels, first line, field names and findings heading (LE-212, #96). The lean-change skill tells the driver to write the intent and Accountable Review's page for a reader new to the project and to apply the no-ai-slop skill.
+
+### Compatibility
+
+- Lean-change output wording and its skill only. The engine, the other providers, the profiles and the record formats are unchanged.
+
 ## [0.37.0] - 2026-10-31
 
 ### Added
