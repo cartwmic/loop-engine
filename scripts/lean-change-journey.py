@@ -832,6 +832,13 @@ def outcome_map_scenario(engine, provider, work):
         assert run['output_tail'].strip() in readme, (run, readme)
     assert 'Old run 1' in readme, readme
     check_findings(unknown, j.show_text())
+    # Stale and recorded for another check: readme has a result, so it is stale too; tool has none, so it is not.
+    (repo / 'notes.txt').write_text('late edit\n')
+    stale_unknown = section_of(outcome_page(provider, j.show_text()))
+    (repo / 'notes.txt').unlink()
+    assert first_paragraph(stale_unknown).startswith('verification stale'), first_paragraph(stale_unknown)
+    assert labels(stale_unknown) == dict({name: f'stale: {label}' for name, label in LABELS.items()},
+                                         tool='unknown: not run', readme='stale: unknown: not run'), labels(stale_unknown)
     # A latest verification that cannot be read is not replaced by the older one: every row is unknown.
     broken = json.loads(j.show_text())
     context = broken['result']['context']

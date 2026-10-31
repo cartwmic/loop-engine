@@ -205,7 +205,7 @@ Each criterion row has one of these labels, from the latest verification of the 
 The section's first paragraph is one of these freshness lines:
 
 - `verification current: <verification id>`: the tree is the one verified.
-- `verification stale`: the tree changed since then. Each row with a counted result starts with `stale: `.
+- `verification stale`: the tree changed since then. Each row with a recorded result starts with `stale: `, even one recorded for another check.
 - `no verification for <intent id>`: no verification names the latest intent. Every row is `unknown: not run`.
 - `verification unreadable: <verification id>: <error>`: the latest verification does not parse. Every row is `unknown: not run`.
 - `verification freshness unknown: <reason>`: the repository cannot be read. Labels carry no prefix.

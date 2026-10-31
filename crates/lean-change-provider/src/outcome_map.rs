@@ -159,7 +159,7 @@ fn latest_verification(
         })
 }
 
-/// The freshness paragraph, and whether the rows with a counted result carry the stale prefix.
+/// The freshness paragraph, and whether the rows with a recorded result carry the stale prefix.
 fn freshness(
     latest: Option<&(String, Result<Verification, String>)>,
     intent_id: &str,
@@ -201,7 +201,7 @@ fn criterion_row(
         Some(result) => judge(criterion, result),
         None => (UNKNOWN.to_owned(), None),
     };
-    if stale && counted.is_some() {
+    if stale && recorded.is_some() {
         label.insert_str(0, STALE);
     }
     let argv = serde_json::to_string(&criterion.check.argv).expect("argv serializes");
@@ -671,7 +671,8 @@ mod tests {
         );
         assert_eq!(label_of(&html, "c8"), "stale: failed now");
         assert_eq!(label_of(&html, "c10"), "unknown: not run");
-        assert_eq!(label_of(&html, "c11"), "unknown: not run");
+        // c11's result is for another check: it does not count, but it is a result, so it is stale too.
+        assert_eq!(label_of(&html, "c11"), "stale: unknown: not run");
         assert!(!html.contains("<span class=\"om-label\">changed as intended"));
         assert!(!html.contains("<span class=\"om-label\">kept (same"));
     }
