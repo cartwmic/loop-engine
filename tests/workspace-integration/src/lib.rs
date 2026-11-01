@@ -104,6 +104,32 @@ struct FreshBinaries {
 
 static FRESH_BINARIES: OnceLock<Result<FreshBinaries, String>> = OnceLock::new();
 
+/// The fresh target removed when the test process exits.  `FRESH_BINARIES`
+/// is a static, and Rust never drops statics, so its `TempDir` alone would
+/// leave one full debug build behind per test process.
+static FRESH_TARGET_AT_EXIT: OnceLock<PathBuf> = OnceLock::new();
+
+extern "C" fn remove_fresh_target_at_exit() {
+    if let Some(path) = FRESH_TARGET_AT_EXIT.get() {
+        let _ = fs::remove_dir_all(path);
+    }
+}
+
+/// Remove `path` when the process exits normally (libtest exits through
+/// `exit` after a pass and after a failure).  A process killed by a signal
+/// leaves it behind.
+fn remove_at_exit(path: &Path) -> Result<(), String> {
+    FRESH_TARGET_AT_EXIT
+        .set(path.to_path_buf())
+        .map_err(|_| "fresh Cargo target exit cleanup is already registered".to_owned())?;
+    // SAFETY: `atexit` only stores the function pointer; the handler is an
+    // `extern "C"` function that touches only a static and the filesystem.
+    if unsafe { libc::atexit(remove_fresh_target_at_exit) } != 0 {
+        return Err("could not register fresh Cargo target exit cleanup".to_owned());
+    }
+    Ok(())
+}
+
 /// Return the repository root containing this dedicated test package.
 pub fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -183,6 +209,7 @@ fn resolve_fresh_binaries() -> Result<FreshBinaries, String> {
         )
     })?;
     let binaries = build_fresh_binaries(Path::new("cargo"), &active_target)?;
+    remove_at_exit(&active_target)?;
     Ok(FreshBinaries {
         _target: target,
         active_target,
@@ -810,6 +837,60 @@ mod tests {
             );
             assert_eq!(path.parent(), Some(debug.as_path()));
         }
+    }
+
+    /// Set in the child that `fresh_target_is_removed_when_the_test_process_exits` starts.
+    const EXIT_PROBE_ENV: &str = "LOOP_ENGINE_TEST_FRESH_TARGET_EXIT_PROBE";
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_target_is_removed_when_the_test_process_exits() {
+        if env::var_os(EXIT_PROBE_ENV).is_some() {
+            // Child: take the unset-handoff fresh build, as `cargo test --workspace` does, then exit.
+            binary("loop-engine");
+            return;
+        }
+        let _guard = ENVIRONMENT_LOCK.lock().expect("environment lock");
+        let root = tempfile::tempdir().expect("fake cargo root");
+        let fake = fake_cargo(root.path(), "success");
+        let count = root.path().join("build-count");
+        let child_tmp = root.path().join("tmp");
+        fs::create_dir(&child_tmp).expect("child temp directory");
+        let mut path = fake
+            .parent()
+            .expect("fake cargo parent")
+            .as_os_str()
+            .to_owned();
+        if let Some(original_path) = env::var_os("PATH") {
+            path.push(":");
+            path.push(original_path);
+        }
+        let output = Command::new(env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "tests::fresh_target_is_removed_when_the_test_process_exits",
+                "--test-threads=1",
+            ])
+            .env(EXIT_PROBE_ENV, "1")
+            .env("PATH", path)
+            .env("TMPDIR", &child_tmp)
+            .env("FAKE_CARGO_COUNT", &count)
+            .env_remove(HANDOFF_ENV)
+            .output()
+            .expect("spawn exit probe");
+        assert!(
+            output.status.success(),
+            "exit probe failed: status={}, stdout={}, stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fs::read_to_string(count).expect("build count"), "1");
+        let left: Vec<_> = fs::read_dir(&child_tmp)
+            .expect("child temp directory")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert!(left.is_empty(), "fresh target left behind: {left:?}");
     }
 
     #[cfg(unix)]
