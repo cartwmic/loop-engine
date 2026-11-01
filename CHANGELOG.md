@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.39.0] - 2026-11-01
+
+### Fixed
+
+- `cargo test --workspace` no longer leaves a full debug build in `$TMPDIR/loop-engine-workspace-binaries-*` after each run. The workspace-integration tests now remove the fresh target they build when the test process exits (#98). A run killed by a signal can still leave one.
+
+### Compatibility
+
+- Test harness only. The engine, the providers, the profiles and the record formats are unchanged.
+
 ## [0.38.0] - 2026-10-31
 
 ### Changed
