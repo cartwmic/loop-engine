@@ -2171,6 +2171,125 @@ fn the_intent_check_uses_the_same_rules() {
     assert!(check_denial(&r, check_ctx(v1, vec![])).contains("findings_schema must be 1"));
 }
 
+// ---- the contract's optional envelope fields: head and brief_sha256 ----
+
+const ENVELOPE: [(&str, &str); 2] = [
+    (
+        "head",
+        "77ece9d68e03b892ae95b4cfbf17828239dc0f75acf88dd65ff6460d1fa9adcf",
+    ),
+    (
+        "brief_sha256",
+        "1584e670abca44ac8ca752756a5abd90908970854f717512df80785fc87cdc56",
+    ),
+];
+
+#[test]
+fn a_v1_review_with_head_and_brief_sha256_gates_as_without_them() {
+    let r = repo();
+    let mut plain = review_v1(&r);
+    plain["findings"] = json!([complete("f1", "scope")]);
+    fail_question(&mut plain, "scope");
+    let mut with = plain.clone();
+    for (field, value) in ENVELOPE {
+        with[field] = json!(value);
+    }
+    let ctx = |v: &Value, extra: Vec<ContextRecord>| review_ctx(&r, v.clone(), extra);
+    // An undisposed blocking finding is refused the same way, with or without the fields.
+    assert_eq!(
+        review_denial(&r, with.clone(), vec![]),
+        review_denial(&r, plain.clone(), vec![])
+    );
+    // Disposed, both are allowed.
+    let disposed = || vec![disposition("f1", "rejected", "why", 5)];
+    allowed(&ask(
+        &r,
+        true,
+        "review",
+        "reviewed",
+        ctx(&plain, disposed()),
+    ));
+    allowed(&ask(&r, true, "review", "reviewed", ctx(&with, disposed())));
+    // Neither field is compared with anything: a head that is not the tree gates the same.
+    let mut odd = with.clone();
+    odd["head"] = json!("not the tree");
+    odd["brief_sha256"] = json!("");
+    allowed(&ask(&r, true, "review", "reviewed", ctx(&odd, disposed())));
+    // Each field alone is accepted too.
+    for (field, value) in ENVELOPE {
+        let mut one = plain.clone();
+        one[field] = json!(value);
+        allowed(&ask(&r, true, "review", "reviewed", ctx(&one, disposed())));
+    }
+    // A clean v1 review with the fields is allowed.
+    let mut clean = review_v1(&r);
+    for (field, value) in ENVELOPE {
+        clean[field] = json!(value);
+    }
+    allowed(&ask(&r, true, "review", "reviewed", ctx(&clean, vec![])));
+}
+
+#[test]
+fn a_v1_intent_check_with_head_and_brief_sha256_gates_as_without_them() {
+    let r = repo();
+    let mut plain = failed_check();
+    plain["findings_schema"] = json!(1);
+    plain["findings"] = json!([complete("f1", "use")]);
+    let mut with = plain.clone();
+    for (field, value) in ENVELOPE {
+        with[field] = json!(value);
+    }
+    assert_eq!(
+        check_denial(&r, check_ctx(with.clone(), vec![])),
+        check_denial(&r, check_ctx(plain.clone(), vec![]))
+    );
+    let disposed = || vec![check_disposition("f1", "rejected", "the goal is clear", 3)];
+    allowed(&check_answer(&r, check_ctx(plain, disposed())));
+    allowed(&check_answer(&r, check_ctx(with.clone(), disposed())));
+    // Not compared with anything.
+    with["head"] = json!("");
+    with["brief_sha256"] = json!("not a sha");
+    allowed(&check_answer(&r, check_ctx(with, disposed())));
+}
+
+#[test]
+fn a_v0_record_with_head_or_brief_sha256_is_refused() {
+    let r = repo();
+    for (field, value) in ENVELOPE {
+        let mut check = check_value();
+        check[field] = json!(value);
+        assert!(
+            check_denial(&r, check_ctx(check, vec![])).contains("need findings_schema: 1"),
+            "intent-check {field}"
+        );
+        let mut v0 = review(&r);
+        v0[field] = json!(value);
+        assert!(
+            review_denial(&r, v0, vec![]).contains("need findings_schema: 1"),
+            "review {field}"
+        );
+    }
+}
+
+/// A reviewer's return as Run S saved it (findings contract v1, with `head` and `brief_sha256`), appended unedited as
+/// an intent-check. Lean-change refused it before the two fields were accepted.
+#[test]
+fn a_saved_run_s_return_is_accepted_as_an_intent_check() {
+    let bytes = include_bytes!("../testdata/run-s-intent-check-round-1.json");
+    let saved: Value = serde_json::from_slice(bytes).unwrap();
+    assert!(saved["head"].is_string() && saved["brief_sha256"].is_string());
+    let r = repo();
+    let ctx = |extra| check_ctx(saved.clone(), extra);
+    // It parses: the only thing left to ask is the disposition of its three blocking findings.
+    assert!(check_denial(&r, ctx(vec![])).contains("needs a disposition"));
+    let disposed: Vec<ContextRecord> = ["f1", "f2", "f3"]
+        .iter()
+        .zip(3..)
+        .map(|(id, seq)| check_disposition(id, "rejected", "the intent settles it", seq))
+        .collect();
+    allowed(&check_answer(&r, ctx(disposed)));
+}
+
 #[test]
 fn both_packets_carry_the_bar_and_the_v1_example() {
     let r = repo();

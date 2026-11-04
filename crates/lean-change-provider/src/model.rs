@@ -375,6 +375,11 @@ pub struct Review {
     /// 1 for the shared finding fields (severity, obligation, component); absent in a record written before them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub findings_schema: Option<u8>,
+    /// The findings contract's optional envelope fields. `findings_schema: 1` only; no gate reads them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief_sha256: Option<String>,
     pub answers: Vec<Answer>,
     pub findings: Vec<Finding>,
 }
@@ -389,6 +394,11 @@ pub struct IntentCheck {
     pub fresh_context: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub findings_schema: Option<u8>,
+    /// The findings contract's optional envelope fields. `findings_schema: 1` only; no gate reads them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief_sha256: Option<String>,
     pub answers: Vec<Answer>,
     pub findings: Vec<Finding>,
 }
