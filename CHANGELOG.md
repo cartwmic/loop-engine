@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.41.0] - 2026-11-04
+
+### Fixed
+
+- Lean-change review and intent-check records with `findings_schema: 1` accept the shared findings contract's optional `head` and `brief_sha256` fields (#102). A reviewer's contract-shape return can be appended unedited. No gate reads either field.
+
+### Compatibility
+
+- Records without `findings_schema` that carry `head` or `brief_sha256` are refused, as they were before. Everything else reads and gates as in 0.40.0.
+
 ## [0.40.0] - 2026-11-04
 
 ### Changed
