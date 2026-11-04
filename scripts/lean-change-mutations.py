@@ -87,6 +87,7 @@ MUTATIONS = [
     ('a v1 review answers the seventh question', MODEL, '    if findings_schema.is_some() {\n        &QUESTIONS', '    if false {\n        &QUESTIONS'),
     ('a review without findings_schema keeps the original six questions', MODEL, '    if findings_schema.is_some() {\n        &QUESTIONS', '    if true {\n        &QUESTIONS'),
     ('a v1 finding needs a severity', EVALUATE, 'if findings.iter().any(|f| f.severity.is_none()) {', 'if false {'),
+    ('a record without findings_schema refuses head and brief_sha256', EVALUATE, '    if has_envelope_fields && findings_schema.is_none() {', '    if false {'),
     ('only schema 1 is accepted', EVALUATE, 'if findings_schema.is_some_and(|schema| schema != 1) {', 'if false {'),
     ('a blocking finding missing a field is demoted', MODEL, '        if missing.is_empty() {\n            Effective::Blocking', '        if true {\n            Effective::Blocking'),
     ('a note needs a disposition', EVALUATE, '        .filter(|f| f.effective(findings_schema) == Effective::Blocking)\n    {', '        .filter(|_| true)\n    {'),

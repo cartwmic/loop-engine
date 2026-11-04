@@ -1,0 +1,66 @@
+{
+  "findings_schema": 1,
+  "intent": "intent-1",
+  "reviewer": {"name": "ordinary-reviewer (Claude Opus 5.5 medium, intent check round 1)", "kind": "agent"},
+  "fresh_context": true,
+  "head": "77ece9d68e03b892ae95b4cfbf17828239dc0f75acf88dd65ff6460d1fa9adcf",
+  "brief_sha256": "1584e670abca44ac8ca752756a5abd90908970854f717512df80785fc87cdc56",
+  "answers": [
+    {"question": "use", "verdict": "fail", "note": "The owner gets direct writes, undo, jobs, settings and pair lists. What he cannot yet do: see again a pair list he did not answer. `pairs` lists only pairs not shown before, and nothing re-lists shown-but-unanswered pairs or says which list a reply's numbers refer to when two daily lists are open. Note f5."},
+    {"question": "edge", "verdict": "fail", "note": "Likeliest missed case: categorize writes a whole run's rows in one `transactions-batch-update` call (one record). If Michael fixes one row and then says \"undo today's categorizing\", the whole record is skipped as changed-since, and \"force\" overwrites his fix. Owner question 1 accepted record-level skip, so this is a note on granularity (f4)."},
+    {"question": "control", "verdict": "fail", "note": "Design 4's changed-since rule (\"a later message that is not from an undo of this record\") disagrees with the experiment that proved it (exp/journal.mjs compares the cell's current value with the record's after/before). Read literally, it skips earlier records of any multi-call action that touch the same cells. Blocking f1."},
+    {"question": "terms", "verdict": "fail", "note": "\"Uncategorized row\" can mean any row whose category is null (including on-budget transfers, off-budget rows and split parents) or the base's rule in src/reports/figures.ts:172-186, which leaves those out. Blocking f2. Also: the packet's Terms constraint drops the second line of two entries, so the packet never says that \"the log\" is `messages_crdt` or that the API keeps `db.sqlite`. INTENT-4.md lines 29-32 have them. This is a transcription gap only."},
+    {"question": "criteria-gap", "verdict": "fail", "note": "Design 9 has `pairs` remember a pair after printing it to the turn, not after the list reaches Michael. If the turn fails after `steward pairs` and before the post (a model error, a pod stop), the retry lists nothing, and the pair is never shown. fa06 and fa14 still pass. Blocking f3."},
+    {"question": "principles-gap", "verdict": "fail", "note": "The journal (src/journal/) is a new component. The principles table claims §1 to §3 (it imports nothing from the steward; pure functions behind one session port) and §5 (a contract). No criterion checks the boundary (the §2/§3/§7 gates) or requires a versioned contract file for the record-line and undo rules. Note f6."}
+  ],
+  "findings": [
+    {
+      "id": "f1",
+      "severity": "blocking",
+      "question": "control",
+      "text": "Which changed-since rule does Undo use? Design 4 says a record is skipped if any of its cells has a later message \"that is not from an undo of this record\". The proven experiment instead skips only when the cell's current value is neither the record's after nor its before. Recommend: state the value rule from the experiment, so a record conflicts when a cell's current value differs from what it wrote, after newer records of the same undo have been reverted.",
+      "obligation": "Goal: \"\\\"undo that\\\" puts back exactly what Actual changed\"; Design 4 (\"Undo takes one record or every record of one action (newest first)\"); fa03 (whole action, S2 = S0 for every EXPERIMENTS.md family); principle §13 (resolve tensions before building).",
+      "evidence": "Design 4's wording is message-origin based. The experiment it cites is value based: ~/tmp/steward-s-redesign/exp/journal.mjs:85-94 (`if (val !== c.after && !(c.before !== ABSENT && val === c.before))`). exp/results/e3-full.json, family transfer-pair-link-and-merge: both records write row e713bc46 (the counterpart) and the outflow's transferred_id. Under Design 4's literal rule, the merge's messages are later and are not \"from an undo of\" record 1, so record 1 is skipped and S2 != S0.",
+      "consequence": "A build that follows the text fails fa03 and must invent a rule. One plausible invention, exempting messages from later records of the same action, still passes fa03, but it lets \"undo the first one\" overwrite cells a later, still-applied merge changed. That breaks a transfer link with no changed-since warning. The literal rule instead makes \"undo that\" after a transfer merge, or after two edits to one transaction in one message, revert only part of the action and blame the steward's own write as a conflict.",
+      "component": "Journal Undo, changed-since check"
+    },
+    {
+      "id": "f2",
+      "severity": "blocking",
+      "question": "terms",
+      "text": "Does \"every uncategorized row\" for `steward categorize` keep the base rule? The base rule leaves out split parents, rows linked as transfers, rows whose payee is a transfer payee, and off-budget accounts. Or does it mean every row with a null category? Recommend: keep the base rule (`uncategorizedTransactions`, with split parts now included) and add a transfer row and an off-budget row to fa05's cases.",
+      "obligation": "Design 8 / fa05 (\"writes System One's answer ... to every uncategorized row\"); data corruption always blocks (reviewer brief §5).",
+      "evidence": "Intent: \"every uncategorized row (any date, any confidence, person envelopes)\". It is silent on transfers, off-budget accounts and split parents. The base defines the term narrowly at src/reports/figures.ts:172-186 (`transferId === null`, not a transfer payee, not off-budget, `!isParent`), and Design 14 removes the gate and policy code around it. fa05's cases are old, low-confidence, person envelopes and a split part. None is a transfer or an off-budget row.",
+      "consequence": "A build that selects rows with a null category passes fa05. Each daily run then writes a #steward-review category onto his on-budget transfers (checking to savings) and off-budget rows. That turns transfers into budget spending and skews the budget and the weekly report every day, until he notices and undoes it.",
+      "component": "steward categorize command (row selection)"
+    },
+    {
+      "id": "f3",
+      "severity": "blocking",
+      "question": "criteria-gap",
+      "text": "When is a pair counted as shown? Design 9 says `pairs` remembers pairs \"after printing\". Printing goes to the agent's turn, not to Michael. Recommend: a pair counts as shown only once the numbered list is posted. For example, `steward pairs` re-lists remembered pairs that are not yet posted, or the post marks them. Add an fa06 or fa14 case: the turn fails after `steward pairs`, and the retry still posts the pair.",
+      "obligation": "Goal (daily pass includes the pair list); Design 7 (\"if pairs came back, post one numbered list\"); fa14 (\"categorize and pairs are safe to rerun\"); the design's own aim, DESIGN.md:176-178 and the principles table §10: a stop \"lists it once more ... rather than never listing it\".",
+      "evidence": "Design 9: \"`pairs` prints duplicate and transfer pairs not shown before and remembers them in `agent/pairs.jsonl` after printing\". fa06 checks only that \"a second run lists nothing again\". fa14 retries an interrupted run and asserts pairs is safe to rerun. Neither covers a turn that dies between the command and the post.",
+      "consequence": "In the daily job, a model error or pod stop after `steward pairs` and before the post is an ordinary failure: c07 exists for model outages, and retries are configured. The retry's `steward pairs` returns nothing, so the duplicate or transfer pair is never offered. The duplicate keeps double-counting spending, and the unlinked transfer keeps showing as spending, with no message to Michael. fa06 and fa14 both pass.",
+      "component": "Pair list (steward pairs memory and daily-turn retry)"
+    },
+    {
+      "id": "f4",
+      "severity": "note",
+      "question": "edge",
+      "text": "How many rows go in each categorize record? If it is one `transactions-batch-update` call for the whole run, one row he edits later makes \"undo today's categorizing\" skip every row, and \"force\" overwrites his edit. One call per row (or per small batch) keeps the skip to the row he touched. This is a mechanism choice the plan can settle. Owner question 1 already accepts record-level skip."
+    },
+    {
+      "id": "f5",
+      "severity": "note",
+      "question": "use",
+      "text": "There is no way to see an unanswered pair list again. `pairs` lists only pairs not shown before, and Design 9 says nothing about pairs that were shown but never answered or declined, or about which list \"merge all except 2\" refers to when two daily lists are open. The agent can read agent/pairs.jsonl with bash, so this may be enough as judgment. Worth one prompt line."
+    },
+    {
+      "id": "f6",
+      "severity": "note",
+      "question": "principles-gap",
+      "text": "The new journal component (src/journal/record.ts, copy.ts, undo.ts) is claimed under §1 to §3 and §5, but no criterion checks it. There is no dependency check that src/journal imports nothing from the steward (the §2/§3/§7 gate for new components), and no versioned contract file for the record-line schema and undo rules. fa03 serves as its conformance suite (§6)."
+    }
+  ]
+}

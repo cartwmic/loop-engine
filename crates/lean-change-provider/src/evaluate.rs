@@ -307,6 +307,7 @@ fn review_form(record: &ContextRecord, intent: &Intent) -> Result<Review, String
         intent,
         (who, fresh),
         review.findings_schema,
+        review.head.is_some() || review.brief_sha256.is_some(),
         &review.answers,
         &review.findings,
     )?;
@@ -332,6 +333,7 @@ fn intent_check_form(
         &intent,
         (who, fresh),
         check.findings_schema,
+        check.head.is_some() || check.brief_sha256.is_some(),
         &check.answers,
         &check.findings,
     )?;
@@ -402,11 +404,17 @@ fn form(
     intent: &Intent,
     (reviewer, fresh_context): (&Actor, bool),
     findings_schema: Option<u8>,
+    has_envelope_fields: bool,
     answers: &[Answer],
     findings: &[Finding],
 ) -> Result<(), String> {
     if findings_schema.is_some_and(|schema| schema != 1) {
         return Err("findings_schema must be 1 or absent".into());
+    }
+    // `head` and `brief_sha256` are the findings contract's optional envelope fields. They are accepted and nothing
+    // reads them.
+    if has_envelope_fields && findings_schema.is_none() {
+        return Err("head and brief_sha256 need findings_schema: 1".into());
     }
     if reviewer.name.trim().is_empty()
         || reviewer
