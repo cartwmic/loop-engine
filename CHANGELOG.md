@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.40.0] - 2026-11-04
+
+### Changed
+
+- Lean-change review and intent-check findings use the shared finding fields of `findings-contract.md` v1 (#100). A finding has `severity` `blocking` or `note`. A blocking finding stays blocking only with a nonblank `obligation`, `evidence` and `consequence`; otherwise it is read as a note, with the reason recorded. Notes need no disposition. Every blocking finding names its `component`. The conformance fixture is vendored and pinned.
+- The review packet gains "Do not invent. Pass every question if nothing material remains", the short form of the bar, and a seventh review question, `smaller-design`: "Is there a materially smaller design that meets the intent, including what the systems you call already do? Name it with evidence. If no materially smaller design exists, pass." The intent check keeps its six questions. The `edge-cases` question now asks for cases a user would likely hit.
+- A v1 review with no effectively-blocking finding accepts a later edit after re-verification, without a fixed finding.
+- The outcome map shows notes apart from blocking findings and labels a demoted finding with its reason. The lean-change skill points further review rounds to the shared reviewer brief and the review-round rule.
+
+### Compatibility
+
+- Review and intent-check records carry `findings_schema: 1` with `severity`; records without it read as before. A reviewer using the new packet returns v1.
+- A record without `findings_schema` is checked against the original six review questions, and gates exactly as in 0.39.0. Such a record that carries `severity`, `obligation` or `component` is refused.
+
 ## [0.39.0] - 2026-11-01
 
 ### Fixed
