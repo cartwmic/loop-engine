@@ -63,12 +63,13 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    ```
 
    The reviewer returns one JSON object; append it as kind `intent-check`. Each question they could not settle from the
-   intent fails with a finding whose text is a concrete question for the owner. The first well-formed check is the
-   check; a second cannot replace it. For each finding, either change the intent (`fixed`, and append a new intent record
+   intent fails with a finding whose text is a concrete question for the owner. The engine records one intent check per
+   intent, the first well-formed one; a later one cannot replace it. The check carries `findings_schema: 1`: each finding has a
+   `severity`, and only an effectively-blocking finding needs a disposition (see the review below). For each such finding, either change the intent (`fixed`, and append a new intent record
    that carries the fix) or reject it with a reason you would say to the owner. A `criteria-gap` finding names a delivery
    that passes every check yet misses the goal; fix it with a criterion whose check fails for that delivery. A `principles-gap`
    finding names a principles section that applies and has no criterion or constraint; fix it with that criterion or constraint. Append one
-   `finding-disposition` per finding, with `review` set to the `intent-check` record id. The check runs once per run; a later revision is not re-checked.
+   `finding-disposition` per effectively-blocking finding, with `review` set to the `intent-check` record id. Notes need none. The check runs once per run; a later revision is not re-checked.
 2. **intent-approval.** Show the owner the intent verbatim, with the check's findings and how each was disposed (profile b), and ask: "What do you expect that is not listed?" Their answer may change the intent. Append their exact words (do not edit them):
 
    ```sh
@@ -101,17 +102,22 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    loop-engine ... --json show --view full RUN | lean-change review-packet > "$WORK/packet.md"
    ```
 
-   The reviewer returns one JSON object. Append it as kind `review`. The first well-formed review is the
-   review; a second one cannot replace it. Then for each finding, either fix it
-   or reject it with a reason, and append one `finding-disposition` per finding:
+   The reviewer returns one JSON object with `findings_schema: 1` and answers all seven questions. Append it as kind
+   `review`. The engine records one review per intent, the first well-formed one; a later one cannot replace it. Any
+   further review round is driver procedure: it follows `~/.local/share/agent-harness/reviewer-brief.md` and the
+   review-round rule that brief names (playbook 58fdb05d), and the engine does not run it.
+   Each finding has a `severity`. A finding is effectively blocking only if it is `blocking` and has an `obligation`,
+   `evidence` and `consequence`; a blocking finding that lacks one is read as a note, with the reason
+   `demoted: missing ...`. Notes need no disposition. For each effectively-blocking finding, either fix it
+   or reject it with a reason, and append one `finding-disposition`:
 
    ```sh
    loop-engine ... append RUN finding-disposition '{"review": "<review record id>", "finding": "f1",
      "disposition": "fixed", "reason": "..."}'
    ```
 
-   If you changed code, run verify again and append the new verification. Request `reviewed`. There is one
-   review; do not ask for a second.
+   If you changed code, run verify again and append the new verification. Request `reviewed`. If the review has no
+   effectively-blocking finding, a changed tree needs only the new verification, not a `fixed` finding.
 7. **end.** Report the criteria, their results, and each finding with its disposition. Then make the owner's page: see [Outcome map](#outcome-map).
 
 `revise` from implement, verify and review goes back (to explore, implement and implement). Going back is free; the
@@ -245,8 +251,9 @@ exit code. Each criterion that is not `none` adds one run
 ## Rules
 
 - The reviewer must not be you and must be in a fresh context. `fresh_context: true` is a claim; make it true.
-- The intent check has six fixed questions and the review has six, including whether the diff breaks the owner's design principles.
+- The intent check has six fixed questions and the review has seven (six in a record without `findings_schema`), including whether the diff breaks the owner's design principles and whether a materially smaller design exists.
   Do not shorten or reword them. Do not pre-answer them for the reviewer.
-- Findings are not nits: each has an obligation, evidence and a consequence. Reject a finding only with a reason you would say to the owner.
+- The engine records one review (and one intent check) per intent, the first well-formed one. A further review round is driver procedure that follows `~/.local/share/agent-harness/reviewer-brief.md` and the review-round rule it names (playbook 58fdb05d).
+- A blocking finding needs an obligation, evidence and a consequence a user would hit in ordinary single-user use; everything else is a note, and a note needs no disposition. Code checks that the three fields are present, not that they are true. Fix or reject each effectively-blocking finding, and reject only with a reason you would say to the owner.
 - Never write a `verification` record by hand. Never copy an owner decision from an earlier intent.
 - The engine never runs your checks or agents. Everything outside the records is yours.

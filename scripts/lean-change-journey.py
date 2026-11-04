@@ -17,6 +17,8 @@ from external_work_driver import engine_call
 PRINCIPLES = '# Principles\n1. Compose small parts.\n'
 GREET_CHECK = 'out=$(sh app.sh Bob)\n[ "$out" = "Hello, Bob!" ] || { echo "got: $out"; exit 1; }\necho ok\n'
 QUESTIONS = ['intent', 'scope', 'edge-cases', 'checks', 'docs', 'principles']
+# A review with findings_schema 1 also answers the seventh question; a record without it answers the six above.
+V1_QUESTIONS = QUESTIONS + ['smaller-design']
 CHECK_QUESTIONS = ['use', 'edge', 'control', 'terms', 'criteria-gap', 'principles-gap']
 OWNER = {'name': 'owner', 'kind': 'human'}
 WORKER = {'name': 'worker', 'kind': 'script'}
@@ -33,7 +35,7 @@ OUTCOME_GOAL = 'Greet Bob with "Hello, Bob!" & say <b>hi</b>.'
 GUARD_REASON = 'a guard on the proof file, which the old tree cannot inform'
 REJECT_REASON = 'The goal names no empty name, so the criteria cover it.'
 FIX_REASON = 'The intent now names the exact greeting.'
-SCENARIOS = ['b', 'c', 'hard', 'old-vs-new', 'parallel', 'outcome-map', 'outcome-map-skill', 'outcome-map-fixture', 'outcome-map-browser']
+SCENARIOS = ['b', 'c', 'hard', 'old-vs-new', 'parallel', 'outcome-map', 'outcome-map-skill', 'outcome-map-fixture', 'outcome-map-browser', 'findings-v1']
 # The stand-in full gate logs every call, then fails when the finished steps word their files differently: each step alone passes, the joined tree does not.
 GATE = ('printf "%s %s\\n" "$(pwd -P)" "$(git rev-parse HEAD)" >> "$GATE_LOG"\n'
         'words=$(sed "s/^[a-z]*: //" one.txt two.txt | grep -vx todo | sort -u | wc -l)\n'
@@ -69,6 +71,23 @@ def intent_check(reviewer='fresh-reviewer', fail=None):
                      'consequence': 'A delivery would pick any text.'}]
     return {'intent': 'intent-1', 'reviewer': {'name': reviewer, 'kind': 'agent'}, 'fresh_context': True,
             'answers': answers, 'findings': findings}
+
+
+def v1_review(tree, failed, findings, reviewer='fresh-reviewer'):
+    """A review with findings_schema 1: all seven answers; each question in `failed` fails."""
+    answers = [{'question': q, 'verdict': 'fail' if q in failed else 'pass', 'note': 'looked'} for q in V1_QUESTIONS]
+    return {'findings_schema': 1, 'intent': 'intent-1', 'tree': tree, 'reviewer': {'name': reviewer, 'kind': 'agent'},
+            'fresh_context': True, 'answers': answers, 'findings': findings}
+
+
+def v1_findings():
+    """One complete blocking finding with a component, one blocking finding missing its consequence, and one note."""
+    return [{'id': 'f1', 'severity': 'blocking', 'question': 'principles', 'text': 'Greeting is hard-coded.',
+             'obligation': 'Principles section 1: compose small parts.', 'evidence': 'greeting.txt line 1',
+             'consequence': 'Changing the greeting needs a code edit.', 'component': 'greeting file'},
+            {'id': 'f2', 'severity': 'blocking', 'question': 'scope', 'text': 'A second file was touched.',
+             'obligation': 'Constraint: touch only greeting.txt.', 'evidence': 'notes.txt in the diff', 'component': 'diff'},
+            {'id': 'n1', 'severity': 'note', 'question': 'docs', 'text': 'The greeting could be mentioned in a README.'}]
 
 
 class Journey:
@@ -1023,6 +1042,96 @@ def outcome_map_skill_scenario(engine, provider, skill, work):
     assert log('viz') == f'publish {out}\n', log('viz')
 
 
+def v1_run_to_review(engine, provider, work, run_id):
+    """Profile b with a v1 intent check whose only finding is a note; the run stops in review with a current verification."""
+    j, repo = greet_run(engine, provider, work, 'b', run_id)
+    j.append('intent-1', 'intent', greet_intent(LABEL_CRITERIA[:2], ['Touch only app.sh.']))
+    packet = j.tool('intent-packet', j.show_text())
+    assert '"severity": "blocking|note"' in packet and '"findings_schema": 1' in packet, packet
+    check = intent_check(fail='terms')
+    check['findings_schema'] = 1
+    check['findings'] = [{'id': 'f1', 'severity': 'note', 'question': 'terms', 'text': 'Which greeting text do you want?'}]
+    j.append('chk-1', 'intent-check', check)
+    j.event('intent-ready')  # a note needs no disposition
+    approve(j, 'intent-1')
+    (repo / 'app.sh').write_text('printf "Hello, %s!\\n" "$1"\n')
+    fresh = j.verify()
+    j.append('v-1', 'verification', fresh)
+    j.event('verified')
+    assert j.state() == 'review'
+    return j, repo, fresh
+
+
+def keep_record(j, keep, name, record_id):
+    """Keeps the review exactly as the run holds it: the record the engine stored, with its envelope."""
+    if keep is None:
+        return
+    record = next(r for r in j.call('show', '--view', 'full', j.run_id)['context'] if r['id'] == record_id)
+    keep.mkdir(parents=True, exist_ok=True)
+    (keep / f'{name}.json').write_text(json.dumps(record['data'], indent=2) + '\n')
+    (keep / f'{name}-record.json').write_text(json.dumps(record, indent=2) + '\n')
+    print(f'lean-change journey kept {keep / (name + ".json")}')
+
+
+def findings_v1_scenario(engine, provider, work, keep):
+    # bookends:LE-207 bookends:LE-209 bookends:LE-212 — findings_schema 1: severity, notes, demotion, the seventh question,
+    # a changed tree after a review of notes alone, and the page that shows notes apart.
+    first = work / 'blocking'
+    first.mkdir()
+    j, repo, fresh = v1_run_to_review(engine, provider, first, 'lean-findings-v1')
+    packet = j.tool('review-packet', j.show_text())
+    for needle in ['severity', 'Do not invent', 'If the intent and the checks settle a question, pass it.', 'smaller-design',
+                   'Pass every question if nothing material remains.', 'names its component']:
+        assert needle in packet, needle
+    sentence = re.search(r'If the intent and the checks settle a question.*?remains\.', packet).group(0)
+    print(f'lean-change journey review-packet says: {sentence}')
+    j.append('rev-1', 'review', v1_review(fresh['tree'], ['principles', 'scope', 'docs'], v1_findings()))
+    out = j.refused('reviewed', 'review-incomplete', 'review')
+    # Only the complete blocking finding needs a disposition; the one missing its consequence and the note do not.
+    assert 'finding f1 needs a disposition' in out and 'f2' not in out and 'n1' not in out, out
+    print(f'lean-change journey reviewed refused: {re.search(r"finding f1 needs a disposition[^\"]*", out).group(0)}')
+    page = section_of(outcome_page(provider, j.show_text()))
+    notes_heading = 'Notes: not blocking, no response needed'
+    assert notes_heading in page, page
+    before, after = page.split(notes_heading)
+    assert 'id="rev-1-f1"' in before and 'id="rev-1-f2"' not in before and 'id="rev-1-n1"' not in before, page
+    assert 'id="rev-1-f2"' in after and 'id="rev-1-n1"' in after and 'id="rev-1-f1"' not in after, page
+    found = rows(page, 'om-finding')
+    assert 'note (demoted: missing consequence)' in summary_text(found['rev-1-f2']), summary_text(found['rev-1-f2'])
+    assert summary_text(found['rev-1-n1']).endswith(' note'), summary_text(found['rev-1-n1'])
+    assert 'Part of the system: greeting file' in visible(found['rev-1-f1']), visible(found['rev-1-f1'])
+    assert '1 issue was raised: 0 fixed, 0 rejected, 1 open.' in summary_of(page) and '3 notes were left that need no response' in summary_of(page), summary_of(page)
+    print(f'lean-change journey outcome-map: {summary_of(page)[summary_of(page).index("1 issue"):]}')
+    state = visible(re.search(r'<span class="om-disposition">(.*?)</span>', found['rev-1-f2'], re.S).group(1))
+    print(f'lean-change journey outcome-map shows "{notes_heading}" with rev-1-f2 as "{state}"')
+    j.append('disp-f1', 'finding-disposition', {'review': 'rev-1', 'finding': 'f1', 'disposition': 'rejected',
+                                                'reason': 'The greeting is fixed by the intent.'})
+    j.event('reviewed')
+    assert j.state() == 'end'
+    print('lean-change journey reviewed granted once f1 was disposed')
+    keep_record(j, keep, 'v1-review', 'rev-1')
+
+    # A review of notes alone, then a change to the tree: accepted after the new verification, no fixed finding needed.
+    second = work / 'notes-only'
+    second.mkdir()
+    j, repo, fresh = v1_run_to_review(engine, provider, second, 'lean-findings-v1-notes')
+    notes = [{'id': 'n1', 'severity': 'note', 'question': 'docs', 'text': 'The greeting could be mentioned in a README.'}]
+    # A review answers seven questions: a v1 review with six is not well-formed, and the first well-formed one counts.
+    short = v1_review(fresh['tree'], ['docs'], notes, 'six-answer-reviewer')
+    short['answers'].pop()
+    j.append('rev-six', 'review', short)
+    out = j.refused('reviewed', 'review-incomplete', 'review')
+    assert 'smaller-design is unanswered' in out, out
+    j.append('rev-1', 'review', v1_review(fresh['tree'], ['docs'], notes))
+    (repo / 'notes.txt').write_text('late edit\n')
+    out = j.refused('reviewed', 'verification-incomplete', 'review')
+    assert 'stale' in out, out
+    j.append('v-2', 'verification', j.verify())
+    j.event('reviewed')
+    assert j.state() == 'end'
+    print('lean-change journey notes-only review accepted after a tree change and re-verification')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--engine')
@@ -1030,12 +1139,15 @@ def main():
     parser.add_argument('--skill', default=str(DEFAULT_SKILL))
     parser.add_argument('--only', choices=SCENARIOS, help='run one scenario')
     parser.add_argument('--chromium', help='headless Chromium for outcome-map-browser; without it that scenario is skipped')
+    parser.add_argument('--keep-records', help='directory to keep the findings-v1 review record in (the record as appended, and as the run stores it)')
     parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args()
     # Bare invocation is the recognized CI collection form; full proof uses the parameterized run below.
     if args.self_test or len(sys.argv) == 1:
         assert [q for q in QUESTIONS] == sorted(set(QUESTIONS), key=QUESTIONS.index)
         assert len(intent()['criteria']) == 2 and review('t', True)['findings'] and intent_check(fail='terms')['findings']
+        assert len(v1_review('t', [], v1_findings())['answers']) == 7 and len(review('t', False)['answers']) == 6
+        assert [f.get('severity') for f in v1_findings()] == ['blocking', 'blocking', 'note'] and 'consequence' not in v1_findings()[1]
         print('lean-change journey self-test passed')
         return
     for name in ['engine', 'provider']:
@@ -1052,6 +1164,7 @@ def main():
         ('outcome-map-skill', lambda w: outcome_map_skill_scenario(engine, provider, skill, w)),
         ('outcome-map-fixture', lambda w: outcome_map_fixture_scenario(provider, w)),
         ('outcome-map-browser', lambda w: outcome_map_browser_scenario(provider, args.chromium, w)),
+        ('findings-v1', lambda w: findings_v1_scenario(engine, provider, w, Path(args.keep_records).resolve() if args.keep_records else None)),
     ]
     for name, action in scenarios:
         if args.only not in (None, name):

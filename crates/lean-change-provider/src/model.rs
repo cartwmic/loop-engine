@@ -8,15 +8,26 @@ use std::path::Path;
 
 pub const WORKFLOW_ID: &str = "lean-change";
 
-/// The six fixed review questions: (id, text).
-pub const QUESTIONS: [(&str, &str); 6] = [
+/// The seven fixed review questions: (id, text). A review without `findings_schema` is checked against the first six
+/// only (`review_questions`), so records written before `smaller-design` existed still gate as they did.
+pub const QUESTIONS: [(&str, &str); 7] = [
     ("intent", "Does the change meet the approved intent: the goal, every constraint and every criterion? Name any that is not met."),
     ("scope", "Does the diff do only what the intent asks? Name any change the intent does not require."),
-    ("edge-cases", "For each criterion, which edge and failure cases can still break it, and does the code or a check handle them? Name an unhandled case with a concrete input."),
+    ("edge-cases", "For each criterion, which edge or failure cases would a user likely hit that can still break it, and does the code or a check handle them? Name an unhandled case with a concrete input. If there is none, pass."),
     ("checks", "Does each criterion's check exercise the criterion from outside, the way a user would, and fail if the criterion were not met? Name any check that mirrors the implementation or cannot fail."),
     ("docs", "Are the docs, help text, examples and contracts that the change touches or invalidates updated? Name any that now say something false. If the repository keeps a living PRD, name each requirement the change adds, changes or relies on, and the check that proves it; a requirement that no check proves is a finding."),
     ("principles", "Against the owner's design principles (full text in the packet; sha256 in the profile): does the diff violate one? The Gate lines (sections 2, 3 and 7) apply to new components and new cross-component boundaries, not to small changes inside an existing component. Cite the section, the evidence in the diff and the consequence. A finding without an obligation, evidence and consequence is not a finding."),
+    ("smaller-design", "Is there a materially smaller design that meets the intent, including what the systems you call already do? Name it with evidence. If no materially smaller design exists, pass."),
 ];
+
+/// The questions a review is checked against: all seven for `findings_schema: 1`, the original six without it.
+pub fn review_questions(findings_schema: Option<u8>) -> &'static [(&'static str, &'static str)] {
+    if findings_schema.is_some() {
+        &QUESTIONS
+    } else {
+        &QUESTIONS[..6]
+    }
+}
 
 /// The six fixed intent-check questions: (id, text). A failed one carries the concrete question for the owner.
 pub const INTENT_QUESTIONS: [(&str, &str); 6] = [
@@ -361,6 +372,9 @@ pub struct Review {
     pub tree: String,
     pub reviewer: Actor,
     pub fresh_context: bool,
+    /// 1 for the shared finding fields (severity, obligation, component); absent in a record written before them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub findings_schema: Option<u8>,
     pub answers: Vec<Answer>,
     pub findings: Vec<Finding>,
 }
@@ -373,6 +387,8 @@ pub struct IntentCheck {
     pub intent: String,
     pub reviewer: Actor,
     pub fresh_context: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub findings_schema: Option<u8>,
     pub answers: Vec<Answer>,
     pub findings: Vec<Finding>,
 }
@@ -398,8 +414,72 @@ pub struct Finding {
     pub id: String,
     pub question: String,
     pub text: String,
-    pub evidence: String,
-    pub consequence: String,
+    /// `findings_schema: 1` only. Required there; a note may leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<Severity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obligation: Option<String>,
+    /// Required in a record without `findings_schema`; optional on a note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consequence: Option<String>,
+    /// The part of the system the finding is in, in the reviewer's own words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    Blocking,
+    Note,
+}
+
+/// What a finding counts as. Computed on read; never written back.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Effective {
+    Blocking,
+    /// `demoted_reason` is `demoted: missing <fields>` for a blocking finding that lacked a field.
+    Note {
+        demoted_reason: Option<String>,
+    },
+}
+
+fn present(field: &Option<String>) -> bool {
+    field.as_deref().is_some_and(|f| !f.trim().is_empty())
+}
+
+impl Finding {
+    /// Without `findings_schema` every finding is blocking, as it always was. With schema 1 a finding is blocking only
+    /// if its severity is blocking and its obligation, evidence and consequence are all nonblank; otherwise it is a
+    /// note, and a blocking one that lacked a field says which (in that order).
+    pub fn effective(&self, findings_schema: Option<u8>) -> Effective {
+        if findings_schema.is_none() {
+            return Effective::Blocking;
+        }
+        if self.severity != Some(Severity::Blocking) {
+            return Effective::Note {
+                demoted_reason: None,
+            };
+        }
+        let missing: Vec<&str> = [
+            ("obligation", &self.obligation),
+            ("evidence", &self.evidence),
+            ("consequence", &self.consequence),
+        ]
+        .into_iter()
+        .filter(|(_, field)| !present(field))
+        .map(|(name, _)| name)
+        .collect();
+        if missing.is_empty() {
+            Effective::Blocking
+        } else {
+            Effective::Note {
+                demoted_reason: Some(format!("demoted: missing {}", missing.join(", "))),
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -89,8 +89,14 @@ pub fn section(
     }
     if let Some(findings) = &findings {
         html.push_str("<h3>Issues raised, and how each was settled</h3>\n");
-        for row in findings {
+        for row in findings.iter().filter(|r| !r.is_note()) {
             html.push_str(&finding_html(row));
+        }
+        if findings.iter().any(FindingRow::is_note) {
+            html.push_str("<h3>Notes: not blocking, no response needed</h3>\n");
+            for row in findings.iter().filter(|r| r.is_note()) {
+                html.push_str(&finding_html(row));
+            }
         }
     }
     html.push_str("</section>");
@@ -353,8 +359,16 @@ fn old_expectation_text(expect: Expect) -> &'static str {
 struct FindingRow {
     id: String,
     finding: Finding,
+    effective: Effective,
     question: Option<&'static str>,
     disposition: Option<Disposition>,
+}
+
+impl FindingRow {
+    /// A note is shown apart from the blocking findings and needs no disposition.
+    fn is_note(&self) -> bool {
+        matches!(self.effective, Effective::Note { .. })
+    }
 }
 
 /// Every finding of every intent-check and review record, in context order.
@@ -373,7 +387,8 @@ fn finding_rows(context: &[Value]) -> Vec<FindingRow> {
         let Some(record_id) = record["id"].as_str() else {
             continue;
         };
-        for finding in findings_of(record) {
+        let (schema, findings) = findings_of(record);
+        for finding in findings {
             let disposition = dispositions
                 .iter()
                 .filter(|(_, d)| d.review == record_id && d.finding == finding.id)
@@ -381,6 +396,7 @@ fn finding_rows(context: &[Value]) -> Vec<FindingRow> {
                 .map(|(_, d)| d.clone());
             rows.push(FindingRow {
                 id: format!("{record_id}-{}", finding.id),
+                effective: finding.effective(schema),
                 question: question_text(
                     record["kind"].as_str().unwrap_or_default(),
                     &finding.question,
@@ -393,16 +409,15 @@ fn finding_rows(context: &[Value]) -> Vec<FindingRow> {
     rows
 }
 
-/// The findings of an intent-check or review record. Other records, and records that do not parse, have none.
-fn findings_of(record: &Value) -> Vec<Finding> {
+/// The `findings_schema` and findings of an intent-check or review record. Other records, and records that do not
+/// parse, have none.
+fn findings_of(record: &Value) -> (Option<u8>, Vec<Finding>) {
     let parsed = match record["kind"].as_str() {
-        Some("intent-check") => {
-            serde_json::from_value::<IntentCheck>(record["data"].clone()).map(|c| c.findings)
-        }
-        Some("review") => {
-            serde_json::from_value::<Review>(record["data"].clone()).map(|r| r.findings)
-        }
-        _ => return Vec::new(),
+        Some("intent-check") => serde_json::from_value::<IntentCheck>(record["data"].clone())
+            .map(|c| (c.findings_schema, c.findings)),
+        Some("review") => serde_json::from_value::<Review>(record["data"].clone())
+            .map(|r| (r.findings_schema, r.findings)),
+        _ => return (None, Vec::new()),
     };
     parsed.unwrap_or_default()
 }
@@ -432,9 +447,25 @@ fn disposition_name(row: &FindingRow) -> &'static str {
 }
 
 /// The summary's sentence on the issues: how many were raised and how each was settled, with a link to each.
-fn findings_sentence(rows: &[FindingRow]) -> String {
+fn findings_sentence(all: &[FindingRow]) -> String {
+    let rows: Vec<&FindingRow> = all.iter().filter(|r| !r.is_note()).collect();
+    let notes: Vec<&FindingRow> = all.iter().filter(|r| r.is_note()).collect();
+    let notes_sentence = if notes.is_empty() {
+        String::new()
+    } else {
+        let links: Vec<String> = notes.iter().map(|r| link(&r.id)).collect();
+        let (count, verb) = if notes.len() == 1 {
+            ("1 note was".to_owned(), "needs")
+        } else {
+            (format!("{} notes were", notes.len()), "need")
+        };
+        format!(
+            " {count} left that {verb} no response: {}.",
+            links.join(", ")
+        )
+    };
     if rows.is_empty() {
-        return "No issues were raised.".into();
+        return format!("No issues were raised.{notes_sentence}");
     }
     let count = |state: &str| rows.iter().filter(|r| disposition_name(r) == state).count();
     let (issues, verb) = if rows.len() == 1 {
@@ -450,7 +481,7 @@ fn findings_sentence(rows: &[FindingRow]) -> String {
         count("open")
     );
     let links: Vec<String> = rows.iter().map(|r| link(&r.id)).collect();
-    format!("{counts} {}", links.join(", "))
+    format!("{counts} {}{notes_sentence}", links.join(", "))
 }
 
 fn finding_html(row: &FindingRow) -> String {
@@ -459,17 +490,39 @@ fn finding_html(row: &FindingRow) -> String {
         Some(text) => format!("{}: {}", esc(&finding.question), esc(text)),
         None => esc(&finding.question),
     };
-    let state = disposition_name(row);
-    let settled = match &row.disposition {
-        None => "still open.".to_owned(),
-        Some(d) => format!("{state}: {}", esc(&d.reason)),
+    // A note has no disposition to show; it says it is a note and, when it was blocking, why it is not.
+    let (state, settled) = match (&row.effective, &row.disposition) {
+        (Effective::Note { demoted_reason }, _) => (
+            demoted_reason
+                .as_deref()
+                .map_or_else(|| "note".to_owned(), |reason| format!("note ({reason})")),
+            None,
+        ),
+        (Effective::Blocking, None) => ("open".to_owned(), Some("still open.".to_owned())),
+        (Effective::Blocking, Some(d)) => (
+            disposition_name(row).to_owned(),
+            Some(format!("{}: {}", disposition_name(row), esc(&d.reason))),
+        ),
     };
+    let optional = |label: &str, value: &Option<String>| {
+        value
+            .as_deref()
+            .filter(|v| !v.trim().is_empty())
+            .map(|v| format!("<p><b>{label}:</b> {}</p>\n", esc(v)))
+            .unwrap_or_default()
+    };
+    let settled = settled
+        .map(|text| format!("<p><b>How it was settled:</b> {text}</p>\n"))
+        .unwrap_or_default();
     format!(
-        "<details id=\"{id}\" class=\"om-finding\">\n<summary><span class=\"om-id\">{id}</span> <span class=\"om-question\">{question}</span> <span class=\"om-disposition\">{state}</span></summary>\n<p><b>Issue:</b> {text}</p>\n<p><b>Evidence:</b> {evidence}</p>\n<p><b>Why it mattered:</b> {consequence}</p>\n<p><b>How it was settled:</b> {settled}</p>\n</details>\n",
+        "<details id=\"{id}\" class=\"om-finding\">\n<summary><span class=\"om-id\">{id}</span> <span class=\"om-question\">{question}</span> <span class=\"om-disposition\">{state}</span></summary>\n<p><b>Issue:</b> {text}</p>\n{component}{obligation}{evidence}{consequence}{settled}</details>\n",
         id = esc(&row.id),
+        state = esc(&state),
         text = esc(&finding.text),
-        evidence = esc(&finding.evidence),
-        consequence = esc(&finding.consequence),
+        component = optional("Part of the system", &finding.component),
+        obligation = optional("Obligation", &finding.obligation),
+        evidence = optional("Evidence", &finding.evidence),
+        consequence = optional("Why it mattered", &finding.consequence),
     )
 }
 
@@ -833,6 +886,71 @@ mod tests {
             "changed as intended: failed on the old code, passes now"
         );
         assert_eq!(label_of(&html, "c8"), "fails on the new code");
+    }
+
+    #[test]
+    fn notes_show_apart_from_blocking_findings_and_a_demoted_one_says_why() {
+        let reviewer = json!({"name": "reviewer", "kind": "agent"});
+        let complete = json!({"id": "f1", "severity": "blocking", "question": "scope", "text": "extra file", "obligation": "scope", "evidence": "a.txt:1", "consequence": "a user hits it", "component": "packet"});
+        let demoted = json!({"id": "f2", "severity": "blocking", "question": "docs", "text": "stale doc", "obligation": "docs", "evidence": "README:3", "component": "docs"});
+        let note = json!({"id": "n1", "severity": "note", "question": "checks", "text": "a wish"});
+        let context = vec![
+            intent_record("Ship the thing.", vec![criterion("c1", None)]),
+            record(
+                "review-1",
+                "review",
+                2,
+                json!({"findings_schema": 1, "intent": "intent-1", "tree": "t", "reviewer": reviewer, "fresh_context": true, "answers": [], "findings": [complete, demoted, note]}),
+            ),
+            record(
+                "disp-1",
+                "finding-disposition",
+                3,
+                json!({"review": "review-1", "finding": "f1", "disposition": "fixed", "reason": "removed it"}),
+            ),
+        ];
+        let html = render(&show(true, false, context), Ok(TREE.to_owned()));
+        assert!(
+            html.contains("1 issue was raised: 1 fixed, 0 rejected, 0 open."),
+            "{html}"
+        );
+        assert!(
+            html.contains("2 notes were left that need no response"),
+            "{html}"
+        );
+        let blocking_at = html.find("id=\"review-1-f1\"").unwrap();
+        let notes_at = html
+            .find("<h3>Notes: not blocking, no response needed</h3>")
+            .unwrap();
+        assert!(blocking_at < notes_at);
+        assert!(html.find("id=\"review-1-f2\"").unwrap() > notes_at);
+        assert!(html.find("id=\"review-1-n1\"").unwrap() > notes_at);
+        assert_eq!(
+            text_in(row(&html, "review-1-f2"), "om-disposition"),
+            "note (demoted: missing consequence)"
+        );
+        assert_eq!(text_in(row(&html, "review-1-n1"), "om-disposition"), "note");
+        assert_eq!(
+            text_in(row(&html, "review-1-f1"), "om-disposition"),
+            "fixed"
+        );
+        assert!(row(&html, "review-1-f1").contains("<b>Part of the system:</b> packet"));
+        assert!(!row(&html, "review-1-n1").contains("How it was settled"));
+        // A review of notes alone raises no issue.
+        let only_notes = vec![
+            intent_record("Ship the thing.", vec![criterion("c1", None)]),
+            record(
+                "review-1",
+                "review",
+                2,
+                json!({"findings_schema": 1, "intent": "intent-1", "tree": "t", "reviewer": reviewer, "fresh_context": true, "answers": [], "findings": [note]}),
+            ),
+        ];
+        let html = render(&show(true, false, only_notes), Ok(TREE.to_owned()));
+        assert!(
+            html.contains("No issues were raised. 1 note was left that needs no response"),
+            "{html}"
+        );
     }
 
     #[test]
