@@ -101,7 +101,10 @@ fn intent_ready(records: &[ContextRecord], input: &InitialInput) -> Gate {
     let none = "run lean-change intent-packet, give it to a fresh reviewer and append their intent-check record";
     let (check_id, check) =
         first_well_formed(checks, none, |r| intent_check_form(r, records)).map_err(incomplete)?;
-    if disposed(records, check_id, &check.findings).map_err(incomplete)? && check.intent == id {
+    let schema = check.findings_schema;
+    if disposed(records, check_id, schema, &check.findings).map_err(incomplete)?
+        && check.intent == id
+    {
         return Err(incomplete(
             "a finding was fixed, so append a new intent record that fixes it".into(),
         ));
@@ -300,9 +303,10 @@ fn review_form(record: &ContextRecord, intent: &Intent) -> Result<Review, String
         .map_err(|e| format!("the review record is invalid: {e}"))?;
     let (who, fresh) = (&review.reviewer, review.fresh_context);
     form(
-        &QUESTIONS,
+        review_questions(review.findings_schema),
         intent,
         (who, fresh),
+        review.findings_schema,
         &review.answers,
         &review.findings,
     )?;
@@ -327,6 +331,7 @@ fn intent_check_form(
         &INTENT_QUESTIONS,
         &intent,
         (who, fresh),
+        check.findings_schema,
         &check.answers,
         &check.findings,
     )?;
@@ -350,15 +355,59 @@ fn first_well_formed<'a, T>(
     Err(problem)
 }
 
+/// The contract's reject codes for a malformed finding, in its check order. A blank id is checked over all findings
+/// before a duplicate one, and so on: the first check that fails over any finding gives the code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FindingReject {
+    BlankId,
+    DuplicateId,
+    BlankText,
+    BadSeverity,
+}
+
+impl FindingReject {
+    pub fn code(self) -> &'static str {
+        match self {
+            FindingReject::BlankId => "blank-id",
+            FindingReject::DuplicateId => "duplicate-id",
+            FindingReject::BlankText => "blank-text",
+            FindingReject::BadSeverity => "bad-severity",
+        }
+    }
+}
+
+/// The per-finding checks of `findings_schema: 1`. Severity that is unknown fails the record's parse, so here it is
+/// only missing. A blocking finding that lacks a field is not rejected: `Finding::effective` demotes it.
+pub fn check_findings(findings: &[Finding]) -> Result<(), FindingReject> {
+    if findings.iter().any(|f| f.id.trim().is_empty()) {
+        return Err(FindingReject::BlankId);
+    }
+    let mut ids = BTreeSet::new();
+    if !findings.iter().all(|f| ids.insert(f.id.as_str())) {
+        return Err(FindingReject::DuplicateId);
+    }
+    if findings.iter().any(|f| f.text.trim().is_empty()) {
+        return Err(FindingReject::BlankText);
+    }
+    if findings.iter().any(|f| f.severity.is_none()) {
+        return Err(FindingReject::BadSeverity);
+    }
+    Ok(())
+}
+
 /// Structure shared by the review and the intent check: independence, fresh context,
 /// one noted answer per question, complete findings.
 fn form(
     questions: &[(&str, &str)],
     intent: &Intent,
     (reviewer, fresh_context): (&Actor, bool),
+    findings_schema: Option<u8>,
     answers: &[Answer],
     findings: &[Finding],
 ) -> Result<(), String> {
+    if findings_schema.is_some_and(|schema| schema != 1) {
+        return Err("findings_schema must be 1 or absent".into());
+    }
     if reviewer.name.trim().is_empty()
         || reviewer
             .name
@@ -384,22 +433,43 @@ fn form(
     if let Some((q, _)) = questions.iter().find(|(q, _)| !asked.contains(q)) {
         return Err(format!("question {q} is unanswered"));
     }
-    let mut ids = BTreeSet::new();
-    for finding in findings {
-        let fields = [
-            &finding.id,
-            &finding.text,
-            &finding.evidence,
-            &finding.consequence,
-        ];
-        if fields.iter().any(|f| f.trim().is_empty())
-            || !asked.contains(finding.question.as_str())
-            || !ids.insert(finding.id.as_str())
+    if findings_schema.is_some() {
+        // Notes need only an id, a known question and text; a blocking finding that lacks a field is demoted on read.
+        check_findings(findings).map_err(|reject| match reject {
+            FindingReject::BlankId | FindingReject::DuplicateId => {
+                "findings need a unique, nonblank id".to_owned()
+            }
+            FindingReject::BlankText => "every finding needs text".to_owned(),
+            FindingReject::BadSeverity => {
+                "every finding needs a severity: blocking or note".to_owned()
+            }
+        })?;
+        if let Some(finding) = findings
+            .iter()
+            .find(|f| !asked.contains(f.question.as_str()))
         {
-            return Err(format!(
-                "finding {} needs a unique id, a known question, text, evidence and consequence",
-                finding.id
-            ));
+            return Err(format!("finding {} needs a known question", finding.id));
+        }
+    } else {
+        let blank = |field: &Option<String>| field.as_deref().is_none_or(|f| f.trim().is_empty());
+        let mut ids = BTreeSet::new();
+        for finding in findings {
+            let v1_only = finding.severity.is_some()
+                || finding.obligation.is_some()
+                || finding.component.is_some();
+            if v1_only
+                || finding.id.trim().is_empty()
+                || finding.text.trim().is_empty()
+                || blank(&finding.evidence)
+                || blank(&finding.consequence)
+                || !asked.contains(finding.question.as_str())
+                || !ids.insert(finding.id.as_str())
+            {
+                return Err(format!(
+                    "finding {} needs a unique id, a known question, text, evidence and consequence (severity, obligation and component need findings_schema: 1)",
+                    finding.id
+                ));
+            }
         }
     }
     for answer in answers.iter().filter(|a| a.verdict == Verdict::Fail) {
@@ -413,14 +483,19 @@ fn form(
     Ok(())
 }
 
-/// Every finding needs its latest disposition with a reason; true when any was fixed.
+/// Every effectively-blocking finding needs its latest disposition with a reason; true when any was fixed. A note
+/// needs none.
 fn disposed(
     records: &[ContextRecord],
     record_id: &str,
+    findings_schema: Option<u8>,
     findings: &[Finding],
 ) -> Result<bool, String> {
     let mut fixed = false;
-    for finding in findings {
+    for finding in findings
+        .iter()
+        .filter(|f| f.effective(findings_schema) == Effective::Blocking)
+    {
         let disposition = records
             .iter()
             .filter(|r| r.kind == "finding-disposition")
@@ -459,9 +534,15 @@ fn review(records: &[ContextRecord], input: &InitialInput, tree: TreeIdentity) -
     let none = "append a review record for the current intent";
     let (review_id, review) =
         first_well_formed(reviews, none, |r| review_form(r, &intent)).map_err(incomplete)?;
-    let fixed = disposed(records, review_id, &review.findings).map_err(incomplete)?;
+    let schema = review.findings_schema;
+    let fixed = disposed(records, review_id, schema, &review.findings).map_err(incomplete)?;
     let now = tree(input).map_err(|e| refuse("tree-unreadable", &e, json!({})))?;
-    if review.tree != now && !fixed {
+    // A review with no effectively-blocking finding has nothing to fix, so a later edit needs only re-verification.
+    let blocking = review
+        .findings
+        .iter()
+        .any(|f| f.effective(schema) == Effective::Blocking);
+    if review.tree != now && blocking && !fixed {
         return Err(incomplete(
             "the tree changed after the review and no finding was fixed".into(),
         ));

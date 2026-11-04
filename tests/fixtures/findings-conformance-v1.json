@@ -1,0 +1,675 @@
+{
+  "fixture": "findings-conformance",
+  "version": 1,
+  "about": "Cases of {name, input, expected}. A string input is raw file text. expected.reject is a code, not message text. A case with v0_reader true is skipped by an implementation that reads v0 records. A case with envelope true tests the shape of the return and is skipped by an implementation that does not parse the envelope. Checks run in the contract's reject order, each across all findings. brief_sha256 is not tested here.",
+  "cases": [
+    {
+      "name": "full blocking finding stays blocking",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true,
+        "verdict": "FAIL",
+        "findings": [
+          {
+            "id": "f1",
+            "effective": "blocking"
+          }
+        ]
+      }
+    },
+    {
+      "name": "blocking missing obligation is demoted",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true,
+        "verdict": "PASS",
+        "findings": [
+          {
+            "id": "f1",
+            "effective": "note",
+            "demoted_reason": "demoted: missing obligation"
+          }
+        ]
+      }
+    },
+    {
+      "name": "blocking missing evidence is demoted",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "consequence": "c",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true,
+        "verdict": "PASS",
+        "findings": [
+          {
+            "id": "f1",
+            "effective": "note",
+            "demoted_reason": "demoted: missing evidence"
+          }
+        ]
+      }
+    },
+    {
+      "name": "blocking missing consequence is demoted",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true,
+        "verdict": "PASS",
+        "findings": [
+          {
+            "id": "f1",
+            "effective": "note",
+            "demoted_reason": "demoted: missing consequence"
+          }
+        ]
+      }
+    },
+    {
+      "name": "blocking missing all three is demoted with all three named",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true,
+        "verdict": "PASS",
+        "findings": [
+          {
+            "id": "f1",
+            "effective": "note",
+            "demoted_reason": "demoted: missing obligation, evidence, consequence"
+          }
+        ]
+      }
+    },
+    {
+      "name": "blocking with blank-string evidence is demoted",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "",
+            "consequence": "c",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true,
+        "verdict": "PASS",
+        "findings": [
+          {
+            "id": "f1",
+            "effective": "note",
+            "demoted_reason": "demoted: missing evidence"
+          }
+        ]
+      }
+    },
+    {
+      "name": "blocking with whitespace-only consequence is demoted",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": " \t\n ",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true,
+        "verdict": "PASS",
+        "findings": [
+          {
+            "id": "f1",
+            "effective": "note",
+            "demoted_reason": "demoted: missing consequence"
+          }
+        ]
+      }
+    },
+    {
+      "name": "blocking without component is not demoted by the contract",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true,
+        "verdict": "FAIL",
+        "findings": [
+          {
+            "id": "f1",
+            "effective": "blocking"
+          }
+        ]
+      }
+    },
+    {
+      "name": "note with no optional fields is kept",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "n1",
+            "severity": "note",
+            "text": "a wish"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true,
+        "verdict": "PASS",
+        "findings": [
+          {
+            "id": "n1",
+            "effective": "note"
+          }
+        ]
+      }
+    },
+    {
+      "name": "note keeps a known question and is accepted",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "n1",
+            "severity": "note",
+            "text": "a wish",
+            "question": "edge-cases"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true,
+        "verdict": "PASS",
+        "findings": [
+          {
+            "id": "n1",
+            "effective": "note"
+          }
+        ]
+      }
+    },
+    {
+      "name": "blocking plus note: verdict follows the blocking one",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          },
+          {
+            "id": "n1",
+            "severity": "note",
+            "text": "a wish"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true,
+        "verdict": "FAIL",
+        "findings": [
+          {
+            "id": "f1",
+            "effective": "blocking"
+          },
+          {
+            "id": "n1",
+            "effective": "note"
+          }
+        ]
+      }
+    },
+    {
+      "name": "demoted blocking plus note: nothing blocks, PASS",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "consequence": "c",
+            "component": "comp"
+          },
+          {
+            "id": "n1",
+            "severity": "note",
+            "text": "a wish"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": true,
+        "verdict": "PASS",
+        "findings": [
+          {
+            "id": "f1",
+            "effective": "note",
+            "demoted_reason": "demoted: missing evidence"
+          },
+          {
+            "id": "n1",
+            "effective": "note"
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty findings is PASS",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": []
+      },
+      "expected": {
+        "accepted": true,
+        "verdict": "PASS",
+        "findings": []
+      }
+    },
+    {
+      "name": "duplicate id is rejected",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          },
+          {
+            "id": "f1",
+            "severity": "note",
+            "text": "a wish"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reject": "duplicate-id"
+      }
+    },
+    {
+      "name": "blank id is rejected",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": " ",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reject": "blank-id"
+      }
+    },
+    {
+      "name": "blank text is rejected",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "  ",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reject": "blank-text"
+      }
+    },
+    {
+      "name": "unknown severity is rejected",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "major",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reject": "bad-severity"
+      }
+    },
+    {
+      "name": "missing severity is rejected",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reject": "bad-severity"
+      }
+    },
+    {
+      "name": "missing findings_schema is rejected (v0)",
+      "input": {
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reject": "bad-schema-version",
+        "v0_reader": true,
+        "envelope": true
+      }
+    },
+    {
+      "name": "findings_schema 2 is rejected",
+      "input": {
+        "findings_schema": 2,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reject": "bad-schema-version",
+        "envelope": true
+      }
+    },
+    {
+      "name": "blank reviewer is rejected",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": " ",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reject": "blank-reviewer",
+        "envelope": true
+      }
+    },
+    {
+      "name": "blank head is rejected",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reject": "blank-head",
+        "envelope": true
+      }
+    },
+    {
+      "name": "findings that is not a list is rejected",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": {
+          "f1": {
+            "id": "f1",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          }
+        }
+      },
+      "expected": {
+        "accepted": false,
+        "reject": "bad-shape",
+        "envelope": true
+      }
+    },
+    {
+      "name": "a finding that is not an object is rejected",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          "just a string"
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reject": "bad-shape",
+        "envelope": true
+      }
+    },
+    {
+      "name": "two findings failing different checks: the earlier check wins, whatever the finding order",
+      "input": {
+        "findings_schema": 1,
+        "reviewer": "r1",
+        "head": "abc123",
+        "findings": [
+          {
+            "id": "f1",
+            "severity": "blocking",
+            "text": " ",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          },
+          {
+            "id": " ",
+            "severity": "blocking",
+            "text": "t",
+            "obligation": "o",
+            "evidence": "e",
+            "consequence": "c",
+            "component": "comp"
+          }
+        ]
+      },
+      "expected": {
+        "accepted": false,
+        "reject": "blank-id"
+      }
+    },
+    {
+      "name": "not JSON is rejected",
+      "input": "this is {not json",
+      "expected": {
+        "accepted": false,
+        "reject": "bad-json",
+        "envelope": true
+      }
+    }
+  ]
+}

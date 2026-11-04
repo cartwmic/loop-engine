@@ -47,6 +47,12 @@ pub(crate) fn git_bytes(
     Ok(out.stdout)
 }
 
+/// The bar for a blocking finding, in both packets (`evidence` says what counts as evidence for that packet). The
+/// contract is `findings-contract.md`; code checks that the fields are present, not that they are true.
+fn bar(evidence: &str) -> String {
+    format!("Each finding has a severity, blocking or note. A blocking finding needs an obligation (the intent criterion or constraint, the principle section, or the repo rule), evidence ({evidence}) and a consequence a user would hit in ordinary single-user use; data loss, corruption or a broken promised outcome always blocks. A blocking finding that lacks any of the three is read as a note. Everything else is a note: it needs only an id, the question and text, and the driver need not answer it. Every blocking finding names its component: the part of the system it is in (a module, command or feature), in your own words.")
+}
+
 /// Profile B (`b`: review on) or C (`c`: review off), frozen with the repo base.
 pub fn setup(args: &[String]) -> Result<Value, String> {
     let mut profile = None;
@@ -106,8 +112,9 @@ pub fn intent_packet(show: &Value) -> Result<String, String> {
         .map(|(id, text)| format!("- {id}: {text}\n"))
         .collect();
     Ok(format!(
-        "# Intent check packet\n\nYou are the reviewer. You did not write this intent. Judge only from this packet and the repository at {repo} as it is now.\nAnswer every question below with verdict pass or fail and a note. If the intent already settles a question, pass it. Otherwise fail it with one finding: text is the concrete question you would ask the owner, evidence is the intent's wording or its silence, consequence is what a delivery would have to guess. Do not invent strained readings or ask for more than the goal promises.\n\nReturn one JSON object:\n{{\"intent\": \"{intent_id}\", \"reviewer\": {{\"name\": \"...\", \"kind\": \"agent\"}}, \"fresh_context\": true, \"answers\": [{{\"question\": \"...\", \"verdict\": \"pass|fail\", \"note\": \"...\"}}], \"findings\": [{{\"id\": \"f1\", \"question\": \"...\", \"text\": \"...\", \"evidence\": \"...\", \"consequence\": \"...\"}}]}}\n\n## Questions\n{questions}\n## Design principles (sha256 {sha})\n{principles}\n\n## Draft intent ({intent_id})\n{intent}\n",
+        "# Intent check packet\n\nYou are the reviewer. You did not write this intent. Judge only from this packet and the repository at {repo} as it is now.\nAnswer every question below with verdict pass or fail and a note. If the intent already settles a question, pass it. Otherwise fail it with one finding: text is the concrete question you would ask the owner, evidence is the intent's wording or its silence, consequence is what a delivery would have to guess. Do not invent strained readings or ask for more than the goal promises.\n{bar}\n\nReturn one JSON object:\n{{\"findings_schema\": 1, \"intent\": \"{intent_id}\", \"reviewer\": {{\"name\": \"...\", \"kind\": \"agent\"}}, \"fresh_context\": true, \"answers\": [{{\"question\": \"...\", \"verdict\": \"pass|fail\", \"note\": \"...\"}}], \"findings\": [{{\"id\": \"f1\", \"severity\": \"blocking|note\", \"question\": \"...\", \"text\": \"...\", \"obligation\": \"...\", \"evidence\": \"...\", \"consequence\": \"...\", \"component\": \"...\"}}]}}\n\n## Questions\n{questions}\n## Design principles (sha256 {sha})\n{principles}\n\n## Draft intent ({intent_id})\n{intent}\n",
         repo = input.repo,
+        bar = bar("the intent's wording or its silence"),
         sha = principles.sha256,
         principles = principles.text,
         intent = serde_json::to_string_pretty(&intent).map_err(|e| e.to_string())?,
@@ -204,9 +211,10 @@ pub fn review_packet(show: &Value) -> Result<String, String> {
         .map(|(id, text)| format!("- {id}: {text}\n"))
         .collect();
     Ok(format!(
-        "# Review packet\n\nYou are the reviewer. You did not write this change. Judge only from this packet and the repository at {repo}.\nAnswer every question below with verdict pass or fail and a note. Every fail needs at least one finding. Every finding needs an id, the question, text, evidence and consequence.\n\nReturn one JSON object:\n{{\"intent\": \"{intent_id}\", \"tree\": \"{tree}\", \"reviewer\": {{\"name\": \"...\", \"kind\": \"agent\"}}, \"fresh_context\": true, \"answers\": [{{\"question\": \"...\", \"verdict\": \"pass|fail\", \"note\": \"...\"}}], \"findings\": [{{\"id\": \"f1\", \"question\": \"...\", \"text\": \"...\", \"evidence\": \"...\", \"consequence\": \"...\"}}]}}\n\n## Questions\n{questions}\n## Approved intent ({intent_id})\n{intent}\n\n## Checks that passed on tree {tree}\n{results}{old_results}\n## Design principles (sha256 {sha})\n{principles}\n\n## Diff against base {base}\n{diff}\n",
+        "# Review packet\n\nYou are the reviewer. You did not write this change. Judge only from this packet and the repository at {repo}.\nAnswer every question below with verdict pass or fail and a note. If the intent and the checks settle a question, pass it. Do not invent. Pass every question if nothing material remains. Every fail needs at least one finding, of any severity. Every finding needs an id, a severity, the question and text.\n{bar}\n\nReturn one JSON object:\n{{\"findings_schema\": 1, \"intent\": \"{intent_id}\", \"tree\": \"{tree}\", \"reviewer\": {{\"name\": \"...\", \"kind\": \"agent\"}}, \"fresh_context\": true, \"answers\": [{{\"question\": \"...\", \"verdict\": \"pass|fail\", \"note\": \"...\"}}], \"findings\": [{{\"id\": \"f1\", \"severity\": \"blocking|note\", \"question\": \"...\", \"text\": \"...\", \"obligation\": \"...\", \"evidence\": \"...\", \"consequence\": \"...\", \"component\": \"...\"}}]}}\n\n## Questions\n{questions}\n## Approved intent ({intent_id})\n{intent}\n\n## Checks that passed on tree {tree}\n{results}{old_results}\n## Design principles (sha256 {sha})\n{principles}\n\n## Diff against base {base}\n{diff}\n",
         repo = input.repo,
         tree = verification.tree,
+        bar = bar("a file:line, or a run and its result"),
         intent = serde_json::to_string_pretty(&intent).map_err(|e| e.to_string())?,
         sha = principles.sha256,
         principles = principles.text,

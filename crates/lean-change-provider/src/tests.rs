@@ -86,8 +86,9 @@ fn verification(repo: &Path, intent_value: &Value) -> Value {
     json!({"intent":"intent-1","tree":tree_of(repo),"results":results})
 }
 
+/// The six answers of a record without `findings_schema`.
 fn answers() -> Vec<Value> {
-    QUESTIONS
+    review_questions(None)
         .iter()
         .map(|(q, _)| json!({"question":q,"verdict":"pass","note":"ok"}))
         .collect()
@@ -1126,17 +1127,25 @@ fn the_question_lists_match_the_prd_text() {
             "edge-cases",
             "checks",
             "docs",
-            "principles"
+            "principles",
+            "smaller-design"
         ]
     );
     let le207 = section("LE-207");
-    assert!(le207.contains("(intent, scope, edge-cases, checks, docs, principles)"));
+    assert!(le207.contains(
+        "seven fixed questions (intent, scope, edge-cases, checks, docs, principles, smaller-design)"
+    ));
+    for (id, text) in QUESTIONS {
+        assert!(le207.contains(&format!("\"{text}\" ({id})")), "{id}");
+    }
     let docs = QUESTIONS.iter().find(|(id, _)| *id == "docs").unwrap().1;
     assert!(docs.ends_with(
         "If the repository keeps a living PRD, name each requirement the change adds, changes or relies on, \
          and the check that proves it; a requirement that no check proves is a finding."
     ));
     assert!(le207.contains(&format!("\"{docs}\" (docs)")));
+    assert_eq!(review_questions(None).len(), 6);
+    assert_eq!(review_questions(Some(1)).len(), 7);
 }
 
 #[test]
@@ -1806,4 +1815,482 @@ fn review_packet_lists_each_criterions_old_runs_and_their_tails() {
     assert!(packet.contains("  old output tail: \"boom\"\n"));
     assert!(packet.contains("- s: old (expect same): exit Some(0)\n"));
     assert!(!packet.contains("- n: old"));
+}
+
+// ---- findings_schema 1: severity, notes and demotion ----
+
+/// A review in the shared finding fields: all seven answers.
+fn review_v1(repo: &Path) -> Value {
+    let mut v = review(repo);
+    v["findings_schema"] = json!(1);
+    v["answers"] = QUESTIONS
+        .iter()
+        .map(|(q, _)| json!({"question":q,"verdict":"pass","note":"ok"}))
+        .collect();
+    v
+}
+
+/// A blocking finding with every field, a blocking one missing its consequence, and a note.
+fn complete(id: &str, question: &str) -> Value {
+    json!({"id":id,"severity":"blocking","question":question,"text":"t","obligation":"o","evidence":"e","consequence":"c","component":"packet"})
+}
+
+fn missing_consequence(id: &str, question: &str) -> Value {
+    let mut f = complete(id, question);
+    f.as_object_mut().unwrap().remove("consequence");
+    f
+}
+
+fn note(id: &str, question: &str) -> Value {
+    json!({"id":id,"severity":"note","question":question,"text":"a wish"})
+}
+
+fn fail_question(review: &mut Value, question: &str) {
+    let answer = review["answers"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|a| a["question"] == question)
+        .unwrap();
+    answer["verdict"] = json!("fail");
+}
+
+fn blocking_finding(overrides: &[(&str, Value)]) -> Finding {
+    let mut f = complete("f1", "scope");
+    for (key, value) in overrides {
+        f[*key] = value.clone();
+    }
+    serde_json::from_value(f).unwrap()
+}
+
+#[test]
+fn effective_is_blocking_only_with_severity_and_all_three_fields() {
+    let nothing = |f: &Finding| f.effective(Some(1));
+    assert_eq!(nothing(&blocking_finding(&[])), Effective::Blocking);
+    let demoted = |reason: &str| Effective::Note {
+        demoted_reason: Some(format!("demoted: missing {reason}")),
+    };
+    assert_eq!(
+        nothing(&blocking_finding(&[("obligation", json!(" "))])),
+        demoted("obligation")
+    );
+    assert_eq!(
+        nothing(&blocking_finding(&[("evidence", json!(""))])),
+        demoted("evidence")
+    );
+    assert_eq!(
+        nothing(&blocking_finding(&[("consequence", json!("\n\t"))])),
+        demoted("consequence")
+    );
+    assert_eq!(
+        nothing(&blocking_finding(&[
+            ("obligation", Value::Null),
+            ("evidence", json!(" ")),
+            ("consequence", json!(""))
+        ])),
+        demoted("obligation, evidence, consequence")
+    );
+    // The component is not part of the bar.
+    assert_eq!(
+        nothing(&blocking_finding(&[("component", json!(" "))])),
+        Effective::Blocking
+    );
+    // A note is never demoted, whatever it has.
+    assert_eq!(
+        nothing(&blocking_finding(&[("severity", json!("note"))])),
+        Effective::Note {
+            demoted_reason: None
+        }
+    );
+    // Without findings_schema every finding is blocking, as before.
+    assert_eq!(
+        blocking_finding(&[("consequence", json!(""))]).effective(None),
+        Effective::Blocking
+    );
+}
+
+#[test]
+fn v1_blocking_finding_missing_a_field_is_a_note_that_needs_no_disposition() {
+    let r = repo();
+    let mut thin = review_v1(&r);
+    fail_question(&mut thin, "scope");
+    thin["findings"] = json!([missing_consequence("f1", "scope")]);
+    allowed(&ask(
+        &r,
+        true,
+        "review",
+        "reviewed",
+        review_ctx(&r, thin.clone(), vec![]),
+    ));
+    // A complete blocking finding beside it still needs one, and only it does.
+    let mut mixed = thin.clone();
+    mixed["findings"] = json!([
+        missing_consequence("f1", "scope"),
+        complete("f2", "scope"),
+        note("n1", "docs")
+    ]);
+    let message = review_denial(&r, mixed.clone(), vec![]);
+    assert!(
+        message.contains("finding f2 needs a disposition"),
+        "{message}"
+    );
+    // Disposing f2 alone is enough: the demoted finding and the note need none.
+    allowed(&ask(
+        &r,
+        true,
+        "review",
+        "reviewed",
+        review_ctx(
+            &r,
+            mixed,
+            vec![disposition("f2", "rejected", "not in scope", 4)],
+        ),
+    ));
+}
+
+#[test]
+fn v1_note_with_no_disposition_lets_reviewed_pass() {
+    let r = repo();
+    let mut notes = review_v1(&r);
+    fail_question(&mut notes, "docs");
+    notes["findings"] = json!([note("n1", "docs")]);
+    allowed(&ask(
+        &r,
+        true,
+        "review",
+        "reviewed",
+        review_ctx(&r, notes, vec![]),
+    ));
+    // A failed answer still needs a finding of some severity.
+    let mut none = review_v1(&r);
+    fail_question(&mut none, "docs");
+    assert!(review_denial(&r, none, vec![]).contains("failed but has no finding"));
+}
+
+#[test]
+fn v1_review_after_a_tree_change_with_only_notes_is_accepted_once_verified() {
+    let r = repo();
+    let mut notes = review_v1(&r);
+    fail_question(&mut notes, "docs");
+    notes["findings"] = json!([note("n1", "docs"), missing_consequence("f2", "scope")]);
+    let ctx = review_ctx(&r, notes, vec![]);
+    std::fs::write(r.join("a.txt"), "edited after the review").unwrap();
+    // The changed tree still goes through verification first.
+    assert_eq!(
+        code(&ask(&r, true, "review", "reviewed", ctx.clone())),
+        "verification-incomplete"
+    );
+    let mut verified = ctx;
+    verified.push(record(
+        "v2",
+        "verification",
+        5,
+        verification(&r, &intent(false)),
+    ));
+    allowed(&ask(&r, true, "review", "reviewed", verified));
+    // A blocking finding that was rejected is still an unreviewed change.
+    let mut blocking = review_v1(&r);
+    fail_question(&mut blocking, "scope");
+    blocking["findings"] = json!([complete("f1", "scope")]);
+    let mut ctx = review_ctx(&r, blocking, vec![disposition("f1", "rejected", "no", 4)]);
+    std::fs::write(r.join("a.txt"), "edited again").unwrap();
+    ctx.push(record(
+        "v3",
+        "verification",
+        6,
+        verification(&r, &intent(false)),
+    ));
+    let denied = ask(&r, true, "review", "reviewed", ctx);
+    assert_eq!(code(&denied), "review-incomplete");
+    assert!(denied["feedback"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("tree changed after the review"));
+}
+
+#[test]
+fn v1_form_refuses_what_the_contract_rejects() {
+    let r = repo();
+    let with = |findings: Value| {
+        let mut v = review_v1(&r);
+        fail_question(&mut v, "scope");
+        v["findings"] = findings;
+        v
+    };
+    let no_severity = {
+        let mut f = complete("f1", "scope");
+        f.as_object_mut().unwrap().remove("severity");
+        f
+    };
+    assert!(review_denial(&r, with(json!([no_severity])), vec![]).contains("severity"));
+    let mut blank_text = note("n1", "scope");
+    blank_text["text"] = json!(" ");
+    assert!(review_denial(&r, with(json!([blank_text])), vec![]).contains("needs text"));
+    let mut blank_id = note("n1", "scope");
+    blank_id["id"] = json!(" ");
+    assert!(review_denial(&r, with(json!([blank_id])), vec![]).contains("nonblank id"));
+    assert!(review_denial(
+        &r,
+        with(json!([note("n1", "scope"), note("n1", "docs")])),
+        vec![]
+    )
+    .contains("unique"));
+    assert!(
+        review_denial(&r, with(json!([note("n1", "nonsense")])), vec![]).contains("known question")
+    );
+    // An unknown severity fails the parse.
+    let mut odd = note("n1", "scope");
+    odd["severity"] = json!("major");
+    assert!(review_denial(&r, with(json!([odd])), vec![]).contains("invalid"));
+    // Only schema 1 is accepted.
+    let mut two = review_v1(&r);
+    two["findings_schema"] = json!(2);
+    assert!(review_denial(&r, two, vec![]).contains("findings_schema must be 1"));
+    // A question stays required on a note.
+    let mut no_question = note("n1", "scope");
+    no_question.as_object_mut().unwrap().remove("question");
+    assert!(review_denial(&r, with(json!([no_question])), vec![]).contains("invalid"));
+}
+
+#[test]
+fn a_v1_review_answers_all_seven_questions_and_a_v0_review_the_original_six() {
+    let r = repo();
+    let mut six = review_v1(&r);
+    six["answers"].as_array_mut().unwrap().pop();
+    assert!(review_denial(&r, six, vec![]).contains("smaller-design is unanswered"));
+    allowed(&ask(
+        &r,
+        true,
+        "review",
+        "reviewed",
+        review_ctx(&r, review_v1(&r), vec![]),
+    ));
+    // A record without findings_schema is checked against the six it was written for, and gates as before.
+    allowed(&ask(
+        &r,
+        true,
+        "review",
+        "reviewed",
+        review_ctx(&r, review(&r), vec![]),
+    ));
+    let mut seven = review(&r);
+    seven["answers"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"question":"smaller-design","verdict":"pass","note":"ok"}));
+    assert!(
+        review_denial(&r, seven, vec![]).contains("unknown or repeated question smaller-design")
+    );
+}
+
+#[test]
+fn a_v0_record_gates_exactly_as_before() {
+    let r = repo();
+    // Every v0 finding is blocking and needs a disposition, whatever else it says.
+    let mut failed = review(&r);
+    failed["answers"][5]["verdict"] = json!("fail");
+    failed["findings"] = json!([finding("f1", "principles")]);
+    assert!(review_denial(&r, failed.clone(), vec![]).contains("needs a disposition"));
+    allowed(&ask(
+        &r,
+        true,
+        "review",
+        "reviewed",
+        review_ctx(
+            &r,
+            failed.clone(),
+            vec![disposition("f1", "rejected", "why", 4)],
+        ),
+    ));
+    // The shared fields need the schema: a v0 record that carries them is refused, not silently read as blocking.
+    for field in ["severity", "obligation", "component"] {
+        let mut odd = failed.clone();
+        odd["findings"][0][field] = json!("note");
+        assert!(
+            review_denial(&r, odd, vec![]).contains("need findings_schema: 1"),
+            "{field}"
+        );
+    }
+    // A v0 finding still needs its evidence and consequence.
+    let mut thin = failed.clone();
+    thin["findings"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("consequence");
+    assert!(review_denial(&r, thin, vec![]).contains("evidence and consequence"));
+    // And after a tree change a v0 review still needs a fixed finding.
+    let mut ctx = review_ctx(&r, failed, vec![disposition("f1", "rejected", "no", 4)]);
+    std::fs::write(r.join("a.txt"), "edited").unwrap();
+    ctx.push(record(
+        "v2",
+        "verification",
+        5,
+        verification(&r, &intent(false)),
+    ));
+    let denied = ask(&r, true, "review", "reviewed", ctx);
+    assert_eq!(code(&denied), "review-incomplete");
+}
+
+#[test]
+fn the_intent_check_uses_the_same_rules() {
+    let r = repo();
+    let mut v1 = check_value();
+    v1["findings_schema"] = json!(1);
+    v1["answers"][0]["verdict"] = json!("fail");
+    // A note needs no disposition.
+    v1["findings"] = json!([note("n1", "use")]);
+    allowed(&check_answer(&r, check_ctx(v1.clone(), vec![])));
+    // A blocking finding missing a field is a note too.
+    v1["findings"] = json!([missing_consequence("f1", "use")]);
+    allowed(&check_answer(&r, check_ctx(v1.clone(), vec![])));
+    // A complete one needs a disposition.
+    v1["findings"] = json!([complete("f1", "use")]);
+    assert!(check_denial(&r, check_ctx(v1.clone(), vec![])).contains("needs a disposition"));
+    allowed(&check_answer(
+        &r,
+        check_ctx(
+            v1.clone(),
+            vec![check_disposition("f1", "rejected", "the goal is clear", 3)],
+        ),
+    ));
+    // The intent check keeps its six questions.
+    assert_eq!(INTENT_QUESTIONS.len(), 6);
+    v1["findings_schema"] = json!(2);
+    assert!(check_denial(&r, check_ctx(v1, vec![])).contains("findings_schema must be 1"));
+}
+
+#[test]
+fn both_packets_carry_the_bar_and_the_v1_example() {
+    let r = repo();
+    let i = intent(false);
+    let mut ctx = vec![
+        record("intent-1", "intent", 1, i.clone()),
+        record("d-ok", "owner-decision", 2, decision("Yes.", "intent-1")),
+    ];
+    ctx.push(record("v1", "verification", 3, verification(&r, &i)));
+    let review_packet = crate::packet::review_packet(&show(&r, true, ctx)).unwrap();
+    let draft = vec![record("intent-1", "intent", 1, intent(false))];
+    let intent_packet = crate::packet::intent_packet(&show(&r, true, draft)).unwrap();
+    for packet in [&review_packet, &intent_packet] {
+        for needle in [
+            "\"findings_schema\": 1",
+            "\"severity\": \"blocking|note\"",
+            "\"obligation\"",
+            "\"component\"",
+            "data loss, corruption or a broken promised outcome always blocks",
+            "ordinary single-user use",
+            "names its component",
+        ] {
+            assert!(packet.contains(needle), "{needle}");
+        }
+    }
+    assert!(review_packet.contains(
+        "If the intent and the checks settle a question, pass it. Do not invent. Pass every question if nothing material remains."
+    ));
+    assert!(review_packet
+        .contains("- smaller-design: Is there a materially smaller design that meets the intent"));
+    assert!(!intent_packet.contains("smaller-design"));
+}
+
+// ---- the shared conformance fixture ----
+
+/// The fixture is shared with the coordinator repo, byte for byte. To change it, change both copies (coordinator and
+/// loop-engine) and both pins in one change set.
+const FIXTURE_SHA256: &str = "ffb5f849d93f77fcf723bf396832ec47d23829ef077f44cf3497830b007183f1";
+
+fn fixture_bytes() -> Vec<u8> {
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/findings-conformance-v1.json"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn the_conformance_fixture_is_the_pinned_copy() {
+    assert_eq!(sha256_hex(&fixture_bytes()), FIXTURE_SHA256);
+}
+
+/// Runs a case's findings through the per-finding checks and returns the contract's reject code, if any. The contract
+/// order is blank-id, duplicate-id, blank-text, bad-severity; a severity that is not blocking or note is reported at
+/// the bad-severity step, after the other checks, not at parse time.
+fn reject_code(findings: &[Value]) -> Option<&'static str> {
+    let parsed: Vec<Finding> = findings
+        .iter()
+        .map(|f| {
+            let mut f = f.clone();
+            if !matches!(f["severity"].as_str(), Some("blocking" | "note")) {
+                f.as_object_mut().unwrap().remove("severity");
+            }
+            // Lean-change keeps a known question on every finding; the shared fixture has none on most.
+            if f.get("question").is_none() {
+                f["question"] = json!("scope");
+            }
+            serde_json::from_value(f).unwrap()
+        })
+        .collect();
+    lean_change_provider::evaluate::check_findings(&parsed)
+        .err()
+        .map(|reject| reject.code())
+}
+
+#[test]
+fn findings_conformance_v1() {
+    let fixture: Value = serde_json::from_slice(&fixture_bytes()).unwrap();
+    let cases = fixture["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 26);
+    let mut ran = 0;
+    for case in cases {
+        let (name, expected) = (case["name"].as_str().unwrap(), &case["expected"]);
+        // Skipped: cases that test the return's own envelope (bad-json, bad-schema-version, blank-reviewer,
+        // blank-head, bad-shape), which lean-change does not parse, and the v0 case, because lean-change reads v0.
+        if expected["envelope"] == true || expected["v0_reader"] == true {
+            continue;
+        }
+        // Not parsed as a Review (the envelope differs): only the findings are run.
+        let findings = case["input"]["findings"].as_array().unwrap();
+        let rejected = reject_code(findings);
+        if expected["accepted"] == false {
+            assert_eq!(rejected, expected["reject"].as_str(), "{name}");
+            ran += 1;
+            continue;
+        }
+        assert_eq!(rejected, None, "{name}");
+        let want = expected["findings"].as_array().unwrap();
+        assert_eq!(findings.len(), want.len(), "{name}");
+        let mut blocking = false;
+        for (given, want) in findings.iter().zip(want) {
+            let mut given = given.clone();
+            given["question"] = json!("scope");
+            let finding: Finding = serde_json::from_value(given).unwrap();
+            let got = finding.effective(Some(1));
+            match want["effective"].as_str().unwrap() {
+                "blocking" => assert_eq!(got, Effective::Blocking, "{name}"),
+                _ => assert_eq!(
+                    got,
+                    Effective::Note {
+                        demoted_reason: want["demoted_reason"].as_str().map(str::to_owned)
+                    },
+                    "{name}"
+                ),
+            }
+            blocking |= got == Effective::Blocking;
+        }
+        assert_eq!(
+            if blocking { "FAIL" } else { "PASS" },
+            expected["verdict"].as_str().unwrap(),
+            "{name}"
+        );
+        ran += 1;
+    }
+    // 26 cases: 6 envelope cases (bad-json, 2 schema-version incl. the v0 one, blank-reviewer, blank-head, 2 bad-shape)
+    // are skipped.
+    assert_eq!(
+        ran,
+        cases
+            .iter()
+            .filter(|c| c["expected"]["envelope"] != true)
+            .count()
+    );
+    assert!(ran >= 18, "{ran}");
 }
