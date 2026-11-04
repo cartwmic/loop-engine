@@ -2283,8 +2283,8 @@ fn findings_conformance_v1() {
         );
         ran += 1;
     }
-    // 26 cases: 6 envelope cases (bad-json, 2 schema-version incl. the v0 one, blank-reviewer, blank-head, 2 bad-shape)
-    // are skipped.
+    // 26 cases; the 7 envelope cases (bad-json, both bad-schema-version cases incl. the v0 one, blank-reviewer,
+    // blank-head, two bad-shape) are skipped above, so 19 run.
     assert_eq!(
         ran,
         cases
@@ -2292,5 +2292,5 @@ fn findings_conformance_v1() {
             .filter(|c| c["expected"]["envelope"] != true)
             .count()
     );
-    assert!(ran >= 18, "{ran}");
+    assert_eq!(ran, 19);
 }
