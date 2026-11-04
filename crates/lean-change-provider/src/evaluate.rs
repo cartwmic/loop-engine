@@ -537,12 +537,14 @@ fn review(records: &[ContextRecord], input: &InitialInput, tree: TreeIdentity) -
     let schema = review.findings_schema;
     let fixed = disposed(records, review_id, schema, &review.findings).map_err(incomplete)?;
     let now = tree(input).map_err(|e| refuse("tree-unreadable", &e, json!({})))?;
-    // A review with no effectively-blocking finding has nothing to fix, so a later edit needs only re-verification.
-    let blocking = review
-        .findings
-        .iter()
-        .any(|f| f.effective(schema) == Effective::Blocking);
-    if review.tree != now && blocking && !fixed {
+    // A v1 review with no effectively-blocking finding has nothing to fix, so a later edit needs only
+    // re-verification. A v0 review gates as before: a later edit needs a fixed finding.
+    let needs_fix = schema.is_none()
+        || review
+            .findings
+            .iter()
+            .any(|f| f.effective(schema) == Effective::Blocking);
+    if review.tree != now && needs_fix && !fixed {
         return Err(incomplete(
             "the tree changed after the review and no finding was fixed".into(),
         ));

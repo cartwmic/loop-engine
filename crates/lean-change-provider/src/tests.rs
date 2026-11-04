@@ -2129,6 +2129,18 @@ fn a_v0_record_gates_exactly_as_before() {
     ));
     let denied = ask(&r, true, "review", "reviewed", ctx);
     assert_eq!(code(&denied), "review-incomplete");
+    // A clean v0 review (no findings) followed by an edit is still refused, as in v0.39.0: N7 is v1 only.
+    let r = repo();
+    let mut ctx = review_ctx(&r, review(&r), vec![]);
+    std::fs::write(r.join("a.txt"), "edited").unwrap();
+    ctx.push(record(
+        "v2",
+        "verification",
+        5,
+        verification(&r, &intent(false)),
+    ));
+    let denied = ask(&r, true, "review", "reviewed", ctx);
+    assert_eq!(code(&denied), "review-incomplete");
 }
 
 #[test]
