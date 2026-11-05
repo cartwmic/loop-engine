@@ -145,13 +145,14 @@ def main() -> int:
         if result.returncode:
             fail(f"dist plan failed: {result.stderr.strip()}")
         plan = json.loads(result.stdout)
-    research = [release for release in plan["releases"] if release["app_name"] == "research-provider"]
-    if len(research) != 1:
-        fail("research must be in the release plan")
-    for target in ("aarch64-apple-darwin", "x86_64-unknown-linux-gnu"):
-        if f"research-provider-{target}.tar.xz" not in research[0]["artifacts"]:
-            fail(f"research missing release archive for {target}")
-    print("Release structure OK: dispatch-only, exact-SHA gate before build, native archive dependency, research included", flush=True)
+    for app in ("research-provider", "bookends-check"):
+        found = [release for release in plan["releases"] if release["app_name"] == app]
+        if len(found) != 1:
+            fail(f"{app} must be in the release plan")
+        for target in ("aarch64-apple-darwin", "x86_64-unknown-linux-gnu"):
+            if f"{app}-{target}.tar.xz" not in found[0]["artifacts"]:
+                fail(f"{app} missing release archive for {target}")
+    print("Release structure OK: dispatch-only, exact-SHA gate before build, native archive dependency, research and bookends-check included", flush=True)
     host = blocks["host"]
     condition = re.search(r"^    if: (.*)$", host, re.MULTILINE)
     if not condition:

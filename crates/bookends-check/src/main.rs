@@ -28,6 +28,10 @@ fn run(args: Vec<String>) -> Result<ExitCode, io::Error> {
             print_help();
             return Ok(ExitCode::from(0));
         }
+        Err(ParseOutcome::Version) => {
+            println!("bookends-check {}", env!("CARGO_PKG_VERSION"));
+            return Ok(ExitCode::from(0));
+        }
         Err(ParseOutcome::Usage(msg)) => {
             let _ = writeln!(io::stderr(), "{msg}");
             print_help_stderr();
@@ -153,6 +157,7 @@ enum Invocation {
 #[derive(Debug)]
 enum ParseOutcome {
     Help,
+    Version,
     Usage(String),
 }
 
@@ -181,6 +186,7 @@ fn parse_args(args: &[String]) -> Result<Invocation, ParseOutcome> {
     while i < args.len() {
         match args[i].as_str() {
             "-h" | "--help" => return Err(ParseOutcome::Help),
+            "-V" | "--version" => return Err(ParseOutcome::Version),
             "--repo" => {
                 i += 1;
                 let value = args
@@ -558,6 +564,14 @@ fn print_help_stderr() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_version() {
+        for flag in ["--version", "-V"] {
+            let args = vec!["bookends-check".into(), flag.into()];
+            assert!(matches!(parse_args(&args), Err(ParseOutcome::Version)));
+        }
+    }
 
     #[test]
     fn parse_help() {

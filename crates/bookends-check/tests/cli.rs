@@ -28,6 +28,20 @@ fn help_exits_zero() {
 }
 
 #[test]
+fn version_flags_print_name_and_package_version_on_stdout() {
+    for flag in ["--version", "-V"] {
+        let output = Command::new(bin()).arg(flag).output().expect("spawn");
+        assert_eq!(output.status.code(), Some(0), "flag={flag}");
+        assert!(output.stderr.is_empty(), "flag={flag}: {:?}", output.stderr);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!("bookends-check {}\n", env!("CARGO_PKG_VERSION")),
+            "flag={flag}"
+        );
+    }
+}
+
+#[test]
 fn usage_unknown_flag_exits_two() {
     let output = Command::new(bin()).arg("--nope").output().expect("spawn");
     assert_eq!(output.status.code(), Some(2));
