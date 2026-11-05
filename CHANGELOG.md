@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.43.1] - 2026-11-05
+
+### Changed
+
+- Repository guidance only: AGENTS.md now runs the baseline as `run-and-wake -- kgate -- scripts/baseline.sh` (#108).
+
+### Compatibility
+
+- No change to the engine, the providers, bookends-check, the profiles or the record formats.
+
 ## [0.43.0] - 2026-11-05
 
 ### Added
