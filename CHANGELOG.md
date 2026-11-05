@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.42.0] - 2026-11-05
+
+### Added
+
+- `kgate.toml`: the profile for running the baseline (`scripts/baseline.sh`) on the personal homelab cluster through kgate (#104). It was proven against the Mac at v0.41.0 (same PASS, 705 Rust tests and 43 Python tests). The engine, the contracts and the workflow in `AGENTS.md` are unchanged.
+
 ## [0.41.0] - 2026-11-04
 
 ### Fixed
