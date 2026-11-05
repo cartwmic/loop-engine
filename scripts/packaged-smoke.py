@@ -21,7 +21,17 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 APPS = {"loop-cli": "loop-engine", "lean-change-provider": "lean-change",
-        "policy-document-provider": "policy-document", "research-provider": "research"}
+        "policy-document-provider": "policy-document", "research-provider": "research",
+        "bookends-check": "bookends-check"}
+
+GREEN_FILES = {
+    "bookends.toml": 'prd = "docs/PRD.md"\n\n[classes.e2e_journey]\npathspecs = ["tests/**"]\n'
+                     'required_ci_jobs = ["journey"]\n',
+    "docs/PRD.md": "### LE-1: Example requirement\n- Status: live\n- Coverage: e2e/journey\n",
+    ".github/workflows/ci.yml": "name: ci\non: push\njobs:\n  journey:\n    runs-on: ubuntu-latest\n"
+                                "    steps:\n      - run: python3 tests/journey.py\n",
+    "tests/journey.py": "# bookends:LE-1\nprint('ok')\n",
+}
 
 
 def digest(path):
@@ -36,7 +46,7 @@ def pairs(values):
             raise ValueError(f"unknown or duplicate application: {key}")
         result[key] = value
     if set(result) != set(APPS):
-        raise ValueError("all four distributed applications are required")
+        raise ValueError("all distributed applications are required")
     return result
 
 
@@ -124,6 +134,17 @@ def main():
         call([sys.executable, ROOT / "scripts/research-journey.py", "--mode", "packaged",
               "--engine", engine, "--provider", binaries["research-provider"],
               "--data-root", research_data, "--profile", "standard.json"])
+        scratch = attempt / "bookends-repo"
+        for name, text in GREEN_FILES.items():
+            (scratch / name).parent.mkdir(parents=True, exist_ok=True)
+            (scratch / name).write_text(text)
+        for git in (["init", "-q", "-b", "main"], ["add", "-A"],
+                    ["-c", "user.name=smoke", "-c", "user.email=smoke@example.com",
+                     "-c", "commit.gpgsign=false", "commit", "-q", "-m", "enable bookends"]):
+            call(["git", "-C", scratch, *git])
+        verdict = call([binaries["bookends-check"], "--repo", scratch]).splitlines()
+        if verdict[:1] != ["GREEN"]:
+            raise ValueError(f"bookends-check did not report GREEN: {verdict}")
         outcome = {"status": "passed"}
     except (OSError, ValueError, KeyError, TypeError, tarfile.TarError) as error:
         outcome = {"status": "failed", "diagnostic": str(error)}
