@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.43.2] - 2026-11-05
+
+### Changed
+
+- Repository tooling only: `kgate.toml` runs the baseline with 12 CPUs instead of 4, and its stale comment is fixed (#110).
+
+### Compatibility
+
+- No change to the engine, the providers, bookends-check, the profiles or the record formats.
+
 ## [0.43.1] - 2026-11-05
 
 ### Changed
