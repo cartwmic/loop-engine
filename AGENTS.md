@@ -50,7 +50,7 @@ Run from the repository root with Rust/Cargo and Python 3 (CI uses 3.14.6). Load
 run-and-wake -- kgate -- scripts/baseline.sh
 ```
 
-Mac undo: run `scripts/baseline.sh` directly from the repository root. Use it when kgate exits 69 (cluster unreachable or job could not finish); kgate never runs the command on the Mac.
+Mac undo: run `scripts/baseline.sh` directly from the repository root.
 
 Keep the check list in `scripts/baseline.sh` identical to [ci.yml](.github/workflows/ci.yml): fmt, locked all-target Clippy, locked workspace build, workspace tests, five bare journey self-tests, the lean-change mutation applicability check, the release-after-merge script tests (`python3 -m unittest scripts/test_release_after_merge.py`), Bookends with bypass unset. Local Bookends checks the working tree; push CI checks every introduced commit from main's previous tip. Bare journeys and `--self-test` prove collection/interface mechanics, not end-to-end progression. Full journeys in [journeys.yml](.github/workflows/journeys.yml) are informational and never gate Release; local boundary proof remains required.
 
