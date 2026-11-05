@@ -44,13 +44,15 @@ Before rebuilding or replacing a provider executable, inspect active runs in eac
 
 ## Workflow
 
-Run from the repository root with Rust/Cargo and Python 3 (CI uses 3.14.6). Load the engine and active provider skills; use policy-document for README/AGENTS authoring or assessment. The final-proof owner runs the baseline plus the boundary checks below on the current source. Workers run focused checks; missing required proof blocks completion.
+Run from the repository root with Rust/Cargo and Python 3 (CI uses 3.14.6). Load the engine and active provider skills; use policy-document for README/AGENTS authoring or assessment. The final-proof owner runs the baseline plus the boundary checks below on the current source. Workers run focused checks and run the baseline on the homelab cluster with kgate (profile [kgate.toml](kgate.toml)); missing required proof blocks completion.
 
 ```sh
-scripts/baseline.sh
+run-and-wake -- kgate -- scripts/baseline.sh
 ```
 
-Keep its check list identical to [ci.yml](.github/workflows/ci.yml): fmt, locked all-target Clippy, locked workspace build, workspace tests, five bare journey self-tests, the lean-change mutation applicability check, the release-after-merge script tests (`python3 -m unittest scripts/test_release_after_merge.py`), Bookends with bypass unset. Local Bookends checks the working tree; push CI checks every introduced commit from main's previous tip. Bare journeys and `--self-test` prove collection/interface mechanics, not end-to-end progression. Full journeys in [journeys.yml](.github/workflows/journeys.yml) are informational and never gate Release; local boundary proof remains required.
+Mac undo: run `scripts/baseline.sh` directly from the repository root. Use it when kgate exits 69 (cluster unreachable or job could not finish); kgate never runs the command on the Mac.
+
+Keep the check list in `scripts/baseline.sh` identical to [ci.yml](.github/workflows/ci.yml): fmt, locked all-target Clippy, locked workspace build, workspace tests, five bare journey self-tests, the lean-change mutation applicability check, the release-after-merge script tests (`python3 -m unittest scripts/test_release_after_merge.py`), Bookends with bypass unset. Local Bookends checks the working tree; push CI checks every introduced commit from main's previous tip. Bare journeys and `--self-test` prove collection/interface mechanics, not end-to-end progression. Full journeys in [journeys.yml](.github/workflows/journeys.yml) are informational and never gate Release; local boundary proof remains required.
 
 Before parameterized journeys, build current source and resolve the actual Cargo target directory. Inspect active catalogs before any rebuild as required above. Use an external directory owned by the proof driver for journey output, not user state:
 

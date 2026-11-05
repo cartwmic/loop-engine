@@ -1,7 +1,6 @@
 # kgate profile for the Loop Engine baseline (`scripts/baseline.sh`). Contract: dotfiles docs/kgate.md.
 # Run: run-and-wake -- kgate -- scripts/baseline.sh
 # Proven 2026-11-05 on the Mac and on the cluster at v0.41.0: PASS on both, 705 Rust tests in 26 suites, 43 Python unit tests.
-# Not part of the workflow in AGENTS.md yet: that instruction changes through the policy-document provider.
 image  = "ghcr.io/cartwmic/kgate@sha256:41dc179299aade303686e2047a361444668e5b3237c3b95b40cef94ddacc4a2d"
 cpu    = 4
 memory = "8Gi"
