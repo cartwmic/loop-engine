@@ -1,7 +1,7 @@
 # kgate profile for the Loop Engine baseline (`scripts/baseline.sh`). Contract: dotfiles docs/kgate.md.
 # Run: run-and-wake -- kgate -- scripts/baseline.sh
-# Proven 2026-11-05 on the cluster (agent-1) at 5b1bd69 with cpu 12: PASS in 662 s (917 s at cpu 4), 707 Rust tests in 26 suites, 43 Python unit tests.
-# AGENTS.md runs the baseline through this profile (#108). cpu 12 sets CARGO_BUILD_JOBS 12; measured -40% on Rust stages on agent-1 (917 s cold at cpu 4).
+# Proven 2026-11-05 on the cluster (agent-1) at 5b1bd69 with cpu 12: PASS in 651 s in-pod (917 s at cpu 4), 707 Rust tests in 26 suites, 43 Python unit tests.
+# AGENTS.md runs the baseline through this profile (#108). cpu 12 sets CARGO_BUILD_JOBS 12 (-40% on the Rust stages on agent-1).
 image  = "ghcr.io/cartwmic/kgate@sha256:41dc179299aade303686e2047a361444668e5b3237c3b95b40cef94ddacc4a2d"
 cpu    = 12
 memory = "8Gi"
