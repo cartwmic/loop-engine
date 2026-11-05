@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.43.0] - 2026-11-05
+
+### Added
+
+- Releases now publish `bookends-check` archives for macOS arm64 and Linux x86_64 (#106), so the PRD and journey coverage gate can be installed like the other binaries. `bookends-check --version` prints its version.
+
+### Compatibility
+
+- `bookends-check --repo` behaviour, exit codes and output are unchanged. The engine, the providers, the profiles and the record formats are unchanged.
+
 ## [0.42.0] - 2026-11-05
 
 ### Added
