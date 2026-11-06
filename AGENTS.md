@@ -50,7 +50,9 @@ Run from the repository root with Rust/Cargo and Python 3 (CI uses 3.14.6). Load
 run-and-wake -- kgate -- scripts/baseline.sh
 ```
 
-Mac undo: to revert this switch, change the command above back to `scripts/baseline.sh` and run it from the repository root. kgate never runs its command on the Mac, so exit 69 (the job could not start or finish on the cluster) means the baseline did not run: report missing proof, not a Mac run.
+Mac undo: to revert this switch, change the command above back to `scripts/baseline.sh` and run it from the repository root. kgate never runs its command on the Mac, so a baseline that did not run on the cluster is missing proof, not a Mac run.
+
+`run-and-wake` returns at once: it prints the job id, the pid and the output file, and its own exit status says nothing about the baseline. The baseline's real exit lands later as an `end` record for that job id in `${XDG_STATE_HOME:-~/.local/state}/run-and-wake/log.jsonl`, and the wake goes to the Pi/Herdr pane or T3 thread that started the job. Wait for it (in an agent session, end the turn); do not read the immediate return as a pass. Then read kgate's record for the job in `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl` (its `job` field is the run-and-wake job id; its `exit` is the baseline's status). Exit 69 means "did not run on the cluster" only when that record's `reason` is non-empty; with an empty `reason` the baseline ran and itself exited 69, which is a failure, not missing proof.
 
 Keep the check list in `scripts/baseline.sh` identical to [ci.yml](.github/workflows/ci.yml): fmt, locked all-target Clippy, locked workspace build, workspace tests, five bare journey self-tests, the lean-change mutation applicability check, the release-after-merge script tests in 8 parallel shards (`python3 scripts/run-release-tests-sharded.py`; it runs the tests of `scripts/test_release_after_merge.py`, keeps one log per shard and fails if any shard fails or any test is missing), Bookends with bypass unset. Local Bookends checks the working tree; push CI checks every introduced commit from main's previous tip. Bare journeys and `--self-test` prove collection/interface mechanics, not end-to-end progression. Full journeys in [journeys.yml](.github/workflows/journeys.yml) are informational and never gate Release; local boundary proof remains required.
 
@@ -137,4 +139,4 @@ gh workflow run release.yml --ref main -f "tag=$TAG"
 
 ## Completion and handoff
 
-Report changed files, exact command outcomes and missing checks, Git identity and staged/committed/pushed state, actual run/catalog paths, residual risks and owner follow-up. No checked transition establishes semantic review.
+Report changed files, exact command outcomes and missing checks, the kgate baseline evidence (the run-and-wake job id, the `tree` hash from the job's kgate record, and the log path `${XDG_STATE_HOME:-~/.local/state}/kgate/<output>`), Git identity and staged/committed/pushed state, actual run/catalog paths, residual risks and owner follow-up. No checked transition establishes semantic review. A baseline run covers only the tree it shipped: any edit after it needs a fresh run, and a handoff that cites an older run is not baseline proof.
