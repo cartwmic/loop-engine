@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.43.4] - 2026-11-06
+
+### Changed
+
+- Repository guidance only: AGENTS.md explains the kgate baseline run and its handoff (#114).
+
+### Compatibility
+
+- No change to the engine, the providers, bookends-check, the profiles or the record formats.
+
 ## [0.43.3] - 2026-11-05
 
 ### Changed
