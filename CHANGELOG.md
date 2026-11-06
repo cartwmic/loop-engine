@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.43.5] - 2026-11-06
+
+### Changed
+
+- Repository guidance only (#116): AGENTS.md says each proof run needs a fresh, empty proof root; adds boundary rows for journey and driver scripts and for root `skills/`; names the release dry run's archive check as the required archive proof for packaging changes, with `packaged-smoke.py --mode archive` optional and `--mode installed` for installed executables only. The release procedure moved to `docs/release-procedure.md`, unchanged in meaning; AGENTS.md keeps a short pointer section.
+
+### Compatibility
+
+- No change to the engine, the providers, bookends-check, the profiles or the record formats.
+
 ## [0.43.4] - 2026-11-06
 
 ### Changed
