@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.43.3] - 2026-11-05
+
+### Changed
+
+- Repository tooling only: CI and the baseline run the release-after-merge Python tests in 8 parallel shards through `scripts/run-release-tests-sharded.py` (#112).
+
+### Compatibility
+
+- No change to the engine, the providers, bookends-check, the profiles or the record formats.
+
 ## [0.43.2] - 2026-11-05
 
 ### Changed
