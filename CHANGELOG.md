@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.44.0] - 2026-11-07
+
+## [0.44.0] - 2026-11-07
+
+### Added
+
+- Delegated owner approval (#123, #122). An `owner-decision` record may carry a `delegation` (`basis` `approval` or `standing-grant`, `source`, `quote`, `covers`) so a lead or driver can record an intent approval under an approval the owner gave earlier or a standing grant, quoting the owner's words. lean-change checks it at `approved`, `approved-hard` and `verified`: `covers` must equal the intent's criterion ids (`delegation-not-covering`), and the revision must not add, drop or change the goal, the constraints or any criterion statement of the latest validly approved earlier revision (`delegation-changes-approved-outcome`). A refused delegated approval never counts as a baseline. The outcome map says when an approval was delegated. `docs/agent-usage.md#delegated-approval` has the rule, the record, an example and a table of every place that needs the owner's words. The skills and guides that asked for the owner's own words point to it and keep the fallback: ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome.
+
+### Compatibility
+
+- A decision without `delegation` is evaluated exactly as before. The workflow text, the profiles and the other record formats are unchanged, so runs already open keep working. Model-binding amendments still need the owner's own words.
+
 ## [0.43.5] - 2026-11-06
 
 ### Changed
