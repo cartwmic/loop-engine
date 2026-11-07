@@ -17,7 +17,7 @@ Load the active provider skill as well as this engine procedure.
 Use the normal user catalog for production unless the owner explicitly requests
 isolation in this session. Never use a user catalog for tests. Put test databases,
 artifacts and retained external outputs in driver-owned directories outside the checkout.
-Do not infer isolation permission from an earlier run or inherited environment. A lead can also record a delegated approval that grants isolation ([Delegated approval](../../docs/agent-usage.md#delegated-approval)).
+Do not infer isolation permission from an earlier run or inherited environment. A lead can instead record a delegated approval that grants isolation ([Delegated approval](../../docs/agent-usage.md#delegated-approval)). Ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome.
 
 Inspect flags, profile artifact_root, LOOP_ variables, XDG_DATA_HOME, HOME and
 USERPROFILE before start. Record the actual catalog path; unset unintended redirects

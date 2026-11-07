@@ -117,7 +117,7 @@ input and complete context; action/full show must precede mutation.
 `show.result.advice_policy` is the effective setting, overriding start-time advice
 flags or frozen action-guidance prose. It contains `frozen`, `change_record_ids`,
 `effective` and `enabled`; unavailable is not an enabled/stale fallback. Owner
-attribution is trusted, not authentication. Append this closed `advice-policy-change`
+attribution is trusted, not authentication. A lead can instead record a delegated approval ([Delegated approval](#delegated-approval)). Ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome. Append this closed `advice-policy-change`
 shape using the current observed visit and actual owner decision:
 
 ```json
@@ -136,7 +136,7 @@ Copy real state/event identities from the stored workflow; examples create no ed
 The complete map replaces the previous effective map immediately, including the
 pending departure. Empty `occasions` disables new due advice. Removing A releases
 A's unanswered prerequisite without releasing retained B; adding a requirement
-needs a current declaration. The original map and every owner change remain in history. A lead can instead record a delegated approval ([Delegated approval](agent-usage.md#delegated-approval)).
+needs a current declaration. The original map and every owner change remain in history.
 
 For `advice-occasion`, provide `source_state`, `state_visit`, `event`, `occasion_id`,
 object `target`, `triggered`, `trigger_source_ids`, `response_ids` and `reason`.
