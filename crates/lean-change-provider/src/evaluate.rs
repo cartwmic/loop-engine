@@ -3,9 +3,11 @@ use crate::model::*;
 use crate::protocol::{allow, deny, unsupported, EvaluateRequest};
 use crate::workflow::workflow;
 use loop_core::ContextRecord;
-use loop_integrations::owner_checkpoint::{self, Actor, Status};
+use loop_integrations::owner_checkpoint::{
+    self, Actor, Decision, Delegation, OwnerDecision, Status,
+};
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Port: the identity of the repository tree right now. The adapter supplies the real one.
 pub type TreeIdentity<'a> = &'a dyn Fn(&InitialInput) -> Result<String, String>;
@@ -114,7 +116,7 @@ fn intent_ready(records: &[ContextRecord], input: &InitialInput) -> Gate {
 
 fn approval(records: &[ContextRecord], input: &InitialInput, event: &str) -> Gate {
     let (id, intent) = current_intent(records, input)?;
-    require_approved(records, &id)?;
+    require_approved(records, &id, &intent)?;
     if (event == "approved-hard") != intent.hard {
         return Err(refuse(
             "hard-mismatch",
@@ -125,8 +127,9 @@ fn approval(records: &[ContextRecord], input: &InitialInput, event: &str) -> Gat
     Ok(())
 }
 
-/// The owner approved exactly this intent record.
-fn require_approved(records: &[ContextRecord], id: &str) -> Gate {
+/// The owner approved exactly this intent record. A delegated approval must also cover the intent's criteria and
+/// keep the outcome of the last validly approved intent before it.
+fn require_approved(records: &[ContextRecord], id: &str, intent: &Intent) -> Gate {
     let evaluation = owner_checkpoint::evaluate(records, "intent", "intent", id, &["intent"]);
     match evaluation.status {
         Status::Approved => {}
@@ -150,7 +153,139 @@ fn require_approved(records: &[ContextRecord], id: &str) -> Gate {
             ));
         }
     }
+    // Only an approval gets here, and only an approval can carry a delegation.
+    if let Some(Delegation { covers, .. }) = evaluation
+        .approved
+        .as_ref()
+        .and_then(|approval| approval.delegation.as_ref())
+    {
+        covers_intent(id, intent, covers)?;
+        keeps_outcome(records, id, intent)?;
+    }
     Ok(())
+}
+
+/// The criteria a delegation misses, and the ids it names that the intent lacks. Both empty means it covers the
+/// intent. `covers` is a set, so its order and repeats do not matter.
+fn coverage_gap<'a>(covers: &'a [String], intent: &'a Intent) -> (Vec<&'a str>, Vec<&'a str>) {
+    let covered: BTreeSet<&str> = covers.iter().map(String::as_str).collect();
+    let criteria: BTreeSet<&str> = intent.criteria.iter().map(|c| c.id.as_str()).collect();
+    (
+        criteria.difference(&covered).copied().collect(),
+        covered.difference(&criteria).copied().collect(),
+    )
+}
+
+/// Check 1: a delegation must name exactly the criteria of the intent it approves.
+fn covers_intent(id: &str, intent: &Intent, covers: &[String]) -> Gate {
+    let (missing, extra) = coverage_gap(covers, intent);
+    if missing.is_empty() && extra.is_empty() {
+        return Ok(());
+    }
+    Err(refuse(
+        "delegation-not-covering",
+        "a delegated approval must name exactly the criteria of this intent",
+        json!({"intent": id, "missing": missing, "extra": extra}),
+    ))
+}
+
+/// Check 2: the approving decision, when delegated, must keep the outcome of the baseline before it.
+fn keeps_outcome(records: &[ContextRecord], id: &str, intent: &Intent) -> Gate {
+    let approvals = intent_approvals(records);
+    // The approving decision is the latest well-formed intent decision, so it is the last approval listed.
+    let earlier = approvals
+        .split_last()
+        .map_or(&[][..], |(_, earlier)| earlier);
+    let Some((approved_revision, baseline)) = last_valid_approval(records, earlier) else {
+        return Ok(());
+    };
+    let differs = outcome_differences(&baseline, intent);
+    if differs.is_empty() {
+        return Ok(());
+    }
+    Err(refuse(
+        "delegation-changes-approved-outcome",
+        "a delegated approval may not change the goal, constraints or criteria the owner approved",
+        json!({"intent": id, "approved_revision": approved_revision, "differs": differs}),
+    ))
+}
+
+/// The latest intent whose approval is valid. An approval in the owner's own words is valid. A delegated one is valid
+/// only if it covers its intent and keeps the outcome of the baseline before it, so a refused delegation never becomes
+/// the baseline for a later one.
+fn last_valid_approval(
+    records: &[ContextRecord],
+    approvals: &[OwnerDecision],
+) -> Option<(String, Intent)> {
+    let mut baseline: Option<(String, Intent)> = None;
+    for approval in approvals {
+        let Some(intent) = intent_record(records, &approval.subject_revision) else {
+            continue;
+        };
+        let valid = match &approval.delegation {
+            None => true,
+            Some(Delegation { covers, .. }) => {
+                let (missing, extra) = coverage_gap(covers, &intent);
+                missing.is_empty()
+                    && extra.is_empty()
+                    && baseline
+                        .as_ref()
+                        .is_none_or(|(_, before)| outcome_differences(before, &intent).is_empty())
+            }
+        };
+        if valid {
+            baseline = Some((approval.subject_revision.clone(), intent));
+        }
+    }
+    baseline
+}
+
+/// Every well-formed approval of the owner's intent decisions, oldest first.
+fn intent_approvals(records: &[ContextRecord]) -> Vec<OwnerDecision> {
+    let mut owner: Vec<&ContextRecord> = records
+        .iter()
+        .filter(|r| r.kind == "owner-decision")
+        .collect();
+    owner.sort_by_key(|r| r.sequence);
+    owner
+        .into_iter()
+        .filter_map(|r| owner_checkpoint::parse(&r.data, &["intent"]).ok())
+        .filter(|d| {
+            d.checkpoint == "intent" && d.subject == "intent" && d.decision == Decision::Approve
+        })
+        .collect()
+}
+
+/// The intent record with this id, when it parses.
+fn intent_record(records: &[ContextRecord], id: &str) -> Option<Intent> {
+    let record = records
+        .iter()
+        .find(|r| r.kind == "intent" && r.id.as_str() == id)?;
+    Intent::parse(&record.data).ok()
+}
+
+/// The parts of the outcome that differ, in a fixed order. The goal, the constraints and the criteria statements are
+/// what the owner approved; the checks, their timeouts, the old expectations and the hard flag are the agents' choices.
+fn outcome_differences(before: &Intent, after: &Intent) -> Vec<&'static str> {
+    let mut differs = Vec::new();
+    if before.goal != after.goal {
+        differs.push("goal");
+    }
+    if before.constraints != after.constraints {
+        differs.push("constraints");
+    }
+    if statements(before) != statements(after) {
+        differs.push("criteria");
+    }
+    differs
+}
+
+fn statements(intent: &Intent) -> BTreeMap<&str, &str> {
+    intent
+        .criteria
+        .iter()
+        .map(|c| (c.id.as_str(), c.statement.as_str()))
+        .collect()
 }
 
 fn plan(records: &[ContextRecord], input: &InitialInput) -> Gate {
@@ -177,7 +312,7 @@ pub fn verification_ready(
 fn verification(records: &[ContextRecord], input: &InitialInput, tree: TreeIdentity) -> Gate {
     let (id, intent) = current_intent(records, input)?;
     // A later intent record, or a later hard flag, must not inherit an earlier approval or plan.
-    require_approved(records, &id)?;
+    require_approved(records, &id, &intent)?;
     if intent.hard {
         plan(records, input)?;
     }

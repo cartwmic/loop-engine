@@ -80,6 +80,21 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
 
    Request `approved` (hard false) or `approved-hard` (hard true). If they want changes, request `revise`,
    write `intent-2`, and ask again. A rejection is the same record with `"decision": "reject"`, a `target` of `intent` and a `reason`.
+
+   **Delegated path.** Use it only when a delegation covers the run: an approval the owner gave earlier of the design or plan, or a standing grant. Read checkout-root `docs/agent-usage.md#delegated-approval` first. Check that every criterion of the intent is one the cited approval covers. Then append the approval yourself, with a `delegation` (`basis` `approval` or `standing-grant`, `source`, `quote`, `covers`):
+
+   ```json
+   {"checkpoint": "intent", "subject": "intent", "subject_revision": "intent-1", "decision": "approve",
+    "text": "intent-1 lists exactly the outcomes in the approved plan; none added, dropped or changed.",
+    "actor": {"name": "lead:loop-engine", "kind": "agent"},
+    "delegation": {"basis": "approval", "source": "ask #412",
+                   "quote": "yes, go ahead with the plan as written",
+                   "covers": ["c1", "c2"]}}
+   ```
+
+   Append it with the same `append RUN owner-decision` command as the owner's words, then request `approved` or `approved-hard`. Under a delegation, `text` is your statement of why the cited approval covers this intent, not the owner's words; `quote` holds the owner's words. The run's frozen workflow text still says that `text` holds the owner's words. Nobody is asked "What do you expect that is not listed?", so put the intent check's findings and how each was disposed in `text`.
+
+   Ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome. Also ask the owner if they rejected an intent earlier in this run. A refusal with `delegation-not-covering` or `delegation-changes-approved-outcome` also means ask the owner.
 3. **plan** (hard only). Append `{"intent": "intent-1", "text": "..."}` as kind `plan`, request `planned`.
 4. **implement.** Change the code. Stay inside the approved goal and constraints. When the work has steps
    that touch different files, build them at once ([Parallel builders](#parallel-builders)). Request `ready`.
@@ -255,5 +270,5 @@ exit code. Each criterion that is not `none` adds one run
   Do not shorten or reword them. Do not pre-answer them for the reviewer.
 - The engine records one review (and one intent check) per intent, the first well-formed one. A further review round is driver procedure that follows `~/.local/share/agent-harness/reviewer-brief.md` and the review-round rule it names (playbook 58fdb05d).
 - A blocking finding needs an obligation, evidence and a consequence a user would hit in ordinary single-user use; everything else is a note, and a note needs no disposition. Code checks that the three fields are present, not that they are true. Fix or reject each effectively-blocking finding, and reject only with a reason you would say to the owner.
-- Never write a `verification` record by hand. Never copy an owner decision from an earlier intent.
+- Never write a `verification` record by hand. Never copy an owner decision from an earlier intent. A delegation names its own source and quote; do not copy one from an earlier intent either.
 - The engine never runs your checks or agents. Everything outside the records is yours.
