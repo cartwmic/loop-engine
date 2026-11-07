@@ -23,6 +23,70 @@ The engine stores and evaluates workflow state; it never executes agents, adviso
 For new workflows advertising provider record admission, supported provider-owned append/intake records are checked before storage. Named rule refusals and unavailable/incompatible/malformed validator responses fail closed; refused writes leave context/history unchanged. Deterministic validity is not semantic approval or aggregate readiness. Started runs keep frozen capabilities/runtime; no migration or bypass is implied.
 
 Preserve review groups, self-review declarations, author counts and amendments. Declare evidence applicability explicitly; check ordinary review clearance before challenge review. Respect declared source scopes and current source identity. Record residual risks honestly and cover every applicable sufficiency axis; zero axes do not require invented reviews. Reuse evidence only while its declared applicability remains true. Typed advice answers are externally authored context of kind `advice-answer`.
+
+## Delegated approval
+
+A lead or driver may record the owner's approval of an intent itself, in two cases: an approval the owner gave earlier of the design or plan, or a standing grant from the owner. Cite that approval or grant by its id, and quote the owner's words exactly. Ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome. Also ask the owner when he rejected an intent earlier in this run.
+
+The lead judges whether the cited source covers the step, and writes the reason in `text`. The engine does not judge that. Under a delegation, `text` is the lead's own statement of why the source covers the step. It is not the owner's words. The `quote` holds the owner's words.
+
+The engine does not stop a delegation from citing an approval that is older than a rejection the owner made in this run. In that case the lead must ask the owner. The engine also keeps an intent the owner approved and later rejected as the baseline for the no-change check. The engine does not enforce the rule about rejections; the lead must follow it.
+
+### The record
+
+A delegated approval is an `owner-decision` record with a `delegation` object. The fields are:
+
+- `basis`: `approval` for an approval the owner gave earlier of the design or plan, or `standing-grant` for a standing grant.
+- `source`: the id of that approval or grant, such as a ledger ask id, a playbook rule id or a grant number.
+- `quote`: the owner's words, copied exactly.
+- `covers`: a non-empty list of the criterion ids that the cited approval is said to cover.
+
+A delegation is allowed only with `"decision": "approve"`. A rejection that has one is refused when it is parsed.
+
+```json
+{"checkpoint": "intent", "subject": "intent", "subject_revision": "intent-1", "decision": "approve",
+ "text": "intent-1 lists exactly the outcomes in the approved plan; none added, dropped or changed.",
+ "actor": {"name": "lead:loop-engine", "kind": "agent"},
+ "delegation": {"basis": "approval", "source": "ask #412",
+                "quote": "yes, go ahead with the plan as written",
+                "covers": ["c1", "c2"]}}
+```
+
+Append it with:
+
+```sh
+loop-engine ... append RUN owner-decision '<the record above>'
+```
+
+### What the engine checks
+
+The engine reads the approval of the latest intent record at `approved`, at `approved-hard` and again at `verified`. For a delegated approval it runs two checks.
+
+1. **Coverage.** The `covers` list, read as a set, must equal the criterion ids of the latest intent record. Order and repeats do not matter. Otherwise the event is refused with `delegation-not-covering`. The refusal lists the ids the intent has and `covers` lacks (`missing`), and the ids `covers` has and the intent lacks (`extra`).
+2. **No change to an approved outcome.** The engine finds the baseline: the latest earlier intent that the owner approved in their own words, or that a delegation approved after passing both checks. A refused delegation is never a baseline. The intent must match the baseline in its `goal`, its `constraints` (in order) and its criteria. Criteria are matched by id: the same ids, and the same `statement` for each. Changes to a criterion's `check` (its `argv` and `timeout_ms`), to `old`, to the `hard` flag or to `author` do not count. Otherwise the event is refused with `delegation-changes-approved-outcome`. The refusal names the baseline record and which of `goal`, `constraints` and `criteria` differ.
+
+A refusal with either code means: ask the owner.
+
+The engine does not check that the quote is the owner's words, or that the source covers the step. Actor kinds are claims the record makes, not checks.
+
+### Audit
+
+`show --view full` shows the record as it was appended. The outcome map says that the approval was delegated, and shows its basis, source and quote.
+
+### Where the owner's words are required
+
+This table lists where the owner's words are required, and whether a delegation can stand in for them.
+
+| Place | Enforced by | Delegation |
+|---|---|---|
+| lean-change intent approval and `verified` | engine (`owner-decision`, LE-204) | yes: the `delegation` field, checked by the engine |
+| model-binding amendment | engine (human actor, owner authority, words) | no, by design |
+| author-count amendment | engine (authority `owner` or `standing-delegation` with a reference) | yes, already: authority kind `standing-delegation` |
+| owner override, advice exception, advice policy change, ending a run | engine checks only that the owner or actor and a reason are present; the rest is a claim | yes: skill text, cite the delegation in the reason or record |
+| starting a run, production isolation | skill text | yes: the report names the delegation |
+| accepting requirement text, commits, pushes, release steps | repository guides | yes: cite the delegation |
+| cap asks and redesign asks after review rounds | the coordinator's playbook, outside this repository | not changed here |
+
 ## Ending a run the owner has decided to stop
 
 `terminate` takes only the run ID and records one history entry. It carries no reason and
