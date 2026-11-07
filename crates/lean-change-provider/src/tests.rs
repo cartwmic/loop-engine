@@ -2425,3 +2425,345 @@ fn findings_conformance_v1() {
     );
     assert_eq!(ran, 19);
 }
+
+/// A lead's approval of `revision` under a delegation that cites the owner's earlier words for `covers`.
+fn delegated(revision: &str, covers: &[&str]) -> Value {
+    json!({"checkpoint":"intent","subject":"intent","subject_revision":revision,"decision":"approve",
+        "text":"The cited approval covers this intent.",
+        "actor":{"name":"lead:loop-engine","kind":"agent"},
+        "delegation":{"basis":"approval","source":"ask #412",
+            "quote":"yes, go ahead with the plan as written","covers":covers}})
+}
+
+/// Intent-1 approved in the owner's words, then `changed` approved by `event` under a delegation for `covers`.
+fn delegated_after_own_words(repo: &Path, changed: Value, covers: &[&str], event: &str) -> Value {
+    let ctx = vec![
+        record("intent-1", "intent", 1, intent(false)),
+        record("d1", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("intent-2", "intent", 3, changed),
+        record("d2", "owner-decision", 4, delegated("intent-2", covers)),
+    ];
+    ask(repo, true, "intent-approval", event, ctx)
+}
+
+#[test]
+fn gate_delegated_coverage_accepts_matching_covers() {
+    let r = repo();
+    let ctx = vec![
+        record("intent-1", "intent", 1, intent(false)),
+        record(
+            "d",
+            "owner-decision",
+            2,
+            delegated("intent-1", &["c2", "c1", "c1"]),
+        ),
+    ];
+    allowed(&ask(&r, true, "intent-approval", "approved", ctx.clone()));
+    let mut verified = ctx;
+    verified.push(record(
+        "v1",
+        "verification",
+        3,
+        verification(&r, &intent(false)),
+    ));
+    allowed(&ask(&r, false, "verify", "verified", verified));
+}
+
+#[test]
+fn gate_delegated_coverage_refuses_missing_and_extra_id() {
+    let r = repo();
+    let ctx = vec![
+        record("intent-1", "intent", 1, intent(false)),
+        record(
+            "d",
+            "owner-decision",
+            2,
+            delegated("intent-1", &["c1", "c9"]),
+        ),
+    ];
+    let refused = ask(&r, true, "intent-approval", "approved", ctx.clone());
+    assert_eq!(code(&refused), "delegation-not-covering");
+    assert_eq!(refused["feedback"]["details"]["intent"], json!("intent-1"));
+    assert_eq!(refused["feedback"]["details"]["missing"], json!(["c2"]));
+    assert_eq!(refused["feedback"]["details"]["extra"], json!(["c9"]));
+    let mut verified = ctx;
+    verified.push(record(
+        "v1",
+        "verification",
+        3,
+        verification(&r, &intent(false)),
+    ));
+    let refused = ask(&r, false, "verify", "verified", verified);
+    assert_eq!(code(&refused), "delegation-not-covering");
+    assert_eq!(refused["feedback"]["details"]["missing"], json!(["c2"]));
+    assert_eq!(refused["feedback"]["details"]["extra"], json!(["c9"]));
+}
+
+#[test]
+fn gate_delegated_coverage_own_words_unaffected() {
+    let r = repo();
+    let ctx = verify_ctx(&r, |_| {});
+    allowed(&ask(
+        &r,
+        true,
+        "intent-approval",
+        "approved",
+        ctx[..2].to_vec(),
+    ));
+    allowed(&ask(&r, false, "verify", "verified", ctx));
+}
+
+#[test]
+fn gate_delegated_revision_refuses_changed_goal() {
+    let r = repo();
+    let mut changed = intent(false);
+    changed["goal"] = json!("g, reworded");
+    let refused = delegated_after_own_words(&r, changed, &["c1", "c2"], "approved");
+    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+    assert_eq!(
+        refused["feedback"]["details"]["approved_revision"],
+        json!("intent-1")
+    );
+    assert_eq!(refused["feedback"]["details"]["differs"], json!(["goal"]));
+}
+
+#[test]
+fn gate_delegated_revision_refuses_changed_constraints() {
+    let r = repo();
+    let mut changed = intent(false);
+    changed["constraints"] = json!(["d"]);
+    let refused = delegated_after_own_words(&r, changed, &["c1", "c2"], "approved");
+    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+    assert_eq!(
+        refused["feedback"]["details"]["differs"],
+        json!(["constraints"])
+    );
+}
+
+#[test]
+fn gate_delegated_revision_refuses_changed_criterion_statement() {
+    let r = repo();
+    let mut changed = intent(false);
+    changed["criteria"][1]["statement"] = json!("s2, reworded");
+    let refused = delegated_after_own_words(&r, changed, &["c1", "c2"], "approved");
+    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+    assert_eq!(
+        refused["feedback"]["details"]["differs"],
+        json!(["criteria"])
+    );
+}
+
+#[test]
+fn gate_delegated_revision_refuses_added_criterion() {
+    let r = repo();
+    let mut changed = intent(false);
+    changed["criteria"]
+        .as_array_mut()
+        .unwrap()
+        .push(criterion("c3", None));
+    let refused = delegated_after_own_words(&r, changed, &["c1", "c2", "c3"], "approved");
+    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+    assert_eq!(
+        refused["feedback"]["details"]["differs"],
+        json!(["criteria"])
+    );
+}
+
+#[test]
+fn gate_delegated_revision_refuses_dropped_criterion() {
+    let r = repo();
+    let mut changed = intent(false);
+    changed["criteria"].as_array_mut().unwrap().pop();
+    let refused = delegated_after_own_words(&r, changed, &["c1"], "approved");
+    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+    assert_eq!(
+        refused["feedback"]["details"]["differs"],
+        json!(["criteria"])
+    );
+}
+
+#[test]
+fn gate_delegated_revision_accepts_check_only_change() {
+    let r = repo();
+    let base = intent(false);
+    // The check's argv and timeout, and the order of the criteria, are the agents' choices.
+    let mut checks = base.clone();
+    checks["criteria"][0]["check"] = json!({"argv":["sh","-c","true"],"timeout_ms":5000});
+    checks["criteria"][1]["check"]["timeout_ms"] = json!(2000);
+    allowed(&delegated_after_own_words(
+        &r,
+        checks,
+        &["c1", "c2"],
+        "approved",
+    ));
+    let mut reordered = base.clone();
+    reordered["criteria"] = json!([base["criteria"][1], base["criteria"][0]]);
+    allowed(&delegated_after_own_words(
+        &r,
+        reordered,
+        &["c1", "c2"],
+        "approved",
+    ));
+    // The hard flag is also the agents' choice: the same outcome, approved as hard.
+    allowed(&delegated_after_own_words(
+        &r,
+        intent(true),
+        &["c1", "c2"],
+        "approved-hard",
+    ));
+}
+
+#[test]
+fn gate_delegated_revision_accepts_old_expectation_change() {
+    let r = repo();
+    let old_intent = |expect: &str| {
+        intent_with(vec![
+            criterion("c1", Some(json!({"expect": expect}))),
+            criterion("c2", Some(json!({"expect": "same"}))),
+        ])
+    };
+    let ctx = vec![
+        record("intent-1", "intent", 1, old_intent("fails")),
+        record("d1", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("intent-2", "intent", 3, old_intent("absent")),
+        record(
+            "d2",
+            "owner-decision",
+            4,
+            delegated("intent-2", &["c1", "c2"]),
+        ),
+    ];
+    allowed(&ask_with(
+        old_vs_new_input(&r, true, &[]),
+        "intent-approval",
+        "approved",
+        ctx,
+    ));
+}
+
+#[test]
+fn gate_delegated_revision_refused_at_verified_for_revision_appended_during_implement() {
+    let r = repo();
+    let mut changed = intent(false);
+    changed["criteria"][0]["statement"] = json!("s1, reworded");
+    let mut v = verification(&r, &changed);
+    v["intent"] = json!("intent-2");
+    let ctx = vec![
+        record("intent-1", "intent", 1, intent(false)),
+        record(
+            "d1",
+            "owner-decision",
+            2,
+            delegated("intent-1", &["c1", "c2"]),
+        ),
+        record("intent-2", "intent", 3, changed),
+        record(
+            "d2",
+            "owner-decision",
+            4,
+            delegated("intent-2", &["c1", "c2"]),
+        ),
+        record("v2", "verification", 5, v),
+    ];
+    let refused = ask(&r, false, "verify", "verified", ctx);
+    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+    assert_eq!(
+        refused["feedback"]["details"]["approved_revision"],
+        json!("intent-1")
+    );
+}
+
+#[test]
+fn gate_delegated_revision_refused_delegation_never_a_baseline() {
+    let r = repo();
+    let mut changed = intent(false);
+    changed["goal"] = json!("g, reworded");
+    let mut ctx = vec![
+        record("intent-1", "intent", 1, intent(false)),
+        record(
+            "d1",
+            "owner-decision",
+            2,
+            delegated("intent-1", &["c1", "c2"]),
+        ),
+        record("intent-2", "intent", 3, changed.clone()),
+        record(
+            "d2",
+            "owner-decision",
+            4,
+            delegated("intent-2", &["c1", "c2"]),
+        ),
+    ];
+    // intent-2 changes the goal, so its delegation is refused and counts for nothing afterwards.
+    let refused = ask(&r, true, "intent-approval", "approved", ctx.clone());
+    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+    // intent-3 repeats that change. Its baseline is still intent-1, not the refused intent-2.
+    ctx.push(record("intent-3", "intent", 5, changed));
+    ctx.push(record(
+        "d3",
+        "owner-decision",
+        6,
+        delegated("intent-3", &["c1", "c2"]),
+    ));
+    let refused = ask(&r, true, "intent-approval", "approved", ctx.clone());
+    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+    assert_eq!(
+        refused["feedback"]["details"]["approved_revision"],
+        json!("intent-1")
+    );
+    // The owner's own words approve intent-3.
+    ctx.push(record(
+        "d4",
+        "owner-decision",
+        7,
+        decision("Yes, that change too.", "intent-3"),
+    ));
+    allowed(&ask(&r, true, "intent-approval", "approved", ctx));
+}
+
+#[test]
+fn gate_delegated_revision_baseline_is_latest_validly_approved() {
+    let r = repo();
+    let base = intent(false);
+    // intent-2 changes only a check, so it keeps the outcome and becomes the baseline.
+    let mut check_only = base.clone();
+    check_only["criteria"][1]["check"]["timeout_ms"] = json!(2000);
+    // intent-3 changes only a check of intent-2.
+    let mut second_check = check_only.clone();
+    second_check["criteria"][0]["check"]["argv"] = json!(["sh", "-c", "true"]);
+    let mut ctx = vec![
+        record("intent-1", "intent", 1, base),
+        record("d1", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("intent-2", "intent", 3, check_only),
+        record(
+            "d2",
+            "owner-decision",
+            4,
+            delegated("intent-2", &["c1", "c2"]),
+        ),
+        record("intent-3", "intent", 5, second_check.clone()),
+        record(
+            "d3",
+            "owner-decision",
+            6,
+            delegated("intent-3", &["c1", "c2"]),
+        ),
+    ];
+    allowed(&ask(&r, true, "intent-approval", "approved", ctx.clone()));
+    // A goal change is judged against intent-3, the latest approval that was valid.
+    let mut goal = second_check;
+    goal["goal"] = json!("g, reworded");
+    ctx.push(record("intent-4", "intent", 7, goal));
+    ctx.push(record(
+        "d4",
+        "owner-decision",
+        8,
+        delegated("intent-4", &["c1", "c2"]),
+    ));
+    let refused = ask(&r, true, "intent-approval", "approved", ctx);
+    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+    assert_eq!(
+        refused["feedback"]["details"]["approved_revision"],
+        json!("intent-3")
+    );
+}

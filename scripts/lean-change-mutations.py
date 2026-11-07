@@ -45,7 +45,7 @@ MUTATIONS = [
     ('a review with no blocking finding needs no fixed finding', EVALUATE, 'if review.tree != now && needs_fix && !fixed {', 'if review.tree != now && !fixed {'),
     ('a v0 review with no finding still needs a fixed finding after an edit', EVALUATE, '    let needs_fix = schema.is_none()\n        ||', '    let needs_fix = false\n        ||'),
     ('review verification first', EVALUATE, 'fn review(records: &[ContextRecord], input: &InitialInput, tree: TreeIdentity) -> Gate {\n    verification(records, input, tree)?;\n', 'fn review(records: &[ContextRecord], input: &InitialInput, tree: TreeIdentity) -> Gate {\n'),
-    ('downstream approval', EVALUATE, '    require_approved(records, &id)?;\n    if intent.hard {', '    if intent.hard {'),
+    ('downstream approval', EVALUATE, '    require_approved(records, &id, &intent)?;\n    if intent.hard {', '    if intent.hard {'),
     ('downstream plan', EVALUATE, '    if intent.hard {\n        plan(records, input)?;\n    }', ''),
     ('first well-formed record by sequence, not order', EVALUATE, '    candidates.sort_by_key(|r| r.sequence);\n', ''),
     ('first well-formed record is authoritative', EVALUATE, 'candidates.sort_by_key(|r| r.sequence);', 'candidates.sort_by_key(|r| std::cmp::Reverse(r.sequence));'),
@@ -91,6 +91,9 @@ MUTATIONS = [
     ('only schema 1 is accepted', EVALUATE, 'if findings_schema.is_some_and(|schema| schema != 1) {', 'if false {'),
     ('a blocking finding missing a field is demoted', MODEL, '        if missing.is_empty() {\n            Effective::Blocking', '        if true {\n            Effective::Blocking'),
     ('a note needs a disposition', EVALUATE, '        .filter(|f| f.effective(findings_schema) == Effective::Blocking)\n    {', '        .filter(|_| true)\n    {'),
+    ('delegation coverage check', EVALUATE, '    if missing.is_empty() && extra.is_empty() {\n        return Ok(());', '    if true {\n        return Ok(());'),
+    ('delegation outcome comparison', EVALUATE, '    differs\n}\n\nfn statements(', '    differs.clear();\n    differs\n}\n\nfn statements('),
+    ('a refused delegation never counts as a baseline', EVALUATE, '        if valid {\n', '        if valid || true {\n'),
 ]
 
 
