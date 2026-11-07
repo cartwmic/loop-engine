@@ -35,7 +35,7 @@ OUTCOME_GOAL = 'Greet Bob with "Hello, Bob!" & say <b>hi</b>.'
 GUARD_REASON = 'a guard on the proof file, which the old tree cannot inform'
 REJECT_REASON = 'The goal names no empty name, so the criteria cover it.'
 FIX_REASON = 'The intent now names the exact greeting.'
-SCENARIOS = ['b', 'c', 'hard', 'old-vs-new', 'parallel', 'outcome-map', 'outcome-map-skill', 'outcome-map-fixture', 'outcome-map-browser', 'findings-v1']
+SCENARIOS = ['b', 'c', 'hard', 'old-vs-new', 'parallel', 'outcome-map', 'outcome-map-skill', 'outcome-map-fixture', 'outcome-map-browser', 'findings-v1', 'delegated']
 # The stand-in full gate logs every call, then fails when the finished steps word their files differently: each step alone passes, the joined tree does not.
 GATE = ('printf "%s %s\\n" "$(pwd -P)" "$(git rev-parse HEAD)" >> "$GATE_LOG"\n'
         'words=$(sed "s/^[a-z]*: //" one.txt two.txt | grep -vx todo | sort -u | wc -l)\n'
@@ -1132,6 +1132,153 @@ def findings_v1_scenario(engine, provider, work, keep):
     print('lean-change journey notes-only review accepted after a tree change and re-verification')
 
 
+def delegation_example(skill):
+    """The first ```json block of the skill that carries a delegation, as a decision; the scenario appends it verbatim."""
+    lines = skill.read_text().splitlines()
+    block, indent = None, 0
+    for line in lines:
+        if block is None and line.strip() == '```json':
+            block, indent = [], len(line) - len(line.lstrip())
+        elif block is not None and line.strip() == '```':
+            text = '\n'.join(block)
+            if '"delegation"' in text:
+                return checked_example(skill, text)
+            block = None
+        elif block is not None:
+            block.append(line[indent:])
+    raise SystemExit(f'{skill}: no ```json block with "delegation"')
+
+
+def checked_example(skill, text):
+    """The example must fit this scenario: an intent approval whose covers name the criteria the scenario builds."""
+    try:
+        decision = json.loads(text)
+    except ValueError as error:
+        raise SystemExit(f'{skill}: the delegation example is not valid JSON: {error}')
+    delegation = decision.get('delegation') if isinstance(decision, dict) else None
+    if not isinstance(delegation, dict) or (decision.get('checkpoint'), decision.get('subject'), decision.get('decision')) != ('intent', 'intent', 'approve'):
+        raise SystemExit(f'{skill}: the delegation example is not an intent approval with a delegation object')
+    covers, criteria = delegation.get('covers'), len(intent()['criteria'])
+    if not isinstance(covers, list) or not all(isinstance(c, str) for c in covers) or len(set(covers)) != criteria:
+        raise SystemExit(f'{skill}: the delegation example covers {covers!r}, but the scenario intent has {criteria} criteria')
+    if not isinstance(decision.get('subject_revision'), str):
+        raise SystemExit(f'{skill}: the delegation example has no subject_revision')
+    return decision
+
+
+def delegated_intent(covers):
+    """The scenario's intent, with its two criteria named by the ids the delegation covers."""
+    doc = intent()
+    for criterion, criterion_id in zip(doc['criteria'], covers):
+        criterion['id'] = criterion_id
+    return doc
+
+
+def changed_intent(covers):
+    """The same intent with one criterion statement changed, so the approved outcome differs."""
+    doc = delegated_intent(covers)
+    doc['criteria'][0]['statement'] = 'greeting.txt says hello, twice'
+    return doc
+
+
+def delegated_decision(example, revision, covers=None):
+    """The example decision aimed at another intent revision, with its covers replaced when given."""
+    decision = json.loads(json.dumps(example))
+    decision['subject_revision'] = revision
+    decision['text'] = f'Lead statement for {revision}.'
+    if covers is not None:
+        decision['delegation']['covers'] = covers
+    return decision
+
+
+def plain_run(engine, provider, work, run_id):
+    """A run on a repository with only README.md and profile c, set up as run_profile sets it up; the run starts in explore."""
+    work.mkdir(parents=True)
+    j = Journey(engine, provider, work)
+    repo = work / 'repo'
+    repo.mkdir()
+    git(repo, 'init', '-q')
+    git(repo, 'config', 'user.email', 'j@example.invalid')
+    git(repo, 'config', 'user.name', 'j')
+    (repo / 'README.md').write_text('fixture\n')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-qm', 'base')
+    profile_path = work / 'profile.json'
+    profile_path.write_text(subprocess.run([str(provider), 'setup', '--profile', 'c', '--repo', str(repo)], text=True, capture_output=True, check=True).stdout)
+    j.run_id = run_id
+    j.call('start', '--id', run_id, 'lean-change', '@' + str(profile_path), 'delegated')
+    assert j.state() == 'explore'
+    return j, repo
+
+
+def delegated_scenario(engine, provider, skill, work):
+    # bookends:LE-204: a delegation is judged on its covers, and a delegated approval never changes an approved outcome.
+    example = delegation_example(skill)
+    revision, covers = example['subject_revision'], example['delegation']['covers']
+
+    # Covers must match the criteria exactly: a missing id and an extra id are each refused, and the run stays in intent-approval.
+    j, repo = plain_run(engine, provider, work / 'end', 'lean-delegated-end')
+    j.append(revision, 'intent', delegated_intent(covers))
+    j.event('intent-ready')
+    j.append('d-missing', 'owner-decision', delegated_decision(example, revision, covers[:1]))
+    j.refused('approved', 'delegation-not-covering', 'intent-approval')
+    j.append('d-extra', 'owner-decision', delegated_decision(example, revision, covers + ['extra']))
+    j.refused('approved', 'delegation-not-covering', 'intent-approval')
+    j.append('d-ok', 'owner-decision', example)
+    j.event('approved')
+    assert j.state() == 'implement'
+    j.event('ready')
+    (repo / 'greeting.txt').write_text('hello\n')
+    fresh = j.verify()
+    assert {r['criterion'] for r in fresh['results']} == set(covers), fresh
+    j.append('v-1', 'verification', fresh)
+    j.event('verified')
+    final = j.call('show', '--view', 'full', j.run_id)
+    assert final['current_state'] == 'end' and final['lifecycle'] == 'final', final
+
+    # The delegated approval of intent-1 is the baseline. intent-2 changes a criterion and its delegation is refused during implement.
+    # intent-3, the same as intent-2, is refused too: the refused approval of intent-2 is not a baseline.
+    j, repo = plain_run(engine, provider, work / 'revised', 'lean-delegated-revised')
+    j.append(revision, 'intent', delegated_intent(covers))
+    j.event('intent-ready')
+    j.append('d-ok', 'owner-decision', example)
+    j.event('approved')
+    assert j.state() == 'implement'
+    j.append('intent-2', 'intent', changed_intent(covers))
+    j.append('d-2', 'owner-decision', delegated_decision(example, 'intent-2'))
+    j.event('ready')
+    (repo / 'greeting.txt').write_text('hello\n')
+    j.append('v-2', 'verification', j.verify())
+    j.refused('verified', 'delegation-changes-approved-outcome', 'verify')
+    j.append('intent-3', 'intent', changed_intent(covers))
+    j.append('d-3', 'owner-decision', delegated_decision(example, 'intent-3'))
+    j.append('v-3', 'verification', j.verify())
+    j.refused('verified', 'delegation-changes-approved-outcome', 'verify')
+    # The owner's own words need no delegation, so they make intent-3 the baseline and let the run finish.
+    j.append('d-own-3', 'owner-decision', {'checkpoint': 'intent', 'subject': 'intent', 'subject_revision': 'intent-3',
+                                       'decision': 'approve', 'text': 'Yes, say hello twice.', 'actor': OWNER})
+    j.append('v-4', 'verification', j.verify())
+    j.event('verified')
+    final = j.call('show', '--view', 'full', j.run_id)
+    assert final['current_state'] == 'end' and final['lifecycle'] == 'final', final
+
+    # A delegation cannot approve a changed outcome at the approval event either. The owner's words approve intent-1, then revise goes back to explore.
+    j, _ = plain_run(engine, provider, work / 'approval', 'lean-delegated-approval')
+    j.append(revision, 'intent', delegated_intent(covers))
+    j.event('intent-ready')
+    j.append('d-own', 'owner-decision', {'checkpoint': 'intent', 'subject': 'intent', 'subject_revision': revision,
+                                      'decision': 'approve', 'text': 'Yes, add the greeting.', 'actor': OWNER})
+    j.event('approved')
+    assert j.state() == 'implement'
+    j.event('revise')
+    assert j.state() == 'explore'
+    j.append('intent-2', 'intent', changed_intent(covers))
+    j.event('intent-ready')
+    assert j.state() == 'intent-approval'
+    j.append('d-2', 'owner-decision', delegated_decision(example, 'intent-2'))
+    j.refused('approved', 'delegation-changes-approved-outcome', 'intent-approval')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--engine')
@@ -1148,6 +1295,7 @@ def main():
         assert len(intent()['criteria']) == 2 and review('t', True)['findings'] and intent_check(fail='terms')['findings']
         assert len(v1_review('t', [], v1_findings())['answers']) == 7 and len(review('t', False)['answers']) == 6
         assert [f.get('severity') for f in v1_findings()] == ['blocking', 'blocking', 'note'] and 'consequence' not in v1_findings()[1]
+        assert 'delegated' in SCENARIOS
         print('lean-change journey self-test passed')
         return
     for name in ['engine', 'provider']:
@@ -1165,6 +1313,7 @@ def main():
         ('outcome-map-fixture', lambda w: outcome_map_fixture_scenario(provider, w)),
         ('outcome-map-browser', lambda w: outcome_map_browser_scenario(provider, args.chromium, w)),
         ('findings-v1', lambda w: findings_v1_scenario(engine, provider, w, Path(args.keep_records).resolve() if args.keep_records else None)),
+        ('delegated', lambda w: delegated_scenario(engine, provider, skill, w)),
     ]
     for name, action in scenarios:
         if args.only not in (None, name):
