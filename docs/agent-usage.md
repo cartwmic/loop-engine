@@ -82,9 +82,9 @@ This table lists where the owner's words are required, and whether a delegation 
 | lean-change intent approval and `verified` | engine (`owner-decision`, LE-204) | yes: the `delegation` field, checked by the engine |
 | model-binding amendment | engine (human actor, owner authority, words) | no, by design |
 | author-count amendment | engine (authority `owner` or `standing-delegation` with a reference) | yes, already: authority kind `standing-delegation` |
-| owner override, advice exception, advice policy change, ending a run | engine checks only that the owner or actor and a reason are present; the rest is a claim | yes: skill text, cite the delegation in the reason or record |
-| starting a run, production isolation | skill text | yes: the report names the delegation |
-| accepting requirement text, commits, pushes, release steps | repository guides | yes: cite the delegation |
+| owner override, advice exception, advice policy change, ending a run | engine checks only that the owner or actor and a reason are present; the rest is a claim | the guide for that step says when a lead may act under a delegation and points here; the engine does not check it |
+| starting a run, production isolation | skill text | the guide for that step says when a lead may act under a delegation and points here; the engine does not check it |
+| accepting requirement text, commits, pushes, release steps | repository guides | the guide for that step says when a lead may act under a delegation and points here; the engine does not check it |
 | cap asks and redesign asks after review rounds | the coordinator's playbook, outside this repository | not changed here |
 
 ## Ending a run the owner has decided to stop
