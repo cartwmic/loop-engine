@@ -3,6 +3,7 @@
 //! tree identity. Nothing here reads a file, a process or Git.
 use lean_change_provider::evaluate::old_problem;
 use lean_change_provider::model::*;
+use loop_integrations::owner_checkpoint::{self, Decision, DelegationBasis};
 use serde_json::Value;
 
 const RAIL_TAG: &str = "<div class=\"rail-links\">";
@@ -79,8 +80,9 @@ pub fn section(
     }
     let summary = sentences.join(" ");
 
+    let delegation = delegation_paragraph(context, intent_id);
     let mut html = format!(
-        "<section id=\"evidence\" class=\"om\">\n<style>\n{CSS}</style>\n<h2 class=\"om-title\">What was approved and what ran</h2>\n<p class=\"om-freshness\">{}</p>\n<p class=\"om-goal\"><b>The approved goal, as written:</b> {}</p>\n<p class=\"om-summary\">{summary}</p>\n",
+        "<section id=\"evidence\" class=\"om\">\n<style>\n{CSS}</style>\n<h2 class=\"om-title\">What was approved and what ran</h2>\n<p class=\"om-freshness\">{}</p>\n<p class=\"om-goal\"><b>The approved goal, as written:</b> {}</p>\n{delegation}<p class=\"om-summary\">{summary}</p>\n",
         esc(&freshness),
         esc(&intent.goal),
     );
@@ -149,6 +151,43 @@ pub fn splice(ar_page: &str, section: &str) -> Result<String, String> {
     }
     out.push_str(&ar_page[from..]);
     Ok(out)
+}
+
+/// The paragraph that says the approval of the latest intent record was given under a delegation. Empty when the
+/// approving decision is in the owner's own words, is not an approval of this revision, or has no delegation. The
+/// approving decision is found as the gate finds it: the latest well-formed intent decision, by sequence.
+fn delegation_paragraph(context: &[Value], intent_id: &str) -> String {
+    let latest = context
+        .iter()
+        .filter(|r| r["kind"] == "owner-decision")
+        .filter_map(|r| {
+            let decision = owner_checkpoint::parse(&r["data"], &["intent"]).ok()?;
+            Some((r["sequence"].as_u64(), decision))
+        })
+        .filter(|(_, decision)| decision.checkpoint == "intent")
+        .max_by_key(|(sequence, _)| *sequence)
+        .map(|(_, decision)| decision);
+    let Some(decision) = latest else {
+        return String::new();
+    };
+    let approves_intent = decision.decision == Decision::Approve
+        && decision.subject == "intent"
+        && decision.subject_revision == intent_id;
+    let delegation = match &decision.delegation {
+        Some(delegation) if approves_intent => delegation,
+        _ => return String::new(),
+    };
+    let basis = match delegation.basis {
+        DelegationBasis::Approval => "an earlier approval",
+        DelegationBasis::StandingGrant => "a standing grant",
+    };
+    format!(
+        "<p class=\"om-delegation\"><b>Approved by delegation, not in the owner's own words:</b> basis {basis}; source {}; the owner's words, as recorded: &ldquo;{}&rdquo;. Recorded by {}, who wrote: {}</p>\n",
+        esc(&delegation.source),
+        esc(&delegation.quote),
+        esc(&decision.actor.name),
+        esc(&decision.text),
+    )
 }
 
 /// The latest verification of the intent, by sequence, and its data if it parses. An unreadable latest record is
@@ -1252,6 +1291,187 @@ mod tests {
             render(&show, Ok(TREE.to_owned())),
             render(&show, Ok(TREE.to_owned()))
         );
+    }
+
+    fn owner() -> Value {
+        json!({"name": "owner", "kind": "human"})
+    }
+
+    fn lead() -> Value {
+        json!({"name": "lead:loop-engine", "kind": "agent"})
+    }
+
+    fn delegation_of(basis: &str, source: &str, quote: &str) -> Value {
+        json!({"basis": basis, "source": source, "quote": quote, "covers": ["c1"]})
+    }
+
+    /// An approve decision on the intent record: the owner's own words, or a delegation the lead recorded.
+    fn intent_decision(
+        id: &str,
+        sequence: u64,
+        revision: &str,
+        actor: Value,
+        text: &str,
+        delegation: Option<Value>,
+    ) -> Value {
+        let mut data = json!({"checkpoint": "intent", "subject": "intent", "subject_revision": revision, "decision": "approve", "text": text, "actor": actor});
+        if let Some(delegation) = delegation {
+            data["delegation"] = delegation;
+        }
+        record(id, "owner-decision", sequence, data)
+    }
+
+    /// The intent of one criterion, then `decisions`.
+    fn approved_context(decisions: Vec<Value>) -> Vec<Value> {
+        let mut context = vec![intent_record(
+            "Ship the thing.",
+            vec![criterion("c1", None)],
+        )];
+        context.extend(decisions);
+        context
+    }
+
+    #[test]
+    fn delegated_approval_is_shown_with_basis_source_and_quote() {
+        let context = approved_context(vec![intent_decision(
+            "decision-1",
+            2,
+            "intent-1",
+            lead(),
+            "The plan lists c1 only.",
+            Some(delegation_of(
+                "approval",
+                "ask #412",
+                "yes, go ahead with the plan as written",
+            )),
+        )]);
+        let html = render(&show(false, false, context), Ok(TREE.to_owned()));
+        let line = "<p class=\"om-delegation\"><b>Approved by delegation, not in the owner's own words:</b> basis an earlier approval; source ask #412; the owner's words, as recorded: &ldquo;yes, go ahead with the plan as written&rdquo;. Recorded by lead:loop-engine, who wrote: The plan lists c1 only.</p>\n";
+        assert!(
+            html.contains(&format!("</p>\n{line}<p class=\"om-summary\">")),
+            "{html}"
+        );
+
+        let context = approved_context(vec![intent_decision(
+            "decision-1",
+            2,
+            "intent-1",
+            lead(),
+            "Standing grant covers c1.",
+            Some(delegation_of(
+                "standing-grant",
+                "grant 3",
+                "always do the plan",
+            )),
+        )]);
+        let html = render(&show(false, false, context), Ok(TREE.to_owned()));
+        assert!(html.contains("<p class=\"om-delegation\"><b>Approved by delegation, not in the owner's own words:</b> basis a standing grant; source grant 3; the owner's words, as recorded: &ldquo;always do the plan&rdquo;. Recorded by lead:loop-engine, who wrote: Standing grant covers c1.</p>\n"), "{html}");
+    }
+
+    #[test]
+    fn delegated_text_is_escaped() {
+        let context = approved_context(vec![intent_decision(
+            "decision-1",
+            2,
+            "intent-1",
+            json!({"name": "lead <agent> & \"x\"", "kind": "agent"}),
+            "Covers <c1> & 'c1'.",
+            Some(delegation_of(
+                "approval",
+                "ask <#412> & \"more\"",
+                "<b>yes</b> & 'go'",
+            )),
+        )]);
+        let html = render(&show(false, false, context), Ok(TREE.to_owned()));
+        assert!(html.contains("<p class=\"om-delegation\"><b>Approved by delegation, not in the owner's own words:</b> basis an earlier approval; source ask &lt;#412&gt; &amp; &quot;more&quot;; the owner's words, as recorded: &ldquo;&lt;b&gt;yes&lt;/b&gt; &amp; &#39;go&#39;&rdquo;. Recorded by lead &lt;agent&gt; &amp; &quot;x&quot;, who wrote: Covers &lt;c1&gt; &amp; &#39;c1&#39;.</p>\n"), "{html}");
+        assert!(!html.contains("<b>yes</b>"));
+        assert!(!html.contains("lead <agent>"));
+    }
+
+    #[test]
+    fn delegated_line_absent_for_owner_words() {
+        let with_owner = approved_context(vec![intent_decision(
+            "decision-1",
+            2,
+            "intent-1",
+            owner(),
+            "Yes, ship this.",
+            None,
+        )]);
+        let html = render(&show(false, false, with_owner), Ok(TREE.to_owned()));
+        assert!(!html.contains("om-delegation"), "{html}");
+        let without_decision = approved_context(vec![]);
+        assert_eq!(
+            html,
+            render(&show(false, false, without_decision), Ok(TREE.to_owned()))
+        );
+    }
+
+    #[test]
+    fn delegated_line_absent_when_delegation_belongs_to_another_revision() {
+        let context = approved_context(vec![intent_decision(
+            "decision-1",
+            2,
+            "intent-0",
+            lead(),
+            "Covers c1.",
+            Some(delegation_of("approval", "ask #412", "yes")),
+        )]);
+        let html = render(&show(false, false, context), Ok(TREE.to_owned()));
+        assert!(!html.contains("om-delegation"), "{html}");
+        assert!(
+            html.contains("<p class=\"om-summary\">1 check was approved."),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn delegated_shown_only_for_the_approving_decision() {
+        let delegated = |sequence: u64| {
+            intent_decision(
+                &format!("decision-{sequence}"),
+                sequence,
+                "intent-1",
+                lead(),
+                "Covers c1.",
+                Some(delegation_of("approval", "ask #412", "yes, go ahead")),
+            )
+        };
+        // Slice order is deliberately not chronological: the owner's later words win by sequence.
+        let later_owner = approved_context(vec![
+            intent_decision(
+                "decision-3",
+                3,
+                "intent-1",
+                owner(),
+                "Yes, ship this.",
+                None,
+            ),
+            delegated(2),
+        ]);
+        let html = render(&show(false, false, later_owner), Ok(TREE.to_owned()));
+        assert!(!html.contains("om-delegation"), "{html}");
+
+        let later_delegated = approved_context(vec![
+            intent_decision(
+                "decision-1",
+                2,
+                "intent-1",
+                owner(),
+                "Yes, ship this.",
+                None,
+            ),
+            delegated(3),
+        ]);
+        let html = render(&show(false, false, later_delegated), Ok(TREE.to_owned()));
+        assert!(html.contains("<p class=\"om-delegation\">"), "{html}");
+
+        // A later record the gate ignores, because it is malformed, does not take the approval.
+        let mut malformed = intent_decision("decision-4", 4, "intent-1", owner(), "Yes.", None);
+        malformed["data"]["actor"]["kind"] = json!("owner");
+        let with_malformed = approved_context(vec![delegated(2), malformed]);
+        let html = render(&show(false, false, with_malformed), Ok(TREE.to_owned()));
+        assert!(html.contains("<p class=\"om-delegation\">"), "{html}");
     }
 
     const AR_PAGE: &str = "<!doctype html>\n<html>\n<body>\n<header>site</header>\n<main>\n<header class=\"masthead\">Title</header>\n<nav><div class=\"rail-links\">\n<a href=\"#01\">What changed</a>\n</div></nav>\n<section id=\"01\">What changed</section>\n</main>\n</body>\n</html>\n";
