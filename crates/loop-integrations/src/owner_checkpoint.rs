@@ -8,6 +8,15 @@
 //! rejection requires nonempty strings for both and a caller-allowed target.
 //! Unknown fields, including unknown actor fields, are refused. No words are trimmed.
 //!
+//! An approval may carry an optional closed `delegation` object,
+//! `{basis: "approval"|"standing-grant", source, quote, covers: [ids]}`, for an
+//! approval the owner gave earlier or a standing grant. `source` and `quote` must be
+//! nonblank, and `covers` must be nonempty with nonblank ids. `quote` holds the
+//! owner's words; `text` is the recording actor's own statement of why the source
+//! covers this subject. A rejection with a delegation is refused. Records without
+//! `delegation` parse, serialize and evaluate as before. Whether a delegation covers
+//! the intent, and whether it changes an approved outcome, is checked by the caller.
+//!
 //! `evaluate(records: &[ContextRecord], checkpoint: &str, subject: &str,
 //! subject_revision: &str, allowed_targets: &[&str]) -> Evaluation` selects the
 //! latest well-formed decision for the checkpoint by semantic sequence, **before**
@@ -16,6 +25,7 @@
 //! older approval. Malformed decisions are ignored and reported by record ID;
 //! unrelated kinds and named checkpoints are ignored. Records without a string
 //! checkpoint (or with a blank one) are reported because they cannot be assigned.
+//! The approving decision is returned as `approved` when the status is `Approved`.
 //! Providers own checkpoint/subject/target names and all routing and freshness checks.
 
 use loop_core::ContextRecord;
@@ -135,6 +145,25 @@ pub fn parse(data: &Value, allowed_targets: &[&str]) -> Result<OwnerDecision, St
             return Err("reject requires nonempty reason".into());
         }
     }
+    if let Some(delegation) = &decision.delegation {
+        if decision.decision == Decision::Reject {
+            return Err("a delegation can only approve".into());
+        }
+        for (field, value) in [
+            ("delegation.source", delegation.source.as_str()),
+            ("delegation.quote", delegation.quote.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(format!("{field} must be nonempty"));
+            }
+        }
+        if delegation.covers.is_empty() {
+            return Err("delegation.covers must be nonempty".into());
+        }
+        if delegation.covers.iter().any(|id| id.trim().is_empty()) {
+            return Err("delegation.covers must not contain blank ids".into());
+        }
+    }
     Ok(decision)
 }
 
@@ -200,6 +229,7 @@ mod tests {
     use super::*;
     use loop_core::{SemanticSequence, Timestamp};
     use serde_json::json;
+    use std::path::Path;
 
     const TARGETS: &[&str] = &["document", "summary"];
 
@@ -396,5 +426,155 @@ mod tests {
             data["actor"]["kind"] = json!(kind);
             assert_eq!(current(&[row("claim", 1, data)]).status, Status::Approved);
         }
+    }
+
+    fn delegated() -> Value {
+        let mut data = approve();
+        data["text"] = json!("  c1 and c2 are the outcomes in the approved plan.\n");
+        data["delegation"] = json!({
+            "basis": "approval",
+            "source": "ask #412",
+            "quote": "  yes, go ahead with the plan as written\n",
+            "covers": ["c1", "c2"]
+        });
+        data
+    }
+
+    #[test]
+    fn delegation_record_accepts_full_record_and_keeps_words() {
+        for (name, basis) in [
+            ("approval", DelegationBasis::Approval),
+            ("standing-grant", DelegationBasis::StandingGrant),
+        ] {
+            let mut data = delegated();
+            data["delegation"]["basis"] = json!(name);
+            let parsed = parse(&data, TARGETS).unwrap();
+            let delegation = parsed.delegation.clone().unwrap();
+            assert_eq!(delegation.basis, basis);
+            assert_eq!(delegation.source, "ask #412");
+            assert_eq!(delegation.covers, ["c1", "c2"]);
+            assert_eq!(
+                delegation.quote,
+                data["delegation"]["quote"].as_str().unwrap()
+            );
+            assert_eq!(parsed.text, data["text"].as_str().unwrap());
+            assert_eq!(
+                serde_json::to_value(&parsed).unwrap()["delegation"]["basis"],
+                name
+            );
+            let evaluation = current(&[row("delegated", 1, data)]);
+            assert_eq!(evaluation.status, Status::Approved);
+            assert_eq!(evaluation.approved.unwrap().delegation, Some(delegation));
+        }
+    }
+
+    #[test]
+    fn delegation_record_refuses_blank_source_quote_and_covers() {
+        for field in ["source", "quote"] {
+            for value in [json!(""), json!(" \n")] {
+                let mut data = delegated();
+                data["delegation"][field] = value;
+                let error = parse(&data, TARGETS).unwrap_err();
+                assert!(error.contains(&format!("delegation.{field}")), "{error}");
+            }
+        }
+        for covers in [json!([]), json!([""]), json!(["c1", " \n"])] {
+            let mut data = delegated();
+            data["delegation"]["covers"] = covers;
+            let error = parse(&data, TARGETS).unwrap_err();
+            assert!(error.contains("delegation.covers"), "{error}");
+        }
+    }
+
+    #[test]
+    fn delegation_record_refuses_unknown_basis_and_unknown_fields() {
+        for basis in ["owner-grant", "standing_grant", "Approval"] {
+            let mut data = delegated();
+            data["delegation"]["basis"] = json!(basis);
+            assert!(parse(&data, TARGETS).is_err(), "{basis}");
+        }
+        let mut extra = delegated();
+        extra["delegation"]["extra"] = json!(true);
+        assert!(parse(&extra, TARGETS).unwrap_err().contains("extra"));
+    }
+
+    #[test]
+    fn delegation_record_on_rejection_is_refused() {
+        let mut data = reject();
+        data["delegation"] = delegated()["delegation"].clone();
+        let error = parse(&data, TARGETS).unwrap_err();
+        assert!(error.contains("a delegation can only approve"), "{error}");
+        let result = current(&[row("refused", 1, data)]);
+        assert_eq!(result.status, Status::Pending);
+        assert_eq!(result.diagnostics[0].record_id, "refused");
+        let rejection = current(&[row("rejection", 1, reject())]);
+        assert!(rejection.approved.is_none());
+    }
+
+    #[test]
+    fn delegation_record_absent_serializes_as_before() {
+        let parsed = parse(&approve(), TARGETS).unwrap();
+        let mut expected = approve();
+        expected["target"] = Value::Null;
+        expected["reason"] = Value::Null;
+        assert_eq!(serde_json::to_value(parsed).unwrap(), expected);
+    }
+
+    #[test]
+    fn delegation_record_malformed_is_ignored_and_reported() {
+        let mut data = delegated();
+        data["delegation"]["quote"] = json!(" \n");
+        let result = current(&[row("bad-delegation", 1, data)]);
+        assert_eq!(result.status, Status::Pending);
+        assert!(result.approved.is_none());
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(result.diagnostics[0].record_id, "bad-delegation");
+        assert!(result.diagnostics[0].message.contains("delegation.quote"));
+    }
+
+    #[test]
+    fn delegation_doc_examples() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../");
+        for doc in [
+            "docs/agent-usage.md",
+            "crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md",
+        ] {
+            let markdown = std::fs::read_to_string(root.join(doc)).unwrap();
+            let blocks = delegation_json_blocks(&markdown);
+            assert!(!blocks.is_empty(), "{doc} has no delegation example");
+            for block in blocks {
+                let value: Value = serde_json::from_str(&block)
+                    .unwrap_or_else(|error| panic!("{doc}: {error}\n{block}"));
+                parse(&value, &["intent"])
+                    .unwrap_or_else(|error| panic!("{doc}: {error}\n{block}"));
+            }
+        }
+    }
+
+    /// The bodies of the ```json fences in `markdown` that mention a delegation.
+    fn delegation_json_blocks(markdown: &str) -> Vec<String> {
+        let mut blocks = Vec::new();
+        let mut open = false;
+        let mut body = String::new();
+        for line in markdown.lines() {
+            match (open, line.trim()) {
+                (false, "```json") => {
+                    open = true;
+                    body.clear();
+                }
+                (true, "```") => {
+                    open = false;
+                    if body.contains("\"delegation\"") {
+                        blocks.push(body.clone());
+                    }
+                }
+                (true, _) => {
+                    body.push_str(line);
+                    body.push('\n');
+                }
+                _ => {}
+            }
+        }
+        blocks
     }
 }
