@@ -2,9 +2,12 @@
 # Run: run-and-wake -- kgate -- scripts/baseline.sh
 # Proven 2026-11-05 on the cluster (agent-1) at 5b1bd69 with cpu 12: PASS in 651 s in-pod (917 s at cpu 4), 707 Rust tests in 26 suites, 43 Python unit tests.
 # AGENTS.md runs the baseline through this profile (#108). cpu 12 sets CARGO_BUILD_JOBS 12 (-40% on the Rust stages on agent-1).
+# Sizing (dotfiles docs/kgate.md): memory is the scheduler request, memory_limit the OOM limit. The request is 3584Mi (3.5 GiB),
+# 1.2x the ~2.7 GiB anonymous peak rounded up to 0.5 GiB. The limit stays 8Gi: the 8.0 GiB peak counts page cache, and a request cannot exceed the limit.
 image  = "ghcr.io/cartwmic/kgate@sha256:41dc179299aade303686e2047a361444668e5b3237c3b95b40cef94ddacc4a2d"
 cpu    = 12
-memory = "8Gi"
+memory = "3584Mi"
+memory_limit = "8Gi"
 
 [tools]
 rustc   = "1.98.0"
