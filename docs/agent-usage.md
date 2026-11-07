@@ -95,7 +95,7 @@ does not verify the decision or any cited proof, so put the decision on the run 
 1. Observe with `show`. Confirm no owned work is live; cancel and verify cleanup first if any.
 2. Append the owner's decision with the owner's exact words, in the record kind the
    provider's skill names for owner words (lean-change: `owner-decision`; otherwise an
-   opaque kind such as `owner-stop` carrying the words and an actor).
+   opaque kind such as `owner-stop` carrying the words and an actor). A lead can instead record a delegated approval ([Delegated approval](agent-usage.md#delegated-approval)). Ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome.
 3. Append one record of an opaque kind (for example `external-close-note`) authored by the
    driver. It names what the driver checked and cites it (merge commits, review verdicts,
    gate output, owner proofs), and lists what was not proven. It is driver provenance,
@@ -117,7 +117,7 @@ input and complete context; action/full show must precede mutation.
 `show.result.advice_policy` is the effective setting, overriding start-time advice
 flags or frozen action-guidance prose. It contains `frozen`, `change_record_ids`,
 `effective` and `enabled`; unavailable is not an enabled/stale fallback. Owner
-attribution is trusted, not authentication. Append this closed `advice-policy-change`
+attribution is trusted, not authentication. A lead can instead record a delegated approval ([Delegated approval](#delegated-approval)). Ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome. Append this closed `advice-policy-change`
 shape using the current observed visit and actual owner decision:
 
 ```json

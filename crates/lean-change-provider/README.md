@@ -6,7 +6,7 @@ A small Loop Engine provider for software changes. It checks; the driver works.
 explore -> intent-approval -> (plan if hard) -> implement -> verify -> review -> end
 ```
 
-- The intent names an executable check for each criterion. The owner approves it in their own words.
+- The intent names an executable check for each criterion. The owner approves it in their own words. A lead can instead record a delegated approval (checkout-root `docs/agent-usage.md#delegated-approval`). Ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome.
 - `verify` runs the checks and binds the result to the repository tree. Any later edit makes it stale.
 - The old-vs-new check is on by default: `verify` also runs each check on the base commit with the proof files laid over
   it, and each criterion says what it must do there (`fails`, `same`, `absent`, or `none` with a reason). `--proof-path`

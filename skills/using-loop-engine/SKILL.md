@@ -17,7 +17,7 @@ Load the active provider skill as well as this engine procedure.
 Use the normal user catalog for production unless the owner explicitly requests
 isolation in this session. Never use a user catalog for tests. Put test databases,
 artifacts and retained external outputs in driver-owned directories outside the checkout.
-Do not infer isolation permission from an earlier run or inherited environment.
+Do not infer isolation permission from an earlier run or inherited environment. A lead can instead record a delegated approval that grants isolation ([Delegated approval](../../docs/agent-usage.md#delegated-approval)). Ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome.
 
 Inspect flags, profile artifact_root, LOOP_ variables, XDG_DATA_HOME, HOME and
 USERPROFILE before start. Record the actual catalog path; unset unintended redirects
@@ -55,7 +55,7 @@ A profile may carry an optional `model_bindings` key (per-role model and thinkin
 It is part of the confirmed bytes and hash, frozen at start, and absent from shipped
 profiles; without it the run is unchanged. The owner may later change bindings only
 through a recorded `model-binding-amendment` (checkout-root `docs/agent-usage.md`, Model
-bindings). The engine compares declared model text only and cannot verify the real session.
+bindings). A `model-binding-amendment` cannot be delegated: it still needs the owner's own words, a human actor and owner authority. The engine compares declared model text only and cannot verify the real session.
 
 Confirm a separate external role-to-model manifest, commands, write ownership,
 owner-set spend/resource limits (none by default), proof owner and escalation owner. Verify the exact model with the
@@ -87,7 +87,7 @@ one history entry. It carries no reason and does not verify the decision or any 
 run first.
 1. Observe with show. Confirm no owned work is live; cancel and verify cleanup first if any.
 2. Append the owner's decision as the provider's owner record (for lean-change,
-   `owner-decision`; see docs/agent-usage.md), holding the owner's exact words.
+   `owner-decision`; see docs/agent-usage.md), holding the owner's exact words. A lead can instead record a delegated approval ([Delegated approval](../../docs/agent-usage.md#delegated-approval)). Ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome.
 3. Append one driver-attributed record of an opaque kind (for example `external-close-note`)
    naming what the driver checked and citing it (merge commits, review verdicts, gate
    output, owner proofs), and listing what was not proven. It is not owner words.
