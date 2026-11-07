@@ -16,7 +16,7 @@ The old-vs-new check is on by default in both (see its section below).
 
 Starting a run is an owner decision. Before `start`, show the owner: the profile file path and its
 sha256, the repository path and base, the provider binary version, and what you will build.
-Wait for their go. Never swap the profile.
+Wait for their go. Never swap the profile. A lead holding a delegated approval that covers the run ([Delegated approval](../../../../docs/agent-usage.md#delegated-approval)), for example the owner's approval of the plan, may start without waiting. The start report then names the delegation (basis, source id, quote). Ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome.
 
 ```sh
 lean-change setup --profile b --repo /abs/repo --principles /abs/design-principles.md > /abs/profile.json

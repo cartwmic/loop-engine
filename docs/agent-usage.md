@@ -95,7 +95,7 @@ does not verify the decision or any cited proof, so put the decision on the run 
 1. Observe with `show`. Confirm no owned work is live; cancel and verify cleanup first if any.
 2. Append the owner's decision with the owner's exact words, in the record kind the
    provider's skill names for owner words (lean-change: `owner-decision`; otherwise an
-   opaque kind such as `owner-stop` carrying the words and an actor).
+   opaque kind such as `owner-stop` carrying the words and an actor). A lead can instead record a delegated approval ([Delegated approval](agent-usage.md#delegated-approval)). Ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome.
 3. Append one record of an opaque kind (for example `external-close-note`) authored by the
    driver. It names what the driver checked and cites it (merge commits, review verdicts,
    gate output, owner proofs), and lists what was not proven. It is driver provenance,
@@ -136,7 +136,7 @@ Copy real state/event identities from the stored workflow; examples create no ed
 The complete map replaces the previous effective map immediately, including the
 pending departure. Empty `occasions` disables new due advice. Removing A releases
 A's unanswered prerequisite without releasing retained B; adding a requirement
-needs a current declaration. The original map and every owner change remain in history.
+needs a current declaration. The original map and every owner change remain in history. A lead can instead record a delegated approval ([Delegated approval](agent-usage.md#delegated-approval)).
 
 For `advice-occasion`, provide `source_state`, `state_visit`, `event`, `occasion_id`,
 object `target`, `triggered`, `trigger_source_ids`, `response_ids` and `reason`.

@@ -13,7 +13,7 @@ fetches, writes conclusions or calls models. Scope → gather → verify → syn
 Load repository skills/using-loop-engine/SKILL.md, especially Deterministic setup,
 Exact profile confirmation and Choose an observation. Use explicit --config and
 inspect LOOP_/XDG/home redirects. Production isolation requires current owner approval;
-tests always use driver-owned catalogs/artifacts outside the checkout.
+tests always use driver-owned catalogs/artifacts outside the checkout. A lead can instead record a delegated approval ([Delegated approval](../../../../docs/agent-usage.md#delegated-approval)) for production isolation. Ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome.
 
 Action/full show arms mutation; status/compact, monitor, list and history do not.
 Re-observe after each transition. Use full show as helper stdin, not a bounded view.
