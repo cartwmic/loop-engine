@@ -45,6 +45,25 @@ pub enum Decision {
     Reject,
 }
 
+/// What a delegated approval cites. `basis` says whether it is an earlier owner approval or a standing grant;
+/// `source` names where that approval or grant can be found; `quote` is the owner's words; `covers` lists the
+/// subject parts (for lean-change, criterion ids) the approval is said to cover.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Delegation {
+    pub basis: DelegationBasis,
+    pub source: String,
+    pub quote: String,
+    pub covers: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DelegationBasis {
+    Approval,
+    StandingGrant,
+}
+
 /// Closed `owner-decision` data. Use [`parse`] to enforce semantic constraints too.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -57,6 +76,8 @@ pub struct OwnerDecision {
     pub reason: Option<String>,
     pub text: String,
     pub actor: Actor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<Delegation>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -77,6 +98,8 @@ pub struct Diagnostic {
 pub struct Evaluation {
     pub status: Status,
     pub diagnostics: Vec<Diagnostic>,
+    /// The approving decision when `status` is `Approved`.
+    pub approved: Option<OwnerDecision>,
 }
 
 /// Parse one closed decision payload and validate against caller-owned target names.
@@ -147,12 +170,16 @@ pub fn evaluate(
             }),
         }
     }
+    let mut approved = None;
     let status = match latest.map(|(_, decision)| decision) {
         Some(decision)
             if decision.subject == subject && decision.subject_revision == subject_revision =>
         {
             match decision.decision {
-                Decision::Approve => Status::Approved,
+                Decision::Approve => {
+                    approved = Some(decision);
+                    Status::Approved
+                }
                 Decision::Reject => Status::Rejected {
                     target: decision.target.unwrap(),
                     reason: decision.reason.unwrap(),
@@ -164,6 +191,7 @@ pub fn evaluate(
     Evaluation {
         status,
         diagnostics,
+        approved,
     }
 }
 
