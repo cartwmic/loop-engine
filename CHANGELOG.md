@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.44.1] - 2026-11-08
+
+## [0.44.1] - 2026-11-08
+
+### Changed
+
+- Repository CI profile only (#125, #126): the kgate baseline profile asks for 5.5 GiB of memory (was 3.5 GiB), because the baseline's working set is 3.6 to 4.5 GiB and the old request sat below it. CPU stays 12 and the memory limit stays 8Gi. Measured run on the cluster: exit 0, working set 4.56 GiB.
+
+### Compatibility
+
+- No change to the engine, the providers, bookends-check, the profiles or the record formats.
+
 ## [0.44.0] - 2026-11-07
 
 ## [0.44.0] - 2026-11-07
