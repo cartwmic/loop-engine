@@ -1175,7 +1175,14 @@ def delegated_intent(covers):
 
 
 def changed_intent(covers):
-    """The same intent with one criterion statement changed, so the approved outcome differs."""
+    """The same intent with the goal changed, so the approved outcome differs."""
+    doc = delegated_intent(covers)
+    doc['goal'] = doc['goal'] + ', twice'
+    return doc
+
+
+def reworded_intent(covers):
+    """The same intent with one criterion statement reworded: the outcome is the same, the wording is not."""
     doc = delegated_intent(covers)
     doc['criteria'][0]['statement'] = 'greeting.txt says hello, twice'
     return doc
@@ -1277,6 +1284,31 @@ def delegated_scenario(engine, provider, skill, work):
     assert j.state() == 'intent-approval'
     j.append('d-2', 'owner-decision', delegated_decision(example, 'intent-2'))
     j.refused('approved', 'delegation-changes-approved-outcome', 'intent-approval')
+
+    # A delegation may reword a statement only as its rewrites declare. Without them the approval is refused; with
+    # them it goes through, and the same intent is then judged against the reworded text.
+    j, _ = plain_run(engine, provider, work / 'rewrite', 'lean-delegated-rewrite')
+    j.append(revision, 'intent', delegated_intent(covers))
+    j.event('intent-ready')
+    j.append('d-own', 'owner-decision', {'checkpoint': 'intent', 'subject': 'intent', 'subject_revision': revision,
+                                      'decision': 'approve', 'text': 'Yes, add the greeting.', 'actor': OWNER})
+    j.event('approved')
+    j.event('revise')
+    reworded = reworded_intent(covers)
+    j.append('intent-2', 'intent', reworded)
+    j.event('intent-ready')
+    j.append('d-2', 'owner-decision', delegated_decision(example, 'intent-2'))
+    j.refused('approved', 'delegation-rewrite-mismatch', 'intent-approval')
+    wrong = delegated_decision(example, 'intent-2')
+    wrong['delegation']['rewrites'] = [{'criterion': covers[0], 'before': 'not the old text', 'after': reworded['criteria'][0]['statement'], 'reason': 'wording'}]
+    j.append('d-3', 'owner-decision', wrong)
+    j.refused('approved', 'delegation-rewrite-mismatch', 'intent-approval')
+    right = delegated_decision(example, 'intent-2')
+    right['delegation']['rewrites'] = [{'criterion': covers[0], 'before': delegated_intent(covers)['criteria'][0]['statement'],
+                                        'after': reworded['criteria'][0]['statement'], 'reason': 'wording only'}]
+    j.append('d-4', 'owner-decision', right)
+    j.event('approved')
+    assert j.state() == 'implement'
 
 
 def main():

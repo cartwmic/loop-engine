@@ -40,6 +40,7 @@ A delegated approval is an `owner-decision` record with a `delegation` object. T
 - `source`: the id of that approval or grant, such as a ledger ask id, a playbook rule id or a grant number.
 - `quote`: the owner's words, copied exactly.
 - `covers`: a non-empty list of the criterion ids that the cited approval is said to cover.
+- `rewrites` (optional): the criterion wording this approval changes, one entry for each: `{"criterion", "field", "before", "after", "reason"}`. `field` is `statement` (the default) or `check`. For `statement`, `before` and `after` are the exact old and new text. For `check`, they are the whole check (`argv` and `timeout_ms`) as JSON. `reason` says why. Leave it out when no wording changes.
 
 A delegation is allowed only with `"decision": "approve"`. A rejection that has one is refused when it is parsed.
 
@@ -58,20 +59,39 @@ Append it with:
 loop-engine ... append RUN owner-decision '<the record above>'
 ```
 
+When a later intent rewords a criterion, the approval declares it. This one rewords the statement of `c1` and moves the check of `c2`:
+
+```json
+{"checkpoint": "intent", "subject": "intent", "subject_revision": "intent-2", "decision": "approve",
+ "text": "intent-2 keeps the approved outcome; only the wording of c1 and the check of c2 changed.",
+ "actor": {"name": "lead:loop-engine", "kind": "agent"},
+ "delegation": {"basis": "approval", "source": "ask #412",
+                "quote": "yes, go ahead with the plan as written",
+                "covers": ["c1", "c2"],
+                "rewrites": [
+                  {"criterion": "c1", "before": "Lag is logged.", "after": "Lag is logged once a minute.",
+                   "reason": "name the interval the owner agreed"},
+                  {"criterion": "c2", "field": "check",
+                   "before": {"argv": ["sh", "-c", "./old.sh"], "timeout_ms": 60000},
+                   "after": {"argv": ["sh", "-c", "./new.sh"], "timeout_ms": 60000},
+                   "reason": "the script moved"}]}}
+```
+
 ### What the engine checks
 
-The engine reads the approval of the latest intent record at `approved`, at `approved-hard` and again at `verified`. For a delegated approval it runs two checks.
+The engine reads the approval of the latest intent record at `approved`, at `approved-hard` and again at `verified`. For a delegated approval it runs these checks.
 
 1. **Coverage.** The `covers` list, read as a set, must equal the criterion ids of the latest intent record. Order and repeats do not matter. Otherwise the event is refused with `delegation-not-covering`. The refusal lists the ids the intent has and `covers` lacks (`missing`), and the ids `covers` has and the intent lacks (`extra`).
-2. **No change to an approved outcome.** The engine finds the baseline: the latest earlier intent that the owner approved in their own words, or that a delegation approved after passing both checks. A refused delegation is never a baseline. The intent must match the baseline in its `goal`, its `constraints` (in order) and its criteria. Criteria are matched by id: the same ids, and the same `statement` for each. Changes to a criterion's `check` (its `argv` and `timeout_ms`), to `old`, to the `hard` flag or to `author` do not count. Otherwise the event is refused with `delegation-changes-approved-outcome`. The refusal names the baseline record and which of `goal`, `constraints` and `criteria` differ.
+2. **No change to an approved outcome.** The engine finds the baseline: the latest earlier intent that the owner approved in their own words, or that a delegation approved after passing both checks. A refused delegation is never a baseline; a delegation whose `rewrites` hold is one. The outcome is the `goal`, the `constraints` (in order) and the set of criterion ids. If any of them differ from the baseline, the event is refused with `delegation-changes-approved-outcome`. The refusal names the baseline record and which of `goal`, `constraints` and `criteria` (the ids) differ. Changes to `old`, to the `hard` flag or to `author` do not count.
+3. **Rewrites.** A criterion's `statement` may change only through `rewrites`. Each criterion whose statement changed needs exactly one entry with that `criterion`, a `before` equal to the baseline statement, an `after` equal to the new statement, and a nonblank `reason`. A change to a criterion's `check` needs no entry, but an entry that is declared must be exact in the same way (`before` and `after` are the baseline's and the new intent's check). An entry for something that did not change, two entries for the same criterion and field, or a statement change with no entry is refused with `delegation-rewrite-mismatch`. The refusal lists `undeclared` criteria, `not_changed` entries, `duplicate` entries and `wrong` entries (which of `before`, `after` or `reason`, with the expected value). When the outcome and the rewrites both differ, the outcome refusal comes first.
 
-A refusal with either code means: ask the owner.
+A refusal with `delegation-not-covering` or `delegation-changes-approved-outcome` means: ask the owner. A refusal with `delegation-rewrite-mismatch` means fix the `rewrites` to match the intents, or ask the owner when the wording change is not yours to make.
 
 The engine does not check that the quote is the owner's words, or that the source covers the step. Actor kinds are claims the record makes, not checks.
 
 ### Audit
 
-`show --view full` shows the record as it was appended. The outcome map says that the approval was delegated, and shows its basis, source and quote.
+`show --view full` shows the record as it was appended. The outcome map says that the approval was delegated, and shows its basis, source and quote, and each rewrite with its criterion, before, after and reason.
 
 ### Where the owner's words are required
 

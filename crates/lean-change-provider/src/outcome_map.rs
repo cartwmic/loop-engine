@@ -3,7 +3,7 @@
 //! tree identity. Nothing here reads a file, a process or Git.
 use lean_change_provider::evaluate::old_problem;
 use lean_change_provider::model::*;
-use loop_integrations::owner_checkpoint::{self, Decision, DelegationBasis};
+use loop_integrations::owner_checkpoint::{self, Decision, DelegationBasis, RewriteField};
 use serde_json::Value;
 
 const RAIL_TAG: &str = "<div class=\"rail-links\">";
@@ -181,8 +181,36 @@ fn delegation_paragraph(context: &[Value], intent_id: &str) -> String {
         DelegationBasis::Approval => "an earlier approval",
         DelegationBasis::StandingGrant => "a standing grant",
     };
+    let rewrites = if delegation.rewrites.is_empty() {
+        String::new()
+    } else {
+        let shown: Vec<String> = delegation
+            .rewrites
+            .iter()
+            .map(|rewrite| {
+                let field = match rewrite.field {
+                    RewriteField::Statement => "statement",
+                    RewriteField::Check => "check",
+                };
+                format!(
+                    "{} {field}: before &ldquo;{}&rdquo;, after &ldquo;{}&rdquo;, reason: {}",
+                    esc(&rewrite.criterion),
+                    esc(&rewrite
+                        .before
+                        .as_str()
+                        .map_or_else(|| rewrite.before.to_string(), str::to_owned)),
+                    esc(&rewrite
+                        .after
+                        .as_str()
+                        .map_or_else(|| rewrite.after.to_string(), str::to_owned)),
+                    esc(&rewrite.reason),
+                )
+            })
+            .collect();
+        format!(" Rewrites declared: {}.", shown.join("; "))
+    };
     format!(
-        "<p class=\"om-delegation\"><b>Approved by delegation, not in the owner's own words:</b> basis {basis}; source {}; the owner's words, as recorded: &ldquo;{}&rdquo;. Recorded by {}, who wrote: {}</p>\n",
+        "<p class=\"om-delegation\"><b>Approved by delegation, not in the owner's own words:</b> basis {basis}; source {}; the owner's words, as recorded: &ldquo;{}&rdquo;. Recorded by {}, who wrote: {}{rewrites}</p>\n",
         esc(&delegation.source),
         esc(&delegation.quote),
         esc(&decision.actor.name),
@@ -1386,6 +1414,27 @@ mod tests {
         assert!(html.contains("<p class=\"om-delegation\"><b>Approved by delegation, not in the owner's own words:</b> basis an earlier approval; source ask &lt;#412&gt; &amp; &quot;more&quot;; the owner's words, as recorded: &ldquo;&lt;b&gt;yes&lt;/b&gt; &amp; &#39;go&#39;&rdquo;. Recorded by lead &lt;agent&gt; &amp; &quot;x&quot;, who wrote: Covers &lt;c1&gt; &amp; &#39;c1&#39;.</p>\n"), "{html}");
         assert!(!html.contains("<b>yes</b>"));
         assert!(!html.contains("lead <agent>"));
+    }
+
+    #[test]
+    fn delegated_rewrites_are_shown_and_escaped() {
+        let mut delegation = delegation_of("approval", "ask #412", "yes");
+        delegation["rewrites"] = json!([
+            {"criterion": "c1", "before": "old <b>", "after": "new & \"x\"", "reason": "wording only, 'safe'"},
+            {"criterion": "c2", "field": "check", "before": {"argv": ["a"], "timeout_ms": 1}, "after": {"argv": ["b"], "timeout_ms": 1}, "reason": "runner moved"}
+        ]);
+        let context = approved_context(vec![intent_decision(
+            "decision-1",
+            2,
+            "intent-1",
+            lead(),
+            "Covers c1.",
+            Some(delegation),
+        )]);
+        let html = render(&show(false, false, context), Ok(TREE.to_owned()));
+        let want = "who wrote: Covers c1. Rewrites declared: c1 statement: before &ldquo;old &lt;b&gt;&rdquo;, after &ldquo;new &amp; &quot;x&quot;&rdquo;, reason: wording only, &#39;safe&#39;; c2 check: before &ldquo;{&quot;argv&quot;:[&quot;a&quot;],&quot;timeout_ms&quot;:1}&rdquo;, after &ldquo;{&quot;argv&quot;:[&quot;b&quot;],&quot;timeout_ms&quot;:1}&rdquo;, reason: runner moved.</p>\n";
+        assert!(html.contains(want), "{html}");
+        assert!(!html.contains("old <b>"));
     }
 
     #[test]
