@@ -92,7 +92,8 @@ MUTATIONS = [
     ('a blocking finding missing a field is demoted', MODEL, '        if missing.is_empty() {\n            Effective::Blocking', '        if true {\n            Effective::Blocking'),
     ('a note needs a disposition', EVALUATE, '        .filter(|f| f.effective(findings_schema) == Effective::Blocking)\n    {', '        .filter(|_| true)\n    {'),
     ('delegation coverage check', EVALUATE, '    if missing.is_empty() && extra.is_empty() {\n        return Ok(());', '    if true {\n        return Ok(());'),
-    ('delegation outcome comparison', EVALUATE, '    differs\n}\n\nfn statements(', '    differs.clear();\n    differs\n}\n\nfn statements('),
+    ('delegation outcome comparison', EVALUATE, '    if !differs.is_empty() {\n        return Outcome::Changed(differs);', '    if false {\n        return Outcome::Changed(differs);'),
+    ('delegation rewrites are checked', EVALUATE, '    if problems == RewriteProblems::default() {\n        Outcome::Keeps', '    if true {\n        Outcome::Keeps'),
     ('a refused delegation never counts as a baseline', EVALUATE, '        if valid {\n', '        if valid || true {\n'),
 ]
 

@@ -4,7 +4,7 @@ use crate::protocol::{allow, deny, unsupported, EvaluateRequest};
 use crate::workflow::workflow;
 use loop_core::ContextRecord;
 use loop_integrations::owner_checkpoint::{
-    self, Actor, Decision, Delegation, OwnerDecision, Status,
+    self, Actor, Decision, Delegation, OwnerDecision, Rewrite, RewriteField, Status,
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -154,13 +154,15 @@ fn require_approved(records: &[ContextRecord], id: &str, intent: &Intent) -> Gat
         }
     }
     // Only an approval gets here, and only an approval can carry a delegation.
-    if let Some(Delegation { covers, .. }) = evaluation
+    if let Some(Delegation {
+        covers, rewrites, ..
+    }) = evaluation
         .approved
         .as_ref()
         .and_then(|approval| approval.delegation.as_ref())
     {
         covers_intent(id, intent, covers)?;
-        keeps_outcome(records, id, intent)?;
+        keeps_outcome(records, id, intent, rewrites)?;
     }
     Ok(())
 }
@@ -189,8 +191,15 @@ fn covers_intent(id: &str, intent: &Intent, covers: &[String]) -> Gate {
     ))
 }
 
-/// Check 2: the approving decision, when delegated, must keep the outcome of the baseline before it.
-fn keeps_outcome(records: &[ContextRecord], id: &str, intent: &Intent) -> Gate {
+/// Check 2: the approving decision, when delegated, must keep the outcome of the baseline before it. The goal, the
+/// constraints and the set of criterion ids are the outcome. A criterion's wording may change only as the
+/// delegation's `rewrites` declare it.
+fn keeps_outcome(
+    records: &[ContextRecord],
+    id: &str,
+    intent: &Intent,
+    rewrites: &[Rewrite],
+) -> Gate {
     let approvals = intent_approvals(records);
     // The approving decision is the latest well-formed intent decision, so it is the last approval listed.
     let earlier = approvals
@@ -199,20 +208,25 @@ fn keeps_outcome(records: &[ContextRecord], id: &str, intent: &Intent) -> Gate {
     let Some((approved_revision, baseline)) = last_valid_approval(records, earlier) else {
         return Ok(());
     };
-    let differs = outcome_differences(&baseline, intent);
-    if differs.is_empty() {
-        return Ok(());
+    match judge(&baseline, intent, rewrites) {
+        Outcome::Keeps => Ok(()),
+        Outcome::Changed(differs) => Err(refuse(
+            "delegation-changes-approved-outcome",
+            "a delegated approval may not change the goal, constraints or criteria the owner approved",
+            json!({"intent": id, "approved_revision": approved_revision, "differs": differs}),
+        )),
+        Outcome::RewriteMismatch(problems) => Err(refuse(
+            "delegation-rewrite-mismatch",
+            "a delegated approval may reword a criterion statement only when its rewrites name that criterion with the exact text before and after and a reason, and no other",
+            json!({"intent": id, "approved_revision": approved_revision, "undeclared": problems.undeclared,
+                "not_changed": problems.not_changed, "duplicate": problems.duplicate, "wrong": problems.wrong}),
+        )),
     }
-    Err(refuse(
-        "delegation-changes-approved-outcome",
-        "a delegated approval may not change the goal, constraints or criteria the owner approved",
-        json!({"intent": id, "approved_revision": approved_revision, "differs": differs}),
-    ))
 }
 
 /// The latest intent whose approval is valid. An approval in the owner's own words is valid. A delegated one is valid
-/// only if it covers its intent and keeps the outcome of the baseline before it, so a refused delegation never becomes
-/// the baseline for a later one.
+/// only if it covers its intent and keeps the outcome of the baseline before it (with its rewrites declared), so a
+/// refused delegation never becomes the baseline for a later one.
 fn last_valid_approval(
     records: &[ContextRecord],
     approvals: &[OwnerDecision],
@@ -224,13 +238,15 @@ fn last_valid_approval(
         };
         let valid = match &approval.delegation {
             None => true,
-            Some(Delegation { covers, .. }) => {
+            Some(Delegation {
+                covers, rewrites, ..
+            }) => {
                 let (missing, extra) = coverage_gap(covers, &intent);
                 missing.is_empty()
                     && extra.is_empty()
-                    && baseline
-                        .as_ref()
-                        .is_none_or(|(_, before)| outcome_differences(before, &intent).is_empty())
+                    && baseline.as_ref().is_none_or(|(_, before)| {
+                        judge(before, &intent, rewrites) == Outcome::Keeps
+                    })
             }
         };
         if valid {
@@ -264,9 +280,43 @@ fn intent_record(records: &[ContextRecord], id: &str) -> Option<Intent> {
     Intent::parse(&record.data).ok()
 }
 
-/// The parts of the outcome that differ, in a fixed order. The goal, the constraints and the criteria statements are
-/// what the owner approved; the checks, their timeouts, the old expectations and the hard flag are the agents' choices.
-fn outcome_differences(before: &Intent, after: &Intent) -> Vec<&'static str> {
+/// How a delegated approval's intent compares with the baseline before it.
+#[derive(Debug, PartialEq)]
+enum Outcome {
+    Keeps,
+    /// The goal, the constraints or the criterion ids changed, in a fixed order.
+    Changed(Vec<&'static str>),
+    RewriteMismatch(RewriteProblems),
+}
+
+#[derive(Debug, Default, PartialEq)]
+struct RewriteProblems {
+    /// Criteria whose statement changed with no rewrite entry.
+    undeclared: Vec<String>,
+    /// Entries naming a criterion and field that did not change, or a criterion the intent lacks.
+    not_changed: Vec<Value>,
+    /// Criterion and field named by more than one entry.
+    duplicate: Vec<Value>,
+    /// Entries whose before, after or reason is wrong.
+    wrong: Vec<Value>,
+}
+
+/// A criterion's statement and check, the two things a rewrite can name.
+fn field_value(intent: &Intent, id: &str, field: RewriteField) -> Option<Value> {
+    let criterion = intent.criteria.iter().find(|c| c.id == id)?;
+    Some(match field {
+        RewriteField::Statement => json!(criterion.statement),
+        RewriteField::Check => json!(criterion.check),
+    })
+}
+
+/// The goal, the constraints and the criterion ids are what the owner approved. A statement may change only as
+/// `rewrites` declare. A check change needs no declaration (the checks, their timeouts, the old expectations and the
+/// hard flag are the agents' choices), but a declared check rewrite must match. Both sides come from the intents.
+fn judge(before: &Intent, after: &Intent, rewrites: &[Rewrite]) -> Outcome {
+    let ids = |intent: &Intent| -> BTreeSet<String> {
+        intent.criteria.iter().map(|c| c.id.clone()).collect()
+    };
     let mut differs = Vec::new();
     if before.goal != after.goal {
         differs.push("goal");
@@ -274,18 +324,62 @@ fn outcome_differences(before: &Intent, after: &Intent) -> Vec<&'static str> {
     if before.constraints != after.constraints {
         differs.push("constraints");
     }
-    if statements(before) != statements(after) {
+    if ids(before) != ids(after) {
         differs.push("criteria");
     }
-    differs
-}
-
-fn statements(intent: &Intent) -> BTreeMap<&str, &str> {
-    intent
-        .criteria
-        .iter()
-        .map(|c| (c.id.as_str(), c.statement.as_str()))
-        .collect()
+    if !differs.is_empty() {
+        return Outcome::Changed(differs);
+    }
+    let mut problems = RewriteProblems::default();
+    let mut declared: BTreeMap<(&str, RewriteField), Vec<&Rewrite>> = BTreeMap::new();
+    for rewrite in rewrites {
+        declared
+            .entry((&rewrite.criterion, rewrite.field))
+            .or_default()
+            .push(rewrite);
+    }
+    let name = |id: &str, field: RewriteField| json!({"criterion": id, "field": field});
+    for ((id, field), entries) in &declared {
+        if entries.len() > 1 {
+            problems.duplicate.push(name(id, *field));
+            continue;
+        }
+        let (was, now) = (
+            field_value(before, id, *field),
+            field_value(after, id, *field),
+        );
+        if was == now {
+            problems.not_changed.push(name(id, *field));
+            continue;
+        }
+        let rewrite = entries[0];
+        for (what, expected, given) in [
+            ("before", &was, &rewrite.before),
+            ("after", &now, &rewrite.after),
+        ] {
+            if expected.as_ref() != Some(given) {
+                problems.wrong.push(json!({"criterion": id, "field": field, "wrong": what, "expected": expected, "given": given}));
+            }
+        }
+        if rewrite.reason.trim().is_empty() {
+            problems.wrong.push(
+                json!({"criterion": id, "field": field, "wrong": "reason", "problem": "blank"}),
+            );
+        }
+    }
+    for criterion in &after.criteria {
+        let id = criterion.id.as_str();
+        let changed = field_value(before, id, RewriteField::Statement)
+            != field_value(after, id, RewriteField::Statement);
+        if changed && !declared.contains_key(&(id, RewriteField::Statement)) {
+            problems.undeclared.push(id.to_owned());
+        }
+    }
+    if problems == RewriteProblems::default() {
+        Outcome::Keeps
+    } else {
+        Outcome::RewriteMismatch(problems)
+    }
 }
 
 fn plan(records: &[ContextRecord], input: &InitialInput) -> Gate {

@@ -2545,12 +2545,10 @@ fn gate_delegated_revision_refuses_changed_criterion_statement() {
     let r = repo();
     let mut changed = intent(false);
     changed["criteria"][1]["statement"] = json!("s2, reworded");
+    // Changed from the old expectation: a statement change with no rewrites is now `delegation-rewrite-mismatch`.
     let refused = delegated_after_own_words(&r, changed, &["c1", "c2"], "approved");
-    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
-    assert_eq!(
-        refused["feedback"]["details"]["differs"],
-        json!(["criteria"])
-    );
+    assert_eq!(code(&refused), "delegation-rewrite-mismatch");
+    assert_eq!(refused["feedback"]["details"]["undeclared"], json!(["c2"]));
 }
 
 #[test]
@@ -2666,7 +2664,8 @@ fn gate_delegated_revision_refused_at_verified_for_revision_appended_during_impl
         record("v2", "verification", 5, v),
     ];
     let refused = ask(&r, false, "verify", "verified", ctx);
-    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+    // Changed from the old expectation: the reworded statement has no rewrites, so `delegation-rewrite-mismatch`.
+    assert_eq!(code(&refused), "delegation-rewrite-mismatch");
     assert_eq!(
         refused["feedback"]["details"]["approved_revision"],
         json!("intent-1")
@@ -2765,5 +2764,407 @@ fn gate_delegated_revision_baseline_is_latest_validly_approved() {
     assert_eq!(
         refused["feedback"]["details"]["approved_revision"],
         json!("intent-3")
+    );
+}
+
+// ---- Delegated rewrites: a statement may be reworded only as the delegation declares. ----
+
+/// `delegated`, with `rewrites` declared.
+fn delegated_rewriting(revision: &str, covers: &[&str], rewrites: Value) -> Value {
+    let mut data = delegated(revision, covers);
+    data["delegation"]["rewrites"] = rewrites;
+    data
+}
+
+fn statement_rewrite(id: &str, before: &str, after: &str) -> Value {
+    json!({"criterion": id, "before": before, "after": after, "reason": "wording only, same promise"})
+}
+
+/// `intent(false)` with c1's statement reworded.
+fn reworded() -> Value {
+    let mut changed = intent(false);
+    changed["criteria"][0]["statement"] = json!("s1, reworded");
+    changed
+}
+
+/// Intent-1 approved in the owner's words, then `changed` approved under a delegation declaring `rewrites`.
+fn rewriting_after_own_words(repo: &Path, changed: Value, rewrites: Value, event: &str) -> Value {
+    let ctx = vec![
+        record("intent-1", "intent", 1, intent(false)),
+        record("d1", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("intent-2", "intent", 3, changed),
+        record(
+            "d2",
+            "owner-decision",
+            4,
+            delegated_rewriting("intent-2", &["c1", "c2"], rewrites),
+        ),
+    ];
+    ask(repo, true, "intent-approval", event, ctx)
+}
+
+fn mismatch(refused: &Value) -> &Value {
+    assert_eq!(code(refused), "delegation-rewrite-mismatch", "{refused}");
+    &refused["feedback"]["details"]
+}
+
+#[test]
+fn gate_delegated_rewrite_accepts_declared_statement_change() {
+    let r = repo();
+    let rewrites = json!([statement_rewrite("c1", "s1", "s1, reworded")]);
+    allowed(&rewriting_after_own_words(
+        &r,
+        reworded(),
+        rewrites.clone(),
+        "approved",
+    ));
+    // approved-hard: the same rewrite on a hard intent
+    let mut hard = intent(true);
+    hard["criteria"][0]["statement"] = json!("s1, reworded");
+    allowed(&rewriting_after_own_words(
+        &r,
+        hard,
+        rewrites.clone(),
+        "approved-hard",
+    ));
+    // verified: the check runs again at verification
+    let mut v = verification(&r, &reworded());
+    v["intent"] = json!("intent-2");
+    let ctx = vec![
+        record("intent-1", "intent", 1, intent(false)),
+        record("d1", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("intent-2", "intent", 3, reworded()),
+        record(
+            "d2",
+            "owner-decision",
+            4,
+            delegated_rewriting("intent-2", &["c1", "c2"], rewrites),
+        ),
+        record("v2", "verification", 5, v),
+    ];
+    allowed(&ask(&r, false, "verify", "verified", ctx));
+}
+
+#[test]
+fn gate_delegated_rewrite_refused_at_verified_when_wrong() {
+    let r = repo();
+    let mut v = verification(&r, &reworded());
+    v["intent"] = json!("intent-2");
+    let ctx = vec![
+        record("intent-1", "intent", 1, intent(false)),
+        record("d1", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("intent-2", "intent", 3, reworded()),
+        record(
+            "d2",
+            "owner-decision",
+            4,
+            delegated_rewriting(
+                "intent-2",
+                &["c1", "c2"],
+                json!([statement_rewrite("c1", "s1", "something else")]),
+            ),
+        ),
+        record("v2", "verification", 5, v),
+    ];
+    let refused = ask(&r, false, "verify", "verified", ctx);
+    assert_eq!(mismatch(&refused)["wrong"][0]["wrong"], json!("after"));
+}
+
+#[test]
+fn gate_delegated_old_record_without_rewrites_behaves_as_before() {
+    let r = repo();
+    // No `rewrites` key at all: still parses, keeps the outcome, and is accepted.
+    let data = delegated("intent-2", &["c1", "c2"]);
+    assert!(data["delegation"].get("rewrites").is_none());
+    let ctx = vec![
+        record("intent-1", "intent", 1, intent(false)),
+        record("d1", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("intent-2", "intent", 3, intent(false)),
+        record("d2", "owner-decision", 4, data),
+    ];
+    allowed(&ask(&r, true, "intent-approval", "approved", ctx));
+}
+
+#[test]
+fn gate_delegated_rewrite_refuses_goal_constraints_and_criterion_ids_even_with_rewrites() {
+    let r = repo();
+    let rewrites = json!([statement_rewrite("c1", "s1", "s1, reworded")]);
+    let mut goal = reworded();
+    goal["goal"] = json!("g, reworded");
+    let refused = rewriting_after_own_words(&r, goal, rewrites.clone(), "approved");
+    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+    assert_eq!(refused["feedback"]["details"]["differs"], json!(["goal"]));
+    let mut constraints = reworded();
+    constraints["constraints"] = json!(["d"]);
+    let refused = rewriting_after_own_words(&r, constraints, rewrites.clone(), "approved");
+    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+    assert_eq!(
+        refused["feedback"]["details"]["differs"],
+        json!(["constraints"])
+    );
+    // Goal first, when a statement is also reworded without a rewrite.
+    let mut both = reworded();
+    both["goal"] = json!("g, reworded");
+    let refused = rewriting_after_own_words(&r, both, json!([]), "approved");
+    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+    let mut added = reworded();
+    added["criteria"]
+        .as_array_mut()
+        .unwrap()
+        .push(criterion("c3", None));
+    let ctx = vec![
+        record("intent-1", "intent", 1, intent(false)),
+        record("d1", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("intent-2", "intent", 3, added),
+        record(
+            "d2",
+            "owner-decision",
+            4,
+            delegated_rewriting("intent-2", &["c1", "c2", "c3"], rewrites.clone()),
+        ),
+    ];
+    let refused = ask(&r, true, "intent-approval", "approved", ctx);
+    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+    assert_eq!(
+        refused["feedback"]["details"]["differs"],
+        json!(["criteria"])
+    );
+    let mut dropped = reworded();
+    dropped["criteria"].as_array_mut().unwrap().pop();
+    let ctx = vec![
+        record("intent-1", "intent", 1, intent(false)),
+        record("d1", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("intent-2", "intent", 3, dropped),
+        record(
+            "d2",
+            "owner-decision",
+            4,
+            delegated_rewriting("intent-2", &["c1"], rewrites),
+        ),
+    ];
+    let refused = ask(&r, true, "intent-approval", "approved", ctx);
+    assert_eq!(code(&refused), "delegation-changes-approved-outcome");
+}
+
+#[test]
+fn gate_delegated_rewrite_refuses_statement_change_without_rewrites() {
+    let r = repo();
+    let refused = rewriting_after_own_words(&r, reworded(), json!([]), "approved");
+    assert_eq!(mismatch(&refused)["undeclared"], json!(["c1"]));
+}
+
+#[test]
+fn gate_delegated_rewrite_refuses_rewrite_for_unchanged_criterion() {
+    let r = repo();
+    let rewrites = json!([
+        statement_rewrite("c1", "s1", "s1, reworded"),
+        statement_rewrite("c2", "s2", "s2, reworded")
+    ]);
+    let refused = rewriting_after_own_words(&r, reworded(), rewrites, "approved");
+    assert_eq!(
+        mismatch(&refused)["not_changed"],
+        json!([{"criterion": "c2", "field": "statement"}])
+    );
+    // A criterion the intent does not have counts the same.
+    let refused = rewriting_after_own_words(
+        &r,
+        reworded(),
+        json!([
+            statement_rewrite("c1", "s1", "s1, reworded"),
+            statement_rewrite("c9", "x", "y")
+        ]),
+        "approved",
+    );
+    assert_eq!(
+        mismatch(&refused)["not_changed"],
+        json!([{"criterion": "c9", "field": "statement"}])
+    );
+}
+
+#[test]
+fn gate_delegated_rewrite_refuses_wrong_before_after_and_blank_reason() {
+    let r = repo();
+    let refused = rewriting_after_own_words(
+        &r,
+        reworded(),
+        json!([statement_rewrite("c1", "not s1", "s1, reworded")]),
+        "approved",
+    );
+    let wrong = &mismatch(&refused)["wrong"];
+    assert_eq!(wrong.as_array().unwrap().len(), 1);
+    assert_eq!(wrong[0]["wrong"], json!("before"));
+    assert_eq!(wrong[0]["expected"], json!("s1"));
+    let refused = rewriting_after_own_words(
+        &r,
+        reworded(),
+        json!([statement_rewrite("c1", "s1", "s1, reworded ")]),
+        "approved",
+    );
+    assert_eq!(mismatch(&refused)["wrong"][0]["wrong"], json!("after"));
+    for reason in ["", "  \n"] {
+        let mut entry = statement_rewrite("c1", "s1", "s1, reworded");
+        entry["reason"] = json!(reason);
+        let refused = rewriting_after_own_words(&r, reworded(), json!([entry]), "approved");
+        assert_eq!(mismatch(&refused)["wrong"][0]["wrong"], json!("reason"));
+    }
+}
+
+#[test]
+fn gate_delegated_rewrite_refuses_duplicate_entry() {
+    let r = repo();
+    let entry = statement_rewrite("c1", "s1", "s1, reworded");
+    let refused =
+        rewriting_after_own_words(&r, reworded(), json!([entry.clone(), entry]), "approved");
+    assert_eq!(
+        mismatch(&refused)["duplicate"],
+        json!([{"criterion": "c1", "field": "statement"}])
+    );
+}
+
+#[test]
+fn gate_delegated_rewrite_refuses_unknown_rewrite_field_as_malformed() {
+    let r = repo();
+    let mut entry = statement_rewrite("c1", "s1", "s1, reworded");
+    entry["extra"] = json!(true);
+    let refused = rewriting_after_own_words(&r, reworded(), json!([entry]), "approved");
+    // The record is malformed, so no decision counts.
+    assert_eq!(code(&refused), "owner-decision-missing");
+}
+
+#[test]
+fn gate_delegated_check_change_needs_no_rewrite_but_a_declared_one_must_match() {
+    let r = repo();
+    let mut changed = intent(false);
+    changed["criteria"][0]["check"] = json!({"argv":["sh","-c","true"],"timeout_ms":5000});
+    let before = intent(false)["criteria"][0]["check"].clone();
+    let after = changed["criteria"][0]["check"].clone();
+    // Undeclared: accepted, as before.
+    allowed(&rewriting_after_own_words(
+        &r,
+        changed.clone(),
+        json!([]),
+        "approved",
+    ));
+    let entry = |before: &Value, after: &Value| json!({"criterion": "c1", "field": "check", "before": before, "after": after, "reason": "runner moved"});
+    allowed(&rewriting_after_own_words(
+        &r,
+        changed.clone(),
+        json!([entry(&before, &after)]),
+        "approved",
+    ));
+    // Wrong before.
+    let refused = rewriting_after_own_words(
+        &r,
+        changed.clone(),
+        json!([entry(&after, &after)]),
+        "approved",
+    );
+    assert_eq!(mismatch(&refused)["wrong"][0]["wrong"], json!("before"));
+    // A check rewrite for a check that did not change.
+    let refused = rewriting_after_own_words(
+        &r,
+        reworded(),
+        json!([
+            statement_rewrite("c1", "s1", "s1, reworded"),
+            entry(&before, &after)
+        ]),
+        "approved",
+    );
+    assert_eq!(
+        mismatch(&refused)["not_changed"],
+        json!([{"criterion": "c1", "field": "check"}])
+    );
+    // A statement and a check rewrite for one criterion are two different entries, not a duplicate.
+    let mut both = changed;
+    both["criteria"][0]["statement"] = json!("s1, reworded");
+    allowed(&rewriting_after_own_words(
+        &r,
+        both,
+        json!([
+            statement_rewrite("c1", "s1", "s1, reworded"),
+            entry(&before, &after)
+        ]),
+        "approved",
+    ));
+}
+
+#[test]
+fn gate_delegated_rewrite_valid_approval_becomes_the_baseline() {
+    let r = repo();
+    // intent-2 rewords c1 under a valid delegation, so it is the baseline for intent-3.
+    let mut ctx = vec![
+        record("intent-1", "intent", 1, intent(false)),
+        record("d1", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("intent-2", "intent", 3, reworded()),
+        record(
+            "d2",
+            "owner-decision",
+            4,
+            delegated_rewriting(
+                "intent-2",
+                &["c1", "c2"],
+                json!([statement_rewrite("c1", "s1", "s1, reworded")]),
+            ),
+        ),
+    ];
+    allowed(&ask(&r, true, "intent-approval", "approved", ctx.clone()));
+    // intent-3 keeps the reworded text: no rewrite is needed, and a goal change is judged against intent-2.
+    ctx.push(record("intent-3", "intent", 5, reworded()));
+    ctx.push(record(
+        "d3",
+        "owner-decision",
+        6,
+        delegated("intent-3", &["c1", "c2"]),
+    ));
+    allowed(&ask(&r, true, "intent-approval", "approved", ctx.clone()));
+    // Going back to the old text is a change from intent-2, so it needs its own rewrite.
+    ctx.push(record("intent-4", "intent", 7, intent(false)));
+    ctx.push(record(
+        "d4",
+        "owner-decision",
+        8,
+        delegated("intent-4", &["c1", "c2"]),
+    ));
+    let refused = ask(&r, true, "intent-approval", "approved", ctx);
+    assert_eq!(mismatch(&refused)["undeclared"], json!(["c1"]));
+    assert_eq!(
+        refused["feedback"]["details"]["approved_revision"],
+        json!("intent-3")
+    );
+}
+
+#[test]
+fn gate_delegated_rewrite_refused_approval_never_a_baseline() {
+    let r = repo();
+    // intent-2 declares a wrong rewrite, so it is refused and intent-1 stays the baseline.
+    let mut ctx = vec![
+        record("intent-1", "intent", 1, intent(false)),
+        record("d1", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("intent-2", "intent", 3, reworded()),
+        record(
+            "d2",
+            "owner-decision",
+            4,
+            delegated_rewriting(
+                "intent-2",
+                &["c1", "c2"],
+                json!([statement_rewrite("c1", "s1", "nope")]),
+            ),
+        ),
+    ];
+    mismatch(&ask(&r, true, "intent-approval", "approved", ctx.clone()));
+    // intent-3 carries the same reworded text with no rewrites. Were intent-2 the baseline, nothing would differ.
+    ctx.push(record("intent-3", "intent", 5, reworded()));
+    ctx.push(record(
+        "d3",
+        "owner-decision",
+        6,
+        delegated("intent-3", &["c1", "c2"]),
+    ));
+    let refused = ask(&r, true, "intent-approval", "approved", ctx);
+    assert_eq!(mismatch(&refused)["undeclared"], json!(["c1"]));
+    assert_eq!(
+        refused["feedback"]["details"]["approved_revision"],
+        json!("intent-1")
     );
 }

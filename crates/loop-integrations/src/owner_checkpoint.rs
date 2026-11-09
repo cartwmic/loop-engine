@@ -9,9 +9,10 @@
 //! Unknown fields, including unknown actor fields, are refused. No words are trimmed.
 //!
 //! An approval may carry an optional closed `delegation` object,
-//! `{basis: "approval"|"standing-grant", source, quote, covers: [ids]}`, for an
-//! approval the owner gave earlier or a standing grant. `source` and `quote` must be
-//! nonblank, and `covers` must be nonempty with nonblank ids. `quote` holds the
+//! `{basis: "approval"|"standing-grant", source, quote, covers: [ids], rewrites?: [...]}`, for an
+//! approval the owner gave earlier or a standing grant. Optional `rewrites` is a list of closed
+//! `{criterion, field?: "statement"|"check", before, after, reason}` objects; the caller checks them against the intents.
+//! `source` and `quote` must be nonblank, and `covers` must be nonempty with nonblank ids. `quote` holds the
 //! owner's words; `text` is the recording actor's own statement of why the source
 //! covers this subject. A rejection with a delegation is refused. Records without
 //! `delegation` parse, serialize and evaluate as before. Whether a delegation covers
@@ -57,7 +58,8 @@ pub enum Decision {
 
 /// What a delegated approval cites. `basis` says whether it is an earlier owner approval or a standing grant;
 /// `source` names where that approval or grant can be found; `quote` is the owner's words; `covers` lists the
-/// subject parts (for lean-change, criterion ids) the approval is said to cover.
+/// subject parts (for lean-change, criterion ids) the approval is said to cover. `rewrites` declares each
+/// criterion statement the approval rewords, with the reason; absent means none.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Delegation {
@@ -65,6 +67,29 @@ pub struct Delegation {
     pub source: String,
     pub quote: String,
     pub covers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rewrites: Vec<Rewrite>,
+}
+
+/// One declared rewrite of a criterion: the exact value before and after, and why. For `field` "statement" (the
+/// default) `before` and `after` are the statement strings; for "check" they are the check as JSON values.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rewrite {
+    pub criterion: String,
+    #[serde(default)]
+    pub field: RewriteField,
+    pub before: Value,
+    pub after: Value,
+    pub reason: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RewriteField {
+    #[default]
+    Statement,
+    Check,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -518,6 +543,32 @@ mod tests {
         expected["target"] = Value::Null;
         expected["reason"] = Value::Null;
         assert_eq!(serde_json::to_value(parsed).unwrap(), expected);
+    }
+
+    #[test]
+    fn delegation_rewrites_parse_default_field_and_serialize_back() {
+        let mut data = delegated();
+        data["delegation"]["rewrites"] = json!([
+            {"criterion": "c1", "before": "a", "after": "b", "reason": "wording"},
+            {"criterion": "c2", "field": "check", "before": {"argv": ["x"]}, "after": {"argv": ["y"]}, "reason": "moved"}
+        ]);
+        let delegation = parse(&data, TARGETS).unwrap().delegation.unwrap();
+        assert_eq!(delegation.rewrites[0].field, RewriteField::Statement);
+        assert_eq!(delegation.rewrites[1].field, RewriteField::Check);
+        assert_eq!(delegation.rewrites[0].before, json!("a"));
+        // Without rewrites the delegation serializes as before, with no `rewrites` key.
+        let plain = parse(&delegated(), TARGETS).unwrap();
+        assert!(serde_json::to_value(plain).unwrap()["delegation"]
+            .get("rewrites")
+            .is_none());
+        // A rewrite is closed: an unknown field, or an unknown `field` value, is malformed.
+        let mut extra = delegated();
+        extra["delegation"]["rewrites"] =
+            json!([{"criterion": "c1", "before": "a", "after": "b", "reason": "r", "x": 1}]);
+        assert!(parse(&extra, TARGETS).is_err());
+        let mut field = delegated();
+        field["delegation"]["rewrites"] = json!([{"criterion": "c1", "field": "goal", "before": "a", "after": "b", "reason": "r"}]);
+        assert!(parse(&field, TARGETS).is_err());
     }
 
     #[test]

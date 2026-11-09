@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- A delegated approval may reword criterion statements. The delegation takes an optional `rewrites` list of `{criterion, field, before, after, reason}` entries (`field` is `statement`, the default, or `check`). lean-change now compares the goal, the constraints and the criterion ids with the baseline (`delegation-changes-approved-outcome`, as before) and lets a statement change only when an entry names it with the exact old and new text and a reason. A declared check rewrite must match too; a check change still needs no entry. A mismatch, a duplicate, an entry for something unchanged, or an undeclared statement change is refused with the new `delegation-rewrite-mismatch`. A delegated approval whose rewrites hold is a valid baseline for the next intent. The outcome map shows each rewrite.
+
+### Changed
+
+- A delegated approval that changes a criterion statement with no `rewrites` is now refused with `delegation-rewrite-mismatch`; it was `delegation-changes-approved-outcome`. `differs` now lists `criteria` only when the ids differ.
+
+### Compatibility
+
+- Records without `rewrites` parse and serialize as before. The workflow text, the profiles and the other record formats are unchanged.
+
 ## [0.44.1] - 2026-11-08
 
 ## [0.44.1] - 2026-11-08
