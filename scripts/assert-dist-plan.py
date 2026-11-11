@@ -11,6 +11,7 @@ from typing import Any, Dict, NoReturn, Set
 
 TARGETS = {
     "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
     "x86_64-unknown-linux-gnu",
 }
 APPS = {
@@ -22,7 +23,7 @@ APPS = {
 }
 ARCHIVE_RE = re.compile(
     r"^(?P<app>bookends-check|lean-change-provider|loop-cli|policy-document-provider|research-provider)-(?P<target>"
-    r"aarch64-apple-darwin|x86_64-unknown-linux-gnu)\.tar\.xz$"
+    r"aarch64-apple-darwin|aarch64-unknown-linux-gnu|x86_64-unknown-linux-gnu)\.tar\.xz$"
 )
 
 

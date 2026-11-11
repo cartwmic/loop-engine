@@ -84,7 +84,8 @@ def main():
 
     try:
         native = {("Darwin", "arm64"): "aarch64-apple-darwin",
-                  ("Linux", "x86_64"): "x86_64-unknown-linux-gnu"}.get((platform.system(), platform.machine()))
+                  ("Linux", "x86_64"): "x86_64-unknown-linux-gnu",
+                  ("Linux", "aarch64"): "aarch64-unknown-linux-gnu"}.get((platform.system(), platform.machine()))
         if args.platform != native:
             raise ValueError(f"platform mismatch: requested {args.platform}, native {native}")
         identity = json.loads(args.package_identity.read_text())
