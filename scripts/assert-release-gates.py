@@ -128,7 +128,7 @@ def main() -> int:
     if re.search(r"^    if:|^        (if|continue-on-error):", archive, re.MULTILINE):
         fail("archive checker jobs and steps must be mandatory")
     for token in ('x86_64-unknown-linux-gnu', 'ubuntu-22.04', 'aarch64-apple-darwin',
-                  'macos-15', 'scripts/archive-version-check.py', '--plan', '--target'):
+                  'macos-15', 'aarch64-unknown-linux-gnu', 'ubuntu-22.04-arm', 'scripts/archive-version-check.py', '--plan', '--target'):
         if token not in archive:
             fail(f"archive workflow missing {token}")
     if "matrix: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix }}" not in local:
@@ -149,7 +149,7 @@ def main() -> int:
         found = [release for release in plan["releases"] if release["app_name"] == app]
         if len(found) != 1:
             fail(f"{app} must be in the release plan")
-        for target in ("aarch64-apple-darwin", "x86_64-unknown-linux-gnu"):
+        for target in ("aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"):
             if f"{app}-{target}.tar.xz" not in found[0]["artifacts"]:
                 fail(f"{app} missing release archive for {target}")
     print("Release structure OK: dispatch-only, exact-SHA gate before build, native archive dependency, research and bookends-check included", flush=True)
