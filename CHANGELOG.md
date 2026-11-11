@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.46.0] - 2026-11-11
+
+### Added
+
+- Releases now publish all five archives (`loop-cli`, `bookends-check`, `lean-change-provider`, `policy-document-provider`, `research-provider`) for Linux arm64 (`aarch64-unknown-linux-gnu`, #131), built natively on the `ubuntu-22.04-arm` runner and gated by the same archive version check before host. Asset names follow the existing `<app>-<target>.tar.xz` pattern.
+
+### Compatibility
+
+- The macOS arm64 and Linux x86_64 archives are unchanged. The engine, providers, record formats and workflow text are unchanged.
+
 ## [0.45.0] - 2026-11-09
 
 ### Added
