@@ -66,8 +66,6 @@ jobs:
         run: python3 scripts/lean-change-mutations.py
       - name: Generate-PRD journey self-test
         run: python3 scripts/generate-prd-journey.py
-      - name: Release-after-merge script tests (8 shards)
-        run: python3 scripts/run-release-tests-sharded.py
       - name: Bookends pushed-range gate
         shell: bash
         env:
@@ -80,3 +78,20 @@ jobs:
           unset BOOKENDS_BYPASS
           export BOOKENDS_UPDATE_STREAM=1 BOOKENDS_REMOTE=origin
           printf 'refs/heads/main %s refs/heads/main %s\n' "$PUSH_AFTER" "$PUSH_BEFORE" | scripts/bookends-check-gate.sh
+
+  release-tests:
+    runs-on: ubuntu-22.04
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14.6"
+      - name: Use runner-owned test temporary directory
+        run: printf 'TMPDIR=%s\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Release-after-merge script tests (8 shards)
+        run: python3 scripts/run-release-tests-sharded.py
