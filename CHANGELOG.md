@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.46.1] - 2026-11-11
+
+### Fixed
+
+- `scripts/release-after-merge.sh` now reads the prepared release diff with explicit `a/` and `b/` prefixes (#133), so its check that only version lines and new CHANGELOG text changed no longer stops on a machine whose git config sets `diff.mnemonicPrefix`.
+
+### Compatibility
+
+- Release archives, the engine, the providers, record formats and workflow text are unchanged.
+
 ## [0.46.0] - 2026-11-11
 
 ### Added
