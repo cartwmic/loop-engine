@@ -416,8 +416,9 @@ PY
     [[ -z $unexpected ]] || stop "the prepared tree changes more than Cargo.toml, Cargo.lock and CHANGELOG.md: $(echo "$unexpected" | tr '\n' ' ')"
     say "staged: $(git -C "$worktree" diff --cached --name-status | tr '\t\n' ' ;')"
     # Content check: Cargo files change only version lines; CHANGELOG.md only gains lines.
-    git -C "$worktree" diff --cached >> "$log_file"
-    odd=$(git -C "$worktree" diff --cached -U0 | python3 -c '
+    # The explicit prefixes keep the "+++ b/" headers the parser reads, whatever diff.mnemonicPrefix or diff.noprefix says.
+    git -C "$worktree" diff --cached --src-prefix=a/ --dst-prefix=b/ >> "$log_file"
+    odd=$(git -C "$worktree" diff --cached --src-prefix=a/ --dst-prefix=b/ -U0 | python3 -c '
 import re, sys
 path = None
 for line in sys.stdin:

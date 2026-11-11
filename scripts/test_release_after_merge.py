@@ -404,6 +404,26 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.assertIn("released v1.0.0", result.stdout)
         self.assertEqual(self.h.events()[0], "prepare")
 
+    def use_mnemonic_prefix(self) -> None:
+        # diff.mnemonicPrefix (set on the Linux box) writes i/ and w/ headers; the release must not depend on diff.* config.
+        self.h.env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="diff.mnemonicPrefix", GIT_CONFIG_VALUE_0="true")
+
+    def test_happy_path_under_mnemonic_prefix_config_still_passes_the_content_check(self) -> None:
+        self.use_mnemonic_prefix()
+        result = self.h.run()
+        self.assert_released(result)
+        self.assertEqual(self.h.events(), [
+            "prepare", "pr create", "pr checks", "pr merge", "ci list", "dispatch tag=dry-run", "dispatch tag=v0.35.0",
+        ])
+
+    def test_mnemonic_prefix_config_still_stops_on_a_prepared_content_change(self) -> None:
+        self.use_mnemonic_prefix()
+        self.h.env["FAKE_PREPARE_EDIT"] = "1"
+        result = self.h.run()
+        self.assert_stopped(result, "pr", "lines other than version bumps")
+        self.assertIn('Cargo.toml: +members = ["x"]', result.stderr)
+        self.assertEqual(self.h.events(), ["prepare"])
+
     # l2
     def test_already_released_prints_url_and_does_nothing(self) -> None:
         result = self.h.run("--version", "0.34.0")
