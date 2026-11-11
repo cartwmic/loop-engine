@@ -9,11 +9,13 @@ on:
 permissions:
   contents: read
 
-# Superseded PR updates are cancelled. Pushes to main always run to completion:
-# release requires a successful push run for the exact commit, and the Bookends
-# range of a cancelled push would otherwise go unchecked.
+# A PR runs `checks` only. A newer push to the PR cancels its superseded run.
+# A push to main runs `checks`, `tests` and `release-tests`. Each pushed commit
+# has its own group and is never cancelled: release requires a successful push
+# run for the exact commit, and the Bookends range of a cancelled push would
+# otherwise go unchecked.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -33,8 +35,11 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace --locked
 
+  # Push to main only: the workspace tests, the journey self-tests and the
+  # Bookends pushed-range gate, on the pushed commit.
   tests:
     runs-on: ubuntu-22.04
+    if: github.event_name == 'push'
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
@@ -43,8 +48,6 @@ jobs:
           persist-credentials: false
           submodules: recursive
           fetch-depth: 0
-          # PRs check the PR head commits, not the synthetic merge commit.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14.6"
@@ -79,8 +82,11 @@ jobs:
           export BOOKENDS_UPDATE_STREAM=1 BOOKENDS_REMOTE=origin
           printf 'refs/heads/main %s refs/heads/main %s\n' "$PUSH_AFTER" "$PUSH_BEFORE" | scripts/bookends-check-gate.sh
 
+  # Push to main only. release-after-merge.sh reads this run's conclusion, not
+  # its job names, so a green push run still satisfies it.
   release-tests:
     runs-on: ubuntu-22.04
+    if: github.event_name == 'push'
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Keep this check list identical to .github/workflows/ci.yml.
+# Keep this check list identical to the union of the jobs in .github/workflows/ci.yml:
+# checks run on PRs, and the rest run on pushes to main.
 # CI uses pushed-range Bookends; this local baseline uses ordinary working-tree mode.
 set -euo pipefail
 
