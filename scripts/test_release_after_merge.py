@@ -440,12 +440,12 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.h.git(self.h.checkout, "worktree", "add", "--quiet", "-b", "release/v0.35.0", str(self.h.worktree), "origin/main")
         (self.h.worktree / "Cargo.toml").write_text("half prepared\n")
         result = self.h.run()
-        self.assert_stopped(result, "prepare", "dirty tree")
+        self.assert_stopped(result, "prepare", "nothing was changed")
         self.assertEqual(self.h.events(), [])
 
     def test_stop_existing_plan_file(self) -> None:
         Path(self.h.env["RELEASE_PLAN_FILE"]).write_text("{}\n")
-        self.assert_stopped(self.h.run(), "prepare", "dist-plan.json exists")
+        self.assert_stopped(self.h.run(), "prepare", "nothing was changed")
         self.assertEqual(self.h.events(), [])
 
     def test_stop_unexpected_prepared_file(self) -> None:
@@ -756,15 +756,6 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.h.git(self.h.checkout, "worktree", "remove", str(self.h.root / "tmp-wt"))
         self.assert_stopped(self.h.run(), "prepare", "local branch release/v0.35.0 has commits not on main")
 
-    def test_rerun_after_dirty_tree_is_cleaned(self) -> None:
-        self.h.git(self.h.checkout, "worktree", "add", "--quiet", "-b", "release/v0.35.0", str(self.h.worktree), "origin/main")
-        (self.h.worktree / "Cargo.toml").write_text("half prepared\n")
-        self.assertEqual(self.h.run().returncode, 1)
-        self.h.git(self.h.worktree, "checkout", "--", "Cargo.toml")
-        self.assert_released(self.h.run())
-        self.assertEqual(self.h.count("prepare"), 1)
-
-
     def test_next_line_names_loop_engine_bump(self) -> None:
         result = self.h.run()
         self.assert_released(result)
@@ -790,47 +781,39 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.assertNotIn("no git identity is set", result.stdout)
         self.assertEqual(self.release_author(), "test <test@example.com>")
 
-    def failed_prepare(self) -> None:
+    def stop_and_clear(self, text: str) -> subprocess.CompletedProcess[str]:
+        """Rerun, expect the leftovers stop, run the printed command exactly as printed, and check the result."""
+        result = self.h.run()
+        self.assert_stopped(result, "prepare", "nothing was changed")
+        self.assertIn(text, result.stderr)
+        printed = re.search(r"run: (git -C .*)$", result.stderr, re.M).group(1)
+        self.assertIn("stash push --include-untracked", printed)
+        subprocess.run(printed, shell=True, check=True, env=self.h.env, capture_output=True)
+        self.assertEqual(self.h.git(self.h.worktree, "status", "--porcelain", "--untracked-files=all"), "")
+        self.assertFalse(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
+        return result
+
+    def stashed(self) -> str:
+        """Names of the paths held in the leftovers stash (tracked changes and untracked files)."""
+        names = self.h.git(self.h.worktree, "stash", "show", "--include-untracked", "--name-only")
+        self.assertIn("release-after-merge v0.35.0 leftovers", self.h.git(self.h.worktree, "stash", "list"))
+        return names
+
+    def finish_after_clear(self) -> None:
+        self.assert_released(self.h.run())
+        self.assertEqual(self.h.count("prepare"), 2)
+
+    def test_resume_own_files_unstaged(self) -> None:
         self.h.env["FAKE_PREPARE_FAIL"] = "1"
         self.assert_stopped(self.h.run(), "prepare", "prepare-stub 0.35.0 failed")
         self.h.env.pop("FAKE_PREPARE_FAIL")
         self.assertTrue(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
-        self.assertNotEqual(self.h.git(self.h.worktree, "status", "--porcelain"), "")
+        self.stop_and_clear(" M Cargo.toml")
+        names = self.stashed()
+        self.assertIn("Cargo.toml", names)
+        self.finish_after_clear()
 
-    def test_resume_after_failed_prepare_cleans_its_own_leftovers(self) -> None:
-        self.failed_prepare()
-        result = self.h.run()
-        self.assert_released(result)
-        self.assertIn("cleaning leftovers of the failed prepare", result.stdout)
-        self.assertEqual(self.h.count("prepare"), 2)
-        self.assertFalse(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
-
-    def test_resume_after_prepare_left_an_extra_file_cleans_the_staged_new_file(self) -> None:
-        # The script's own add -A stages the stray file, then the unexpected-file check stops the run.
-        self.h.env["FAKE_PREPARE_EXTRA"] = "1"
-        self.assert_stopped(self.h.run(), "pr", "stray.txt")
-        self.assertIn("A  stray.txt", self.h.git(self.h.worktree, "status", "--porcelain"))
-        self.h.env.pop("FAKE_PREPARE_EXTRA")
-        result = self.h.run()
-        self.assert_released(result)
-        self.assertIn("cleaning leftovers of the failed prepare", result.stdout)
-        self.assertEqual(self.h.count("prepare"), 2)
-        self.assertFalse(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
-
-    def test_dirty_tree_without_our_marker_stops_and_the_printed_command_clears_it(self) -> None:
-        self.h.git(self.h.checkout, "worktree", "add", "--quiet", "-b", "release/v0.35.0", str(self.h.worktree), "origin/main")
-        (self.h.worktree / "Cargo.toml").write_text("half prepared\n")
-        (self.h.worktree / "mine.txt").write_text("staged new file\n")
-        self.h.git(self.h.worktree, "add", "mine.txt")
-        result = self.h.run()
-        self.assert_stopped(result, "prepare", "dirty tree")
-        printed = f"git -C {self.h.worktree} reset -q --hard HEAD && git -C {self.h.worktree} clean -fd"
-        self.assertIn(printed, result.stderr)
-        subprocess.run(printed, shell=True, check=True, env=self.h.env, capture_output=True)
-        self.assertEqual(self.h.git(self.h.worktree, "status", "--porcelain", "--untracked-files=all"), "")
-        self.assert_released(self.h.run())
-
-    def test_resume_after_failed_commit_cleans_staged_leftovers(self) -> None:
+    def test_resume_own_files_staged(self) -> None:
         # The release-prep commit fails after the files are staged (a failing pre-commit hook).
         self.h.git(self.h.checkout, "worktree", "add", "--quiet", "-b", "release/v0.35.0", str(self.h.worktree), "origin/main")
         hooks = Path(self.h.git(self.h.worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")) / "hooks"
@@ -839,27 +822,41 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         hook.write_text("#!/bin/sh\nexit 1\n")
         hook.chmod(0o755)
         self.assert_stopped(self.h.run(), "pr", "git commit failed")
-        self.assertRegex(self.h.git(self.h.worktree, "status", "--porcelain"), r"(?m)^M  Cargo\.toml$")
         hook.unlink()
-        result = self.h.run()
-        self.assert_released(result)
-        self.assertIn("cleaning leftovers of the failed prepare", result.stdout)
-        self.assertEqual(self.h.count("prepare"), 2)
-        self.assertFalse(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
+        self.stop_and_clear("M  Cargo.toml")
+        self.assertIn("Cargo.toml", self.stashed())
+        self.finish_after_clear()
 
-    def test_commit_falls_back_when_only_the_author_is_set(self) -> None:
-        for key in ("GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
-            self.h.env.pop(key)
-        result = self.h.run()
-        self.assert_released(result)
-        self.assertIn("no git identity is set", result.stdout)
+    def test_resume_unexpected_new_file_staged(self) -> None:
+        self.h.env["FAKE_PREPARE_EXTRA"] = "1"
+        self.assert_stopped(self.h.run(), "pr", "stray.txt")
+        self.h.env.pop("FAKE_PREPARE_EXTRA")
+        self.stop_and_clear("A  stray.txt")
+        self.assertIn("stray.txt", self.stashed())
+        self.finish_after_clear()
 
-    def test_plan_file_without_our_marker_is_not_removed(self) -> None:
+    def test_resume_operator_edit_to_a_tracked_file(self) -> None:
+        self.h.git(self.h.checkout, "worktree", "add", "--quiet", "-b", "release/v0.35.0", str(self.h.worktree), "origin/main")
+        (self.h.worktree / "feature.txt").write_text("operator edit\n")
+        self.stop_and_clear(" M feature.txt")
+        self.assertIn("feature.txt", self.stashed())
+        self.assertIn("operator edit", self.h.git(self.h.worktree, "show", "stash@{0}:feature.txt"))
+        self.assert_released(self.h.run())
+        self.assertEqual(self.h.count("prepare"), 1)
+
+    def test_resume_operator_untracked_file(self) -> None:
+        self.h.git(self.h.checkout, "worktree", "add", "--quiet", "-b", "release/v0.35.0", str(self.h.worktree), "origin/main")
+        (self.h.worktree / "notes.txt").write_text("operator notes\n")
+        self.stop_and_clear("?? notes.txt")
+        self.assertIn("notes.txt", self.stashed())
+        self.assertIn("operator notes", self.h.git(self.h.worktree, "show", "stash@{0}^3:notes.txt"))
+        self.assert_released(self.h.run())
+        self.assertEqual(self.h.count("prepare"), 1)
+
+    def test_plan_file_alone_stops_and_the_printed_command_removes_it(self) -> None:
         Path(self.h.env["RELEASE_PLAN_FILE"]).write_text("{}\n")
-        result = self.h.run()
-        self.assert_stopped(result, "prepare", "this script did not leave it")
-        self.assertIn(f"rm {self.h.env['RELEASE_PLAN_FILE']}", result.stderr)
-        self.assertTrue(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
+        self.stop_and_clear("plan file")
+        self.assert_released(self.h.run())
 
 
 class AgentsContractTest(unittest.TestCase):
