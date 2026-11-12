@@ -1,6 +1,6 @@
 # Running the baseline on kgate
 
-Load this before running `scripts/baseline.sh` on the homelab cluster: as a pre-merge option for a risky change, in a culprit hunt on a red main, or when the owner asks. The baseline is the union of the jobs in [ci.yml](../.github/workflows/ci.yml), plus Bookends in working-tree mode. PRs do not need it. The kgate profile is [kgate.toml](../kgate.toml).
+Load this before running `scripts/baseline.sh` on the homelab cluster: as a pre-merge option for a risky change, or when the owner asks. A culprit hunt on a red main does not run the baseline; it runs only the failing check with the same `run-and-wake -- kgate --` form and the same result reading below. The baseline is the union of the jobs in [ci.yml](../.github/workflows/ci.yml), plus Bookends in working-tree mode. PRs do not need it. The kgate profile is [kgate.toml](../kgate.toml).
 
 ## Run
 
