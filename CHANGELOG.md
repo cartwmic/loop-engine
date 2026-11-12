@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.46.2] - 2026-11-12
+
+CI split: PRs run checks only; tests and release-tests run on push to main (ask #847); red-main culprit hunt in docs/culprit-hunt.md.
+
 ## [0.46.1] - 2026-11-11
 
 ### Fixed
