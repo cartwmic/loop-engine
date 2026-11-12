@@ -1,0 +1,5 @@
+# Tools this checkout pins for its release scripts. `mise install` provisions them.
+# scripts/generate-release.py resolves `dist` through this file, so release prep
+# finds the pinned cargo-dist on any host that has mise.
+[tools]
+"aqua:axodotdev/cargo-dist" = "0.32.0"

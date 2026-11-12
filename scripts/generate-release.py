@@ -58,6 +58,36 @@ def tighten(stock: bytes) -> bytes:
     return before + STRICT.encode() + after
 
 
+def resolve_dist(root: Path, name: str | None) -> str:
+    """Return the dist executable. An explicit name or path is used as given (via PATH).
+
+    With no name, the checkout's mise.toml pin (aqua:axodotdev/cargo-dist) is installed and
+    used when mise is available; otherwise dist on PATH. The version check in generate()
+    still decides whether the result is acceptable.
+    """
+    if name is not None:
+        found = shutil.which(name)
+        if not found:
+            raise GenerationError("cargo-dist executable not found")
+        return found
+    mise = shutil.which("mise")
+    if mise and (root / "mise.toml").is_file():
+        # Trust this checkout's mise.toml for these two calls only; nothing is written to mise's trust list.
+        env = dict(os.environ, MISE_TRUSTED_CONFIG_PATHS=str(root), MISE_YES="1")
+        for command in ([mise, "install", "--quiet", "aqua:axodotdev/cargo-dist"],
+                        [mise, "which", "dist"]):
+            result = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True)
+            if result.returncode:
+                break
+        else:
+            return result.stdout.strip()
+        print(f"mise could not provide dist ({result.stderr.strip()}); trying PATH", file=sys.stderr)
+    found = shutil.which("dist")
+    if not found:
+        raise GenerationError("cargo-dist executable not found: install mise and run `mise install`, or put dist 0.32.0 on PATH")
+    return found
+
+
 def generate(root: Path, dist: str) -> bytes:
     version = subprocess.run([dist, "--version"], cwd=root, capture_output=True, text=True)
     if version.returncode or version.stdout.strip() != "cargo-dist 0.32.0":
@@ -147,17 +177,19 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--self-test", action="store_true")
+    mode.add_argument("--print-dist", action="store_true", help="print the resolved dist executable and exit")
     parser.add_argument("--workspace", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--dist", default="dist", help="pinned dist executable (also supports scripted fixture proof)")
+    parser.add_argument("--dist", default=None, help="dist executable (default: the mise.toml pin, else dist on PATH; also supports scripted fixture proof)")
     args = parser.parse_args()
     try:
         if args.self_test:
             self_test()
             return 0
         root = args.workspace.resolve()
-        dist = shutil.which(args.dist)
-        if not dist:
-            raise GenerationError("cargo-dist executable not found")
+        dist = resolve_dist(root, args.dist)
+        if args.print_dist:
+            print(dist)
+            return 0
         final = generate(root, str(Path(dist).resolve()))
         output = root / WORKFLOW
         if args.check:

@@ -175,7 +175,7 @@ summary() {
   [[ -z ${dry_run_url:-} ]] || say "dry run: $dry_run_url"
   [[ -z ${publish_url:-} ]] || say "publish run: $publish_url"
   say "resume or check later with: scripts/release-after-merge.sh --version $version"
-  say "next (playbook rule 7c57de5a): ~/.local/user_scripts/import_release_skills.py bump $tag"
+  say "next (playbook rule 7c57de5a): ~/.local/user_scripts/loop_engine_bump.py $tag"
 }
 
 main_sha() {
@@ -359,6 +359,14 @@ if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
   main_checkout=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
   worktree=${RELEASE_WORKTREE:-$(dirname "$main_checkout")/loop-engine-release-$tag}
   prepared=
+  # stop_leftovers: a rerun never deletes anything. It lists what an earlier attempt left and prints the one
+  # command that clears it while keeping the work (the stash holds every path, staged, unstaged or untracked).
+  stop_leftovers() {
+    local listing=$1 clear
+    clear="git -C '$worktree' -c user.name=release-after-merge -c user.email=release-after-merge@localhost stash push --include-untracked -m 'release-after-merge $tag leftovers' && rm -f '$plan_file'"
+    printf 'leftovers from an earlier attempt:\n%s\n' "$listing" >&2
+    stop "$worktree or $plan_file has leftovers; nothing was changed. To clear them and keep your work in a git stash, run: $clear"
+  }
   # Only a worktree of this repo on $branch is ours to reuse; anything else at the path, or commits on
   # $branch other than the prep commit, stops so the caller decides (RELEASE_WORKTREE picks another path).
   if [[ -e $worktree ]]; then
@@ -366,8 +374,9 @@ if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
       == "$(git rev-parse --path-format=absolute --git-common-dir)" \
       && $(git -C "$worktree" branch --show-current) == "$branch" ]] \
       || stop "$worktree exists and is not this repo's worktree on $branch; move it or set RELEASE_WORKTREE"
-    [[ -z $(git -C "$worktree" status --porcelain=v1 --untracked-files=all) ]] \
-      || stop "dirty tree: $worktree has uncommitted changes from an earlier attempt; inspect them, keep what you need, clean the tree, then resume"
+    leftovers=$(git -C "$worktree" status --porcelain=v1 --untracked-files=all)
+    [[ ! -e $plan_file ]] || leftovers+=${leftovers:+$'\n'}"plan file $plan_file"
+    [[ -z $leftovers ]] || stop_leftovers "$leftovers"
     if [[ $(git -C "$worktree" log -1 --format=%s) == "release: prepare $tag" ]] \
       && git -C "$worktree" merge-base --is-ancestor HEAD~1 origin/main; then
       prepared=yes
@@ -388,8 +397,7 @@ if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
   fi
   if [[ -z $prepared ]]; then
     # prepare-release.sh writes the dist plan here; AGENTS.md keeps another run's plan from being overwritten.
-    [[ ! -e $plan_file ]] \
-      || stop "$plan_file exists; check it is a finished release's plan, remove it, then rerun"
+    [[ ! -e $plan_file ]] || stop_leftovers "plan file $plan_file"
     prepare_cmd=${RELEASE_PREPARE_CMD:-scripts/prepare-release.sh}
     say "running $prepare_cmd $version"
     (cd "$worktree" && $prepare_cmd "$version") || stop "$prepare_cmd $version failed in $worktree"
@@ -435,7 +443,14 @@ for line in sys.stdin:
             print(f"{path}: {line.rstrip()}")
 ')
     [[ -z $odd ]] || stop "the prepared diff has lines other than version bumps and new CHANGELOG text: $odd"
-    git -C "$worktree" commit --quiet -m "release: prepare $tag" || stop "git commit failed"
+    # Use the caller's git identity when there is one; otherwise a fixed release identity, for this commit only.
+    ident=()
+    if ! git -C "$worktree" var GIT_AUTHOR_IDENT >/dev/null 2>&1 \
+      || ! git -C "$worktree" var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
+      say "no git identity is set: committing as release-after-merge"
+      ident=(-c user.name=release-after-merge -c user.email=release-after-merge@example.invalid)
+    fi
+    git -C "$worktree" ${ident[@]+"${ident[@]}"} commit --quiet -m "release: prepare $tag" || stop "git commit failed"
     rm -f "$plan_file"
   fi
   step="pr"
