@@ -75,7 +75,9 @@ unset BOOKENDS_BYPASS BOOKENDS_UPDATE_STREAM BOOKENDS_REMOTE
 PATH="$BIN_DIR:$PATH" scripts/bookends-check-gate.sh
 cargo fmt --all -- --check
 python3 scripts/generate-release.py --check
-dist plan --output-format=json > /tmp/loop-engine-dist-plan.json
+# The pinned cargo-dist from mise.toml (else dist on PATH), the same one generate-release.py uses.
+dist=$(python3 scripts/generate-release.py --print-dist)
+"$dist" plan --output-format=json > /tmp/loop-engine-dist-plan.json
 python3 scripts/assert-dist-plan.py /tmp/loop-engine-dist-plan.json
 python3 scripts/assert-release-gates.py
 

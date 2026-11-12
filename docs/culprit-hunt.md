@@ -9,7 +9,7 @@ R=<head sha of the red run>
 gh api 'repos/cartwmic/loop-engine/activity?ref=main&per_page=100' --jq '.[] | "\(.after) \(.before)"' |
 sed -n "/^$R /,\$p" |
 while read -r after before; do
-  run=$(gh run list --repo cartwmic/loop-engine --workflow ci.yml --branch main --event push --commit "$after" --json databaseId,status,conclusion --jq '.[0] | "\(.databaseId) \(.status) \(.conclusion)"')
+  run=$(gh run list --repo cartwmic/loop-engine --workflow ci.yml --branch main --event push --commit "$after" --json databaseId,status,conclusion --jq '.[0] // empty | "\(.databaseId) \(.status) \(.conclusion)"')
   echo "PUSH $after before=$before run=$run"
   [ -n "$run" ] && gh run view "${run%% *}" --repo cartwmic/loop-engine --json jobs --jq '.jobs[] | .name as $j | .steps[] | select(.conclusion == "failure" or .conclusion == "skipped") | "  \($j) | \(.name) | \(.conclusion)"'
   case $run in *success) break ;; esac

@@ -49,6 +49,7 @@ FAKE_GH = textwrap.dedent(
 
     def git(*args, cwd=None):
         env = {k: v for k, v in os.environ.items() if k != "FAKE_GIT_LOG"}  # only the script's git calls are logged
+        env.update(GIT_AUTHOR_NAME="gh", GIT_AUTHOR_EMAIL="gh@example.com", GIT_COMMITTER_NAME="gh", GIT_COMMITTER_EMAIL="gh@example.com")  # the merge commit's own identity
         return subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout.strip()
 
     def main_sha():
@@ -182,6 +183,8 @@ PREPARE_STUB = textwrap.dedent(
         path.write_text(path.read_text().replace("members = []", 'members = ["x"]'))
     if os.environ.get("FAKE_PREPARE_EXTRA"):
         Path("stray.txt").write_text("not a release file\n")
+    if os.environ.get("FAKE_PREPARE_FAIL"):
+        sys.exit(1)
     '''
 ).lstrip()
 
@@ -374,7 +377,7 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         merge = self.h.gh_state()["prs"][0]["mergeCommit"]["oid"]
         self.assertEqual(merge, self.h.origin_main())
         self.assertIn(f"commit: {merge}", result.stdout)
-        self.assertIn("import_release_skills.py bump v0.35.0", result.stdout)
+        self.assertIn("loop_engine_bump.py v0.35.0", result.stdout)
         self.assertEqual(self.h.events(), [
             "prepare", "pr create", "pr checks", "pr merge", "ci list", "dispatch tag=dry-run", "dispatch tag=v0.35.0",
         ])
@@ -760,6 +763,63 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.h.git(self.h.worktree, "checkout", "--", "Cargo.toml")
         self.assert_released(self.h.run())
         self.assertEqual(self.h.count("prepare"), 1)
+
+
+    def test_next_line_names_loop_engine_bump(self) -> None:
+        result = self.h.run()
+        self.assert_released(result)
+        self.assertIn("next (playbook rule 7c57de5a): ~/.local/user_scripts/loop_engine_bump.py v0.35.0", result.stdout)
+        self.assertNotIn("import_release_skills", result.stdout)
+
+    def release_author(self) -> str:
+        return git("--git-dir", str(self.h.origin), "log", "-1", "--format=%an <%ae>", "release/v0.35.0")
+
+    def test_commit_uses_fallback_identity_when_none_is_set(self) -> None:
+        for key in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+            self.h.env.pop(key)
+        result = self.h.run()
+        self.assert_released(result)
+        self.assertIn("no git identity is set", result.stdout)
+        self.assertEqual(self.release_author(), "release-after-merge <release-after-merge@example.invalid>")
+        self.assertEqual(subprocess.run(["git", "config", "--get", "user.name"], cwd=self.h.checkout, env=self.h.env,
+                                        capture_output=True, text=True).stdout, "", "the identity must not be written to config")
+
+    def test_commit_keeps_the_callers_identity(self) -> None:
+        result = self.h.run()
+        self.assert_released(result)
+        self.assertNotIn("no git identity is set", result.stdout)
+        self.assertEqual(self.release_author(), "test <test@example.com>")
+
+    def failed_prepare(self) -> None:
+        self.h.env["FAKE_PREPARE_FAIL"] = "1"
+        self.assert_stopped(self.h.run(), "prepare", "prepare-stub 0.35.0 failed")
+        self.h.env.pop("FAKE_PREPARE_FAIL")
+        self.assertTrue(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
+        self.assertNotEqual(self.h.git(self.h.worktree, "status", "--porcelain"), "")
+
+    def test_resume_after_failed_prepare_cleans_its_own_leftovers(self) -> None:
+        self.failed_prepare()
+        result = self.h.run()
+        self.assert_released(result)
+        self.assertIn("cleaning leftovers of the failed prepare", result.stdout)
+        self.assertEqual(self.h.count("prepare"), 2)
+        self.assertFalse(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
+
+    def test_resume_after_failed_prepare_leaves_a_stray_file_and_says_what_to_remove(self) -> None:
+        self.failed_prepare()
+        (self.h.worktree / "mine.txt").write_text("not from prepare\n")
+        result = self.h.run()
+        self.assert_stopped(result, "prepare", "dirty tree")
+        self.assertIn(f"git -C {self.h.worktree} clean -fd", result.stderr)
+        self.assertTrue((self.h.worktree / "mine.txt").exists())
+        self.assertTrue(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
+
+    def test_plan_file_without_our_marker_is_not_removed(self) -> None:
+        Path(self.h.env["RELEASE_PLAN_FILE"]).write_text("{}\n")
+        result = self.h.run()
+        self.assert_stopped(result, "prepare", "this script did not leave it")
+        self.assertIn(f"rm {self.h.env['RELEASE_PLAN_FILE']}", result.stderr)
+        self.assertTrue(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
 
 
 class AgentsContractTest(unittest.TestCase):

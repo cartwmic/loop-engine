@@ -175,7 +175,7 @@ summary() {
   [[ -z ${dry_run_url:-} ]] || say "dry run: $dry_run_url"
   [[ -z ${publish_url:-} ]] || say "publish run: $publish_url"
   say "resume or check later with: scripts/release-after-merge.sh --version $version"
-  say "next (playbook rule 7c57de5a): ~/.local/user_scripts/import_release_skills.py bump $tag"
+  say "next (playbook rule 7c57de5a): ~/.local/user_scripts/loop_engine_bump.py $tag"
 }
 
 main_sha() {
@@ -359,6 +359,28 @@ if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
   main_checkout=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
   worktree=${RELEASE_WORKTREE:-$(dirname "$main_checkout")/loop-engine-release-$tag}
   prepared=
+  # clean_own_leftovers: after a failed prepare, remove what that prepare left and nothing else. The marker
+  # in the worktree's git dir says this script started a prepare here; without it, nothing is cleaned.
+  # Cleaned: tracked changes to Cargo.toml, Cargo.lock and CHANGELOG.md (the only files prepare may touch),
+  # and the dist plan file. Any other dirty or untracked path is not ours and is left for the caller.
+  clean_own_leftovers() {
+    local marker dirty stray
+    marker=$(git -C "$worktree" rev-parse --absolute-git-dir)/release-prepare.marker
+    [[ -f $marker && $(sed -n 1p "$marker") == "tag=$tag" ]] || return 0
+    dirty=$(git -C "$worktree" status --porcelain=v1 --untracked-files=all)
+    stray=$(printf '%s\n' "$dirty" | grep -vE '^ ?M (Cargo\.toml|Cargo\.lock|CHANGELOG\.md)$' | grep . || true)
+    [[ -z $stray ]] || return 0
+    if [[ -n $dirty ]]; then
+      say "cleaning leftovers of the failed prepare in $worktree: $(printf '%s' "$dirty" | tr '\n' ';')"
+      git -C "$worktree" checkout -- Cargo.toml Cargo.lock CHANGELOG.md 2>/dev/null \
+        || git -C "$worktree" checkout -- . || stop "could not clean $worktree"
+    fi
+    if [[ -e $plan_file && $(sed -n 2p "$marker") == "plan=$plan_file" ]]; then
+      say "removing the dist plan $plan_file left by the failed prepare"
+      rm -f "$plan_file"
+    fi
+    rm -f "$marker"
+  }
   # Only a worktree of this repo on $branch is ours to reuse; anything else at the path, or commits on
   # $branch other than the prep commit, stops so the caller decides (RELEASE_WORKTREE picks another path).
   if [[ -e $worktree ]]; then
@@ -366,8 +388,9 @@ if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
       == "$(git rev-parse --path-format=absolute --git-common-dir)" \
       && $(git -C "$worktree" branch --show-current) == "$branch" ]] \
       || stop "$worktree exists and is not this repo's worktree on $branch; move it or set RELEASE_WORKTREE"
+    clean_own_leftovers
     [[ -z $(git -C "$worktree" status --porcelain=v1 --untracked-files=all) ]] \
-      || stop "dirty tree: $worktree has uncommitted changes from an earlier attempt; inspect them, keep what you need, clean the tree, then resume"
+      || stop "dirty tree: $worktree has uncommitted changes this script did not leave; inspect them, keep what you need, then clean the tree: git -C $worktree status; git -C $worktree checkout -- . && git -C $worktree clean -fd; then resume"
     if [[ $(git -C "$worktree" log -1 --format=%s) == "release: prepare $tag" ]] \
       && git -C "$worktree" merge-base --is-ancestor HEAD~1 origin/main; then
       prepared=yes
@@ -389,9 +412,10 @@ if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
   if [[ -z $prepared ]]; then
     # prepare-release.sh writes the dist plan here; AGENTS.md keeps another run's plan from being overwritten.
     [[ ! -e $plan_file ]] \
-      || stop "$plan_file exists; check it is a finished release's plan, remove it, then rerun"
+      || stop "$plan_file exists and this script did not leave it; check it is a finished release's plan, then remove it: rm $plan_file; then rerun"
     prepare_cmd=${RELEASE_PREPARE_CMD:-scripts/prepare-release.sh}
     say "running $prepare_cmd $version"
+    printf 'tag=%s\nplan=%s\n' "$tag" "$plan_file" > "$(git -C "$worktree" rev-parse --absolute-git-dir)/release-prepare.marker"
     (cd "$worktree" && $prepare_cmd "$version") || stop "$prepare_cmd $version failed in $worktree"
     say "adding the CHANGELOG entry from $notes"
     python3 - "$worktree/CHANGELOG.md" "$version" "$(date -u +%Y-%m-%d)" "$notes" <<'PY' || stop "could not add the CHANGELOG entry"
@@ -435,8 +459,15 @@ for line in sys.stdin:
             print(f"{path}: {line.rstrip()}")
 ')
     [[ -z $odd ]] || stop "the prepared diff has lines other than version bumps and new CHANGELOG text: $odd"
-    git -C "$worktree" commit --quiet -m "release: prepare $tag" || stop "git commit failed"
-    rm -f "$plan_file"
+    # Use the caller's git identity when there is one; otherwise a fixed release identity, for this commit only.
+    ident=()
+    if [[ -z $(git -C "$worktree" config --get user.name || true) && -z ${GIT_AUTHOR_NAME:-} ]] \
+      || [[ -z $(git -C "$worktree" config --get user.email || true) && -z ${GIT_AUTHOR_EMAIL:-} ]]; then
+      say "no git identity is set: committing as release-after-merge"
+      ident=(-c user.name=release-after-merge -c user.email=release-after-merge@example.invalid)
+    fi
+    git -C "$worktree" ${ident[@]+"${ident[@]}"} commit --quiet -m "release: prepare $tag" || stop "git commit failed"
+    rm -f "$plan_file" "$(git -C "$worktree" rev-parse --absolute-git-dir)/release-prepare.marker"
   fi
   step="pr"
   say "pushing $branch"
