@@ -359,21 +359,18 @@ if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
   main_checkout=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
   worktree=${RELEASE_WORKTREE:-$(dirname "$main_checkout")/loop-engine-release-$tag}
   prepared=
-  # clean_own_leftovers: after a failed prepare, remove what that prepare left and nothing else. The marker
-  # in the worktree's git dir says this script started a prepare here; without it, nothing is cleaned.
-  # Cleaned: tracked changes to Cargo.toml, Cargo.lock and CHANGELOG.md (the only files prepare may touch),
-  # and the dist plan file. Any other dirty or untracked path is not ours and is left for the caller.
+  # clean_own_leftovers: this worktree is the script's own (made by it, on its release branch). When this
+  # tag's marker is present, a prepare started here and failed, so everything uncommitted in it, staged or not,
+  # tracked or not, is that prepare's leftover: reset to HEAD, clean, and remove the dist plan. Without the
+  # marker nothing is touched and the dirty-tree stop below tells the caller what to run.
   clean_own_leftovers() {
-    local marker dirty stray
+    local marker dirty
     marker=$(git -C "$worktree" rev-parse --absolute-git-dir)/release-prepare.marker
     [[ -f $marker && $(cat "$marker") == "tag=$tag" ]] || return 0
     dirty=$(git -C "$worktree" status --porcelain=v1 --untracked-files=all)
-    stray=$(printf '%s\n' "$dirty" | grep -vE '^[ M][ M] (Cargo\.toml|Cargo\.lock|CHANGELOG\.md)$' | grep . || true)
-    [[ -z $stray ]] || return 0
     if [[ -n $dirty ]]; then
       say "cleaning leftovers of the failed prepare in $worktree: $(printf '%s' "$dirty" | tr '\n' ';')"
-      # From HEAD, so staged changes (a failed commit) go too, not only unstaged ones.
-      git -C "$worktree" checkout HEAD -- Cargo.toml Cargo.lock CHANGELOG.md || stop "could not clean $worktree"
+      git -C "$worktree" reset -q --hard HEAD && git -C "$worktree" clean -fdq || stop "could not clean $worktree"
     fi
     if [[ -e $plan_file ]]; then
       say "removing the dist plan $plan_file left by the failed prepare"
@@ -390,7 +387,7 @@ if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
       || stop "$worktree exists and is not this repo's worktree on $branch; move it or set RELEASE_WORKTREE"
     clean_own_leftovers
     [[ -z $(git -C "$worktree" status --porcelain=v1 --untracked-files=all) ]] \
-      || stop "dirty tree: $worktree has uncommitted changes this script did not leave; inspect them, keep what you need, then clean the tree: git -C $worktree status; git -C $worktree checkout HEAD -- . && git -C $worktree clean -fd; then resume"
+      || stop "dirty tree: $worktree has uncommitted changes this script did not leave; inspect them, keep what you need, then clean the tree: git -C $worktree status; git -C $worktree reset -q --hard HEAD && git -C $worktree clean -fd; then resume"
     if [[ $(git -C "$worktree" log -1 --format=%s) == "release: prepare $tag" ]] \
       && git -C "$worktree" merge-base --is-ancestor HEAD~1 origin/main; then
       prepared=yes

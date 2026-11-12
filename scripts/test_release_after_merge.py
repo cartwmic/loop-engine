@@ -805,14 +805,30 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.assertEqual(self.h.count("prepare"), 2)
         self.assertFalse(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
 
-    def test_resume_after_failed_prepare_leaves_a_stray_file_and_says_what_to_remove(self) -> None:
-        self.failed_prepare()
-        (self.h.worktree / "mine.txt").write_text("not from prepare\n")
+    def test_resume_after_prepare_left_an_extra_file_cleans_the_staged_new_file(self) -> None:
+        # The script's own add -A stages the stray file, then the unexpected-file check stops the run.
+        self.h.env["FAKE_PREPARE_EXTRA"] = "1"
+        self.assert_stopped(self.h.run(), "pr", "stray.txt")
+        self.assertIn("A  stray.txt", self.h.git(self.h.worktree, "status", "--porcelain"))
+        self.h.env.pop("FAKE_PREPARE_EXTRA")
+        result = self.h.run()
+        self.assert_released(result)
+        self.assertIn("cleaning leftovers of the failed prepare", result.stdout)
+        self.assertEqual(self.h.count("prepare"), 2)
+        self.assertFalse(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
+
+    def test_dirty_tree_without_our_marker_stops_and_the_printed_command_clears_it(self) -> None:
+        self.h.git(self.h.checkout, "worktree", "add", "--quiet", "-b", "release/v0.35.0", str(self.h.worktree), "origin/main")
+        (self.h.worktree / "Cargo.toml").write_text("half prepared\n")
+        (self.h.worktree / "mine.txt").write_text("staged new file\n")
+        self.h.git(self.h.worktree, "add", "mine.txt")
         result = self.h.run()
         self.assert_stopped(result, "prepare", "dirty tree")
-        self.assertIn(f"git -C {self.h.worktree} clean -fd", result.stderr)
-        self.assertTrue((self.h.worktree / "mine.txt").exists())
-        self.assertTrue(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
+        printed = f"git -C {self.h.worktree} reset -q --hard HEAD && git -C {self.h.worktree} clean -fd"
+        self.assertIn(printed, result.stderr)
+        subprocess.run(printed, shell=True, check=True, env=self.h.env, capture_output=True)
+        self.assertEqual(self.h.git(self.h.worktree, "status", "--porcelain", "--untracked-files=all"), "")
+        self.assert_released(self.h.run())
 
     def test_resume_after_failed_commit_cleans_staged_leftovers(self) -> None:
         # The release-prep commit fails after the files are staged (a failing pre-commit hook).
