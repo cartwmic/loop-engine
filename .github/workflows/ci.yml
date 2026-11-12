@@ -72,8 +72,8 @@ jobs:
       - name: Bookends pushed-range gate
         shell: bash
         env:
-          PUSH_AFTER: ${{ github.event.pull_request.head.sha || github.event.after }}
-          PUSH_BEFORE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           BIN_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"] + "/debug")')"
