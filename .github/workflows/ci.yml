@@ -9,11 +9,13 @@ on:
 permissions:
   contents: read
 
-# Superseded PR updates are cancelled. Pushes to main always run to completion:
-# release requires a successful push run for the exact commit, and the Bookends
-# range of a cancelled push would otherwise go unchecked.
+# A PR runs `checks` only. A newer push to the PR cancels its superseded run.
+# A push to main runs `checks`, `tests` and `release-tests`. Each push has its
+# own group (its tip SHA) and is never cancelled: release requires a successful
+# push run for the exact commit, and the Bookends range of a cancelled push
+# would otherwise go unchecked.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -24,6 +26,8 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+          # PRs check the PR head, not the synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: Swatinem/rust-cache@v2
       # Keep the check list in sync with scripts/baseline.sh.
       - name: Check formatting
@@ -33,8 +37,11 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace --locked
 
+  # Push to main only: the workspace tests, the journey self-tests and the
+  # Bookends pushed-range gate, on the pushed commit.
   tests:
     runs-on: ubuntu-22.04
+    if: github.event_name == 'push'
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
@@ -43,8 +50,6 @@ jobs:
           persist-credentials: false
           submodules: recursive
           fetch-depth: 0
-          # PRs check the PR head commits, not the synthetic merge commit.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14.6"
@@ -66,13 +71,11 @@ jobs:
         run: python3 scripts/lean-change-mutations.py
       - name: Generate-PRD journey self-test
         run: python3 scripts/generate-prd-journey.py
-      - name: Release-after-merge script tests (8 shards)
-        run: python3 scripts/run-release-tests-sharded.py
       - name: Bookends pushed-range gate
         shell: bash
         env:
-          PUSH_AFTER: ${{ github.event.pull_request.head.sha || github.event.after }}
-          PUSH_BEFORE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           BIN_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"] + "/debug")')"
@@ -80,3 +83,23 @@ jobs:
           unset BOOKENDS_BYPASS
           export BOOKENDS_UPDATE_STREAM=1 BOOKENDS_REMOTE=origin
           printf 'refs/heads/main %s refs/heads/main %s\n' "$PUSH_AFTER" "$PUSH_BEFORE" | scripts/bookends-check-gate.sh
+
+  # Push to main only. release-after-merge.sh reads this run's conclusion, not
+  # its job names, so a green push run still satisfies it.
+  release-tests:
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'push'
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14.6"
+      - name: Use runner-owned test temporary directory
+        run: printf 'TMPDIR=%s\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Release-after-merge script tests (8 shards)
+        run: python3 scripts/run-release-tests-sharded.py
