@@ -366,16 +366,16 @@ if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
   clean_own_leftovers() {
     local marker dirty stray
     marker=$(git -C "$worktree" rev-parse --absolute-git-dir)/release-prepare.marker
-    [[ -f $marker && $(sed -n 1p "$marker") == "tag=$tag" ]] || return 0
+    [[ -f $marker && $(cat "$marker") == "tag=$tag" ]] || return 0
     dirty=$(git -C "$worktree" status --porcelain=v1 --untracked-files=all)
-    stray=$(printf '%s\n' "$dirty" | grep -vE '^ ?M (Cargo\.toml|Cargo\.lock|CHANGELOG\.md)$' | grep . || true)
+    stray=$(printf '%s\n' "$dirty" | grep -vE '^[ M][ M] (Cargo\.toml|Cargo\.lock|CHANGELOG\.md)$' | grep . || true)
     [[ -z $stray ]] || return 0
     if [[ -n $dirty ]]; then
       say "cleaning leftovers of the failed prepare in $worktree: $(printf '%s' "$dirty" | tr '\n' ';')"
-      git -C "$worktree" checkout -- Cargo.toml Cargo.lock CHANGELOG.md 2>/dev/null \
-        || git -C "$worktree" checkout -- . || stop "could not clean $worktree"
+      # From HEAD, so staged changes (a failed commit) go too, not only unstaged ones.
+      git -C "$worktree" checkout HEAD -- Cargo.toml Cargo.lock CHANGELOG.md || stop "could not clean $worktree"
     fi
-    if [[ -e $plan_file && $(sed -n 2p "$marker") == "plan=$plan_file" ]]; then
+    if [[ -e $plan_file ]]; then
       say "removing the dist plan $plan_file left by the failed prepare"
       rm -f "$plan_file"
     fi
@@ -390,7 +390,7 @@ if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
       || stop "$worktree exists and is not this repo's worktree on $branch; move it or set RELEASE_WORKTREE"
     clean_own_leftovers
     [[ -z $(git -C "$worktree" status --porcelain=v1 --untracked-files=all) ]] \
-      || stop "dirty tree: $worktree has uncommitted changes this script did not leave; inspect them, keep what you need, then clean the tree: git -C $worktree status; git -C $worktree checkout -- . && git -C $worktree clean -fd; then resume"
+      || stop "dirty tree: $worktree has uncommitted changes this script did not leave; inspect them, keep what you need, then clean the tree: git -C $worktree status; git -C $worktree checkout HEAD -- . && git -C $worktree clean -fd; then resume"
     if [[ $(git -C "$worktree" log -1 --format=%s) == "release: prepare $tag" ]] \
       && git -C "$worktree" merge-base --is-ancestor HEAD~1 origin/main; then
       prepared=yes
@@ -415,7 +415,7 @@ if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
       || stop "$plan_file exists and this script did not leave it; check it is a finished release's plan, then remove it: rm $plan_file; then rerun"
     prepare_cmd=${RELEASE_PREPARE_CMD:-scripts/prepare-release.sh}
     say "running $prepare_cmd $version"
-    printf 'tag=%s\nplan=%s\n' "$tag" "$plan_file" > "$(git -C "$worktree" rev-parse --absolute-git-dir)/release-prepare.marker"
+    printf 'tag=%s\n' "$tag" > "$(git -C "$worktree" rev-parse --absolute-git-dir)/release-prepare.marker"
     (cd "$worktree" && $prepare_cmd "$version") || stop "$prepare_cmd $version failed in $worktree"
     say "adding the CHANGELOG entry from $notes"
     python3 - "$worktree/CHANGELOG.md" "$version" "$(date -u +%Y-%m-%d)" "$notes" <<'PY' || stop "could not add the CHANGELOG entry"
@@ -461,8 +461,8 @@ for line in sys.stdin:
     [[ -z $odd ]] || stop "the prepared diff has lines other than version bumps and new CHANGELOG text: $odd"
     # Use the caller's git identity when there is one; otherwise a fixed release identity, for this commit only.
     ident=()
-    if [[ -z $(git -C "$worktree" config --get user.name || true) && -z ${GIT_AUTHOR_NAME:-} ]] \
-      || [[ -z $(git -C "$worktree" config --get user.email || true) && -z ${GIT_AUTHOR_EMAIL:-} ]]; then
+    if ! git -C "$worktree" var GIT_AUTHOR_IDENT >/dev/null 2>&1 \
+      || ! git -C "$worktree" var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
       say "no git identity is set: committing as release-after-merge"
       ident=(-c user.name=release-after-merge -c user.email=release-after-merge@example.invalid)
     fi

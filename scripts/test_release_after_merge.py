@@ -814,6 +814,30 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.assertTrue((self.h.worktree / "mine.txt").exists())
         self.assertTrue(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
 
+    def test_resume_after_failed_commit_cleans_staged_leftovers(self) -> None:
+        # The release-prep commit fails after the files are staged (a failing pre-commit hook).
+        self.h.git(self.h.checkout, "worktree", "add", "--quiet", "-b", "release/v0.35.0", str(self.h.worktree), "origin/main")
+        hooks = Path(self.h.git(self.h.worktree, "rev-parse", "--path-format=absolute", "--git-common-dir")) / "hooks"
+        hooks.mkdir(exist_ok=True)
+        hook = hooks / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.chmod(0o755)
+        self.assert_stopped(self.h.run(), "pr", "git commit failed")
+        self.assertRegex(self.h.git(self.h.worktree, "status", "--porcelain"), r"(?m)^M  Cargo\.toml$")
+        hook.unlink()
+        result = self.h.run()
+        self.assert_released(result)
+        self.assertIn("cleaning leftovers of the failed prepare", result.stdout)
+        self.assertEqual(self.h.count("prepare"), 2)
+        self.assertFalse(Path(self.h.env["RELEASE_PLAN_FILE"]).exists())
+
+    def test_commit_falls_back_when_only_the_author_is_set(self) -> None:
+        for key in ("GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+            self.h.env.pop(key)
+        result = self.h.run()
+        self.assert_released(result)
+        self.assertIn("no git identity is set", result.stdout)
+
     def test_plan_file_without_our_marker_is_not_removed(self) -> None:
         Path(self.h.env["RELEASE_PLAN_FILE"]).write_text("{}\n")
         result = self.h.run()
