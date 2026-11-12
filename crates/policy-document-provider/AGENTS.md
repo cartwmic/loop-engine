@@ -46,7 +46,7 @@ python3 scripts/run-central-tests.py --filter policy_document
 
 Crate manifests set `autotests = false`: the provider Cargo command above runs unit tests, not the integration files under `tests/`. The central runner executes focused integration checks and builds the required binaries. A narrower unit check may use `cargo test -p policy-document-provider <filter>`.
 
-Final proof is checkout-root `scripts/baseline.sh` plus the root `AGENTS.md` boundary-table union: policy-document changes require draft, audit and external-work journeys. Draft/audit README/AGENTS through this provider under the root document procedure, not direct unaudited edits. Release generation/checking uses checkout-root `python3 scripts/generate-release.py` / `python3 scripts/generate-release.py --check`, never stock workflow generation. Use the root packaged-smoke rule only for packaging changes. Keep `src/embedded_data.rs` inventories current when adding bundled data. Root `AGENTS.md` owns catalog/environment safety, observation rules and Git approval.
+Proof follows checkout-root `AGENTS.md` (Workflow and Boundary checks): policy-document changes run that file's policy-document row (the draft, audit and external-work journeys). Draft/audit README/AGENTS through this provider under the root document procedure, not direct unaudited edits. Release generation/checking uses checkout-root `python3 scripts/generate-release.py` / `python3 scripts/generate-release.py --check`, never stock workflow generation. Use the root packaged-smoke rule only for packaging changes. Keep `src/embedded_data.rs` inventories current when adding bundled data. Root `AGENTS.md` owns catalog/environment safety, observation rules and Git approval.
 
 ## Completion
 

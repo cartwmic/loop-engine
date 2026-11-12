@@ -10,10 +10,10 @@ permissions:
   contents: read
 
 # A PR runs `checks` only. A newer push to the PR cancels its superseded run.
-# A push to main runs `checks`, `tests` and `release-tests`. Each pushed commit
-# has its own group and is never cancelled: release requires a successful push
-# run for the exact commit, and the Bookends range of a cancelled push would
-# otherwise go unchecked.
+# A push to main runs `checks`, `tests` and `release-tests`. Each push has its
+# own group (its tip SHA) and is never cancelled: release requires a successful
+# push run for the exact commit, and the Bookends range of a cancelled push
+# would otherwise go unchecked.
 concurrency:
   group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -26,6 +26,8 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+          # PRs check the PR head, not the synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: Swatinem/rust-cache@v2
       # Keep the check list in sync with scripts/baseline.sh.
       - name: Check formatting
