@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.47.0] - 2026-11-12
+
+### Changed
+
+- Release scripts (#137): `mise.toml` pins cargo-dist 0.32.0 and `generate-release.py` runs it through mise (falling back to `dist` on PATH). `scripts/release-after-merge.sh` commits the prep commit under its own git identity when none is set, cleans its own leftovers on resume and stops with the exact command for anything else, and ends by naming `loop_engine_bump.py vX.Y.Z`.
+
+### Compatibility
+
+- Release archives, the engine, the providers, record formats and workflow text are unchanged.
+
 ## [0.46.2] - 2026-11-12
 
 CI split: PRs run checks only; tests and release-tests run on push to main (ask #847); red-main culprit hunt in docs/culprit-hunt.md.
