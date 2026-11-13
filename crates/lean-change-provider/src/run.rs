@@ -65,7 +65,7 @@ impl Runner {
 
 /// kgate's own exit codes, for a job that did not run the check to its end: 64 bad command line, 69 could not
 /// start or finish on the cluster, 75 pod unschedulable, 130 and 143 interrupted or cancelled; no code at all is a
-/// signal. A check that exits with one of these itself is read the same way. That is the safe side: the run is not
+/// signal; a time limit that ran out before kgate began the check is turned into that by `run_check`. A check that exits with one of these itself is read the same way. That is the safe side: the run is not
 /// recorded, so it is neither a pass nor a failure, and the driver runs verify again.
 fn kgate_did_not_run(exit_code: Option<i32>, timed_out: bool) -> bool {
     !timed_out && matches!(exit_code, None | Some(64 | 69 | 75 | 130 | 143))
@@ -142,21 +142,50 @@ pub fn from_show(show: &Value) -> Result<(InitialInput, String, Intent), String>
     Ok((input, id, intent))
 }
 
+/// What a drained stream held: its last bytes, and whether kgate said the check had started.
+struct Drained {
+    tail: Vec<u8>,
+    check_started: bool,
+}
+
+/// kgate prints `kgate[<job>]: running [<argv>]` in the pod just before it runs the check. A line like it is the
+/// proof that the check began, so it is looked for as the stream goes by and not in the tail, which a chatty check
+/// could push the line out of.
+fn is_check_started_line(head: &[u8]) -> bool {
+    head.starts_with(b"kgate[") && head.windows(11).any(|w| w == b"]: running ")
+}
+
 /// Drain a stream, keeping only its last `keep` bytes.
-fn drain_tail(mut stream: impl Read + Send + 'static, keep: usize) -> JoinHandle<Vec<u8>> {
+fn drain_tail(mut stream: impl Read + Send + 'static, keep: usize) -> JoinHandle<Drained> {
     std::thread::spawn(move || {
+        const HEAD: usize = 96;
         let mut tail = Vec::new();
+        let mut line = Vec::new();
+        let mut check_started = false;
         let mut buffer = [0u8; 8192];
         while let Ok(n) = stream.read(&mut buffer) {
             if n == 0 {
                 break;
             }
+            for byte in &buffer[..n] {
+                if *byte == b'\n' {
+                    check_started = check_started || is_check_started_line(&line);
+                    line.clear();
+                } else if line.len() < HEAD {
+                    line.push(*byte);
+                }
+            }
+            // A marker line that has not got its newline yet still counts.
+            check_started = check_started || is_check_started_line(&line);
             tail.extend_from_slice(&buffer[..n]);
             if tail.len() > keep {
                 tail.drain(..tail.len() - keep);
             }
         }
-        tail
+        Drained {
+            tail,
+            check_started,
+        }
     })
 }
 
@@ -232,8 +261,21 @@ fn run_check(
     };
     // Nothing the check started may outlive it or edit the tree after it is measured.
     kill_group(pid);
-    let mut tail = out.join().map_err(|_| "output reader failed")?;
-    tail.extend(err.join().map_err(|_| "output reader failed")?);
+    let (out, err) = (
+        out.join().map_err(|_| "output reader failed")?,
+        err.join().map_err(|_| "output reader failed")?,
+    );
+    // A timeout that struck while kgate was still shipping the tree, queueing or starting the pod is not a check
+    // that timed out: the check never began. It is reported as a kgate job that did not run (no exit code, no
+    // timeout), which verify refuses to record, so it is neither a failure nor, under `old: absent`, a met expectation.
+    let (code, timed_out) =
+        if runner.is_kgate() && timed_out && !(out.check_started || err.check_started) {
+            (None, false)
+        } else {
+            (code, timed_out)
+        };
+    let mut tail = out.tail;
+    tail.extend(err.tail);
     if runner.is_kgate() {
         tail = without_kgate_lines(&tail);
     }
@@ -458,7 +500,11 @@ fn not_run_under_kgate(
     output_tail: &str,
 ) -> Result<(), String> {
     if runner.is_kgate() && kgate_did_not_run(exit_code, timed_out) {
-        let code = exit_code.map_or("no exit code".to_owned(), |c| format!("exit {c}"));
+        let code = exit_code.map_or(
+            "no exit code (a signal, or the check's time limit ran out before kgate began the check: raise its timeout_ms)"
+                .to_owned(),
+            |c| format!("exit {c}"),
+        );
         let tail = output_tail.trim();
         return Err(not_run(
             criterion,

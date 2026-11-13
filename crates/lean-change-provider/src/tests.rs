@@ -3196,7 +3196,7 @@ fn fake_kgate(body: &str) -> (PathBuf, PathBuf) {
     (script, log)
 }
 
-const PASS_THROUGH: &str = "echo \"kgate[job-$$]: start $(date +%s%N)\"; \"$@\"; code=$?; echo \"kgate[job-$$]: end $(date +%s%N) exit $code\"; exit $code";
+const PASS_THROUGH: &str = "echo \"kgate[job-$$]: start $(date +%s%N)\"; echo \"kgate[job-$$]: running [\\\"$1\\\"]\"; \"$@\"; code=$?; echo \"kgate[job-$$]: end $(date +%s%N) exit $code\"; exit $code";
 
 fn kgate_repo() -> PathBuf {
     let r = repo();
@@ -3413,7 +3413,7 @@ fn kgate_runner_stops_a_timed_out_client_with_sigterm_so_it_can_delete_its_pod()
     let r = kgate_repo();
     let marker = std::env::temp_dir().join(format!("lean-change-term-{}", std::process::id()));
     let (script, _) = fake_kgate(&format!(
-        "trap 'echo term > {}; exit 143' TERM; sleep 30 & wait",
+        "echo \"kgate[job-$$]: running [\\\"$1\\\"]\"; trap 'echo term > {}; exit 143' TERM; sleep 30 & wait",
         marker.display()
     ));
     let i = check_intent(json!(["true"]), 300, None);
@@ -3427,4 +3427,68 @@ fn kgate_runner_stops_a_timed_out_client_with_sigterm_so_it_can_delete_its_pod()
     assert!(started.elapsed() < std::time::Duration::from_secs(20));
     assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "term");
     let _ = std::fs::remove_file(marker);
+}
+
+#[test]
+fn a_time_limit_that_runs_out_before_kgate_starts_the_check_is_not_run() {
+    let r = kgate_repo();
+    let marker = std::env::temp_dir().join(format!("lean-change-pre-{}", std::process::id()));
+    // The client is still shipping the tree or waiting for a pod: it prints its own lines, never `running`.
+    let (script, _) = fake_kgate(&format!(
+        "echo 'kgate: waiting for the pod: ContainerCreating'; trap 'echo term > {}; exit 143' TERM; sleep 30 & wait",
+        marker.display()
+    ));
+    let i = check_intent(json!(["true"]), 300, None);
+    let error = crate::run::verify_with(
+        &show(&r, false, vec![record("intent-1", "intent", 1, i)]),
+        &kgate_runner(&r, &script),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("criterion c1 was not run on the current tree")
+            && error.contains("timeout_ms"),
+        "{error}"
+    );
+    // The pod is still cleaned up.
+    assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "term");
+    let _ = std::fs::remove_file(marker);
+}
+
+#[test]
+fn a_pre_start_timeout_on_the_old_tree_does_not_meet_an_absent_expectation() {
+    let r = kgate_repo();
+    let i = check_intent(json!(["true"]), 400, Some(json!({"expect": "absent"})));
+    let input = old_vs_new_input(&r, false, &[]);
+    let here = std::fs::canonicalize(&r).unwrap();
+    // The current tree runs the check; the old tree's pod is never ready before the limit.
+    let (script, _) = fake_kgate(&format!(
+        "if [ \"$PWD\" = '{}' ]; then echo \"kgate[job-$$]: running\"; \"$@\"; exit $?; fi; sleep 30",
+        here.display()
+    ));
+    let error = crate::run::verify_with(
+        &show_with(input, vec![record("intent-1", "intent", 1, i)]),
+        &kgate_runner(&r, &script),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("criterion c1 was not run on the old tree"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_timeout_after_kgate_started_the_check_is_a_timed_out_result() {
+    let r = kgate_repo();
+    // `running` is followed by more than the tail keeps, so the marker is out of the recorded tail but still seen.
+    let (script, _) = fake_kgate(
+        "echo \"kgate[job-$$]: running [\\\"$1\\\"]\"; i=0; while [ $i -lt 400 ]; do echo 'line of check output that fills the tail xxxxxxxxxxxxxxxxxxxxxxxxxxxx'; i=$((i+1)); done; sleep 30",
+    );
+    let i = check_intent(json!(["true"]), 800, None);
+    let v = crate::run::verify_with(
+        &show(&r, false, vec![record("intent-1", "intent", 1, i)]),
+        &kgate_runner(&r, &script),
+    )
+    .unwrap();
+    assert!(v.results[0].timed_out && v.results[0].exit_code.is_none());
+    assert!(!v.results[0].output_tail.contains("running"));
 }
