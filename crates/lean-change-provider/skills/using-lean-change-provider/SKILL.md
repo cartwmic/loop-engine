@@ -118,8 +118,10 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
      no record and exits 1, naming the criterion and the tree. That is neither a pass nor a failure. Read the end of
      `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`, fix the cause and run verify again. A check that itself
      exits with one of those codes is read the same way.
-   - `timeout_ms` also covers waiting for a node, the image pull and shipping the tree. Set it for that. A check that
-     times out gets SIGTERM to its kgate client, so the client deletes its pod, and is recorded as timed out.
+   - `timeout_ms` also covers waiting for a node, the image pull and shipping the tree. Set it for that. The client
+     gets SIGTERM when the time runs out, so it deletes its pod. If that happens before kgate prints
+     `kgate[<job>]: running` (the line it prints in the pod just before it starts the check), the check never began:
+     that is the same "not run" case, with no record. A timeout after that line is recorded as timed out.
    - The kgate lines (`kgate: ...`, `kgate[<job>]: ...`) are left out of `output_tail`. A pod gives the check's two
      streams in no fixed order, so a check with `old: same` should send both to one stream (`2>&1`).
    - The old tree is a full clone rather than a shared one, so that git works inside the pod.
