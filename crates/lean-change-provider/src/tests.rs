@@ -3168,3 +3168,327 @@ fn gate_delegated_rewrite_refused_approval_never_a_baseline() {
         json!("intent-1")
     );
 }
+
+// ---- the kgate runner ----
+
+/// A stand-in for kgate. `fake --profile P -- CMD...` prints kgate-style lines (job ids and times that differ on every
+/// call) around CMD, as the real one does, and runs `body` in place of the pod. Returns the script and its log, which
+/// gets one line per call: the directory it was called from and its arguments.
+fn fake_kgate(body: &str) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "lean-change-fake-kgate-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (script, log) = (dir.join("kgate"), dir.join("calls.log"));
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\necho \"$PWD $*\" >> '{}'\necho \"kgate: pod kgate-$$ on node-$(date +%s%N)\"\n[ \"$1\" = --profile ] && [ \"$3\" = -- ] || exit 64\nshift 3\n{body}\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (script, log)
+}
+
+const PASS_THROUGH: &str = "echo \"kgate[job-$$]: start $(date +%s%N)\"; echo \"kgate[job-$$]: running [\\\"$1\\\"]\"; \"$@\"; code=$?; echo \"kgate[job-$$]: end $(date +%s%N) exit $code\"; exit $code";
+
+fn kgate_repo() -> PathBuf {
+    let r = repo();
+    std::fs::write(r.join("kgate.toml"), "image = \"x\"\n").unwrap();
+    r
+}
+
+fn kgate_runner(r: &Path, script: &Path) -> crate::run::Runner {
+    crate::run::Runner::Kgate {
+        program: script.display().to_string(),
+        profile: r.join("kgate.toml"),
+    }
+}
+
+fn check_intent(argv: Value, timeout_ms: u64, old: Option<Value>) -> Value {
+    let mut c = criterion("c1", old);
+    c["check"] = json!({"argv": argv, "timeout_ms": timeout_ms});
+    intent_with(vec![c])
+}
+
+#[test]
+fn kgate_runner_needs_the_repositorys_profile() {
+    let r = repo();
+    assert!(crate::run::Runner::kgate(&r, "kgate.toml")
+        .unwrap_err()
+        .contains("kgate.toml"));
+    std::fs::write(r.join("kgate.toml"), "image = \"x\"\n").unwrap();
+    assert!(crate::run::Runner::kgate(&r, "kgate.toml").is_ok());
+    // Another profile of the repository, but not one outside it.
+    std::fs::write(r.join("small.toml"), "image = \"x\"\n").unwrap();
+    match crate::run::Runner::kgate(&r, "small.toml").unwrap() {
+        crate::run::Runner::Kgate { profile, .. } => assert_eq!(profile, r.join("small.toml")),
+        crate::run::Runner::Host => panic!("not kgate"),
+    }
+    for outside in ["../kgate.toml", "/etc/hostname", "a/../../kgate.toml"] {
+        assert!(
+            crate::run::Runner::kgate(&r, outside)
+                .unwrap_err()
+                .contains("inside the repository"),
+            "{outside}"
+        );
+    }
+}
+
+#[test]
+fn kgate_runner_runs_the_check_through_kgate_and_keeps_only_the_checks_output() {
+    let r = kgate_repo();
+    let (script, log) = fake_kgate(PASS_THROUGH);
+    let i = check_intent(json!(["sh", "-c", "echo out; test -f a.txt"]), 5000, None);
+    let v = crate::run::verify_with(
+        &show(&r, false, vec![record("intent-1", "intent", 1, i.clone())]),
+        &kgate_runner(&r, &script),
+    )
+    .unwrap();
+    assert_eq!(
+        (v.results[0].exit_code, v.results[0].output_tail.as_str()),
+        (Some(0), "out\n")
+    );
+    // The approved check, not the kgate command line, is what the result is bound to.
+    let parsed: Intent = serde_json::from_value(i).unwrap();
+    assert_eq!(v.results[0].check_sha256, parsed.criteria[0].check.sha256());
+    // kgate was called from the repository with its profile and the check after `--`.
+    let calls = std::fs::read_to_string(log).unwrap();
+    assert_eq!(
+        calls.trim(),
+        format!(
+            "{r} --profile {r}/kgate.toml -- sh -c echo out; test -f a.txt",
+            r = std::fs::canonicalize(&r).unwrap().display()
+        )
+    );
+}
+
+#[test]
+fn kgate_runner_reports_a_failing_check_as_failing() {
+    let r = kgate_repo();
+    let (script, _) = fake_kgate(PASS_THROUGH);
+    let i = check_intent(json!(["sh", "-c", "echo no; exit 1"]), 5000, None);
+    let v = crate::run::verify_with(
+        &show(&r, false, vec![record("intent-1", "intent", 1, i)]),
+        &kgate_runner(&r, &script),
+    )
+    .unwrap();
+    assert_eq!(v.results[0].exit_code, Some(1));
+    assert_eq!(v.results[0].output_tail, "no\n");
+}
+
+#[test]
+fn kgate_that_did_not_run_the_check_makes_no_verification() {
+    let r = kgate_repo();
+    let i = check_intent(json!(["true"]), 5000, None);
+    let ctx = || vec![record("intent-1", "intent", 1, i.clone())];
+    for code in [64, 69, 75, 130, 143] {
+        let (script, _) = fake_kgate(&format!("echo 'kgate: cannot'; exit {code}"));
+        let error = crate::run::verify_with(&show(&r, false, ctx()), &kgate_runner(&r, &script))
+            .unwrap_err();
+        assert!(
+            error.contains("criterion c1 was not run on the current tree")
+                && error.contains(&format!("exit {code}")),
+            "{code}: {error}"
+        );
+    }
+    // A kgate killed by a signal has no exit code and is not a result either.
+    let (script, _) = fake_kgate("kill -9 $$");
+    assert!(
+        crate::run::verify_with(&show(&r, false, ctx()), &kgate_runner(&r, &script))
+            .unwrap_err()
+            .contains("was not run")
+    );
+    // A kgate that is not installed is the same.
+    let missing = crate::run::Runner::Kgate {
+        program: "/nonexistent/kgate".into(),
+        profile: r.join("kgate.toml"),
+    };
+    assert!(crate::run::verify_with(&show(&r, false, ctx()), &missing)
+        .unwrap_err()
+        .contains("was not run"));
+}
+
+#[test]
+fn kgate_that_did_not_run_on_the_old_tree_does_not_count_as_the_check_failing_there() {
+    let r = kgate_repo();
+    let i = check_intent(
+        json!(["sh", "-c", "test -f a.txt"]),
+        5000,
+        Some(json!({"expect": "fails"})),
+    );
+    let input = old_vs_new_input(&r, false, &[]);
+    let ctx = || vec![record("intent-1", "intent", 1, i.clone())];
+    // Runs the check in the repository; refuses everywhere else, as kgate does when it cannot reach the cluster.
+    let here = std::fs::canonicalize(&r).unwrap();
+    let (script, _) = fake_kgate(&format!(
+        "[ \"$PWD\" = '{}' ] && {{ \"$@\"; exit $?; }}; echo 'kgate: cluster unreachable'; exit 69",
+        here.display()
+    ));
+    let error =
+        crate::run::verify_with(&show_with(input.clone(), ctx()), &kgate_runner(&r, &script))
+            .unwrap_err();
+    assert!(
+        error.contains("criterion c1 was not run on the old tree"),
+        "{error}"
+    );
+    // The control: on the host a check that itself exits 69 is a real failure, twice, and satisfies `fails`.
+    let mut host = i.clone();
+    host["criteria"][0]["check"]["argv"] = json!(["sh", "-c", "exit 69"]);
+    let v = crate::run::verify(&show_with(
+        input,
+        vec![record("intent-1", "intent", 1, host)],
+    ))
+    .unwrap();
+    let runs = &v.results[0].old.as_ref().unwrap().runs;
+    assert_eq!(
+        runs.iter().map(|r| r.exit_code).collect::<Vec<_>>(),
+        [Some(69), Some(69)]
+    );
+}
+
+#[test]
+fn kgate_old_run_output_matches_the_current_run_for_same() {
+    let r = kgate_repo();
+    let (script, _) = fake_kgate(PASS_THROUGH);
+    let i = check_intent(
+        json!(["sh", "-c", "echo hello"]),
+        5000,
+        Some(json!({"expect": "same"})),
+    );
+    let v = crate::run::verify_with(
+        &show_with(
+            old_vs_new_input(&r, false, &[]),
+            vec![record("intent-1", "intent", 1, i)],
+        ),
+        &kgate_runner(&r, &script),
+    )
+    .unwrap();
+    let old = v.results[0].old.as_ref().unwrap();
+    assert_eq!(old.runs.len(), 1);
+    assert_eq!(old.runs[0].output_tail, "hello\n");
+    assert_eq!(v.results[0].output_tail, "hello\n");
+}
+
+#[test]
+fn kgate_old_tree_carries_its_own_git_objects() {
+    let r = kgate_repo();
+    // The old tree is shipped to a pod, where the repository's objects are not: it must not borrow them.
+    let i = check_intent(
+        json!([
+            "sh",
+            "-c",
+            "test ! -e .git/objects/info/alternates && git log -1 --format=%s"
+        ]),
+        5000,
+        Some(json!({"expect": "same"})),
+    );
+    let ctx = || vec![record("intent-1", "intent", 1, i.clone())];
+    let (script, _) = fake_kgate(PASS_THROUGH);
+    let v = crate::run::verify_with(
+        &show_with(old_vs_new_input(&r, false, &[]), ctx()),
+        &kgate_runner(&r, &script),
+    )
+    .unwrap();
+    assert_eq!(
+        v.results[0].old.as_ref().unwrap().runs[0].exit_code,
+        Some(0)
+    );
+    // The control: on the host the old tree borrows them, as it always did.
+    let host = crate::run::verify(&show_with(old_vs_new_input(&r, false, &[]), ctx())).unwrap();
+    assert_eq!(
+        host.results[0].old.as_ref().unwrap().runs[0].exit_code,
+        Some(1)
+    );
+}
+
+#[test]
+fn kgate_runner_stops_a_timed_out_client_with_sigterm_so_it_can_delete_its_pod() {
+    let r = kgate_repo();
+    let marker = std::env::temp_dir().join(format!("lean-change-term-{}", std::process::id()));
+    let (script, _) = fake_kgate(&format!(
+        "echo \"kgate[job-$$]: running [\\\"$1\\\"]\"; trap 'echo term > {}; exit 143' TERM; sleep 30 & wait",
+        marker.display()
+    ));
+    let i = check_intent(json!(["true"]), 300, None);
+    let started = std::time::Instant::now();
+    let v = crate::run::verify_with(
+        &show(&r, false, vec![record("intent-1", "intent", 1, i)]),
+        &kgate_runner(&r, &script),
+    )
+    .unwrap();
+    assert!(v.results[0].timed_out && v.results[0].exit_code.is_none());
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "term");
+    let _ = std::fs::remove_file(marker);
+}
+
+#[test]
+fn a_time_limit_that_runs_out_before_kgate_starts_the_check_is_not_run() {
+    let r = kgate_repo();
+    let marker = std::env::temp_dir().join(format!("lean-change-pre-{}", std::process::id()));
+    // The client is still shipping the tree or waiting for a pod: it prints its own lines, never `running`.
+    let (script, _) = fake_kgate(&format!(
+        "echo 'kgate: waiting for the pod: ContainerCreating'; trap 'echo term > {}; exit 143' TERM; sleep 30 & wait",
+        marker.display()
+    ));
+    let i = check_intent(json!(["true"]), 300, None);
+    let error = crate::run::verify_with(
+        &show(&r, false, vec![record("intent-1", "intent", 1, i)]),
+        &kgate_runner(&r, &script),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("criterion c1 was not run on the current tree")
+            && error.contains("timeout_ms"),
+        "{error}"
+    );
+    // The pod is still cleaned up.
+    assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), "term");
+    let _ = std::fs::remove_file(marker);
+}
+
+#[test]
+fn a_pre_start_timeout_on_the_old_tree_does_not_meet_an_absent_expectation() {
+    let r = kgate_repo();
+    let i = check_intent(json!(["true"]), 400, Some(json!({"expect": "absent"})));
+    let input = old_vs_new_input(&r, false, &[]);
+    let here = std::fs::canonicalize(&r).unwrap();
+    // The current tree runs the check; the old tree's pod is never ready before the limit.
+    let (script, _) = fake_kgate(&format!(
+        "if [ \"$PWD\" = '{}' ]; then echo \"kgate[job-$$]: running\"; \"$@\"; exit $?; fi; sleep 30",
+        here.display()
+    ));
+    let error = crate::run::verify_with(
+        &show_with(input, vec![record("intent-1", "intent", 1, i)]),
+        &kgate_runner(&r, &script),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("criterion c1 was not run on the old tree"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_timeout_after_kgate_started_the_check_is_a_timed_out_result() {
+    let r = kgate_repo();
+    // `running` is followed by more than the tail keeps, so the marker is out of the recorded tail but still seen.
+    let (script, _) = fake_kgate(
+        "echo \"kgate[job-$$]: running [\\\"$1\\\"]\"; i=0; while [ $i -lt 400 ]; do echo 'line of check output that fills the tail xxxxxxxxxxxxxxxxxxxxxxxxxxxx'; i=$((i+1)); done; sleep 30",
+    );
+    let i = check_intent(json!(["true"]), 800, None);
+    let v = crate::run::verify_with(
+        &show(&r, false, vec![record("intent-1", "intent", 1, i)]),
+        &kgate_runner(&r, &script),
+    )
+    .unwrap();
+    assert!(v.results[0].timed_out && v.results[0].exit_code.is_none());
+    assert!(!v.results[0].output_tail.contains("running"));
+}
