@@ -1,0 +1,12 @@
+# kgate profile for `lean-change verify --runner kgate --kgate-profile kgate-verify.toml`: one crate's tests, not the baseline.
+# The baseline profile (kgate.toml) asks for 12 CPUs; on 2026-11-13 no node had room for that for 10 minutes (kgate exit 75).
+# Same image and tools as kgate.toml. cpu 4 is what `cargo test -p lean-change-provider` was run with on the cluster that day.
+image  = "ghcr.io/cartwmic/kgate@sha256:41dc179299aade303686e2047a361444668e5b3237c3b95b40cef94ddacc4a2d"
+cpu    = 4
+memory = "5632Mi"
+memory_limit = "8Gi"
+
+[tools]
+rustc   = "1.98.0"
+cargo   = "1.98.0"
+python3 = "3.14.6"

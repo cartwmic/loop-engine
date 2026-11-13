@@ -107,6 +107,26 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    loop-engine ... append RUN verification "$(cat "$WORK/v.json")"
    ```
 
+   **Heavy checks run on kgate.** A check that installs, builds or runs a test suite is a heavy job and belongs on the
+   cluster, not on this machine. Add `--runner kgate`: `lean-change verify --runner kgate`. `verify` then runs each
+   check, on the current tree and on the old tree, as `kgate --profile <repo>/kgate.toml -- <argv>` from that tree:
+   kgate ships the tree to a pod and the check runs there. The repository needs a `kgate.toml` at its root, and the
+   same profile is used for the old tree. `--kgate-profile FILE` (a path inside the repository) picks another profile,
+   for a repository whose `kgate.toml` is sized for its baseline and asks for more than one check needs. Nothing else changes: the criterion's check, its digest, the old-vs-new
+   expectations and the verification record are the same, and `verified` judges them the same way. Four things differ.
+   - If kgate did not run the check to its end (it exits 64, 69, 75, 130 or 143, or dies by a signal), `verify` prints
+     no record and exits 1, naming the criterion and the tree. That is neither a pass nor a failure. Read the end of
+     `${XDG_STATE_HOME:-~/.local/state}/kgate/log.jsonl`, fix the cause and run verify again. A check that itself
+     exits with one of those codes is read the same way.
+   - `timeout_ms` also covers waiting for a node, the image pull and shipping the tree. Set it for that. A check that
+     times out gets SIGTERM to its kgate client, so the client deletes its pod, and is recorded as timed out.
+   - The kgate lines (`kgate: ...`, `kgate[<job>]: ...`) are left out of `output_tail`. A pod gives the check's two
+     streams in no fixed order, so a check with `old: same` should send both to one stream (`2>&1`).
+   - The old tree is a full clone rather than a shared one, so that git works inside the pod.
+
+   Run it under `run-and-wake` and end the turn, as any long job: `run-and-wake -- sh -c '... | lean-change verify
+   --runner kgate > "$WORK/v.json"'`. Without `--runner`, checks run on this machine as before.
+
    Request `verified`. It is refused if any criterion failed, was not run, its old runs do not meet its `old`
    expectation, or the tree changed after the run (any edit, even a comment, to a tracked or not-ignored file;
    git-ignored files are not covered, so a check must not depend on them). Checks run in their own process group and are killed at their timeout.

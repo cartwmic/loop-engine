@@ -28,7 +28,7 @@ fn dispatch() -> i32 {
         ),
         Some("verify") => report(
             stdin_json()
-                .and_then(|show| run::verify(&show))
+                .and_then(|show| verify_command(&args[1..], &show))
                 .and_then(|v| serde_json::to_string_pretty(&v).map_err(|e| e.to_string())),
         ),
         Some("intent-packet") => report(stdin_json().and_then(|show| packet::intent_packet(&show))),
@@ -52,6 +52,34 @@ fn report(result: Result<String, String>) -> i32 {
             eprintln!("{message}");
             1
         }
+    }
+}
+
+/// `verify [--runner host|kgate] [--kgate-profile FILE]`: where the checks run. The default is this machine.
+/// FILE is a kgate profile, relative to the repository root; the default is `kgate.toml`.
+fn verify_command(args: &[String], show: &Value) -> Result<model::Verification, String> {
+    const USAGE: &str = "usage: lean-change verify [--runner host|kgate] [--kgate-profile FILE]";
+    let (mut runner, mut profile) = (None, None);
+    let mut rest = args.iter();
+    while let Some(flag) = rest.next() {
+        let value = rest.next().ok_or(USAGE)?;
+        match flag.as_str() {
+            "--runner" if runner.is_none() => runner = Some(value.as_str()),
+            "--kgate-profile" if profile.is_none() => profile = Some(value.as_str()),
+            _ => return Err(USAGE.into()),
+        }
+    }
+    match (runner.unwrap_or("host"), profile) {
+        ("host", None) => run::verify(show),
+        ("kgate", profile) => {
+            let (input, _, _) = run::from_show(show)?;
+            let runner = run::Runner::kgate(
+                std::path::Path::new(&input.repo),
+                profile.unwrap_or("kgate.toml"),
+            )?;
+            run::verify_with(show, &runner)
+        }
+        _ => Err(USAGE.into()),
     }
 }
 
