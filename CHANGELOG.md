@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.48.0] - 2026-11-13
+
+### Added
+
+- `lean-change verify --runner kgate [--kgate-profile FILE]` (#139) runs each criterion check on the cluster through kgate. The check digest, the old-tree runs and the `old` expectations are unchanged. A kgate job that did not run the check (exit 64, 69, 75, 130, 143, no exit code, or a time limit that ran out before kgate began the check) makes no verification: it is neither a pass nor a failure. kgate's own lines are left out of `output_tail`. The repository carries `kgate-verify.toml`, a 4-CPU profile.
+
+### Compatibility
+
+- `--runner host` is the default and behaves as before. Release archives, the engine, record formats and workflow text are unchanged.
+
 ## [0.47.0] - 2026-11-12
 
 ### Changed
