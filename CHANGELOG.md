@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.48.1] - 2026-11-13
+
+### Fixed
+
+- The lean-change skill's "Heavy checks run on kgate" block (#141) now says what `verify --runner kgate` does when a check's time limit runs out before kgate starts the check: the check is "not run" and no record is made. A timeout after kgate starts the check is a timed-out result, as before.
+
+### Compatibility
+
+- No code change. Release archives, the engine, the providers, record formats and workflow text are unchanged.
+
 ## [0.48.0] - 2026-11-13
 
 ### Added
