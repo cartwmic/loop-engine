@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.49.0] - 2026-11-14
+
+### Changed
+
+- The lean-change skill's optional outcome-map link block publishes to shartifacts (`POST /api/artifacts`, kind `html`) and prints the `/view/<id>` link, instead of calling `viz publish`. It still runs only when the owner asks for a link (#145).
+
+### Compatibility
+
+- Only the lean-change skill text, the LE-212 PRD sentence and the skill journey change. The engine, the providers' commands, the profiles and the record formats are unchanged.
+
 ## [0.48.1] - 2026-11-13
 
 ### Fixed
