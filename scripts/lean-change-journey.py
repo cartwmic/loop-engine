@@ -981,7 +981,7 @@ def outcome_map_browser_scenario(provider, chromium, work):
 
 
 def outcome_map_skill_scenario(engine, provider, skill, work):
-    # bookends:LE-212 — the skill's Outcome map blocks, run as written with stub open and viz.
+    # bookends:LE-212 — the skill's Outcome map blocks, run as written with stub open and curl.
     default, link = section_blocks(skill, OUTCOME_SECTION, 2)
     text = '\n'.join(skill_section(skill, OUTCOME_SECTION))
     for needle in [REVIEW_MAP, 'status --porcelain', '--output "$WORK/ar"']:
@@ -997,9 +997,11 @@ def outcome_map_skill_scenario(engine, provider, skill, work):
     stubs = work / 'bin'
     stubs.mkdir()
     (stubs / 'lean-change').symlink_to(provider)
-    for name in ['open', 'viz']:
+    for name in ['open', 'curl']:
         stub = stubs / name
-        stub.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$WORK/' + name + '.log"\n')
+        # curl also saves the request body and answers like shartifacts: {"id": ...}.
+        body = 'cat > "$WORK/curl.body"\nprintf \'{"id":"abc123"}\'\n' if name == 'curl' else ''
+        stub.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$WORK/' + name + '.log"\n' + body)
         stub.chmod(0o755)
     path = os.environ['PATH']
     env = dict(os.environ, REPO=str(repo), WORK=str(work), PATH=f'{stubs}{os.pathsep}{path}')
@@ -1007,10 +1009,11 @@ def outcome_map_skill_scenario(engine, provider, skill, work):
     ar_index = work / 'ar' / 'index.html'
 
     def run_sh(block):
-        for name in ['open', 'viz']:
+        for name in ['open', 'curl']:
             (work / f'{name}.log').unlink(missing_ok=True)
         result = subprocess.run(['sh', '-c', block], env=env, text=True, capture_output=True)
         assert result.returncode == 0, (result.returncode, result.stderr)
+        return result.stdout
 
     def log(name):
         log_path = work / f'{name}.log'
@@ -1025,21 +1028,27 @@ def outcome_map_skill_scenario(engine, provider, skill, work):
     assert git_out(repo, 'status', '--porcelain') == ''
     expected = outcome_page(provider, show, '--into', str(ar_index))
     run_sh(default)
-    assert written() == expected and log('open') == f'{out}\n' and log('viz') == '', (log('open'), log('viz'))
+    assert written() == expected and log('open') == f'{out}\n' and log('curl') == '', (log('open'), log('curl'))
     # No AR page: the standalone page.
     shutil.rmtree(work / 'ar')
     expected = outcome_page(provider, show)
     run_sh(default)
-    assert written() == expected and log('open') == f'{out}\n' and log('viz') == ''
+    assert written() == expected and log('open') == f'{out}\n' and log('curl') == ''
     # AR's page again, but an untracked file: the standalone page.
     ar_index.parent.mkdir()
     ar_index.write_bytes(AR_PAGE.read_bytes())
     (repo / 'untracked.txt').write_text('uncommitted\n')
     expected = outcome_page(provider, show)
     run_sh(default)
-    assert written() == expected and log('open') == f'{out}\n' and log('viz') == ''
-    run_sh(link)
-    assert log('viz') == f'publish {out}\n', log('viz')
+    assert written() == expected and log('open') == f'{out}\n' and log('curl') == ''
+    # The link block posts the page to shartifacts as an html artifact and prints its /view link.
+    printed = run_sh(link)
+    base = 'https://shartifacts.internal.cartwmic.com'
+    assert printed == f'{base}/view/abc123\n', printed
+    assert log('open') == '', log('open')
+    assert log('curl').split() == ['-sS', '--fail-with-body', '-X', 'POST', '-H', 'Content-Type:', 'application/json', '--data-binary', '@-', f'{base}/api/artifacts'], log('curl')
+    sent = json.loads((work / 'curl.body').read_text())
+    assert sent == {'title': 'Outcome map', 'kind': 'html', 'content': written()}, sent
 
 
 def v1_run_to_review(engine, provider, work, run_id):

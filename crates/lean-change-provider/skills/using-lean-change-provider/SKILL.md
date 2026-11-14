@@ -223,7 +223,7 @@ When `$HOME/.local/share/agent-harness/external-skills/accountable-review/review
 
 Write every sentence of Accountable Review's page for that same reader: a technical reader who does not know the project, the change or Loop Engine. Apply the no-ai-slop skill to every sentence of its prose before AR's coverage gate and lint. If that skill is not installed, tell the owner and write plainly without it. AR's own text and rules stay as they are.
 
-The default block makes the page and opens the local file. It does not call `viz`.
+The default block makes the page and opens the local file. It does not publish.
 
 ```sh
 # REPO: the run's repository. WORK: your work directory outside it.
@@ -235,10 +235,12 @@ fi
 lean-change outcome-map "$@" < "$WORK/show-full.json" > "$WORK/outcome-map.html" && open "$WORK/outcome-map.html"
 ```
 
-Run the link block only when the owner asks for a link:
+Run the link block only when the owner asks for a link. It publishes the file to shartifacts and prints the link to give the owner:
 
 ```sh
-viz publish "$WORK/outcome-map.html"
+python3 -c 'import json,sys; print(json.dumps({"title": "Outcome map", "kind": "html", "content": sys.stdin.read()}))' < "$WORK/outcome-map.html" |
+  curl -sS --fail-with-body -X POST -H 'Content-Type: application/json' --data-binary @- https://shartifacts.internal.cartwmic.com/api/artifacts |
+  python3 -c 'import json,sys; print("https://shartifacts.internal.cartwmic.com/view/" + json.load(sys.stdin)["id"])'
 ```
 
 Each criterion row has one of these labels, from the latest verification of the latest intent:
