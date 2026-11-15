@@ -7,7 +7,9 @@
 #            plus the caller's CHANGELOG notes
 #   pr       commit on release/vX.Y.Z, push, open the release-prep PR
 #   checks   wait for the PR checks
-#   merge    squash-merge the PR and read the merge SHA
+#   merge    check main is not red (ci-main-status loop-engine: exit 0 green or
+#            2 untested go on, anything else or a missing tool stops), then
+#            squash-merge the PR and read the merge SHA
 #   ci       wait for push-event ci.yml green on that exact SHA
 #   dry-run  dispatch release.yml with tag=dry-run on that SHA and wait
 #   publish  dispatch release.yml with tag=vX.Y.Z and wait
@@ -500,6 +502,14 @@ else:
   done
 
   step=merge
+  command -v ci-main-status >/dev/null \
+    || stop "ci-main-status is not installed, so main's state cannot be read; no merge"
+  main_rc=0
+  main_out=$(ci-main-status loop-engine 2>&1) || main_rc=$?
+  case $main_rc in
+    0|2) say "main state (ci-main-status exit $main_rc): $main_out" ;;
+    *) stop "main is not green (ci-main-status loop-engine exit $main_rc): $main_out" ;;
+  esac
   say "squash-merging $pr_url"
   gh pr merge "$pr_number" --squash || stop "gh pr merge $pr_number failed"
   view=$(gh pr view "$pr_number" --json state,mergeCommit,url) || stop "gh pr view $pr_number failed"
