@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.50.0] - 2026-11-15
+
+### Changed
+
+- `scripts/release-after-merge.sh` runs `ci-main-status loop-engine` before it merges the release-prep PR (#147). Exit 0 (green) or 2 (untested) goes on. Exit 1, any other exit, or a missing `ci-main-status` stops at step `merge` with no merge, quoting the tool's output; a rerun after main is green resumes and merges.
+
+### Compatibility
+
+- Only the release script, its tests and the release docs change. The engine, the providers, the profiles and the record formats are unchanged. Running the release script now needs `ci-main-status` on PATH.
+
 ## [0.49.0] - 2026-11-14
 
 ### Changed
