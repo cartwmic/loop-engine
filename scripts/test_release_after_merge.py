@@ -167,6 +167,22 @@ FAKE_GH = textwrap.dedent(
     '''
 ).lstrip()
 
+# Reads main-status.json ({"exit": N, "output": "..."}) in FAKE_GH_DIR; no file means GREEN.
+FAKE_CI_MAIN_STATUS = textwrap.dedent(
+    """\
+    #!/usr/bin/env python3
+    import json, os, sys
+    from pathlib import Path
+    state = Path(os.environ["FAKE_GH_DIR"])
+    with open(state / "main-status-calls.log", "a") as log:
+        log.write(" ".join(sys.argv[1:]) + "\\n")
+    path = state / "main-status.json"
+    scripted = json.loads(path.read_text()) if path.exists() else {"exit": 0, "output": "GREEN loop-engine"}
+    print(scripted["output"])
+    sys.exit(scripted["exit"])
+    """
+)
+
 PREPARE_STUB = textwrap.dedent(
     r'''
     #!/usr/bin/env python3
@@ -232,6 +248,10 @@ class Harness:
         (bindir / "gh").chmod(0o755)
         (bindir / "git").write_text(FAKE_GIT.replace("REAL_GIT", shutil.which("git")))
         (bindir / "git").chmod(0o755)
+        (bindir / "ci-main-status").write_text(FAKE_CI_MAIN_STATUS)
+        (bindir / "ci-main-status").chmod(0o755)
+        # The machine's own ci-main-status must never be reachable from the script under test.
+        host_path = [p for p in os.environ["PATH"].split(os.pathsep) if not (Path(p) / "ci-main-status").exists()]
         self.prepare = root / "prepare-stub"
         self.prepare.write_text(PREPARE_STUB)
         self.prepare.chmod(0o755)
@@ -240,7 +260,7 @@ class Harness:
         self.log = root / "release.log"
         self.env = {
             **os.environ,
-            "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
+            "PATH": os.pathsep.join([str(bindir), *host_path]),
             "FAKE_GH_DIR": str(self.gh),
             "FAKE_ORIGIN": str(self.origin),
             "RELEASE_PREPARE_CMD": str(self.prepare),
@@ -290,6 +310,14 @@ class Harness:
         args = args or ("--notes", str(self.notes))
         return subprocess.run([str(SCRIPT), *args], cwd=cwd or self.checkout, env={**self.env, "FAKE_GIT_LOG": "1"},
                               capture_output=True, text=True, timeout=120)
+
+    def main_status(self, exit_code: int, output: str) -> None:
+        """Script what the fake ci-main-status prints and exits with."""
+        (self.gh / "main-status.json").write_text(json.dumps({"exit": exit_code, "output": output}))
+
+    def main_status_calls(self) -> list[str]:
+        path = self.gh / "main-status-calls.log"
+        return path.read_text().splitlines() if path.exists() else []
 
     def resume_runs(self) -> None:
         """Put the last release.yml run back in progress, as if a rerun finds it still running."""
@@ -495,6 +523,44 @@ class ReleaseAfterMergeTest(unittest.TestCase):
                 self.assert_stopped(self.h.run(), "ci", text)
                 self.assertEqual(self.h.count("pr merge"), 1)
                 self.assertFalse([e for e in self.h.events() if e.startswith("dispatch")])
+
+    def test_stop_main_red_before_merge(self) -> None:
+        for code, line in ((1, "RED loop-engine: ci.yml failed on 1a2b3c4 (https://github.com/test/loop-engine/actions/runs/9)"),
+                           (1, "ERROR loop-engine: gh run list failed"),
+                           (3, "unexpected ci-main-status failure")):
+            with self.subTest(line=line):
+                self.setUp()
+                self.h.main_status(code, line)
+                result = self.h.run()
+                self.assert_stopped(result, "merge", line)
+                self.assertIn(f"exit {code}", result.stderr)
+                self.assertEqual(self.h.main_status_calls(), ["loop-engine"])
+                self.assertEqual(self.h.events(), ["prepare", "pr create", "pr checks"])
+                self.assertEqual(self.h.gh_state()["prs"][0]["state"], "OPEN")
+
+    def test_untested_main_still_merges(self) -> None:
+        self.h.main_status(2, "UNTESTED loop-engine: no run has tested main")
+        result = self.h.run()
+        self.assert_released(result)
+        self.assertIn("UNTESTED loop-engine", result.stdout)
+        self.assertEqual(self.h.count("pr merge"), 1)
+
+    def test_missing_ci_main_status_stops(self) -> None:
+        (self.h.root / "bin" / "ci-main-status").unlink()
+        result = self.h.run()
+        self.assert_stopped(result, "merge", "ci-main-status is not installed")
+        self.assertNotIn("pr merge", self.h.events())
+        self.assertEqual(self.h.gh_state()["prs"][0]["state"], "OPEN")
+
+    def test_rerun_after_main_green_merges(self) -> None:
+        self.h.main_status(1, "RED loop-engine: ci.yml failed on 1a2b3c4")
+        first = self.h.run()
+        self.assert_stopped(first, "merge", "RED loop-engine")
+        self.assertEqual(self.h.count("pr merge"), 0)
+        self.h.main_status(0, "GREEN loop-engine")
+        self.assert_released(self.h.run("--version", "0.35.0"))
+        self.assertEqual(self.h.count("pr merge"), 1)
+        self.assertEqual(self.h.count("prepare"), 1)
 
     def test_stop_main_moved(self) -> None:
         self.h.scenario(move_main_after_merge=True)
