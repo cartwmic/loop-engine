@@ -526,7 +526,8 @@ class ReleaseAfterMergeTest(unittest.TestCase):
 
     def test_stop_main_red_before_merge(self) -> None:
         for code, line in ((1, "RED loop-engine: ci.yml failed on 1a2b3c4 (https://github.com/test/loop-engine/actions/runs/9)"),
-                           (1, "ERROR loop-engine: gh run list failed")):
+                           (1, "ERROR loop-engine: gh run list failed"),
+                           (3, "unexpected ci-main-status failure")):
             with self.subTest(line=line):
                 self.setUp()
                 self.h.main_status(code, line)
