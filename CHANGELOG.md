@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.50.1] - 2026-11-16
+
+lean-change skill: intent-check step now tells the driver to fix every promise in a quoted sentence, not only the word (#149).
+
 ## [0.50.0] - 2026-11-15
 
 ### Changed
