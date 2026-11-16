@@ -272,14 +272,17 @@ fn intent_ready_needs_an_independent_complete_disposed_intent_check() {
     assert!(bad(|v| v["reviewer"]["name"] = json!("Driver")).contains("someone other"));
     assert!(bad(|v| v["fresh_context"] = json!(false)).contains("fresh context"));
     assert!(bad(|v| v["intent"] = json!("intent-9")).contains("must name an intent record"));
-    assert!(bad(|v| v["answers"][1]["question"] = json!("scope")).contains("unknown or repeated"));
-    assert!(bad(|v| v["answers"][1]["question"] = json!("use")).contains("unknown or repeated"));
+    assert!(
+        bad(|v| v["answers"][1]["question"] = json!("scope")).contains("unknown question `scope`")
+    );
+    assert!(bad(|v| v["answers"][1]["question"] = json!("use")).contains("repeated question `use`"));
     assert!(bad(|v| {
         v["answers"].as_array_mut().unwrap().pop();
     })
     .contains("unanswered"));
     assert!(bad(|v| v["answers"][0]["note"] = json!(" ")).contains("needs a note"));
-    assert!(bad(|v| v["answers"][3]["verdict"] = json!("fail")).contains("has no finding"));
+    assert!(bad(|v| v["answers"][3]["verdict"] = json!("fail"))
+        .contains("is fail but no finding has question `terms`"));
     assert!(bad(|v| v["findings"] = json!([finding("f1", "scope")])).contains("unique id"));
     assert!(bad(|v| {
         v["findings"] = json!([finding("f1", "use")]);
@@ -635,7 +638,7 @@ fn review_gate_needs_an_independent_complete_disposed_review() {
     assert!(review_denial(&r, stale_ctx, vec![]).contains("fresh context"));
     let mut missing_q = review(&r);
     missing_q["answers"].as_array_mut().unwrap().pop();
-    assert!(review_denial(&r, missing_q, vec![]).contains("principles is unanswered"));
+    assert!(review_denial(&r, missing_q, vec![]).contains("question `principles` is unanswered"));
     let mut dup_q = review(&r);
     dup_q["answers"][1]["question"] = json!("intent");
     assert!(review_denial(&r, dup_q, vec![]).contains("repeated"));
@@ -1195,6 +1198,7 @@ fn only_b_asks_for_the_intent_check_and_c_is_unchanged() {
     // B differs from v1 B only in the explore text.
     let strip = |mut w: serde_json::Value| {
         w["states"][0]["instructions"] = json!("");
+        w.as_object_mut().unwrap().remove("admit");
         w
     };
     let b = strip(serde_json::to_value(workflow(true, false)).unwrap());
@@ -1964,7 +1968,7 @@ fn v1_note_with_no_disposition_lets_reviewed_pass() {
     // A failed answer still needs a finding of some severity.
     let mut none = review_v1(&r);
     fail_question(&mut none, "docs");
-    assert!(review_denial(&r, none, vec![]).contains("failed but has no finding"));
+    assert!(review_denial(&r, none, vec![]).contains("is fail but no finding has question `docs`"));
 }
 
 #[test]
@@ -2036,7 +2040,8 @@ fn v1_form_refuses_what_the_contract_rejects() {
     )
     .contains("unique"));
     assert!(
-        review_denial(&r, with(json!([note("n1", "nonsense")])), vec![]).contains("known question")
+        review_denial(&r, with(json!([note("n1", "nonsense")])), vec![])
+            .contains("not a question here")
     );
     // An unknown severity fails the parse.
     let mut odd = note("n1", "scope");
@@ -2057,7 +2062,7 @@ fn a_v1_review_answers_all_seven_questions_and_a_v0_review_the_original_six() {
     let r = repo();
     let mut six = review_v1(&r);
     six["answers"].as_array_mut().unwrap().pop();
-    assert!(review_denial(&r, six, vec![]).contains("smaller-design is unanswered"));
+    assert!(review_denial(&r, six, vec![]).contains("question `smaller-design` is unanswered"));
     allowed(&ask(
         &r,
         true,
@@ -2078,9 +2083,7 @@ fn a_v1_review_answers_all_seven_questions_and_a_v0_review_the_original_six() {
         .as_array_mut()
         .unwrap()
         .push(json!({"question":"smaller-design","verdict":"pass","note":"ok"}));
-    assert!(
-        review_denial(&r, seven, vec![]).contains("unknown or repeated question smaller-design")
-    );
+    assert!(review_denial(&r, seven, vec![]).contains("unknown question `smaller-design`"));
 }
 
 #[test]
@@ -3491,4 +3494,344 @@ fn a_timeout_after_kgate_started_the_check_is_a_timed_out_result() {
     .unwrap();
     assert!(v.results[0].timed_out && v.results[0].exit_code.is_none());
     assert!(!v.results[0].output_tail.contains("running"));
+}
+
+// --- Reviewer records are checked when they are appended, and the reviewer can check them first. ---
+
+fn args(values: &[&str]) -> Vec<String> {
+    values.iter().map(|v| v.to_string()).collect()
+}
+
+/// The refusal the record-local check gives for a v1 review, or None when it is accepted.
+fn review_refusal(value: &Value) -> Option<String> {
+    lean_change_provider::evaluate::check_review(value).err()
+}
+
+fn check_refusal(value: &Value) -> Option<String> {
+    lean_change_provider::evaluate::check_intent_check(value).err()
+}
+
+#[test]
+fn a_plain_string_reviewer_is_an_agent_of_that_name() {
+    let r = repo();
+    let mut review = review_v1(&r);
+    review["reviewer"] = json!("reviewer (Opus 5.5, fresh context)");
+    let parsed = lean_change_provider::evaluate::check_review(&review).unwrap();
+    assert_eq!(parsed.reviewer.name, "reviewer (Opus 5.5, fresh context)");
+    assert_eq!(
+        serde_json::to_value(&parsed.reviewer).unwrap(),
+        json!({"name": "reviewer (Opus 5.5, fresh context)", "kind": "agent"})
+    );
+    let mut check = check_value();
+    check["reviewer"] = json!("a fresh reviewer");
+    let parsed = lean_change_provider::evaluate::check_intent_check(&check).unwrap();
+    assert_eq!(parsed.reviewer.name, "a fresh reviewer");
+    // The gate reads it the same way: it passes `reviewed`, and a string that names the author is still refused.
+    allowed(&ask(
+        &r,
+        true,
+        "review",
+        "reviewed",
+        review_ctx(&r, review, vec![]),
+    ));
+    let mut same = review_v1(&r);
+    same["reviewer"] = json!("Driver");
+    assert!(review_denial(&r, same, vec![]).contains("someone other than the intent author"));
+    // A reviewer that is neither a string nor an actor still fails the parse, and says what an actor is.
+    let mut odd = review_v1(&r);
+    odd["reviewer"] = json!(7);
+    assert!(review_refusal(&odd)
+        .unwrap()
+        .contains("the review record is invalid"));
+}
+
+#[test]
+fn every_record_refusal_names_the_fix() {
+    let r = repo();
+    let good = review_v1(&r);
+    assert_eq!(review_refusal(&good), None);
+    let refused = |mutate: fn(&mut Value), needle: &str| {
+        let mut v = good.clone();
+        mutate(&mut v);
+        let message = review_refusal(&v).unwrap_or_else(|| panic!("accepted: {needle}"));
+        assert!(message.contains(needle), "{message}");
+    };
+    refused(
+        |v| v["findings_schema"] = json!(2),
+        "set \"findings_schema\": 1",
+    );
+    refused(
+        |v| v["reviewer"] = json!(" "),
+        "set \"reviewer\": {\"name\": \"<who you are>\", \"kind\": \"agent\"}",
+    );
+    refused(
+        |v| v["fresh_context"] = json!(false),
+        "return \"fresh_context\": true",
+    );
+    refused(
+        |v| v["answers"][1]["question"] = json!("nonsense"),
+        "unknown question `nonsense`: answer only these questions, by id: intent, scope",
+    );
+    refused(
+        |v| v["answers"][1]["question"] = json!("intent"),
+        "repeated question `intent`: keep one answer per question",
+    );
+    refused(
+        |v| v["answers"][0]["note"] = json!(" "),
+        "answer to `intent` needs a note: add a one-line \"note\"",
+    );
+    refused(
+        |v| {
+            v["answers"].as_array_mut().unwrap().pop();
+        },
+        "question `smaller-design` is unanswered: add {\"question\": \"smaller-design\", \"verdict\": \"pass|fail\", \"note\": \"...\"}",
+    );
+    refused(
+        |v| {
+            v["findings"] =
+                json!([{"id": " ", "severity": "note", "question": "docs", "text": "t"}])
+        },
+        "give every finding an \"id\" such as \"f1\"",
+    );
+    refused(
+        |v| v["findings"] = json!([note("n1", "docs"), note("n1", "scope")]),
+        "`n1` is used twice, so give each finding its own \"id\"",
+    );
+    refused(
+        |v| {
+            v["findings"] =
+                json!([{"id": "n1", "severity": "note", "question": "docs", "text": " "}])
+        },
+        "finding `n1` has none, so put what you found in its \"text\"",
+    );
+    refused(
+        |v| v["findings"] = json!([{"id": "n1", "question": "docs", "text": "t"}]),
+        "finding `n1` has none, so set \"severity\" to \"blocking\" or \"note\"",
+    );
+    refused(
+        |v| v["findings"] = json!([note("n1", "nonsense")]),
+        "finding `n1` has question `nonsense`, which is not a question here: set its \"question\" to one of: intent",
+    );
+    refused(
+        |v| {
+            v["answers"][3]["verdict"] = json!("fail");
+        },
+        "answer `checks` is fail but no finding has question `checks`: add a finding with \"question\": \"checks\" (any severity), or change the verdict to pass",
+    );
+    // A record without findings_schema names its own fixes.
+    let mut envelope = review(&r);
+    envelope["head"] = json!("abc");
+    let message = review_refusal(&envelope).unwrap();
+    assert!(message.contains("need findings_schema: 1"), "{message}");
+    assert!(
+        message.contains("add \"findings_schema\": 1, or remove head and brief_sha256"),
+        "{message}"
+    );
+    let mut v0 = review(&r);
+    v0["findings"] = json!([note("n1", "docs")]);
+    assert!(review_refusal(&v0)
+        .unwrap()
+        .contains("add \"findings_schema\": 1 to the record"));
+    // A parse failure shows the shape that parses, with the field the serde error names.
+    let mut unknown = good.clone();
+    unknown["extra"] = json!(1);
+    let message = review_refusal(&unknown).unwrap();
+    assert!(message.contains("unknown field `extra`"), "{message}");
+    assert!(
+        message.contains("Return exactly this shape: {\"findings_schema\": 1,"),
+        "{message}"
+    );
+    assert!(message.contains("\"tree\":"), "{message}");
+    let mut missing = check_value();
+    missing.as_object_mut().unwrap().remove("fresh_context");
+    let message = check_refusal(&missing).unwrap();
+    assert!(
+        message.contains("missing field `fresh_context`"),
+        "{message}"
+    );
+    assert!(
+        message.contains(
+            "Return exactly this shape: {\"findings_schema\": 1, \"intent\": \"...\", \"reviewer\""
+        ),
+        "{message}"
+    );
+}
+
+#[test]
+fn the_check_refuses_the_records_reviewers_really_returned() {
+    let r = repo();
+    // event-inbox-B review-1: `checks` failed, and the only findings are about other questions.
+    let mut b = review_v1(&r);
+    for question in ["intent", "edge-cases", "checks", "docs", "smaller-design"] {
+        fail_question(&mut b, question);
+    }
+    b["findings"] = json!([
+        complete("f1", "intent"),
+        note("f2", "smaller-design"),
+        note("f3", "docs"),
+        note("f5", "edge-cases")
+    ]);
+    let message = review_refusal(&b).unwrap();
+    assert_eq!(
+        message,
+        "answer `checks` is fail but no finding has question `checks`: add a finding with \"question\": \"checks\" (any severity), or change the verdict to pass"
+    );
+    // The same refusal is the gate's, so the record could never be reviewed later either.
+    assert!(review_denial(&r, b.clone(), vec![]).contains(&message));
+    // p6-wake-fields review-1: `intent` failed with no finding about it.
+    let mut p6 = review_v1(&r);
+    for question in ["intent", "edge-cases"] {
+        fail_question(&mut p6, question);
+    }
+    p6["findings"] = json!([complete("f1", "edge-cases"), note("n4", "docs")]);
+    assert!(review_refusal(&p6)
+        .unwrap()
+        .contains("answer `intent` is fail but no finding has question `intent`"));
+    // The driver's fix is to add the finding; the record is then accepted.
+    b["findings"]
+        .as_array_mut()
+        .unwrap()
+        .push(note("f6", "checks"));
+    assert_eq!(review_refusal(&b), None);
+    // event-inbox-K review-1: the reviewer is a plain string, which was refused at `reviewed` and is now valid.
+    let mut k = review_v1(&r);
+    k["reviewer"] = json!("reviewer (Opus 5.5, fresh context)");
+    assert_eq!(review_refusal(&k), None);
+}
+
+#[test]
+fn review_check_reads_a_kind_and_prints_ok_or_the_fix() {
+    use crate::{review_check, review_check_kind};
+    assert_eq!(review_check_kind(&[]).unwrap(), RecordKind::Review);
+    assert_eq!(
+        review_check_kind(&args(&["--kind", "intent-check"])).unwrap(),
+        RecordKind::IntentCheck
+    );
+    assert_eq!(
+        review_check_kind(&args(&["--kind", "review"])).unwrap(),
+        RecordKind::Review
+    );
+    for bad in [&["--kind", "plan"][..], &["--kind"], &["review"]] {
+        assert!(review_check_kind(&args(bad))
+            .unwrap_err()
+            .contains("usage: lean-change review-check"));
+    }
+    let r = repo();
+    assert_eq!(
+        review_check(RecordKind::Review, &review_v1(&r)).unwrap(),
+        "ok"
+    );
+    assert_eq!(
+        review_check(RecordKind::IntentCheck, &check_value()).unwrap(),
+        "ok"
+    );
+    let mut failed = check_value();
+    failed["answers"][0]["verdict"] = json!("fail");
+    assert!(review_check(RecordKind::IntentCheck, &failed)
+        .unwrap_err()
+        .contains("answer `use` is fail but no finding has question `use`"));
+    // Each kind is checked as its own kind: an intent check is not a review.
+    assert!(review_check(RecordKind::Review, &check_value()).is_err());
+}
+
+#[test]
+fn admit_refuses_a_bad_review_or_intent_check_and_reads_nothing_else() {
+    use lean_change_provider::evaluate::admit;
+    let r = repo();
+    assert_eq!(admit("review", &review_v1(&r)), json!({}));
+    assert_eq!(admit("intent-check", &check_value()), json!({}));
+    let mut bad = review_v1(&r);
+    fail_question(&mut bad, "docs");
+    let refusal = admit("review", &bad);
+    assert_eq!(refusal["refused"]["rule"], "review-record");
+    assert!(refusal["refused"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("answer `docs` is fail but no finding has question `docs`"));
+    let mut bad_check = check_value();
+    bad_check["fresh_context"] = json!(false);
+    let refusal = admit("intent-check", &bad_check);
+    assert_eq!(refusal["refused"]["rule"], "intent-check-record");
+    // Every other kind, even one with nonsense data, is admitted unread.
+    for kind in [
+        "intent",
+        "plan",
+        "verification",
+        "finding-disposition",
+        "owner-decision",
+        "note",
+    ] {
+        assert_eq!(
+            admit(kind, &json!("not even an object")),
+            json!({}),
+            "{kind}"
+        );
+    }
+    // The run-context rule stays the gate's: a reviewer who is the intent author is admitted here.
+    let mut same = review_v1(&r);
+    same["reviewer"] = json!("driver");
+    assert_eq!(admit("review", &same), json!({}));
+}
+
+#[test]
+fn only_a_review_profile_declares_admission_and_an_older_snapshot_still_gates() {
+    let r = repo();
+    assert!(workflow(true, false).admit && workflow(true, true).admit);
+    assert!(!workflow(false, false).admit && !workflow(false, true).admit);
+    // A run started before `admit` existed froze the workflow without it; that run still gates.
+    let mut old = workflow(true, false);
+    old.admit = false;
+    let wf = workflow(true, false);
+    let transition = wf
+        .transitions
+        .iter()
+        .find(|t| t.source.as_str() == "explore" && t.event.as_str() == "intent-ready")
+        .cloned()
+        .unwrap();
+    let request = |workflow| EvaluateRequest {
+        operation: "evaluate".into(),
+        workflow,
+        initial_input: input(&r, true),
+        context: check_ctx(check_value(), vec![]),
+        transition: transition.clone(),
+        prior_evaluations: vec![],
+    };
+    allowed(&evaluate(&request(old.clone())).unwrap());
+    allowed(&evaluate(&request(wf.clone())).unwrap());
+    // A profile without a review never declares it, so a snapshot that does is not this workflow.
+    let mut c = workflow(false, false);
+    c.admit = true;
+    assert_eq!(evaluate(&request(c)).unwrap()["result"], "unsupported");
+}
+
+#[test]
+fn both_packets_name_the_check_command_and_share_the_shape_refusals_quote() {
+    let r = repo();
+    let i = intent(false);
+    let draft = vec![record("intent-1", "intent", 1, i.clone())];
+    let packet = crate::packet::intent_packet(&show(&r, true, draft)).unwrap();
+    assert!(
+        packet.contains("`lean-change review-check --kind intent-check`"),
+        "{packet}"
+    );
+    assert!(
+        packet.contains("the shape above is the one that counts"),
+        "{packet}"
+    );
+    assert!(packet.contains(&return_shape(RecordKind::IntentCheck, "intent-1", "")));
+    let approved = vec![
+        record("intent-1", "intent", 1, i.clone()),
+        record("d-ok", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("v1", "verification", 3, verification(&r, &i)),
+    ];
+    let packet = crate::packet::review_packet(&show(&r, true, approved)).unwrap();
+    assert!(
+        packet.contains("`lean-change review-check --kind review`"),
+        "{packet}"
+    );
+    assert!(
+        packet.contains("the shape above is the one that counts"),
+        "{packet}"
+    );
+    assert!(packet.contains(&return_shape(RecordKind::Review, "intent-1", &tree_of(&r))));
 }

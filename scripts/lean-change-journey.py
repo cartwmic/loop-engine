@@ -118,6 +118,15 @@ class Journey:
         self.call('append', '--record-id', record_id, self.run_id, kind, json.dumps(data))
         self.appended.add(record_id)
 
+    def append_refused(self, record_id, kind, data):
+        """A record the provider refuses at append: no record is stored and the state does not change."""
+        before = self.state()
+        result = subprocess.run(self.engine_args('append', '--record-id', record_id, self.run_id, kind, json.dumps(data)), text=True, capture_output=True)
+        assert result.returncode != 0 and 'record-refused' in result.stdout, (record_id, result.stdout, result.stderr)
+        assert f'"id":"{record_id}"' not in self.show_text().replace(' ', ''), record_id
+        assert self.state() == before
+        return result.stdout
+
     def event(self, name):
         self.state()
         self.call('event', self.run_id, name)
@@ -134,6 +143,11 @@ class Journey:
         result = subprocess.run([str(self.provider), command], input=stdin, text=True, capture_output=True)
         assert result.returncode == 0, (command, result.stderr)
         return result.stdout
+
+    def review_check(self, kind, record):
+        """What a reviewer runs before returning its record: (exit code, stdout, stderr)."""
+        result = subprocess.run([str(self.provider), 'review-check', '--kind', kind], input=json.dumps(record), text=True, capture_output=True)
+        return result.returncode, result.stdout, result.stderr
 
     def verify(self):
         data = json.loads(self.tool('verify', self.show_text()))
@@ -1128,10 +1142,16 @@ def findings_v1_scenario(engine, provider, work, keep):
     # A review answers seven questions: a v1 review with six is not well-formed, and the first well-formed one counts.
     short = v1_review(fresh['tree'], ['docs'], notes, 'six-answer-reviewer')
     short['answers'].pop()
-    j.append('rev-six', 'review', short)
-    out = j.refused('reviewed', 'review-incomplete', 'review')
-    assert 'smaller-design is unanswered' in out, out
-    j.append('rev-1', 'review', v1_review(fresh['tree'], ['docs'], notes))
+    # bookends:LE-213 — the provider refuses a malformed review at append, naming the fix, stores nothing, and the reviewer can run the same check first; a plain-string reviewer is accepted.
+    out = j.append_refused('rev-six', 'review', short)
+    assert 'question `smaller-design` is unanswered' in out, out
+    code, _, err = j.review_check('review', short)
+    assert code != 0 and 'question `smaller-design` is unanswered' in err, (code, err)
+    # A reviewer that returns its name as a plain string is accepted.
+    plain = v1_review(fresh['tree'], ['docs'], notes)
+    plain['reviewer'] = 'plain-string-reviewer'
+    assert j.review_check('review', plain)[:2] == (0, 'ok\n')
+    j.append('rev-1', 'review', plain)
     (repo / 'notes.txt').write_text('late edit\n')
     out = j.refused('reviewed', 'verification-incomplete', 'review')
     assert 'stale' in out, out

@@ -435,7 +435,7 @@ Appending:
 - creates one semantic history entry;
 - preserves stable append ordering;
 - does not change workflow state;
-- does not invoke the provider;
+- invokes the provider only to admit the record, and only when the run's frozen workflow declares `admit` (LE-188, LE-213); otherwise it does not invoke the provider;
 - cannot create or alter engine-authored invocation records.
 
 > **Non-normative stable-reference note:** New append records use concise context-record or invocation/assignment references. Core resolves same-run opaque invocation identities and records rich output metadata once; the software-change provider resolves its own subject, evidence, finding, task, policy, and checkpoint identities. Review reuse uses one explicit `evidence-applicability` declaration with a current target, attesting driver, and short reason. Completed historical runs may still expose the former verbose records, but those records are not new ordinary append forms.
@@ -2290,3 +2290,9 @@ The skill's intent step tells the driver to write the goal, each criterion state
 The checks are `scripts/lean-change-journey.py` with `--only outcome-map` (criteria c1–c6), `--only outcome-map-skill` (c7), `--only outcome-map-fixture` (c8) and `--only outcome-map-browser --chromium PATH` (c11: a headless Chromium opens the spliced page from file://; without `--chromium` the journey prints that it skipped this check). The criteria are those of the outcome-map intent.
 
 Known limits: AR's own page loads fonts and syntax colouring from CDNs; that is AR's and is left as is. No check runs AR; the checks use a saved AR page as a fixture. An AR release that moves the anchors makes `--into` refuse the page with exit 1.
+
+### LE-213: Lean-change refuses a malformed review or intent-check when it is appended, and a reviewer can check its record first
+- Status: live
+- Coverage: e2e/journey
+
+A lean-change profile with a review declares `admit` (LE-188), so `append` of a `review` or `intent-check` record that fails its record-local checks is refused before storage with the fix named: no record, no history, the provider's message returned. The record-local checks are the shape, `findings_schema`, fresh context, one noted answer per known question, well-formed findings, and a failed answer having a finding for its question; the gate at `reviewed` and `intent-ready` runs the same function and still adds the checks that need the run (a reviewer other than the intent author, the current intent, dispositions, verification). `lean-change review-check [--kind review|intent-check]` (default `review`) reads one record on stdin and prints `ok` or exits 1 with that message; both packets tell the reviewer to run it before returning. A `reviewer` given as a plain string is read as an agent of that name. Every other record kind is admitted unread; a profile without a review declares no `admit`; a run started before this keeps its frozen workflow and is not refused at append. The checks are `scripts/lean-change-journey.py` (the notes-only scenario appends a six-answer review and a plain-string reviewer) and the unit tests of `lean-change-provider`.

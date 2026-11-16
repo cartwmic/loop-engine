@@ -44,7 +44,8 @@ pub fn workflow(review: bool, old_vs_new: bool) -> Workflow {
         "Every criterion check passes on the final tree.",
         true,
     ));
-    Workflow::new(WORKFLOW_ID, "explore", states, transitions)
+    // Only a review profile has records worth checking at append (`evaluate::admit`).
+    Workflow::new(WORKFLOW_ID, "explore", states, transitions).with_admit(review)
 }
 
 #[cfg(test)]
