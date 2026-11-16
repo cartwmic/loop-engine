@@ -70,6 +70,16 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    that passes every check yet misses the goal; fix it with a criterion whose check fails for that delivery. A `principles-gap`
    finding names a principles section that applies and has no criterion or constraint; fix it with that criterion or constraint. Append one
    `finding-disposition` per effectively-blocking finding, with `review` set to the `intent-check` record id. Notes need none. The check runs once per run; a later revision is not re-checked.
+
+   **Fix the sentence, not the word.** A finding quotes a sentence of the goal or a constraint, and its question often names
+   more than one thing that sentence promises. Nothing re-checks your fix, so a fix that covers some of them leaves the rest
+   unproved. Before you change the intent, copy the quoted sentence and list each promise in it (split at every "and", comma
+   and semicolon). For each, name the criterion whose check fails when only that promise is unmet, and add a criterion where
+   there is none. Put the list in the `finding-disposition` reason so the owner sees it. When a check reads a file the work
+   will write (an evidence file or a log), also write a sample of that file and run the check's test on it before
+   `intent-ready`: spelled the way the criterion's statement spells it (a name written `Alice` in the statement is `Alice` in
+   the sample) it must pass, and with one promise broken it must fail. A check that refuses the first or accepts the second is
+   wrong. Nothing in the provider enforces this step.
 2. **intent-approval.** Show the owner the intent verbatim, with the check's findings and how each was disposed (profile b), and ask: "What do you expect that is not listed?" Their answer may change the intent. Append their exact words (do not edit them):
 
    ```sh
