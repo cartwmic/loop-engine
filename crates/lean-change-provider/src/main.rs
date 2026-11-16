@@ -34,6 +34,7 @@ fn dispatch() -> i32 {
         Some("intent-packet") => report(stdin_json().and_then(|show| packet::intent_packet(&show))),
         Some("review-packet") => report(stdin_json().and_then(|show| packet::review_packet(&show))),
         Some("outcome-map") => report_page(outcome_map_command(&args[1..])),
+        Some("review-check") => report(review_check_command(&args[1..])),
         Some(other) => {
             eprintln!("unsupported command `{other}`");
             2
@@ -81,6 +82,37 @@ fn verify_command(args: &[String], show: &Value) -> Result<model::Verification, 
         }
         _ => Err(USAGE.into()),
     }
+}
+
+/// `review-check [--kind review|intent-check]`: one reviewer record on stdin, checked as `append` will check it.
+/// Prints `ok`, or exits 1 with what to fix. The default kind is `review`.
+fn review_check_command(args: &[String]) -> Result<String, String> {
+    let kind = review_check_kind(args)?;
+    let record = stdin_json().map_err(|e| format!("{e}: pipe only the record's JSON object"))?;
+    review_check(kind, &record)
+}
+
+fn review_check_kind(args: &[String]) -> Result<model::RecordKind, String> {
+    match args {
+        [] => Ok(model::RecordKind::Review),
+        [flag, kind] if flag.as_str() == "--kind" && kind.as_str() == "review" => {
+            Ok(model::RecordKind::Review)
+        }
+        [flag, kind] if flag.as_str() == "--kind" && kind.as_str() == "intent-check" => {
+            Ok(model::RecordKind::IntentCheck)
+        }
+        _ => {
+            Err("usage: lean-change review-check [--kind review|intent-check] < record.json".into())
+        }
+    }
+}
+
+fn review_check(kind: model::RecordKind, record: &Value) -> Result<String, String> {
+    match kind {
+        model::RecordKind::Review => evaluate::check_review(record).map(drop),
+        model::RecordKind::IntentCheck => evaluate::check_intent_check(record).map(drop),
+    }
+    .map(|()| "ok".to_owned())
 }
 
 /// `outcome-map [--into AR_PAGE]`: the section for the run's latest intent, alone as a page or inserted into AR's page.
@@ -173,6 +205,13 @@ fn protocol() -> i32 {
             }
             Ok(_) => protocol_error("evaluate request has wrong operation".into()),
             Err(e) => protocol_error(format!("invalid evaluate request: {e}")),
+        },
+        Some("admit") => match (
+            value["record"]["kind"].as_str(),
+            value["record"].get("data"),
+        ) {
+            (Some(kind), Some(data)) => write_json(&evaluate::admit(kind, data)),
+            _ => protocol_error("admit request must contain record.kind and record.data".into()),
         },
         Some(other) => protocol_error(format!("unsupported provider operation `{other}`")),
         None => protocol_error("request must contain string operation".into()),

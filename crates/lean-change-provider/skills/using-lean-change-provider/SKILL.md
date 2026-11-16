@@ -62,7 +62,7 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    loop-engine ... --json show --view full RUN | lean-change intent-packet > "$WORK/intent-packet.md"
    ```
 
-   The reviewer returns one JSON object; append it as kind `intent-check`. Each question they could not settle from the
+   The reviewer returns one JSON object, after piping it through `lean-change review-check --kind intent-check` (the packet says so); append it as kind `intent-check`. `append` refuses an intent check that fails that same check and names the fix, so you never get a record you cannot edit. Each question they could not settle from the
    intent fails with a finding whose text is a concrete question for the owner. The engine records one intent check per
    intent, the first well-formed one; a later one cannot replace it. The check carries `findings_schema: 1`: each finding has a
    `severity`, and only an effectively-blocking finding needs a disposition (see the review below). For each such finding, either change the intent (`fixed`, and append a new intent record
@@ -151,8 +151,10 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    loop-engine ... --json show --view full RUN | lean-change review-packet > "$WORK/packet.md"
    ```
 
-   The reviewer returns one JSON object with `findings_schema: 1` and answers all seven questions. Append it as kind
-   `review`. The engine records one review per intent, the first well-formed one; a later one cannot replace it. Any
+   The reviewer returns one JSON object with `findings_schema: 1` and answers all seven questions, after piping it through
+   `lean-change review-check --kind review` (the packet says so). Append it as kind `review`. `append` refuses a review that
+   fails that same check, names the fix and stores nothing: send the message back to the reviewer, who returns a corrected
+   record. A reviewer given as a plain string is read as an agent of that name. The engine records one review per intent, the first well-formed one; a later one cannot replace it. Any
    further review round is driver procedure: it follows `~/.local/share/agent-harness/reviewer-brief.md` and the
    review-round rule that brief names (playbook 58fdb05d), and the engine does not run it.
    Each finding has a `severity`. A finding is effectively blocking only if it is `blocking` and has an `obligation`,

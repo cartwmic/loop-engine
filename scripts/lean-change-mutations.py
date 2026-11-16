@@ -14,6 +14,7 @@ WORKFLOW = ROOT / 'crates/lean-change-provider/src/workflow.rs'
 RUN = ROOT / 'crates/lean-change-provider/src/run.rs'
 PACKET = ROOT / 'crates/lean-change-provider/src/packet.rs'
 MODEL = ROOT / 'crates/lean-change-provider/src/model.rs'
+MAIN = ROOT / 'crates/lean-change-provider/src/main.rs'
 
 # (name, file, original text, mutated text). Each original must occur exactly once.
 MUTATIONS = [
@@ -34,7 +35,7 @@ MUTATIONS = [
     ('verification failed check', EVALUATE, 'Some(r) if r.timed_out || r.exit_code != Some(0) =>', 'Some(r) if false =>'),
     ('verification approved check', EVALUATE, 'Some(r) if r.check_sha256 != criterion.check.sha256() =>', 'Some(r) if false =>'),
     ('verification of current intent', EVALUATE, 'match recorded.filter(|(_, v)| v.intent == id) {', 'match recorded {'),
-    ('independence of reviewers', EVALUATE, '        || reviewer\n            .name\n            .trim()\n            .eq_ignore_ascii_case(intent.author.name.trim())\n', ''),
+    ('independence of reviewers', EVALUATE, '        .eq_ignore_ascii_case(intent.author.name.trim())\n', '        .eq_ignore_ascii_case("\\0")\n'),
     ('fresh context of reviewers', EVALUATE, 'if !fresh_context {', 'if false {'),
     ('all questions answered', EVALUATE, 'questions.iter().find(|(q, _)| !asked.contains(q))', 'questions.iter().find(|(q, _)| false && !asked.contains(q))'),
     ('failed question needs finding', EVALUATE, 'if !findings.iter().any(|f| f.question == answer.question) {', 'if false {'),
@@ -104,6 +105,14 @@ MUTATIONS = [
     ('delegation outcome comparison', EVALUATE, '    if !differs.is_empty() {\n        return Outcome::Changed(differs);', '    if false {\n        return Outcome::Changed(differs);'),
     ('delegation rewrites are checked', EVALUATE, '    if problems == RewriteProblems::default() {\n        Outcome::Keeps', '    if true {\n        Outcome::Keeps'),
     ('a refused delegation never counts as a baseline', EVALUATE, '        if valid {\n', '        if valid || true {\n'),
+    ('append refuses a review that fails its own check', EVALUATE, '"review" => check_review(data).map(drop),', '"review" => Ok(()),'),
+    ('append refuses an intent check that fails its own check', EVALUATE, '"intent-check" => check_intent_check(data).map(drop),', '"intent-check" => Ok(()),'),
+    ('append admits every other kind unread', EVALUATE, '        _ => return admitted(),', '        _ => check_review(data).map(drop),'),
+    ('a review profile declares admission', WORKFLOW, '.with_admit(review)', '.with_admit(false)'),
+    ('a profile without a review declares no admission', WORKFLOW, '.with_admit(review)', '.with_admit(true)'),
+    ('a run started before admission still gates', EVALUATE, '    expected.admit &= request.workflow.admit;\n', ''),
+    ('a plain-string reviewer is an agent', MODEL, 'Value::String(name) => Ok(Actor {', 'Value::String(name) if false => Ok(Actor {'),
+    ('review-check defaults to a review', MAIN, '[] => Ok(model::RecordKind::Review),', '[] => Ok(model::RecordKind::IntentCheck),'),
 ]
 
 

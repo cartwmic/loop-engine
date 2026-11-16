@@ -1,6 +1,6 @@
 //! The provider is a checker: it decides whether a checked transition is allowed.
 use crate::model::*;
-use crate::protocol::{allow, deny, unsupported, EvaluateRequest};
+use crate::protocol::{admitted, allow, deny, refused, unsupported, EvaluateRequest};
 use crate::workflow::workflow;
 use loop_core::ContextRecord;
 use loop_integrations::owner_checkpoint::{
@@ -66,7 +66,10 @@ fn parse_latest<T: serde::de::DeserializeOwned>(
 
 pub fn evaluate(request: &EvaluateRequest, tree: TreeIdentity) -> Result<Value, String> {
     let input = InitialInput::parse(&request.initial_input)?;
-    if request.workflow != workflow(input.review, input.old_vs_new.is_some()) {
+    // A run started before `admit` existed froze a workflow without it; it is still this workflow.
+    let mut expected = workflow(input.review, input.old_vs_new.is_some());
+    expected.admit &= request.workflow.admit;
+    if request.workflow != expected {
         return Ok(unsupported());
     }
     let t = &request.transition;
@@ -86,6 +89,20 @@ pub fn evaluate(request: &EvaluateRequest, tree: TreeIdentity) -> Result<Value, 
         _ => return Ok(unsupported()),
     };
     Ok(gate.map_or_else(|denial| denial, |()| allow()))
+}
+
+/// Write-time admission: a review or an intent-check that fails its record-local check is refused at `append`, with the
+/// fix named; every other kind is admitted unread. Only the record is read, never the run.
+pub fn admit(kind: &str, data: &Value) -> Value {
+    let checked = match kind {
+        "review" => check_review(data).map(drop),
+        "intent-check" => check_intent_check(data).map(drop),
+        _ => return admitted(),
+    };
+    checked.map_or_else(
+        |message| refused(&format!("{kind}-record"), &message),
+        |()| admitted(),
+    )
 }
 
 /// Profile b: the first well-formed intent-check, every finding disposed, and a fix means a newer intent.
@@ -528,13 +545,51 @@ fn describe_run(run: &OldRun) -> String {
 }
 
 fn review_form(record: &ContextRecord, intent: &Intent) -> Result<Review, String> {
-    let review: Review = serde_json::from_value(record.data.clone())
-        .map_err(|e| format!("the review record is invalid: {e}"))?;
-    let (who, fresh) = (&review.reviewer, review.fresh_context);
-    form(
+    let review = check_review(&record.data)?;
+    independent(&review.reviewer, intent)?;
+    Ok(review)
+}
+
+fn intent_check_form(
+    record: &ContextRecord,
+    records: &[ContextRecord],
+) -> Result<IntentCheck, String> {
+    let check = check_intent_check(&record.data)?;
+    // Independence is judged against the author of the intent that was checked.
+    let checked = records
+        .iter()
+        .find(|r| r.kind == "intent" && r.id.as_str() == check.intent)
+        .ok_or("the intent-check must name an intent record")?;
+    let intent = Intent::parse(&checked.data)
+        .map_err(|e| format!("the checked intent record is invalid: {e}"))?;
+    independent(&check.reviewer, &intent)?;
+    Ok(check)
+}
+
+/// Run context, not the record: the reviewer is someone other than the author of the intent.
+fn independent(reviewer: &Actor, intent: &Intent) -> Result<(), String> {
+    if reviewer
+        .name
+        .trim()
+        .eq_ignore_ascii_case(intent.author.name.trim())
+    {
+        return Err(format!(
+            "the reviewer must be someone other than the intent author: the reviewer name `{}` is the intent author's, so have a different reviewer return the record",
+            reviewer.name
+        ));
+    }
+    Ok(())
+}
+
+/// The record-local part of a review: everything that can be judged from the record alone. The driver may not edit a
+/// reviewer's record, so `append` refuses one that fails this and `lean-change review-check` lets the reviewer try it
+/// first; the gate runs the same function. Every refusal names the fix.
+pub fn check_review(data: &Value) -> Result<Review, String> {
+    let review: Review = parse_record(RecordKind::Review, data)?;
+    local_form(
         review_questions(review.findings_schema),
-        intent,
-        (who, fresh),
+        &review.reviewer,
+        review.fresh_context,
         review.findings_schema,
         review.head.is_some() || review.brief_sha256.is_some(),
         &review.answers,
@@ -543,30 +598,33 @@ fn review_form(record: &ContextRecord, intent: &Intent) -> Result<Review, String
     Ok(review)
 }
 
-fn intent_check_form(
-    record: &ContextRecord,
-    records: &[ContextRecord],
-) -> Result<IntentCheck, String> {
-    let check: IntentCheck = serde_json::from_value(record.data.clone())
-        .map_err(|e| format!("the intent-check record is invalid: {e}"))?;
-    // Independence is judged against the author of the intent that was checked.
-    let checked = records
-        .iter()
-        .find(|r| r.kind == "intent" && r.id.as_str() == check.intent)
-        .ok_or("the intent-check must name an intent record")?;
-    let intent = Intent::parse(&checked.data)
-        .map_err(|e| format!("the checked intent record is invalid: {e}"))?;
-    let (who, fresh) = (&check.reviewer, check.fresh_context);
-    form(
+/// The record-local part of an intent check; see `check_review`.
+pub fn check_intent_check(data: &Value) -> Result<IntentCheck, String> {
+    let check: IntentCheck = parse_record(RecordKind::IntentCheck, data)?;
+    local_form(
         &INTENT_QUESTIONS,
-        &intent,
-        (who, fresh),
+        &check.reviewer,
+        check.fresh_context,
         check.findings_schema,
         check.head.is_some() || check.brief_sha256.is_some(),
         &check.answers,
         &check.findings,
     )?;
     Ok(check)
+}
+
+/// A parse failure says what is wrong and shows the shape that parses.
+fn parse_record<T: serde::de::DeserializeOwned>(
+    kind: RecordKind,
+    data: &Value,
+) -> Result<T, String> {
+    serde_json::from_value(data.clone()).map_err(|e| {
+        format!(
+            "the {name} record is invalid: {e}. Return exactly this shape: {shape}",
+            name = kind.name(),
+            shape = return_shape(kind, "...", "...")
+        )
+    })
 }
 
 /// The first well-formed record is the one that counts: a later one cannot replace it and drop its findings.
@@ -597,6 +655,35 @@ pub enum FindingReject {
 }
 
 impl FindingReject {
+    /// The refusal for this reject over `findings`: what is wrong, and the fix.
+    fn fix(self, findings: &[Finding]) -> String {
+        match self {
+            FindingReject::BlankId => "findings need a unique, nonblank id: give every finding an \"id\" such as \"f1\", \"f2\"".into(),
+            FindingReject::DuplicateId => {
+                let mut seen = BTreeSet::new();
+                let twice = findings.iter().find(|f| !seen.insert(f.id.as_str()));
+                format!(
+                    "findings need a unique, nonblank id: `{}` is used twice, so give each finding its own \"id\"",
+                    twice.map_or("", |f| f.id.as_str())
+                )
+            }
+            FindingReject::BlankText => {
+                let blank = findings.iter().find(|f| f.text.trim().is_empty());
+                format!(
+                    "every finding needs text: finding `{}` has none, so put what you found in its \"text\"",
+                    blank.map_or("", |f| f.id.as_str())
+                )
+            }
+            FindingReject::BadSeverity => {
+                let missing = findings.iter().find(|f| f.severity.is_none());
+                format!(
+                    "every finding needs a severity: finding `{}` has none, so set \"severity\" to \"blocking\" or \"note\"",
+                    missing.map_or("", |f| f.id.as_str())
+                )
+            }
+        }
+    }
+
     pub fn code(self) -> &'static str {
         match self {
             FindingReject::BlankId => "blank-id",
@@ -626,70 +713,80 @@ pub fn check_findings(findings: &[Finding]) -> Result<(), FindingReject> {
     Ok(())
 }
 
-/// Structure shared by the review and the intent check: independence, fresh context,
-/// one noted answer per question, complete findings.
-fn form(
+/// Structure shared by the review and the intent check, from the record alone: fresh context, one noted answer per
+/// question, complete findings.
+fn local_form(
     questions: &[(&str, &str)],
-    intent: &Intent,
-    (reviewer, fresh_context): (&Actor, bool),
+    reviewer: &Actor,
+    fresh_context: bool,
     findings_schema: Option<u8>,
     has_envelope_fields: bool,
     answers: &[Answer],
     findings: &[Finding],
 ) -> Result<(), String> {
+    let ids = || {
+        questions
+            .iter()
+            .map(|(q, _)| *q)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     if findings_schema.is_some_and(|schema| schema != 1) {
-        return Err("findings_schema must be 1 or absent".into());
+        return Err("findings_schema must be 1 or absent: set \"findings_schema\": 1".into());
     }
     // `head` and `brief_sha256` are the findings contract's optional envelope fields. They are accepted and nothing
     // reads them.
     if has_envelope_fields && findings_schema.is_none() {
-        return Err("head and brief_sha256 need findings_schema: 1".into());
+        return Err("head and brief_sha256 need findings_schema: 1: add \"findings_schema\": 1, or remove head and brief_sha256".into());
     }
-    if reviewer.name.trim().is_empty()
-        || reviewer
-            .name
-            .trim()
-            .eq_ignore_ascii_case(intent.author.name.trim())
-    {
-        return Err("the reviewer must be someone other than the intent author".into());
+    if reviewer.name.trim().is_empty() {
+        return Err("the reviewer name is blank: set \"reviewer\": {\"name\": \"<who you are>\", \"kind\": \"agent\"}".into());
     }
     if !fresh_context {
-        return Err("the review must be done in a fresh context".into());
+        return Err("the review must be done in a fresh context: run it again in a new session that has not seen the work, then return \"fresh_context\": true".into());
     }
     let mut asked = BTreeSet::new();
     for answer in answers {
-        if !questions.iter().any(|(q, _)| *q == answer.question)
-            || !asked.insert(answer.question.as_str())
-        {
-            return Err(format!("unknown or repeated question {}", answer.question));
+        let question = &answer.question;
+        if !questions.iter().any(|(q, _)| q == question) {
+            return Err(format!(
+                "unknown question `{question}`: answer only these questions, by id: {}",
+                ids()
+            ));
+        }
+        if !asked.insert(question.as_str()) {
+            return Err(format!(
+                "repeated question `{question}`: keep one answer per question and remove the others"
+            ));
         }
         if answer.note.trim().is_empty() {
-            return Err(format!("answer to {} needs a note", answer.question));
+            return Err(format!(
+                "answer to `{question}` needs a note: add a one-line \"note\" saying why it passes or fails"
+            ));
         }
     }
     if let Some((q, _)) = questions.iter().find(|(q, _)| !asked.contains(q)) {
-        return Err(format!("question {q} is unanswered"));
+        return Err(format!(
+            "question `{q}` is unanswered: add {{\"question\": \"{q}\", \"verdict\": \"pass|fail\", \"note\": \"...\"}} to answers"
+        ));
     }
     if findings_schema.is_some() {
         // Notes need only an id, a known question and text; a blocking finding that lacks a field is demoted on read.
-        check_findings(findings).map_err(|reject| match reject {
-            FindingReject::BlankId | FindingReject::DuplicateId => {
-                "findings need a unique, nonblank id".to_owned()
-            }
-            FindingReject::BlankText => "every finding needs text".to_owned(),
-            FindingReject::BadSeverity => {
-                "every finding needs a severity: blocking or note".to_owned()
-            }
-        })?;
+        check_findings(findings).map_err(|reject| reject.fix(findings))?;
         if let Some(finding) = findings
             .iter()
             .find(|f| !asked.contains(f.question.as_str()))
         {
-            return Err(format!("finding {} needs a known question", finding.id));
+            return Err(format!(
+                "finding `{}` has question `{}`, which is not a question here: set its \"question\" to one of: {}",
+                finding.id,
+                finding.question,
+                ids()
+            ));
         }
     } else {
         let blank = |field: &Option<String>| field.as_deref().is_none_or(|f| f.trim().is_empty());
-        let mut ids = BTreeSet::new();
+        let mut ids_seen = BTreeSet::new();
         for finding in findings {
             let v1_only = finding.severity.is_some()
                 || finding.obligation.is_some()
@@ -700,10 +797,10 @@ fn form(
                 || blank(&finding.evidence)
                 || blank(&finding.consequence)
                 || !asked.contains(finding.question.as_str())
-                || !ids.insert(finding.id.as_str())
+                || !ids_seen.insert(finding.id.as_str())
             {
                 return Err(format!(
-                    "finding {} needs a unique id, a known question, text, evidence and consequence (severity, obligation and component need findings_schema: 1)",
+                    "finding `{}` needs a unique id, a known question, text, evidence and consequence (severity, obligation and component need findings_schema: 1): fill in the missing fields, or add \"findings_schema\": 1 to the record to use severity, obligation and component",
                     finding.id
                 ));
             }
@@ -711,9 +808,9 @@ fn form(
     }
     for answer in answers.iter().filter(|a| a.verdict == Verdict::Fail) {
         if !findings.iter().any(|f| f.question == answer.question) {
+            let question = &answer.question;
             return Err(format!(
-                "question {} failed but has no finding",
-                answer.question
+                "answer `{question}` is fail but no finding has question `{question}`: add a finding with \"question\": \"{question}\" (any severity), or change the verdict to pass"
             ));
         }
     }

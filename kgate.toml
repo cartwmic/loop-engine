@@ -9,6 +9,8 @@ image  = "ghcr.io/cartwmic/kgate@sha256:41dc179299aade303686e2047a361444668e5b32
 cpu    = 12
 memory = "5632Mi"
 memory_limit = "8Gi"
+# ephemeral_storage is the disk request (kgate default 3Gi): the kgate lead measured the Rust gate peaking at 5.6 GiB of disk (2026-11-16), so 8Gi keeps the pod from eviction.
+ephemeral_storage = "8Gi"
 
 [tools]
 rustc   = "1.98.0"

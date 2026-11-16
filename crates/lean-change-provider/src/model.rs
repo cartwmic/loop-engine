@@ -1,6 +1,6 @@
 //! Frozen input and the closed record shapes the driver appends.
-use loop_integrations::owner_checkpoint::Actor;
-use serde::{Deserialize, Serialize};
+use loop_integrations::owner_checkpoint::{Actor, ActorKind};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -370,6 +370,7 @@ pub struct Plan {
 pub struct Review {
     pub intent: String,
     pub tree: String,
+    #[serde(deserialize_with = "reviewer_actor")]
     pub reviewer: Actor,
     pub fresh_context: bool,
     /// 1 for the shared finding fields (severity, obligation, component); absent in a record written before them.
@@ -390,6 +391,7 @@ pub struct Review {
 pub struct IntentCheck {
     /// Record id of the intent that was checked.
     pub intent: String,
+    #[serde(deserialize_with = "reviewer_actor")]
     pub reviewer: Actor,
     pub fresh_context: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -401,6 +403,45 @@ pub struct IntentCheck {
     pub brief_sha256: Option<String>,
     pub answers: Vec<Answer>,
     pub findings: Vec<Finding>,
+}
+
+/// A reviewer is `{"name": ..., "kind": ...}`, or just a name: reviewers keep returning the plain string, so the
+/// string is read as an agent of that name.
+fn reviewer_actor<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Actor, D::Error> {
+    match Value::deserialize(deserializer)? {
+        Value::String(name) => Ok(Actor {
+            name,
+            kind: ActorKind::Agent,
+        }),
+        other => Actor::deserialize(other).map_err(serde::de::Error::custom),
+    }
+}
+
+/// The two records a fresh-context reviewer returns.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecordKind {
+    Review,
+    IntentCheck,
+}
+
+impl RecordKind {
+    /// The context record kind, as the driver appends it.
+    pub fn name(self) -> &'static str {
+        match self {
+            RecordKind::Review => "review",
+            RecordKind::IntentCheck => "intent-check",
+        }
+    }
+}
+
+/// The JSON a reviewer returns. The packets and the refusals show this one text, so the shape a reviewer is told and
+/// the shape a refusal quotes cannot differ. A review names the checked tree; an intent check does not.
+pub fn return_shape(kind: RecordKind, intent_id: &str, tree: &str) -> String {
+    let tree = match kind {
+        RecordKind::Review => format!(" \"tree\": \"{tree}\","),
+        RecordKind::IntentCheck => String::new(),
+    };
+    format!("{{\"findings_schema\": 1, \"intent\": \"{intent_id}\",{tree} \"reviewer\": {{\"name\": \"...\", \"kind\": \"agent\"}}, \"fresh_context\": true, \"answers\": [{{\"question\": \"...\", \"verdict\": \"pass|fail\", \"note\": \"...\"}}], \"findings\": [{{\"id\": \"f1\", \"severity\": \"blocking|note\", \"question\": \"...\", \"text\": \"...\", \"obligation\": \"...\", \"evidence\": \"...\", \"consequence\": \"...\", \"component\": \"...\"}}]}}")
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

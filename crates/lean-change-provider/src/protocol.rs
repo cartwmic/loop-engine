@@ -30,3 +30,11 @@ pub fn unsupported() -> Value {
 pub fn deny(code: &str, message: &str, details: Value) -> Value {
     json!({"result":"deny","feedback":{"code":code,"message":message,"details":details}})
 }
+/// The `admit` reply that lets a record be appended.
+pub fn admitted() -> Value {
+    json!({})
+}
+/// The `admit` reply that refuses a record; the engine names the record and this rule to the caller.
+pub fn refused(rule: &str, message: &str) -> Value {
+    json!({"refused":{"rule":rule,"message":message}})
+}
