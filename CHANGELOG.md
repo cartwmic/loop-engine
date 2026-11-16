@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.51.0] - 2026-11-16
+
+lean-change: a malformed review or intent-check record is now refused when it is appended (profile b), with an error naming the fix, using the same check the gate runs. A plain-string `reviewer` is read as an agent of that name. New `lean-change review-check [--kind review|intent-check]` checks a record on stdin before you append it; both review packets name it. kgate profiles request 8Gi of ephemeral storage (#151).
+
 ## [0.50.1] - 2026-11-16
 
 lean-change skill: intent-check step now tells the driver to fix every promise in a quoted sentence, not only the word (#149).
