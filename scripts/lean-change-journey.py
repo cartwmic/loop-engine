@@ -569,6 +569,17 @@ def parallel_run(engine, provider, blocks, work):
     assert (steps / 'wt-s2' / 'two.txt').read_text() == 'two: finished\n'
     assert subprocess.run(['git', 'merge-base', '--is-ancestor', fix, 'step/s2'], cwd=repo).returncode == 1
 
+    # An ignored file is work `git worktree remove` would delete without a word: the block refuses, then removes once it is gone.
+    exclude = Path(git_out(repo, 'rev-parse', '--path-format=absolute', '--git-common-dir').strip()) / 'info' / 'exclude'
+    exclude.parent.mkdir(exist_ok=True)
+    exclude.write_text('local.cfg\n')
+    ignored = steps / 'wt-s1' / 'local.cfg'
+    ignored.write_text('local note\n')
+    assert git_out(steps / 'wt-s1', 'status', '--porcelain') == '' and git_out(steps / 'wt-s1', 'status', '--porcelain', '--ignored') != ''
+    result = run_block(clean, repo, steps, 's1')
+    assert result.returncode != 0 and 'not clean: s1' in result.stderr, (result.returncode, result.stderr)
+    assert ignored.read_text() == 'local note\n' and git_out(repo, 'branch', '--list', 'step/s1').strip() == 'step/s1'
+    ignored.unlink()
     for step in ['s1', 's2', 's3']:
         result = run_block(clean, repo, steps, step)
         assert result.returncode == 0, (step, result.stderr)
