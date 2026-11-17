@@ -223,15 +223,21 @@ the repository's own instructions say more about commits, worktrees, deleting or
 6. **Clean up** each step, then request `ready`:
 
    ```sh
-   git -C "$REPO" worktree remove "$WORK/wt-$STEP" && git -C "$REPO" branch -q -D "step/$STEP"
+   if [ -n "$(git -C "$WORK/wt-$STEP" status --porcelain --ignored)" ]; then
+     echo "not clean: $STEP" >&2; false
+   else
+     git -C "$REPO" worktree remove "$WORK/wt-$STEP" && git -C "$REPO" branch -q -D "step/$STEP"
+   fi
    ```
 
    Removing a worktree or branch is deleting. Run this block only where the repository's own rules
    let the driver remove them (the owner's say, or a standing exception, for example a rule that allows removal
    once the work has merged to main and the worktree is clean, which is usually after `ready`: run the block then);
-   otherwise leave the landed step worktrees and branches in place and report them. Git refuses to remove a worktree
-   that still holds uncommitted work. Land it first. Dropping a step's work that has not landed
-   (`--force`, or `branch -D` on a step that did not land) always needs the owner.
+   otherwise leave the landed step worktrees and branches in place and report them. The block removes nothing and
+   prints `not clean: <step>` when `git status --porcelain --ignored` lists anything in the worktree: uncommitted work,
+   untracked files, or ignored files (a local config file or scratch output, which `git worktree remove` would delete
+   without a word). Land the work first, or report the ignored files to the owner. Dropping a step's work that has not
+   landed (`--force`, or `branch -D` on a step that did not land) always needs the owner.
 
 Verify, the old-vs-new check and the review are unchanged: they judge the merged tree in `REPO`.
 
