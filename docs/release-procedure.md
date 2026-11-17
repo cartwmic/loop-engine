@@ -46,3 +46,9 @@ Inspect the new Release run's `headSha` with `gh run view RUN_ID --json headSha,
 test "$(gh api 'repos/{owner}/{repo}/commits/main' --jq .sha)" = "$COMMIT"
 gh workflow run release.yml --ref main -f "tag=$TAG"
 ```
+
+## Running release-after-merge.sh
+
+`scripts/release-after-merge.sh` runs `ci-main-status loop-engine` before it squash-merges the release-prep PR: exit 0 (green) or 2 (untested) go on; exit 1 (red, or main's state cannot be read), any other exit or a missing `ci-main-status` stop it at step `merge` with no merge, quoting the output, and a rerun after main is green resumes and merges.
+
+`scripts/release-after-merge.sh` runs `$RELEASE_PREPARE_CMD VERSION` in the release worktree (default `scripts/prepare-release.sh`, on the host). Set `RELEASE_PREPARE_CMD` only to replace that command; no wrapper for it is committed here.
