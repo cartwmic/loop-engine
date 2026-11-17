@@ -578,7 +578,8 @@ def parallel_run(engine, provider, blocks, work):
     assert git_out(steps / 'wt-s1', 'status', '--porcelain') == '' and git_out(steps / 'wt-s1', 'status', '--porcelain', '--ignored') != ''
     result = run_block(clean, repo, steps, 's1')
     assert result.returncode != 0 and 'not clean: s1' in result.stderr, (result.returncode, result.stderr)
-    assert ignored.read_text() == 'local note\n' and git_out(repo, 'branch', '--list', 'step/s1').strip() == 'step/s1'
+    assert ignored.read_text() == 'local note\n'
+    git(repo, 'rev-parse', '--verify', '-q', 'step/s1')  # the branch is still there
     ignored.unlink()
     for step in ['s1', 's2', 's3']:
         result = run_block(clean, repo, steps, step)
