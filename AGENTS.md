@@ -44,7 +44,7 @@ Before rebuilding or replacing a provider executable, inspect active runs in eac
 |---|---|
 | Start or resume a run | [Deterministic setup](skills/using-loop-engine/SKILL.md#deterministic-setup) and the active provider skill |
 | Observe before mutation | [Choose an observation](skills/using-loop-engine/SKILL.md#choose-an-observation) |
-| Deliver code | [Lean-change skill](crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md) |
+| Deliver code | [Lean-change skill](crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md). Code work in this checkout uses profile b unless the approved plan names c. |
 | Draft or audit README/AGENTS | [Policy-document skill](crates/policy-document-provider/skills/using-policy-document-provider/SKILL.md) |
 | Research a question | [Research skill](crates/research-provider/skills/using-research-provider/SKILL.md) |
 | Coordinate independent drivers | [Coordinator skill](skills/coordinating-loop-engine/SKILL.md) |
