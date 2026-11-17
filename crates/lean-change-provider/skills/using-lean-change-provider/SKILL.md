@@ -227,8 +227,9 @@ the repository's own instructions say more about commits, worktrees, deleting or
    ```
 
    Removing a worktree or branch is deleting. Run this block only where the repository's own rules
-   let the driver remove them (the owner's say, or a standing exception); otherwise leave the
-   landed step worktrees and branches in place and report them. Git refuses to remove a worktree
+   let the driver remove them (the owner's say, or a standing exception, for example a rule that allows removal
+   once the work has merged to main and the worktree is clean, which is usually after `ready`: run the block then);
+   otherwise leave the landed step worktrees and branches in place and report them. Git refuses to remove a worktree
    that still holds uncommitted work. Land it first. Dropping a step's work that has not landed
    (`--force`, or `branch -D` on a step that did not land) always needs the owner.
 
