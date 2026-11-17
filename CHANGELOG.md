@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.52.0] - 2026-11-17
+
+- AGENTS.md: builders no longer ask for steps a standing grant or playbook rule already covers (merge and release under grant 46, Git steps under the recorded checkpoint decision). Destructive steps, deleting, buying things, the work Mac, run starts and intent approvals stay with the owner. Agent-run spend is reported, not asked about. Links the design principles. (#153)
+- docs: `gh run watch` examples poll with `--interval 60`. (#153)
+
 ## [0.51.0] - 2026-11-16
 
 lean-change: a malformed review or intent-check record is now refused when it is appended (profile b), with an error naming the fix, using the same check the gate runs. A plain-string `reviewer` is read as an agent of that name. New `lean-change review-check [--kind review|intent-check]` checks a record on stdin before you append it; both review packets name it. kgate profiles request 8Gi of ephemeral storage (#151).
