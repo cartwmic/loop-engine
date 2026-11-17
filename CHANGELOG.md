@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.54.0] - 2026-11-17
+
+Instruction and documentation text only; no code changes.
+
+- AGENTS.md: grant 51 (ask #1289) lets a lean-change step worktree and branch be removed once they are merged to main and clean, after checking both. This replaces the rule that all removals stay with the owner for that case. Requirement text can be decided by the lead as a two-way decision under playbook a4c181c4; a generate-PRD candidate still needs a human to accept it. A fourth deletion exception covers the release script's own cleanup. Code work uses lean-change profile b unless the approved plan names c. The Merge row gives the gated merge command. Citations corrected (90fe4b7b, grant 46 exclusions, #847). (#157)
+- docs/release-procedure.md, docs/agent-usage.md, docs/PRD.md (LE-211) and the lean-change skill: wording brought in line with AGENTS.md; "driver" and "run driver" used consistently. (#157)
+
 ## [0.53.0] - 2026-11-17
 
 Instruction text only; no code changes.
