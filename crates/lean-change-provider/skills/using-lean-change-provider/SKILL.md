@@ -180,10 +180,15 @@ When the plan has two or more steps that touch different files, build those step
 each in its own git worktree, and gate the joined tree once. Only you merge, append and request
 events; the engine and the provider never see the steps.
 
+The step worktrees, the step commits and the landing merges are the run driver's, under the run's
+recorded Git checkpoint decision (or the repository's own rule that stands in for it). If no such
+decision names you as committer, get one before you start. No builder commits. Where
+the repository's own instructions say more about commits, worktrees or deleting, they win.
+
 1. **Split.** In the plan (or your own notes, for work that is not hard) name each step, the files it
    owns, and which steps are independent. A file that two steps need (a CLI dispatch table, a
    registry, a README) belongs to one of them, or to a last wire-up step done after the join.
-   Commit the repository first: a step starts from `HEAD`, not from uncommitted edits.
+   Commit the repository first, if the checkpoint decision allows you to: a step starts from `HEAD`, not from uncommitted edits.
 2. **Start** every independent step in its own worktree, outside the repository:
 
    ```sh
@@ -220,8 +225,10 @@ events; the engine and the provider never see the steps.
    git -C "$REPO" worktree remove "$WORK/wt-$STEP" && git -C "$REPO" branch -q -D "step/$STEP"
    ```
 
-   Git refuses to remove a worktree that still holds uncommitted work. Land it first, or, if you
-   mean to drop that work, add `--force`.
+   Cleanup removes only steps that have landed, so it deletes no work. Git refuses to remove a
+   worktree that still holds uncommitted work. Land it first. Dropping a step's work that has not
+   landed (`--force`, or `branch -D` on a step that did not land) is deleting, not cleanup: it needs
+   the owner, and the checkpoint decision does not cover it.
 
 Verify, the old-vs-new check and the review are unchanged: they judge the merged tree in `REPO`.
 
