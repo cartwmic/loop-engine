@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.55.0] - 2026-11-17
+
+Instruction text, the lean-change skill's clean-up block, and its journey; no engine or provider code changes.
+
+- The step-worktree clean check now counts files git ignores: a step worktree is clean only when `git -C <worktree> status --porcelain --ignored` prints nothing. The lean-change skill's clean-up block refuses with `not clean: <step>` otherwise, so `git worktree remove` can no longer delete ignored files silently. AGENTS.md (grant 51), the skill and PRD LE-211 say the same. (#159)
+- Before the release script's stash is dropped, it is checked with `git stash show -p --include-untracked`, which shows the contents, not only file names. (#159)
+- The lean-change journey's parallel scenario covers a step holding only an ignored file. (#159)
+
 ## [0.54.0] - 2026-11-17
 
 Instruction and documentation text only; no code changes.
