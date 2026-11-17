@@ -24,7 +24,7 @@ Where sources overlap on checkout operations (proof, CI, handoff) and on who may
 
 Catalog selection follows the [engine skill’s Deterministic setup](skills/using-loop-engine/SKILL.md#deterministic-setup); README examples are not current-session owner authorization for production isolation.
 
-README.md is the human overview. Requirement changes need exact owner acceptance, a delegated approval of the intent as described in Document and Git safety, or, for requirement text, the lead's two-way decision under playbook a4c181c4 (the coordinator, when the lead asks); either way the commit also needs the recorded Git checkpoint decision. Unrelated recovery drafts remain drafts. Source integration alone establishes no requirement authority or semantic approval.
+README.md is the human overview. Requirement changes need exact owner acceptance, a delegated approval of the intent as described in Document and Git safety, or, for requirement text, the lead's two-way decision under playbook a4c181c4 (the coordinator, when the lead asks), except that a generate-PRD candidate still needs a human to accept it, as [the research provider guide](crates/research-provider/AGENTS.md) says; either way the commit also needs the recorded Git checkpoint decision. Unrelated recovery drafts remain drafts. Source integration alone establishes no requirement authority or semantic approval.
 
 When proposing provenance obligations, load [docs/PRD.md](docs/PRD.md) LE-107; this guide is referential, not a second product policy. Owner-accepted wording remains a proposal until committed in that PRD.
 
