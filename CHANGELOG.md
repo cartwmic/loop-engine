@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.53.0] - 2026-11-17
+
+Instruction text only; no code changes.
+
+- AGENTS.md: creating a worktree or branch follows the recorded Git checkpoint decision; removing one is deleting and goes to the owner (culprit-hunt and release worktrees excepted). The checkpoint decision now names who stages, commits, pushes and opens the PR. Run starts follow playbook f3404f07; intent approvals, model-binding amendments, deleting, buying things and the work Mac stay with the owner. The release-worktree exception cites grant 19 and playbook d9fa9f06. (#155)
+- lean-change skill, Parallel builders: defers to the repository's own rules on commits, worktrees and deleting; command blocks unchanged. (#155)
+
 ## [0.52.0] - 2026-11-17
 
 - AGENTS.md: builders no longer ask for steps a standing grant or playbook rule already covers (merge and release under grant 46, Git steps under the recorded checkpoint decision). Destructive steps, deleting, buying things, the work Mac, run starts and intent approvals stay with the owner. Agent-run spend is reported, not asked about. Links the design principles. (#153)
