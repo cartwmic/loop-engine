@@ -13,7 +13,7 @@ Providers that opt in (research and policy-document) also answer an optional `ca
 Use an explicit catalog `--config`, inspect unintended LOOP/XDG/home redirects, and keep artifacts outside the checkout. Never use a user catalog for tests. Load CLI `--help` for exact arguments. Mutations require a fresh action/full observation; compact/status views do not arm them.
 ## External-driver loop
 
-The engine stores and evaluates workflow state; it never executes agents, advisors or proof commands. The driver may use any agents or harness.
+The engine stores and evaluates workflow state; it never executes agents, advisors or proof commands. The driver may use any agents or harness. "The driver" is the one agent that drives a run through the CLI and owns progression; checkout-root `AGENTS.md` (External work, Terms) fixes the word for this repository, and there is no separate "run driver".
 
 1. Inspect action/full `show` and provider `commission`. Early commissions return `missing_inputs`; supply those inputs before treating a commission as ready.
 2. Do the work externally. Reviewers return judgments; the driver runs deterministic checks and owns progression.
