@@ -225,10 +225,11 @@ the repository's own instructions say more about commits, worktrees or deleting,
    git -C "$REPO" worktree remove "$WORK/wt-$STEP" && git -C "$REPO" branch -q -D "step/$STEP"
    ```
 
-   Cleanup removes only steps that have landed, so it deletes no work. Git refuses to remove a
-   worktree that still holds uncommitted work. Land it first. Dropping a step's work that has not
-   landed (`--force`, or `branch -D` on a step that did not land) is deleting, not cleanup: it needs
-   the owner, and the checkpoint decision does not cover it.
+   Removing a worktree or branch is deleting. Run this block only where the repository's own rules
+   let the driver remove them (the owner's say, or a standing exception); otherwise leave the
+   landed step worktrees and branches in place and report them. Git refuses to remove a worktree
+   that still holds uncommitted work. Land it first. Dropping a step's work that has not landed
+   (`--force`, or `branch -D` on a step that did not land) always needs the owner.
 
 Verify, the old-vs-new check and the review are unchanged: they judge the merged tree in `REPO`.
 
