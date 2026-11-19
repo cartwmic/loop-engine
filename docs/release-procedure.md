@@ -1,6 +1,6 @@
 # Authorized release procedure
 
-This is the authorized release sequence. Checkout-root `AGENTS.md` links here and still governs Git safety, authorization and proof; the text below moved from its "Authorized release sequence" section.
+This is the authorized release sequence: the steps, their order and their commands. Checkout-root `AGENTS.md` links here and governs what authorizes each step, Git safety and proof; where the two overlap on those, `AGENTS.md` wins (its Authority section lists this file as source 8). The text below moved from its "Authorized release sequence" section, which keeps a short pointer here.
 
 ## Authorized release sequence
 

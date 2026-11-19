@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Cut a loop-engine release after a merge to main, as one command.
 #
-# Runs the release sequence in AGENTS.md ("Authorized release sequence") end to
-# end and stops at the first failure, naming the step:
+# Runs the release sequence in docs/release-procedure.md ("Authorized release
+# sequence") end to end and stops at the first failure, naming the step:
 #   prepare  scripts/prepare-release.sh in a fresh worktree from origin/main,
 #            plus the caller's CHANGELOG notes
 #   pr       commit on release/vX.Y.Z, push, open the release-prep PR

@@ -19,8 +19,9 @@ Each source governs its named scope:
 5. Provider README: that provider's public contract.
 6. Engine and provider skills: driving procedure.
 7. [docs/agent-usage.md](docs/agent-usage.md): generic CLI forms and loop operations.
+8. [docs/release-procedure.md](docs/release-procedure.md): the release steps, their order and their commands.
 
-Where sources overlap on checkout operations (proof, CI, handoff) and on who may commit, create or remove worktrees, or start a run, root `AGENTS.md` wins. Nested guides and `docs/agent-usage.md` defer to its Workflow and Boundary checks rather than restate them.
+Where sources overlap on checkout operations (proof, CI, handoff) and on who may commit, create or remove worktrees, or start a run, root `AGENTS.md` wins. Nested guides and `docs/agent-usage.md` defer to its Workflow and Boundary checks rather than restate them. `docs/release-procedure.md` governs how a release runs; root `AGENTS.md` still governs what authorizes each release step, Git safety and proof.
 
 Catalog selection follows the [engine skill’s Deterministic setup](skills/using-loop-engine/SKILL.md#deterministic-setup); README examples are not current-session owner authorization for production isolation.
 
