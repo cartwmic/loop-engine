@@ -69,6 +69,41 @@ Every proposed requirement must have one and only one evidence mapping. The mapp
 
 This extract path is not required to start a lean-change run.
 
+## Converting an accepted PRD
+
+Use this when a human has already accepted a PRD written as prose and you are asked to turn it into a repository PRD with requirement ids. It is a different job from the extraction above: the accepted prose is the authority, and the conversion must not change it. It needs no new run or provider. Do the five parts below in the session.
+
+### Inclusion test
+
+A record is a requirement only if it is a current, independently falsifiable product obligation: someone could check the product and show it false. A goal, non-goal, journey, rationale, measurement plan or open question is not a requirement, even when it is worded with "must" or "must not". Do not measure completeness by "every source identifier is mapped": that pushes goals and journeys into requirements and still misses a real obligation. Measure it by "every obligation in the prose has a record". When you cannot tell, stop and ask the owner. Do not decide it yourself.
+
+### Keep the accepted prose
+
+Agree the document shape with the owner before you extract anything: the accepted prose kept as it is, plus a requirements-only index derived from it, and which one wins when they disagree (recommend the prose). Never paraphrase or compress the prose. You may add ids, status lines and the index around it. Copy defects of the source, such as a contradiction or an unverifiable statement, as written, label them next to the text, and return them to the owner. Do not fix them silently.
+
+### Owner sign-off on the outline
+
+Before any id is given out and before any expensive review, show the owner the outline (the sections of the prose and of the index), the inclusion rules, and a few representative records, including one you left out and why. Allocate ids only after the owner approves the outline. The first check should be the cheap one.
+
+### Defective samples
+
+Test the conversion against each of these before you hand it over. Keep one small sample file per kind; a process that passes one of them is wrong.
+
+1. A non-goal worded as "must not" became a requirement.
+2. A goal that looks measurable (a number and a unit) became a requirement with no obligation behind it.
+3. A journey repeats a requirement as a second record.
+4. A source contradiction: two statements disagree and the conversion quietly picked one or smoothed them together.
+5. An unverifiable requirement: no check could show it false. Work out how each record could be verified before you assign proof; one proof class for every record is wrong.
+6. An omitted obligation hidden behind complete-looking id coverage: every source id has a record, but one obligation sentence has none.
+
+The script catches the prose-level part: prose that was dropped, changed or moved, which includes a contradiction that was smoothed by editing the text (4) and the loss of the sentence behind an omitted obligation (6) when the sentence itself was dropped. The script does not catch wrong inclusion (1, 2, 3), a record with no way to be falsified (5), an obligation whose prose was kept but never got a record (6), or a contradiction left unlabelled (4). Those need the owner or a reviewer. Give at least one reviewer the job of challenging the framing and the requirement boundary, not only checking conformance, and give each reviewer the converted file itself with its sha256, not a report about it.
+
+### Check the prose
+
+Run `python3 scripts/check-prd-prose.py ACCEPTED.md CONVERTED.md` from a Loop Engine checkout. The script is in that repository's `scripts/` directory and is not shipped with the binary, so from another repository run it from a checkout or copy that one file. It reads both files and checks that every non-blank line of the accepted prose is a whole line of the converted file, in the same order. Added lines anywhere (ids, status lines, an index, lines between list items) are allowed. Only line endings and trailing spaces are ignored; a reflowed line counts as changed. It exits 0 when the prose is kept, 1 with a report of each line that was dropped, changed (with the closest converted line) or moved, and 2 when a file cannot be read. Run it after every edit, before every review.
+
+Report three results separately, and never let one stand for another: grammar validity (`bookends-check candidate`, which checks grammar only), prose preservation (this script) and whether each record can really be verified (a reviewer's judgment).
+
 ## Gate map
 
 Same research topology as `standard.json`: `scope → gather → verify → synthesize → end`, plus check-free owning-phase `revise*` edges. Checked events, evidence rules, and production-start isolation rules are those in `skills/using-research-provider/SKILL.md`. Do not treat generate-PRD as a lean-change workflow (`explore` / `intent-approval` / `implement` / `verify`).
