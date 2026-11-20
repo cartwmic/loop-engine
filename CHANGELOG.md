@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.60.0] - 2026-11-20
+
+## [0.60.0] - 2026-11-20
+
+Nested runs: split a plan too big for one run into a parent run and child runs, with guidance only. The engine does not change.
+
+- docs/agent-usage.md: new "Nested runs" section. A parent is an ordinary lean-change run whose part checks read each child run's state with `loop-engine show --view full` and `jq`. It gives the two check lines (the owner's own words, or delegated allowed), the `child-run` and `parent-run` link records, the child's first constraint quoting its parent criterion, and how a child starts, reports, retries and is replaced. The machine that runs `lean-change verify` on a parent needs `jq`.
+- using-loop-engine, using-lean-change-provider and coordinating-loop-engine skills point to the new section.
+- scripts/lean-change-journey.py: new `nested` scenario, a parent with two children walked through the real CLIs, reading both check lines from the docs. It needs `jq` and fails with a clear message when it is missing. (#174)
+
 ## [0.59.0] - 2026-11-20
 
 - lean-change docs: "the owner" means the user. When the user's instructions name someone else to approve a repo's intents, that approver records a standing-grant delegation citing those instructions and quoting the user's words (#172).
