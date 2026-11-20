@@ -210,7 +210,7 @@ the repository's own instructions say more about commits, worktrees, deleting or
 3. **Build all at once.** Launch one builder per step together, each with its worktree as its working
    directory, and wait for all of them. Tell each builder: edit only files in this worktree; run only
    this step's focused tests (one test file, or one crate with a filter), or none; never run the full
-   test suite, a full or workspace build, a journey or a heavy-gate job; never commit, merge or call
+   test suite, a full or workspace build, a journey or any other heavy job; never commit, merge or call
    `loop-engine`. For Rust, give the builders one shared `CARGO_TARGET_DIR` outside the worktrees.
 4. **Land** each finished step, in plan order:
 
@@ -227,7 +227,7 @@ the repository's own instructions say more about commits, worktrees, deleting or
    `conflict`, resolve the conflict yourself, or build that step again from the landed tree (a new
    worktree off the new `HEAD`).
 5. **Join, then gate once.** After the last independent step lands, run the full build and the full
-   test suite once, in `REPO` (through heavy-gate or kgate, whichever the repository uses; its own `AGENTS.md` says
+   test suite once, in `REPO` (through kgate where the repository uses it; its own `AGENTS.md` says
    which commands run, where, and how the result is recorded). Fix what they find
    in `REPO`, then do the wire-up step, if any. Steps that depend on others are built after the join,
    the same way.
