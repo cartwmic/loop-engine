@@ -37,6 +37,8 @@ Outcome: each driver finishes or returns a durable blocker independently of chat
 8. Separate execution facts, conformance and independent judgment in final handoff.
    Preserve pending calibration, Git authorization and hosted-delivery obligations.
 
+To split one outcome that is too big for a single run into parts, use a parent run with child runs rather than independent drivers: see [Nested runs](../../docs/agent-usage.md#nested-runs).
+
 Example: retain a research driver's missing-source blocker while a document driver
 finishes its own outcome. Return newly supplied evidence only to the blocked driver;
 that driver observes its current run before continuing. Do not advance the peer run.

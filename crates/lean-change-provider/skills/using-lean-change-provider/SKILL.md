@@ -252,6 +252,16 @@ the repository's own instructions say more about commits, worktrees, deleting or
 
 Verify, the old-vs-new check and the review are unchanged: they judge the merged tree in `REPO`.
 
+## Nested runs
+
+A plan too big for one run is split by the driver's proposal; the owner decides by approving the parent's intent. The shapes and procedures are in checkout-root `docs/agent-usage.md#nested-runs`. Read it before you write a parent. In short:
+
+1. **Choose the smallest form.** One run; one run with [parallel builders](#parallel-builders); a parent with child runs; or unrelated runs with no parent.
+2. **Write the parent.** A lean-change run with `hard` true: one criterion per part, each naming its approver ("owner's own words" or "delegated allowed") and carrying that approver's check line, with `old` `none`. Add joined criteria for the whole result. Verify the parent on the machine that holds the catalog.
+3. **Write each child.** An ordinary run. Its first constraint quotes the parent criterion word for word. Its intent is approved by the approver the parent names.
+4. **Retry inside a child.** `revise` back to `implement`; no new approval. Replace a child only when it is abandoned, and approve the updated parent intent and the new child's intent by the same approvers.
+5. **Show the owner both sides.** Put the child's intent next to the parent criterion with the read commands in the guide. The parent's outcome map is the owner's map of the whole plan.
+
 ## Outcome map
 
 At the end, make one page for the owner. It is Accountable Review's (AR) page for the run's change, with the section "What was approved and what ran" added at the top. The section comes from the run's records. `lean-change outcome-map` makes it from the show and prints HTML to stdout. It writes no file.

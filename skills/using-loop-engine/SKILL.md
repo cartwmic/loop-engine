@@ -163,6 +163,15 @@ Read in this order; stop when you can name the next action.
 
 Fix a finding that passes all four. **Name the failed test:** decline a finding that fails one with a reason that starts with it (`real:`, `useful:`, `maintainable:` or `in intent:`). A finding that fails `in intent` is a follow-up: mention it as "for a follow-up: ..." and never let it block. List the declined findings with their reasons, and the follow-ups, in what you report to the owner so they can overrule. The active provider skill says how a rejection is recorded.
 
+## Nested runs
+
+A plan too big for one run can be split into a parent run and child runs without any engine change. The parent is an ordinary run whose per-part checks read each child. Two context records link them. [Nested runs](../../docs/agent-usage.md#nested-runs) owns the record shapes, the two per-part check lines and the procedures; this is the engine's side of them.
+
+- Link with `append`: a `child-run` record on the parent and a `parent-run` record on the child. The engine stores and pages them and checks neither.
+- Start each child with `start --id PARENT.part-N`. A run id cannot be reused, so a replacement child gets a new id.
+- End an abandoned child as under Ending a run above: the stop decision, then an `external-close-note` that names the replacement, then `terminate`.
+- Stopping a parent leaves its children as they are. Stop each one.
+
 ## Advice and record recovery
 
 On a supporting runtime, inspect `show.result.advice_policy` before departure;

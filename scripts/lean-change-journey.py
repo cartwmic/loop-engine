@@ -5,6 +5,7 @@ import html
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SKILL = REPO_ROOT / 'crates/lean-change-provider/skills/using-lean-change-provider/SKILL.md'
 PARALLEL_SECTION = '## Parallel builders'
 OUTCOME_SECTION = '## Outcome map'
+NESTED_SECTION = '## Nested runs'
+NESTED_DOCS = REPO_ROOT / 'docs/agent-usage.md'
 REVIEW_MAP = '$HOME/.local/share/agent-harness/external-skills/accountable-review/review-map/SKILL.md'
 FIXTURES = REPO_ROOT / 'scripts/fixtures/outcome-map'
 AR_PAGE = FIXTURES / 'ar-page.html'
@@ -35,7 +38,7 @@ OUTCOME_GOAL = 'Greet Bob with "Hello, Bob!" & say <b>hi</b>.'
 GUARD_REASON = 'a guard on the proof file, which the old tree cannot inform'
 REJECT_REASON = 'The goal names no empty name, so the criteria cover it.'
 FIX_REASON = 'The intent now names the exact greeting.'
-SCENARIOS = ['b', 'c', 'hard', 'old-vs-new', 'parallel', 'outcome-map', 'outcome-map-skill', 'outcome-map-fixture', 'outcome-map-browser', 'findings-v1', 'delegated']
+SCENARIOS = ['b', 'c', 'hard', 'old-vs-new', 'parallel', 'outcome-map', 'outcome-map-skill', 'outcome-map-fixture', 'outcome-map-browser', 'findings-v1', 'delegated', 'nested']
 # The stand-in full gate logs every call, then fails when the finished steps word their files differently: each step alone passes, the joined tree does not.
 GATE = ('printf "%s %s\\n" "$(pwd -P)" "$(git rev-parse HEAD)" >> "$GATE_LOG"\n'
         'words=$(sed "s/^[a-z]*: //" one.txt two.txt | grep -vx todo | sort -u | wc -l)\n'
@@ -1352,11 +1355,270 @@ def delegated_scenario(engine, provider, skill, work):
     assert j.state() == 'implement'
 
 
+def nested_section(docs):
+    """The lines of the docs' Nested runs section."""
+    return skill_section(docs, NESTED_SECTION)
+
+
+def nested_check_line(docs, label):
+    """The sh block that follows the bold label in the section, verbatim: the guidance's own check line for one approver."""
+    lines, found = nested_section(docs), False
+    for index, line in enumerate(lines):
+        if line.startswith(label):
+            found = True
+            if lines[index + 2:index + 3] == ['```sh']:
+                return lines[index + 3]
+    raise SystemExit(f'{docs}: no sh block after "{label}"' if found else f'{docs}: no "{label}" in the Nested runs section')
+
+
+def nested_constraint(docs, parent, intent_id, criterion, statement):
+    """The first constraint of a child intent, built from the template the docs give."""
+    for line in nested_section(docs):
+        if line.startswith('`Delivers criterion'):
+            template = line.strip('`')
+            for placeholder, value in [('<id>', criterion), ('<parent>', parent), ('<parent intent id>', intent_id),
+                                       ('<the criterion statement, copied exactly>', statement)]:
+                assert placeholder in template, (placeholder, template)
+                template = template.replace(placeholder, value)
+            return template
+    raise SystemExit(f'{docs}: the Nested runs section has no "Delivers criterion" template')
+
+
+class Nested:
+    """Parent and child runs of one journey: one repository, one catalog, one engine and one provider."""
+
+    OWN = "**Owner's own words.**"
+    DELEGATED = '**Delegated allowed.**'
+
+    def __init__(self, engine, provider, docs, work):
+        if not shutil.which('jq'):
+            raise SystemExit('the nested scenario needs jq on PATH: the part check lines in docs/agent-usage.md use it (the kgate image has none; download a static jq first)')
+        self.engine, self.provider, self.docs, self.work = engine, provider, docs, work
+        self.repo = work / 'repo'
+        self.repo.mkdir()
+        git(self.repo, 'init', '-q')
+        git(self.repo, 'config', 'user.email', 'j@example.invalid')
+        git(self.repo, 'config', 'user.name', 'j')
+        (self.repo / 'README.md').write_text('fixture\n')
+        git(self.repo, 'add', '-A')
+        git(self.repo, 'commit', '-qm', 'base')
+        self.journey = Journey(engine, provider, work)  # every run shares this catalog and config
+        self.lines = {approver: nested_check_line(docs, approver) for approver in [self.OWN, self.DELEGATED]}
+
+    def start(self, run_id, profile_name):
+        """Start a profile c run on the shared catalog; the returned journey drives it."""
+        profile = self.work / f'{profile_name}.json'
+        profile.write_text(subprocess.run([str(self.provider), 'setup', '--profile', 'c', '--repo', str(self.repo)], text=True, capture_output=True, check=True).stdout)
+        j = Journey(self.engine, self.provider, self.work)
+        j.run_id = run_id
+        j.call('start', '--id', run_id, 'lean-change', '@' + str(profile), run_id.replace('.', '/'))
+        return j
+
+    def line(self, approver, child):
+        """The docs' check line for this approver and child, with the real program, catalog and child id in it."""
+        text = self.lines[approver]
+        for old, new in [('loop-engine --database DB ', f'{shlex.quote(str(self.engine))} --database {shlex.quote(str(self.journey.database))} '), (' CHILD |', f' {child} |')]:
+            assert old in text, (old, text)
+            text = text.replace(old, new)
+        return text
+
+    def part(self, criterion, approver, child, statement):
+        check = {'argv': ['sh', '-c', self.line(approver, child)], 'timeout_ms': 60000}
+        old = {'expect': 'none', 'reason': 'The check reads the state of another run, not the code, so the old code cannot inform it.'}
+        return {'id': criterion, 'statement': statement, 'check': check, 'old': old}
+
+    def parent_intent(self, parts, hard=True, joined=None):
+        criteria = list(parts)
+        if joined:
+            criteria.append({'id': 'joined', 'statement': 'one.txt and two.txt both exist.', 'old': {'expect': 'fails'},
+                             'check': {'argv': ['sh', '-c', 'test -f one.txt && test -f two.txt'], 'timeout_ms': 10000}})
+        return {'author': WORKER, 'goal': 'Add one.txt and two.txt.', 'constraints': ['Each part is its own child run.'], 'hard': hard, 'criteria': criteria}
+
+    def approve(self, j, revision, text='Yes, as written.'):
+        j.append(f'own-{revision}', 'owner-decision', {'checkpoint': 'intent', 'subject': 'intent', 'subject_revision': revision,
+                                                      'decision': 'approve', 'text': text, 'actor': OWNER})
+
+    def approve_parent(self, j, revision, intent_doc):
+        """Intent, owner's own words and, for a hard intent, the plan: the parent ends in implement."""
+        j.append(revision, 'intent', intent_doc)
+        j.event('intent-ready')
+        self.approve(j, revision)
+        j.event('approved-hard' if intent_doc['hard'] else 'approved')
+        if intent_doc['hard']:
+            j.append(f'plan-{revision}', 'plan', {'intent': revision, 'text': 'Two children, one per part.'})
+            j.event('planned')
+        assert j.state() == 'implement'
+
+    def link(self, parent, child, criterion, intent_id, replaces=None):
+        link = {'run': child.run_id, 'criterion': criterion}
+        if replaces:
+            link['replaces'] = replaces
+        parent.append(f'child-{child.run_id}', 'child-run', link)
+        child.append('parent-run', 'parent-run', {'run': parent.run_id, 'intent': intent_id, 'criterion': criterion})
+
+    def child_intent(self, parent, intent_id, criterion, filename):
+        statement = self.statement(parent, criterion)
+        first = nested_constraint(self.docs, parent.run_id, intent_id, criterion, statement)
+        check = {'argv': ['sh', '-c', f'test -f {filename}'], 'timeout_ms': 10000}
+        return {'author': WORKER, 'goal': f'Add {filename}.', 'constraints': [first, f'Touch only {filename}.'], 'hard': False,
+                'criteria': [{'id': 'c1', 'statement': f'{filename} exists.', 'check': check, 'old': {'expect': 'fails'}}]}
+
+    def statement(self, parent, criterion):
+        """The parent criterion's statement, read from the engine as the guidance says."""
+        value = parent.call('read', parent.run_id, '--kind', 'record', '--id', self.intent_id(parent), '--pointer', '/data/criteria')['value']
+        return next(c['statement'] for c in value if c['id'] == criterion)
+
+    def intent_id(self, parent):
+        return next(r['id'] for r in reversed(parent.call('show', '--view', 'full', parent.run_id)['context']) if r['kind'] == 'intent')
+
+    def approve_child(self, child, approval='own', revision='intent-1'):
+        """Child from explore to implement. approval is 'own' (the owner's words) or 'delegated'."""
+        child.event('intent-ready')
+        child.append(f'approval-{revision}', 'owner-decision', self.decision(approval, revision))
+        child.event('approved')
+        assert child.state() == 'implement'
+
+    def decision(self, approval, revision, verdict='approve'):
+        decision = {'checkpoint': 'intent', 'subject': 'intent', 'subject_revision': revision, 'decision': verdict}
+        if verdict == 'reject':
+            return {**decision, 'target': 'intent', 'reason': 'Start this part again.', 'text': 'Stop this run; start the part again.', 'actor': OWNER}
+        if approval == 'own':
+            return {**decision, 'text': 'Yes, this part.', 'actor': OWNER}
+        return {**decision, 'text': 'The approved plan covers this part.', 'actor': {'name': 'driver', 'kind': 'agent'},
+                'delegation': {'basis': 'approval', 'source': 'journey', 'quote': 'go ahead with the plan', 'covers': ['c1']}}
+
+    def complete(self, child, filename, override=False):
+        """Child from implement to the end: the file is written and verified, or the end is forced with an override."""
+        child.event('ready')
+        if not override:
+            (self.repo / filename).write_text('x\n')
+        child.append('v-1', 'verification', child.verify())
+        if override:
+            attestation = {'state_visit': child.call('show', '--view', 'full', child.run_id)['state_visit'], 'owner': 'journey-owner', 'reason': 'Journey: force the end.'}
+            child.call('event', '--override', json.dumps(attestation), child.run_id, 'verified')
+        else:
+            child.event('verified')
+        final = child.call('show', '--view', 'full', child.run_id)
+        assert final['current_state'] == 'end' and final['lifecycle'] == 'final' and final['has_overrides'] == override, final
+
+    def finish(self, child, filename, approval='own', override=False):
+        self.approve_child(child, approval)
+        self.complete(child, filename, override)
+
+    def part_passes(self, approver, child):
+        """Run the docs' check line itself, as the parent's verify does."""
+        return subprocess.run(['sh', '-c', self.line(approver, child)], cwd=self.repo, capture_output=True, text=True).returncode == 0
+
+    def exits(self, parent, v_id):
+        """The exit code of each criterion in the parent's verification record."""
+        verification = next(r for r in parent.call('show', '--view', 'full', parent.run_id)['context'] if r['id'] == v_id)
+        return {r['criterion']: r['exit_code'] for r in verification['data']['results']}
+
+
+def nested_scenario(engine, provider, docs, work):
+    # bookends:LE-206 — a parent cannot end while a part check fails: unfinished, terminated, overridden and delegated children are each refused.
+    n = Nested(engine, provider, docs, work)
+    stmt = lambda number, who: (f'{number}.txt exists. Its child run has finished without overrides, and its intent was approved by {who}.')
+    parent = n.start('nest', 'nest-profile')
+    parts = [n.part('part-1', n.OWN, 'nest.part-1', stmt('one', "the owner's own words")), n.part('part-2', n.OWN, 'nest.part-2', stmt('two', "the owner's own words"))]
+    n.approve_parent(parent, 'intent-1', n.parent_intent(parts, joined=True))
+
+    # Two children, started and linked once the parent is in implement; the first quotes its parent criterion and is finished by the owner's words.
+    first, second = n.start('nest.part-1', 'part-1-profile'), n.start('nest.part-2', 'part-2-profile')
+    n.link(parent, first, 'part-1', 'intent-1')
+    n.link(parent, second, 'part-2', 'intent-1')
+    first.append('intent-1', 'intent', n.child_intent(parent, 'intent-1', 'part-1', 'one.txt'))
+    assert first.call('show', '--view', 'full', first.run_id)['context'][-1]['data']['constraints'][0].startswith('Delivers criterion part-1 of run nest (intent-1), which reads: one.txt exists.')
+    second.append('intent-1', 'intent', n.child_intent(parent, 'intent-1', 'part-2', 'two.txt'))
+    n.finish(first, 'one.txt')
+    links = parent.call('read', parent.run_id, '--kind', 'context', '--record-kind', 'child-run')['items']
+    assert [(i['scalars']['run'], i['scalars']['criterion']) for i in links] == [('nest.part-1', 'part-1'), ('nest.part-2', 'part-2')], links
+    back = first.call('read', first.run_id, '--kind', 'context', '--record-kind', 'parent-run')['items']
+    assert back[0]['scalars'] == {'run': 'nest', 'intent': 'intent-1', 'criterion': 'part-1'}, back
+
+    # A child approved but still in implement is unfinished: its part is refused, so the parent cannot end.
+    n.approve_child(second)
+    assert n.part_passes(n.OWN, 'nest.part-1') and not n.part_passes(n.OWN, 'nest.part-2') and not n.part_passes(n.DELEGATED, 'nest.part-2')
+    parent.event('ready')
+    (n.repo / 'two.txt').write_text('x\n')
+    parent.append('v-1', 'verification', parent.verify())
+    assert n.exits(parent, 'v-1')['part-1'] == 0 and n.exits(parent, 'v-1')['part-2'] != 0
+    parent.refused('verified', 'verification-incomplete', 'verify')
+    (n.repo / 'two.txt').unlink()
+
+    # The second child is abandoned: closed with a note that names its replacement, then terminated. Its part is refused.
+    parent.event('revise')
+    parent.event('revise')
+    second.append('abandon', 'owner-decision', n.decision('own', 'intent-1', 'reject'))
+    second.append('close-note', 'external-close-note', {'author': WORKER, 'text': 'The owner stopped this part before any file was written. Replaced by run nest.part-2b.', 'replaced_by': 'nest.part-2b'})
+    second.state()
+    second.call('terminate', second.run_id)
+    ended = second.call('show', '--view', 'full', second.run_id)
+    assert ended['lifecycle'] == 'terminated', ended
+    assert not n.part_passes(n.OWN, 'nest.part-2') and not n.part_passes(n.DELEGATED, 'nest.part-2')
+
+    # The parent names the replacement in its part check; the owner approves that intent. Both approvers' lines then refuse the unfinished replacement.
+    parts[1] = n.part('part-2', n.OWN, 'nest.part-2b', stmt('two', "the owner's own words"))
+    n.approve_parent(parent, 'intent-2', n.parent_intent(parts, joined=True))
+    replacement = n.start('nest.part-2b', 'part-2b-profile')
+    n.link(parent, replacement, 'part-2', 'intent-2', replaces='nest.part-2')
+    links = parent.call('read', parent.run_id, '--kind', 'context', '--record-kind', 'child-run')['items']
+    assert [i['scalars'].get('replaces') for i in links] == [None, None, 'nest.part-2'], links
+    replacement.append('intent-1', 'intent', n.child_intent(parent, 'intent-2', 'part-2', 'two.txt'))
+
+    # A child approved by delegation is refused under "owner's own words" and accepted under "delegated allowed"; the parent follows the same two lines.
+    n.finish(replacement, 'two.txt', approval='delegated')
+    assert not n.part_passes(n.OWN, 'nest.part-2b') and n.part_passes(n.DELEGATED, 'nest.part-2b')
+    parent.event('ready')
+    parent.append('v-2', 'verification', parent.verify())
+    assert n.exits(parent, 'v-2')['part-1'] == 0 and n.exits(parent, 'v-2')['part-2'] != 0
+    parent.refused('verified', 'verification-incomplete', 'verify')
+    parent.event('revise')
+    parent.event('revise')
+    parts[1] = n.part('part-2', n.DELEGATED, 'nest.part-2b', stmt('two', 'a delegated approval'))
+    n.approve_parent(parent, 'intent-3', n.parent_intent(parts, joined=True))
+    parent.event('ready')
+    parent.append('v-3', 'verification', parent.verify())
+    assert set(n.exits(parent, 'v-3').values()) == {0}, n.exits(parent, 'v-3')
+    parent.event('verified')
+    done = parent.call('show', '--view', 'full', parent.run_id)
+    assert done['current_state'] == 'end' and done['lifecycle'] == 'final' and not done['has_overrides'], done
+
+    # The owner's map of the whole plan is the parent's outcome map: one row per part.
+    page = parent.tool('outcome-map', parent.show_text())
+    for criterion in ['part-1', 'part-2', 'joined']:
+        assert criterion in page, criterion
+
+    # A child forced to its end with an override reads final, and still does not satisfy a parent, under either line.
+    forced_parent = n.start('forced', 'forced-profile')
+    forced = n.start('forced.part-1', 'forced-part-profile')
+    part = n.part('part-1', n.DELEGATED, 'forced.part-1', 'three.txt exists. Its child run has finished without overrides.')
+    n.approve_parent(forced_parent, 'intent-1', n.parent_intent([part], hard=False))
+    n.link(forced_parent, forced, 'part-1', 'intent-1')
+    forced.append('intent-1', 'intent', n.child_intent(forced_parent, 'intent-1', 'part-1', 'three.txt'))
+    n.finish(forced, 'three.txt', override=True)
+    assert not n.part_passes(n.OWN, 'forced.part-1') and not n.part_passes(n.DELEGATED, 'forced.part-1')
+    forced_parent.event('ready')
+    forced_parent.append('v-1', 'verification', forced_parent.verify())
+    forced_parent.refused('verified', 'verification-incomplete', 'verify')
+
+    # The latest intent approval is the one that counts: a child first approved in the owner's words, then revised and approved by delegation, is a delegated child.
+    revised = n.start('revised.part-1', 'revised-profile')
+    revised.append('intent-1', 'intent', n.child_intent(parent, 'intent-1', 'part-1', 'four.txt'))
+    n.approve_child(revised)
+    revised.event('revise')
+    revised.append('intent-2', 'intent', n.child_intent(parent, 'intent-1', 'part-1', 'four.txt'))
+    n.approve_child(revised, 'delegated', 'intent-2')
+    n.complete(revised, 'four.txt')
+    assert not n.part_passes(n.OWN, 'revised.part-1') and n.part_passes(n.DELEGATED, 'revised.part-1')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--engine')
     parser.add_argument('--provider')
     parser.add_argument('--skill', default=str(DEFAULT_SKILL))
+    parser.add_argument('--docs', default=str(NESTED_DOCS), help='the usage guide the nested scenario takes its check lines from')
     parser.add_argument('--only', choices=SCENARIOS, help='run one scenario')
     parser.add_argument('--chromium', help='headless Chromium for outcome-map-browser; without it that scenario is skipped')
     parser.add_argument('--keep-records', help='directory to keep the findings-v1 review record in (the record as appended, and as the run stores it)')
@@ -1368,7 +1630,7 @@ def main():
         assert len(intent()['criteria']) == 2 and review('t', True)['findings'] and intent_check(fail='terms')['findings']
         assert len(v1_review('t', [], v1_findings())['answers']) == 7 and len(review('t', False)['answers']) == 6
         assert [f.get('severity') for f in v1_findings()] == ['blocking', 'blocking', 'note'] and 'consequence' not in v1_findings()[1]
-        assert 'delegated' in SCENARIOS
+        assert 'delegated' in SCENARIOS and 'nested' in SCENARIOS
         print('lean-change journey self-test passed')
         return
     for name in ['engine', 'provider']:
@@ -1387,6 +1649,7 @@ def main():
         ('outcome-map-browser', lambda w: outcome_map_browser_scenario(provider, args.chromium, w)),
         ('findings-v1', lambda w: findings_v1_scenario(engine, provider, w, Path(args.keep_records).resolve() if args.keep_records else None)),
         ('delegated', lambda w: delegated_scenario(engine, provider, skill, w)),
+        ('nested', lambda w: nested_scenario(engine, provider, Path(args.docs), w)),
     ]
     for name, action in scenarios:
         if args.only not in (None, name):

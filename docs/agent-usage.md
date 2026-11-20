@@ -126,6 +126,95 @@ The run ends `terminated`, never `final`, and nothing claims completion. The eng
 not check the cited records. Walk the remaining edges with `event --override` only if the
 owner wants a completed-with-overrides outcome instead.
 
+## Nested runs
+
+A plan that is too big for one run can be split into a parent run and child runs. Loop Engine's program does not change and does not know about it. A parent is an ordinary lean-change run whose checks read the state of other runs. Two small records link the runs. A run with no link records and no child check is an ordinary single run.
+
+The parent is a lean-change run, because the gate on each part is a lean-change criterion check; it needs a Git repository. The part checks read the catalog on the machine that runs `lean-change verify`, so verify a parent there, not with `--runner kgate`. They use `jq`, which must be on that machine: without it every part check fails. The link records and the part checks use only engine commands, so a child may be any provider's run. Nothing here has been run for a child that is itself a parent.
+
+### When to split
+
+No number decides. The driver proposes the split while it explores; the owner decides by approving the parent's intent, which is the split. Nothing in code measures size. Pick the smallest form that fits:
+
+1. **One run.** The default. The owner can hold the whole intent in their head, and one review can read the whole diff.
+2. **One run with parallel builders.** The steps touch different files but share one intent and one approval (lean-change skill, Parallel builders).
+3. **A parent with child runs.** Use it when at least one of these holds: a part needs its own approved intent, because the owner would want to approve or refuse it alone; the criteria fall into groups that can each be built, checked and judged without the others; different drivers or providers will do different parts; one review could not read the joined diff in one pass.
+4. **A series of runs with no parent.** Use it when the parts share no plan and no joined result.
+
+### The parent intent
+
+The parent is a lean-change run with `hard` true, so it also carries a `plan` record. Its intent holds:
+
+- the goal: the whole outcome, in plain words;
+- one criterion per part. The statement says what the part delivers and names who must approve the child's intent: "owner's own words" or "delegated allowed" (see the next subsection). The check is one of the two lines below, naming the child run by id. Its `old` is `{"expect": "none", "reason": "..."}`, because the check reads the state of another run, not the code;
+- joined criteria, when the parts must work together, each checking the joined result;
+- a `plan` record: the order of the children, which run at the same time, and each child's run id, worktree and branch.
+
+Keep the child's run id out of the statement and in the check. Then replacing a child changes only a check. Give children ids `PARENT.part-N` and labels `PARENT/part-N`, for people reading `list`. A run id cannot contain `/`, and `list --label` matches substrings, so neither is the link.
+
+Loop Engine does not know which parts need whose approval. The parent intent says so, and the owner approves that intent. Choose "owner's own words" for a part the owner wants to approve in person. Choose "delegated allowed" where the owner has said a driver may approve for them.
+
+### Link records
+
+Two context records tie the runs together. The engine stores and pages them. It does not check them, and a record can name a run that does not exist; the part check still fails closed, because an unknown run does not pass.
+
+- On the parent, one `child-run` record per child: `{"run": "<child id>", "criterion": "<parent criterion id>"}`, with `"replaces": "<old child id>"` on a replacement.
+- On each child, one `parent-run` record: `{"run": "<parent id>", "intent": "<parent intent id>", "criterion": "<parent criterion id>"}`.
+
+```sh
+loop-engine ... append --record-id child-1 PARENT child-run '{"run": "PARENT.part-1", "criterion": "part-1"}'
+loop-engine ... append --record-id parent-1 PARENT.part-1 parent-run '{"run": "PARENT", "intent": "intent-1", "criterion": "part-1"}'
+```
+
+### The check for each part
+
+A part passes when its child run is `final`, has no overrides, and its latest intent approval comes from the approver the parent names. The engine refuses to end a run whose latest owner decision is not for its latest intent, so the latest approval is the one that let the child end. A child forced to its end with `event --override` reads `final` but has overrides (`has_overrides` true), so it does not pass. A child that was stopped reads `terminated`, so it does not pass either. The check reads `lifecycle` and `has_overrides` from the full view of the child.
+
+Put the line in the criterion as `"check": {"argv": ["sh", "-c", "<line>"], "timeout_ms": 30000}`. Write the absolute catalog path for `DB` and the child's run id for `CHILD`.
+
+**Owner's own words.** The child's latest intent approval has no delegation:
+
+```sh
+loop-engine --database DB --json show --view full CHILD | jq -e '.result as $r | ([$r.context[] | select(.kind=="owner-decision" and .data.checkpoint=="intent" and .data.decision=="approve")] | last) as $a | $r.lifecycle=="final" and $r.has_overrides==false and $a!=null and ($a.data | has("delegation") | not)'
+```
+
+**Delegated allowed.** Any intent approval counts, including a delegated one:
+
+```sh
+loop-engine --database DB --json show --view full CHILD | jq -e '.result as $r | $r.lifecycle=="final" and $r.has_overrides==false and ([$r.context[] | select(.kind=="owner-decision" and .data.checkpoint=="intent" and .data.decision=="approve")] | length) > 0'
+```
+
+The engine's own gate accepts a delegated approval on any run, so without the delegation clause a child approved that way would satisfy the parent. The clause is what makes the owner's review of each child a gate. The check fails closed: an unknown run, a renamed field or a missing `jq` all exit non-zero.
+
+### The child's first constraint
+
+A child is an ordinary run. Its intent is approved in the child run, as for any run. The first entry of its `constraints` quotes its parent criterion word for word:
+
+`Delivers criterion <id> of run <parent> (<parent intent id>), which reads: <the criterion statement, copied exactly>`
+
+Whoever approves the child's intent then reads the part it serves first. For a profile b child, the fresh intent checker gets the quote too, because it is in the intent packet.
+
+### Start, report, retry and replace
+
+- **Start.** After the parent reaches `implement`, the driver starts each child with `start --id PARENT.part-N`, in its own Git worktree when children run at the same time, then appends the `parent-run` record on the child and the `child-run` record on the parent. The child's intent is approved by the approver the parent names for that part. Children that do not depend on each other can run at the same time on one catalog.
+- **Report.** A child reports through its own records: `show --compact`, its history and its outcome map. Nothing is copied into the parent. The parent reads each child's state through the part check when it verifies.
+- **Retry.** Most failures stay inside the child. When a check fails, the child goes back with `revise` to `implement`, is fixed, and verifies again. The intent did not change, so nobody approves again and the parent is untouched. A child whose intent turns out wrong goes back to `explore`, gets a new intent and a new approval; the parent is still untouched.
+- **Replace.** When a child is abandoned: follow "Ending a run the owner has decided to stop" for the old child, with an `external-close-note` that carries `"replaced_by": "<new child id>"`, then `terminate` it. A run id cannot be reused, so start the new child under a new id. Then update the parent: `revise` back to `explore`, write a new intent whose part check names the new child, and have it approved by the same approver as before. The new child's intent is approved by the same approver as before too. Append a `child-run` record on the parent with `replaces` naming the old child. Parts that already finished are not redone. A parent intent that changes only a check passes a delegated approval's outcome check, because the goal, the constraints and the criterion ids stay the same.
+
+Stopping a parent leaves its children as they are, because the engine holds no link between runs. Stop each child the same way, one by one.
+
+### Reading parent and child together
+
+Put the parent's criterion and the child's intent side by side for the approver, straight from the engine:
+
+```sh
+loop-engine ... read CHILD --kind record --id intent-1 --pointer /data
+loop-engine ... read CHILD --kind context --record-kind parent-run
+loop-engine ... read PARENT --kind record --id intent-1 --pointer /data/criteria/0/statement
+```
+
+The tree is `loop-engine ... read PARENT --kind context --record-kind child-run`; each run's state is in `list` and `show --view status`. The owner's map of the whole plan is the parent's outcome map: `lean-change outcome-map` on the finished parent shows one row per part, with its statement, its check and its result.
+
 ## Running advice and append-only recovery
 
 Use a release implementing these record kinds on new runs. Do not apply current
