@@ -120,6 +120,13 @@ pub static FILES: &[EmbeddedFile] = &[
             "/skills/using-generate-prd/SKILL.md"
         )),
     },
+    EmbeddedFile {
+        path: "crates/research-provider/skills/using-generate-prd/scripts/check-prd-prose.py",
+        bytes: include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/skills/using-generate-prd/scripts/check-prd-prose.py"
+        )),
+    },
 ];
 
 /// Materialize all embedded files beneath `destination`.

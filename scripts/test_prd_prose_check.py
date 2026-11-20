@@ -1,7 +1,9 @@
-"""Tests for scripts/check-prd-prose.py and the skill section that tells agents to run it."""
+"""Tests for the check-prd-prose.py script in the using-generate-prd skill directory and the skill section that tells agents to run it."""
 
 from __future__ import annotations
 
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -9,9 +11,31 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts" / "check-prd-prose.py"
+SKILL_DIR = ROOT / "crates" / "research-provider" / "skills" / "using-generate-prd"
+SCRIPT = SKILL_DIR / "scripts" / "check-prd-prose.py"
 FIXTURES = ROOT / "scripts" / "fixtures" / "prd-prose"
-SKILL = ROOT / "crates" / "research-provider" / "skills" / "using-generate-prd" / "SKILL.md"
+SKILL = SKILL_DIR / "SKILL.md"
+
+
+ACCEPTED_LINE = "The app must not send note text to any server. This is a promise to users."
+
+
+def faithful_with(replacement: str) -> str:
+    """The faithful sample with one accepted line replaced."""
+    text = (FIXTURES / "faithful.md").read_text(encoding="utf-8")
+    assert ACCEPTED_LINE in text
+    return text.replace(ACCEPTED_LINE, replacement)
+
+
+def run_texts(accepted: str | bytes, converted: str | bytes) -> subprocess.CompletedProcess[str]:
+    """Run the script on two temporary files with exactly these bytes."""
+    with tempfile.TemporaryDirectory() as directory:
+        paths = []
+        for name, content in (("accepted.md", accepted), ("converted.md", converted)):
+            path = Path(directory) / name
+            path.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
+            paths.append(path)
+        return run(*paths)
 
 
 def run(accepted: Path, converted: Path) -> subprocess.CompletedProcess[str]:
@@ -80,6 +104,88 @@ class CheckScriptTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("dropped: accepted line 3", result.stdout)
 
+    def test_accepted_line_hidden_in_html_comment_is_reported(self) -> None:
+        wrappers = {
+            "comment on its own lines": f"<!--\n{ACCEPTED_LINE}\n-->",
+            "comment opened in the middle of a line": f"Editor note <!-- todo\n{ACCEPTED_LINE}\n-->",
+            "comment never closed": f"<!--\n{ACCEPTED_LINE}",
+            "comment that closes and reopens on one line": f"<!--\nnote\n--> <!--\n{ACCEPTED_LINE}\n-->",
+        }
+        for label, replacement in wrappers.items():
+            result = run(self.accepted, self.write(faithful_with(replacement)))
+            self.assertEqual(result.returncode, 1, f"{label}: {result.stdout}")
+            # An unclosed comment hides the rest of the file, so the report groups the run: "lines 15-21".
+            self.assertRegex(result.stdout, r"hidden: accepted lines? 15", label)
+            self.assertIn("must not send note text", result.stdout, label)
+            self.assertNotIn("all 25 accepted lines kept", result.stdout, label)
+
+    def test_accepted_line_hidden_in_code_fence_is_reported(self) -> None:
+        for fence in ("```", "~~~~", "  ```", "```python"):
+            closing = fence.strip().split("p")[0]
+            converted = faithful_with(f"{fence}\n{ACCEPTED_LINE}\n{closing}")
+            result = run(self.accepted, self.write(converted))
+            self.assertEqual(result.returncode, 1, f"{fence!r}: {result.stdout}")
+            self.assertIn("hidden: accepted line 15", result.stdout, repr(fence))
+
+    def test_comment_and_fence_written_in_the_accepted_prose_may_stay(self) -> None:
+        accepted = f"Intro.\n\n<!-- A note for editors. -->\n\n```\ncode line\n```\n\n<!--\nlong note\n-->\n\nOutro.\n"
+        converted = accepted.replace("Intro.\n", "Intro.\n- Requirement: X-1\n")
+        result = run_texts(accepted, converted)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("kept verbatim", result.stdout)
+
+    def test_dropped_list_item_is_reported_as_dropped(self) -> None:
+        converted = (FIXTURES / "faithful.md").read_text(encoding="utf-8").replace("- A note body is at most 1 MB.\n", "")
+        result = run(self.accepted, self.write(converted))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("dropped: accepted line 37: - A note body is at most 1 MB.", result.stdout)
+        self.assertNotIn("changed", result.stdout)
+        self.assertNotIn("closest converted line", result.stdout)
+
+    def test_a_repeated_accepted_line_with_its_second_copy_hidden_is_reported_as_hidden(self) -> None:
+        accepted = "The app is offline.\n\nMiddle.\n\nThe app is offline.\n"
+        converted = "The app is offline.\nMiddle.\n<!--\nThe app is offline.\n-->\n"
+        result = run_texts(accepted, converted)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("hidden: accepted line 5", result.stdout)
+
+    def test_a_converted_line_is_named_closest_for_one_accepted_line_only(self) -> None:
+        accepted = "- A note body is at most 1 MB.\n- A note title is at most 1 KB.\n"
+        converted = "- A note body can hold at most 1 MB.\n"
+        result = run_texts(accepted, converted)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("changed: accepted line 1", result.stdout)
+        self.assertIn("closest converted line 1", result.stdout)
+        self.assertIn("dropped: accepted line 2: - A note title is at most 1 KB.", result.stdout)
+
+    def test_reworded_list_item_names_its_own_closest_line(self) -> None:
+        converted = (FIXTURES / "faithful.md").read_text(encoding="utf-8").replace(
+            "- A note body is at most 1 MB.", "- A note body can hold at most 1 MB."
+        )
+        result = run(self.accepted, self.write(converted))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("changed: accepted line 37: - A note body is at most 1 MB.", result.stdout)
+        self.assertIn("closest converted line 53: - A note body can hold at most 1 MB.", result.stdout)
+
+    def test_utf8_byte_order_mark_on_either_file_is_ignored(self) -> None:
+        faithful = (FIXTURES / "faithful.md").read_bytes()
+        accepted = self.accepted.read_bytes()
+        mark = b"\xef\xbb\xbf"
+        for label, left, right in (
+            ("converted", accepted, mark + faithful),
+            ("accepted", mark + accepted, faithful),
+            ("both", mark + accepted, mark + faithful),
+        ):
+            result = run_texts(left, right)
+            self.assertEqual(result.returncode, 0, f"{label}: {result.stdout}{result.stderr}")
+
+    def write(self, text: str) -> Path:
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, True)
+        path = Path(directory) / "converted.md"
+        path.write_text(text, encoding="utf-8")
+        return path
+
     def test_unreadable_input_exits_2_with_a_message(self) -> None:
         result = run(self.accepted, FIXTURES / "no-such-file.md")
         self.assertEqual(result.returncode, 2)
@@ -142,11 +248,18 @@ class SkillSectionTest(unittest.TestCase):
         self.assertIn("The script catches", text)
         self.assertIn("The script does not catch", text)
 
-    def test_prose_check_names_the_script_and_it_exists(self) -> None:
+    def test_prose_check_names_a_script_that_ships_with_the_skill(self) -> None:
+        # The release copies a skill's own directory and nothing else, so the path the skill names must resolve
+        # from that directory. Read the path out of the skill text rather than assuming it.
         text = self.part("Check the prose")
-        self.assertIn("scripts/check-prd-prose.py", text)
-        self.assertTrue(SCRIPT.is_file())
-
+        named = re.search(r"`python3 (\S+check-prd-prose\.py) ", text)
+        self.assertIsNotNone(named, "the section does not give the command")
+        path = named.group(1)
+        self.assertFalse(path.startswith(("/", "crates/")), f"{path} is not relative to the skill's directory")
+        self.assertNotIn("crates/", text)
+        self.assertTrue((SKILL.parent / path).is_file(), f"{path} does not exist beside the skill")
+        self.assertTrue(SCRIPT.samefile(SKILL.parent / path))
+        self.assertFalse((ROOT / "scripts" / "check-prd-prose.py").exists(), "a second copy of the script exists")
 
 if __name__ == "__main__":
     unittest.main()
