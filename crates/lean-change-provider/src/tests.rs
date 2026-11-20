@@ -879,7 +879,7 @@ fn review_packet_carries_questions_intent_principles_and_the_untracked_diff() {
         .contains("stale"));
     std::fs::remove_file(r.join("late.txt")).unwrap();
     for (id, _) in QUESTIONS {
-        assert!(packet.contains(&format!("- {id}: ")), "{id}");
+        assert!(packet.contains(&format!("- id: {id}\n  ")), "{id}");
     }
     assert!(
         packet.contains(PRINCIPLES) && packet.contains("brand new") && packet.contains("+changed")
@@ -1158,7 +1158,7 @@ fn intent_packet_carries_the_six_questions_the_principles_and_the_draft_intent()
     // Needs no verification: the intent is still a draft.
     let packet = crate::packet::intent_packet(&show(&r, true, draft.clone())).unwrap();
     for (id, text) in INTENT_QUESTIONS {
-        assert!(packet.contains(&format!("- {id}: {text}")), "{id}");
+        assert!(packet.contains(&format!("- id: {id}\n  {text}\n")), "{id}");
     }
     assert!(packet.contains("\"goal\": \"g\"") && packet.contains("(intent-1)"));
     assert!(packet.contains(&r.display().to_string()));
@@ -2321,8 +2321,9 @@ fn both_packets_carry_the_bar_and_the_v1_example() {
     assert!(review_packet.contains(
         "If the intent and the checks settle a question, pass it. Do not invent. Pass every question if nothing material remains."
     ));
-    assert!(review_packet
-        .contains("- smaller-design: Is there a materially smaller design that meets the intent"));
+    assert!(review_packet.contains(
+        "- id: smaller-design\n  Is there a materially smaller design that meets the intent"
+    ));
     assert!(!intent_packet.contains("smaller-design"));
 }
 
@@ -3802,6 +3803,51 @@ fn only_a_review_profile_declares_admission_and_an_older_snapshot_still_gates() 
     let mut c = workflow(false, false);
     c.admit = true;
     assert_eq!(evaluate(&request(c)).unwrap()["result"], "unsupported");
+}
+
+/// Issue 121: a reviewer copied a whole list line into `question`. The id stands alone and the template says id only.
+#[test]
+fn packets_name_question_ids_intent_check() {
+    let r = repo();
+    let draft = vec![record("intent-1", "intent", 1, intent(false))];
+    let packet = crate::packet::intent_packet(&show(&r, true, draft)).unwrap();
+    for (id, text) in INTENT_QUESTIONS {
+        assert!(packet.contains(&format!("- id: {id}\n  {text}\n")), "{id}");
+        assert!(!packet.contains(&format!("- {id}: ")), "{id}");
+    }
+    assert_eq!(
+        packet
+            .matches("\"question\": \"<question id, e.g. use>\"")
+            .count(),
+        2,
+        "answers and findings"
+    );
+    assert!(!packet.contains("\"question\": \"...\""));
+}
+
+#[test]
+fn packets_name_question_ids_review() {
+    let r = repo();
+    let i = intent(false);
+    let approved = vec![
+        record("intent-1", "intent", 1, i.clone()),
+        record("d-ok", "owner-decision", 2, decision("Yes.", "intent-1")),
+        record("v1", "verification", 3, verification(&r, &i)),
+    ];
+    let packet = crate::packet::review_packet(&show(&r, true, approved)).unwrap();
+    for (id, text) in QUESTIONS {
+        assert!(packet.contains(&format!("- id: {id}\n  {text}\n")), "{id}");
+        assert!(!packet.contains(&format!("- {id}: ")), "{id}");
+    }
+    // `use` is an intent-check id; a review reviewer is shown a review id.
+    assert_eq!(
+        packet
+            .matches("\"question\": \"<question id, e.g. scope>\"")
+            .count(),
+        2,
+        "answers and findings"
+    );
+    assert!(!packet.contains("\"question\": \"...\""));
 }
 
 #[test]

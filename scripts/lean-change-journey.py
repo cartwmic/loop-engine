@@ -191,7 +191,7 @@ def run_profile(engine, provider, profile, work):
         # bookends:LE-209 — profile b: no intent-ready without one independent check with every finding disposed.
         j.refused('intent-ready', 'intent-check-incomplete', 'explore')
         packet = j.tool('intent-packet', j.show_text())
-        assert all(f'- {q}: ' in packet for q in CHECK_QUESTIONS) and 'intent-1' in packet, packet
+        assert all(f'- id: {q}\n' in packet for q in CHECK_QUESTIONS) and 'intent-1' in packet, packet
         assert 'pass every criterion\'s check and still leave the goal' in packet, packet
         # The intent check also gets the owner's principles and asks which applicable section has no criterion.
         assert PRINCIPLES in packet and 'yet has no criterion or constraint covering it' in packet, packet

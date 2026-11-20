@@ -64,7 +64,7 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
 
    The reviewer returns one JSON object, after piping it through `lean-change review-check --kind intent-check` (the packet says so); append it as kind `intent-check`. `append` refuses an intent check that fails that same check and names the fix, so you never get a record you cannot edit. Each question they could not settle from the
    intent fails with a finding whose text is a concrete question for the owner. The engine records one intent check per
-   intent, the first well-formed one; a later one cannot replace it. The check carries `findings_schema: 1`: each finding has a
+   run, the first well-formed one; a later one cannot replace it. The check carries `findings_schema: 1`: each finding has a
    `severity`, and only an effectively-blocking finding needs a disposition (see the review below). For each such finding, either change the intent (`fixed`, and append a new intent record
    that carries the fix) or reject it with a reason you would say to the owner. A `criteria-gap` finding names a delivery
    that passes every check yet misses the goal; fix it with a criterion whose check fails for that delivery. A `principles-gap`
@@ -322,7 +322,7 @@ exit code. Each criterion that is not `none` adds one run
 - The reviewer must not be you and must be in a fresh context. `fresh_context: true` is a claim; make it true.
 - The intent check has six fixed questions and the review has seven (six in a record without `findings_schema`), including whether the diff breaks the owner's design principles and whether a materially smaller design exists.
   Do not shorten or reword them. Do not pre-answer them for the reviewer.
-- The engine records one review (and one intent check) per intent, the first well-formed one. A further review round is driver procedure that follows `~/.local/share/agent-harness/reviewer-brief.md` and the review-round rule it names (playbook 58fdb05d).
+- The engine records one review per intent (and one intent check per run), the first well-formed one. A further review round is driver procedure that follows `~/.local/share/agent-harness/reviewer-brief.md` and the review-round rule it names (playbook 58fdb05d).
 - A blocking finding needs an obligation, evidence and a consequence a user would hit in ordinary single-user use; everything else is a note, and a note needs no disposition. Code checks that the three fields are present, not that they are true. Fix or reject each effectively-blocking finding, and reject only with a reason you would say to the owner.
 - Never write a `verification` record by hand. Never copy an owner decision from an earlier intent. A delegation names its own source and quote; do not copy one from an earlier intent either.
 - The engine never runs your checks or agents. Everything outside the records is yours.

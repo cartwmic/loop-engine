@@ -47,6 +47,15 @@ pub(crate) fn git_bytes(
     Ok(out.stdout)
 }
 
+/// The question list of a packet: each id on its own line, then its text, so a reviewer writes the id and not the text
+/// in every `question` field (the template in `return_shape` says so too).
+fn question_list(questions: &[(&str, &str)]) -> String {
+    questions
+        .iter()
+        .map(|(id, text)| format!("- id: {id}\n  {text}\n"))
+        .collect()
+}
+
 /// The bar for a blocking finding, in both packets (`evidence` says what counts as evidence for that packet). The
 /// contract is `findings-contract.md`; code checks that the fields are present, not that they are true.
 fn bar(evidence: &str) -> String {
@@ -113,10 +122,7 @@ pub fn intent_packet(show: &Value) -> Result<String, String> {
         .as_ref()
         .filter(|_| input.review)
         .ok_or("this profile has no intent check")?;
-    let questions: String = INTENT_QUESTIONS
-        .iter()
-        .map(|(id, text)| format!("- {id}: {text}\n"))
-        .collect();
+    let questions = question_list(&INTENT_QUESTIONS);
     Ok(format!(
         "# Intent check packet\n\nYou are the reviewer. You did not write this intent. Judge only from this packet and the repository at {repo} as it is now.\nAnswer every question below with verdict pass or fail and a note. If the intent already settles a question, pass it. Otherwise fail it with one finding: text is the concrete question you would ask the owner, evidence is the intent's wording or its silence, consequence is what a delivery would have to guess. Do not invent strained readings or ask for more than the goal promises.\n{bar}\n\nReturn one JSON object:\n{shape}\n{check}\n\n## Questions\n{questions}\n## Design principles (sha256 {sha})\n{principles}\n\n## Draft intent ({intent_id})\n{intent}\n",
         repo = input.repo,
@@ -214,10 +220,7 @@ pub fn review_packet(show: &Value) -> Result<String, String> {
         .and_then(|_| git(repo, &["add", "-A"], Some(&index)))
         .and_then(|_| git(repo, &["diff", "--cached", &input.base], Some(&index)));
     let _ = std::fs::remove_file(&index);
-    let questions: String = QUESTIONS
-        .iter()
-        .map(|(id, text)| format!("- {id}: {text}\n"))
-        .collect();
+    let questions = question_list(&QUESTIONS);
     Ok(format!(
         "# Review packet\n\nYou are the reviewer. You did not write this change. Judge only from this packet and the repository at {repo}.\nAnswer every question below with verdict pass or fail and a note. If the intent and the checks settle a question, pass it. Do not invent. Pass every question if nothing material remains. Every fail needs at least one finding, of any severity. Every finding needs an id, a severity, the question and text.\n{bar}\n\nReturn one JSON object:\n{shape}\n{check}\n\n## Questions\n{questions}\n## Approved intent ({intent_id})\n{intent}\n\n## Checks that passed on tree {tree}\n{results}{old_results}\n## Design principles (sha256 {sha})\n{principles}\n\n## Diff against base {base}\n{diff}\n",
         repo = input.repo,
