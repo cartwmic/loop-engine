@@ -66,10 +66,19 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    intent fails with a finding whose text is a concrete question for the owner. The engine records one intent check per
    run, the first well-formed one; a later one cannot replace it. The check carries `findings_schema: 1`: each finding has a
    `severity`, and only an effectively-blocking finding needs a disposition (see the review below). For each such finding, either change the intent (`fixed`, and append a new intent record
-   that carries the fix) or reject it with a reason you would say to the owner. A `criteria-gap` finding names a delivery
+   that carries the fix) or reject it with a reason that names the failed test (see the four tests below). A `criteria-gap` finding names a delivery
    that passes every check yet misses the goal; fix it with a criterion whose check fails for that delivery. A `principles-gap`
    finding names a principles section that applies and has no criterion or constraint; fix it with that criterion or constraint. Append one
    `finding-disposition` per effectively-blocking finding, with `review` set to the `intent-check` record id. Notes need none. The check runs once per run; a later revision is not re-checked.
+
+   **Triage each finding on four tests** before you fix or reject it, whoever raised it: a person, a bot or a reviewer agent. Who wrote a finding does not make it true. Run the tests in order. When `~/.local/share/agent-harness/finding-triage.md` exists, it states the same rule at more length; this text stands alone.
+
+   1. **Real.** It holds when checked against the code, the document or a run. Say how you checked.
+   2. **Useful.** Fixing it changes something a user, a caller or the next maintainer would notice. Taste and hypotheticals fail, and so does a fix that an existing job or check already does.
+   3. **Maintainable.** The finding and its fix hold up against the owner's design principles (`~/.local/share/agent-harness/design-principles.md`). A fix that breaks a principle fails. So does a fix that adds machinery the need does not require.
+   4. **In intent.** It fits the approved intent and scope of this change (at the intent check, the owner's request and the goal). A problem that existed before the change fails this test. A defect the change itself introduces always passes it, even when the intent does not mention it.
+
+   Fix a finding that passes all four. **Name the failed test:** reject a finding that fails one with a reason that starts with it (`real:`, `useful:`, `maintainable:` or `in intent:`). A finding that fails `in intent` is a follow-up: record it `rejected` with an `in intent:` reason, mention it as "for a follow-up: ...", and never let it block. A disposition is `fixed` or `rejected`; there is no third value.
 
    **Fix the sentence, not the word.** A finding quotes a sentence of the goal or a constraint, and its question often names
    more than one thing that sentence promises. Nothing re-checks your fix, so a fix that covers some of them leaves the rest
@@ -159,8 +168,8 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    review-round rule that brief names (playbook 58fdb05d), and the engine does not run it.
    Each finding has a `severity`. A finding is effectively blocking only if it is `blocking` and has an `obligation`,
    `evidence` and `consequence`; a blocking finding that lacks one is read as a note, with the reason
-   `demoted: missing ...`. Notes need no disposition. For each effectively-blocking finding, either fix it
-   or reject it with a reason, and append one `finding-disposition`:
+   `demoted: missing ...`. Notes need no disposition. Triage each effectively-blocking finding on the four tests of step 1 before you decide.
+   Fix it, or reject it with a reason that names the failed test (`real:`, `useful:`, `maintainable:` or `in intent:`), and append one `finding-disposition`:
 
    ```sh
    loop-engine ... append RUN finding-disposition '{"review": "<review record id>", "finding": "f1",
@@ -169,7 +178,7 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
 
    If you changed code, run verify again and append the new verification. Request `reviewed`. If the review has no
    effectively-blocking finding, a changed tree needs only the new verification, not a `fixed` finding.
-7. **end.** Report the criteria, their results, and each finding with its disposition. Then make the owner's page: see [Outcome map](#outcome-map).
+7. **end.** Report the criteria, their results, and each finding with its disposition. List the declined findings (the ones you recorded `rejected`), each with the test it failed, and the follow-ups (`for a follow-up: ...`), so the owner can overrule. Then make the owner's page: see [Outcome map](#outcome-map).
 
 `revise` from implement, verify and review goes back (to explore, implement and implement). Going back is free; the
 gates check the records again when you return.
@@ -323,6 +332,6 @@ exit code. Each criterion that is not `none` adds one run
 - The intent check has six fixed questions and the review has seven (six in a record without `findings_schema`), including whether the diff breaks the owner's design principles and whether a materially smaller design exists.
   Do not shorten or reword them. Do not pre-answer them for the reviewer.
 - The engine records one review per intent (and one intent check per run), the first well-formed one. A further review round is driver procedure that follows `~/.local/share/agent-harness/reviewer-brief.md` and the review-round rule it names (playbook 58fdb05d).
-- A blocking finding needs an obligation, evidence and a consequence a user would hit in ordinary single-user use; everything else is a note, and a note needs no disposition. Code checks that the three fields are present, not that they are true. Fix or reject each effectively-blocking finding, and reject only with a reason you would say to the owner.
+- A blocking finding needs an obligation, evidence and a consequence a user would hit in ordinary single-user use; everything else is a note, and a note needs no disposition. Code checks that the three fields are present, not that they are true. Triage each effectively-blocking finding on the four tests, fix what passes, and reject only with a reason that names the failed test.
 - Never write a `verification` record by hand. Never copy an owner decision from an earlier intent. A delegation names its own source and quote; do not copy one from an earlier intent either.
 - The engine never runs your checks or agents. Everything outside the records is yours.

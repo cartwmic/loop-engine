@@ -146,10 +146,22 @@ Read in this order; stop when you can name the next action.
 3. Perform work externally under confirmed ownership. Preserve request, original return,
    source identity and genuine command results outside the checkout.
 4. Intake review returns through provider review-candidates; inspect candidates and
-   diagnostics, triage findings, then append accepted provider-shaped context.
+   diagnostics, triage findings on the four tests (see Triage findings), then append accepted
+   provider-shaped context.
 5. Observe and request the shown checked event. Correct the named cause on denial;
    do not fabricate evidence or use an exception as ordinary clearance.
 6. Repeat until the actual terminal state; report residuals and pending owner decisions.
+
+## Triage findings
+
+**Triage each finding on four tests** before you fix or reject it, whoever raised it: a person, a bot or a reviewer agent. Who wrote a finding does not make it true. Run the tests in order. When `~/.local/share/agent-harness/finding-triage.md` exists, it states the same rule at more length; this text stands alone.
+
+1. **Real.** It holds when checked against the code, the document or a run. Say how you checked.
+2. **Useful.** Fixing it changes something a user, a caller or the next maintainer would notice. Taste and hypotheticals fail, and so does a fix that an existing job or check already does.
+3. **Maintainable.** The finding and its fix hold up against the owner's design principles (`~/.local/share/agent-harness/design-principles.md`). A fix that breaks a principle fails. So does a fix that adds machinery the need does not require.
+4. **In intent.** It fits the stated intent and scope of the change under review. A problem that existed before the change fails this test. A defect the change itself introduces always passes it, even when the intent does not mention it.
+
+Fix a finding that passes all four. **Name the failed test:** decline a finding that fails one with a reason that starts with it (`real:`, `useful:`, `maintainable:` or `in intent:`). A finding that fails `in intent` is a follow-up: mention it as "for a follow-up: ..." and never let it block. List the declined findings with their reasons, and the follow-ups, in what you report to the owner so they can overrule. The active provider skill says how a rejection is recorded.
 
 ## Advice and record recovery
 

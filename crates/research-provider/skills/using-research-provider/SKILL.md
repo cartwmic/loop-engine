@@ -91,7 +91,7 @@ these records yourself.
    and result. assignment names gate, review_stage, subject, subject_revision and
    policy_ids; request.text and result.text retain the genuine exchange.
    `research review-candidates` projects candidates, not semantic approval.
-5. Inspect diagnostics and triage candidates before append. Append actual accepted
+5. Inspect diagnostics and triage candidates on the four tests (see Triage reviewer candidates) before append. Append actual accepted
    review-evidence; request verified or completed only after required coverage.
 
 For shared intake, a JSON return uses items with policy_id, result and findings.
@@ -118,6 +118,17 @@ name exact targets, after count, actor, owner authority reference and reason.
 A count change does not edit an axis, rewrite old judgments or excuse known failures.
 Zero applicable axes require no invented reviewers. Explicit applicability is needed
 for reuse; declare source scope and current identity rather than relabeling old evidence.
+
+## Triage reviewer candidates
+
+**Triage each finding on four tests** in a reviewer candidate before you append it, whoever raised it. A reviewer calling something a failure does not make it one. Run the tests in order. When `~/.local/share/agent-harness/finding-triage.md` exists, it states the same rule at more length; this text stands alone.
+
+1. **Real.** It holds when checked against the code, the document or a run. Say how you checked.
+2. **Useful.** Fixing it changes something a user, a caller or the next maintainer would notice. Taste and hypotheticals fail, and so does a fix that an existing job or check already does.
+3. **Maintainable.** The finding and its fix hold up against the owner's design principles (`~/.local/share/agent-harness/design-principles.md`). A fix that breaks a principle fails. So does a fix that adds machinery the need does not require.
+4. **In intent.** It fits the frozen brief, and everything this run produced is in scope. A problem outside the brief that existed before the run fails this test. A defect the run itself introduces always passes it, even when the brief does not mention it.
+
+**Name the failed test:** a finding that fails one is declined with a reason that starts with it (`real:`, `useful:`, `maintainable:` or `in intent:`). A finding that fails `in intent` is a follow-up: mention it as "for a follow-up: ...". When a candidate's failure rests only on such findings, the driver does not append it as a blocking failure and never edits the reviewer's original return. If that leaves an axis without a conforming judgment, ask for focused reconsideration of that candidate, as the reviewer protocol provides. A finding that passes all four and is material stays blocking: append it as conforming failure evidence and fix it. The tests act before a failure is accepted, so a declined candidate is not an accepted failure and no waiver is involved. Report the declined findings with their failed tests, and the follow-ups, to the owner.
 
 ## Recovery and completion
 
