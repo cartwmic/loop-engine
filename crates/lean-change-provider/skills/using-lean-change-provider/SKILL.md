@@ -1,6 +1,6 @@
 ---
 name: using-lean-change-provider
-description: Use when driving a lean-change run in Loop Engine: explore, owner-approved intent, implement, verify with digest-bound checks, and (profile b) one fresh-context intent check and one fresh-context diff review.
+description: Use when driving a lean-change run in Loop Engine: explore, approved intent, implement, verify with digest-bound checks, and (profile b) one fresh-context intent check and one fresh-context diff review.
 ---
 
 # Using the lean-change provider
@@ -8,6 +8,8 @@ description: Use when driving a lean-change run in Loop Engine: explore, owner-a
 lean-change checks; it does not work. You do the work and append records. The provider refuses
 a transition until the records for it are complete. Load the `using-loop-engine` skill for
 the engine commands (`start`, `show`, `append`, `event`). Use explicit `--database` and `--config`.
+
+Who approves a run's intent is decided outside the engine. By default the owner does, in their own words. If the user's instructions name someone else to approve this repo's intents, treat those instructions as a standing grant: that approver approves by recording a delegation (`basis` `standing-grant`) that cites the instructions, or the decision they rest on, and quotes the user's words (see the Delegated path below). "The owner" in this guide always means the user. The engine's `owner-decision` gate is the same either way.
 
 Two profiles, one provider: **b** has an intent check and a review state, **c** has neither. The profile is frozen at start.
 The old-vs-new check is on by default in both (see its section below).
@@ -100,7 +102,7 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    Request `approved` (hard false) or `approved-hard` (hard true). If they want changes, request `revise`,
    write `intent-2`, and ask again. A rejection is the same record with `"decision": "reject"`, a `target` of `intent` and a `reason`.
 
-   **Delegated path.** Use it only when a delegation covers the run: an approval the owner gave earlier of the design or plan, or a standing grant. Read checkout-root `docs/agent-usage.md#delegated-approval` first. Check that every criterion of the intent is one the cited approval covers. Then append the approval yourself, with a `delegation` (`basis` `approval` or `standing-grant`, `source`, `quote`, `covers`):
+   **Delegated path.** Use it only when a delegation covers the run: an approval the owner gave earlier of the design or plan, or a standing grant. User instructions that name someone else to approve this repo's intents are such a standing grant: cite them, or the decision they rest on, as `source`, and quote the user's words in `quote`. Read checkout-root `docs/agent-usage.md#delegated-approval` first. Check that every criterion of the intent is one the cited approval covers. Then append the approval yourself, with a `delegation` (`basis` `approval` or `standing-grant`, `source`, `quote`, `covers`):
 
    ```json
    {"checkpoint": "intent", "subject": "intent", "subject_revision": "intent-1", "decision": "approve",
