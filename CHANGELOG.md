@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.58.0] - 2026-11-20
+
+Finding triage in the provider skills: four tests, and name the one a finding fails.
+
+- using-lean-change-provider, using-loop-engine, using-research-provider and using-policy-document-provider skills: each says to triage every review finding on four tests (real, useful, maintainable, in intent) and to name the failed test (`real:`, `useful:`, `maintainable:`, `in intent:`). A finding that fails "in intent" goes to a follow-up, not a decline. Each points to `finding-triage.md` when it exists. (#167)
+
 ## [0.57.0] - 2026-11-20
 
 PRD prose check follow-ups: hidden prose, clearer labels, and the check now ships with its skill.
