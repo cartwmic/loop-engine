@@ -9,7 +9,7 @@ lean-change checks; it does not work. You do the work and append records. The pr
 a transition until the records for it are complete. Load the `using-loop-engine` skill for
 the engine commands (`start`, `show`, `append`, `event`). Use explicit `--database` and `--config`.
 
-Who approves a run's intent is decided outside the engine: it is whoever the user's instructions name for this repo, by default the owner. Where this guide says "the owner" for an approval, it means that person, and a delegated approval stands in for them as described below.
+Who approves a run's intent is decided outside the engine. By default the owner does, in their own words. If the user's instructions name someone else to approve this repo's intents, treat those instructions as a standing grant: that approver approves by recording a delegation (`basis` `standing-grant`) that cites the instructions, or the decision they rest on, and quotes the user's words (see the Delegated path below). "The owner" in this guide always means the user. The engine's `owner-decision` gate is the same either way.
 
 Two profiles, one provider: **b** has an intent check and a review state, **c** has neither. The profile is frozen at start.
 The old-vs-new check is on by default in both (see its section below).
@@ -91,7 +91,7 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    `intent-ready`: spelled the way the criterion's statement spells it (a name written `Alice` in the statement is `Alice` in
    the sample) it must pass, and with one promise broken it must fail. A check that refuses the first or accepts the second is
    wrong. Nothing in the provider enforces this step.
-2. **intent-approval.** Show the approver (whoever the user's instructions name for this repo, by default the owner) the intent verbatim, with the check's findings and how each was disposed (profile b), and ask: "What do you expect that is not listed?" Their answer may change the intent. Append their exact words (do not edit them):
+2. **intent-approval.** Show the owner the intent verbatim, with the check's findings and how each was disposed (profile b), and ask: "What do you expect that is not listed?" Their answer may change the intent. Append their exact words (do not edit them):
 
    ```sh
    loop-engine ... append RUN owner-decision '{"checkpoint": "intent", "subject": "intent",
@@ -102,7 +102,7 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    Request `approved` (hard false) or `approved-hard` (hard true). If they want changes, request `revise`,
    write `intent-2`, and ask again. A rejection is the same record with `"decision": "reject"`, a `target` of `intent` and a `reason`.
 
-   **Delegated path.** Use it only when a delegation covers the run: an approval the owner gave earlier of the design or plan, or a standing grant. Read checkout-root `docs/agent-usage.md#delegated-approval` first. Check that every criterion of the intent is one the cited approval covers. Then append the approval yourself, with a `delegation` (`basis` `approval` or `standing-grant`, `source`, `quote`, `covers`):
+   **Delegated path.** Use it only when a delegation covers the run: an approval the owner gave earlier of the design or plan, or a standing grant. User instructions that name someone else to approve this repo's intents are such a standing grant: cite them, or the decision they rest on, as `source`, and quote the user's words in `quote`. Read checkout-root `docs/agent-usage.md#delegated-approval` first. Check that every criterion of the intent is one the cited approval covers. Then append the approval yourself, with a `delegation` (`basis` `approval` or `standing-grant`, `source`, `quote`, `covers`):
 
    ```json
    {"checkpoint": "intent", "subject": "intent", "subject_revision": "intent-1", "decision": "approve",
@@ -154,7 +154,7 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    expectation, or the tree changed after the run (any edit, even a comment, to a tracked or not-ignored file;
    git-ignored files are not covered, so a check must not depend on them). Checks run in their own process group and are killed at their timeout.
    If the checks rewrite the repository between them, verify refuses; make them read-only. If a check fails, fix the code and verify again. Do not edit the intent
-   to make a check pass; that needs a new intent and a new approval.
+   to make a check pass; that needs a new intent and the owner's approval.
 6. **review** (profile b only). Produce the packet and give it to a reviewer who has not seen this work
    (a fresh session or a different model), unchanged:
 
@@ -334,6 +334,6 @@ exit code. Each criterion that is not `none` adds one run
 - The intent check has six fixed questions and the review has seven (six in a record without `findings_schema`), including whether the diff breaks the owner's design principles and whether a materially smaller design exists.
   Do not shorten or reword them. Do not pre-answer them for the reviewer.
 - The engine records one review per intent (and one intent check per run), the first well-formed one. A further review round is driver procedure that follows `~/.local/share/agent-harness/reviewer-brief.md` and the review-round rule it names (playbook 58fdb05d).
-- A blocking finding needs an obligation, evidence and a consequence a user would hit in ordinary use; everything else is a note, and a note needs no disposition. Code checks that the three fields are present, not that they are true. Triage each effectively-blocking finding on the four tests, fix what passes, and reject only with a reason that names the failed test.
+- A blocking finding needs an obligation, evidence and a consequence a user would hit in ordinary single-user use; everything else is a note, and a note needs no disposition. Code checks that the three fields are present, not that they are true. Triage each effectively-blocking finding on the four tests, fix what passes, and reject only with a reason that names the failed test.
 - Never write a `verification` record by hand. Never copy an owner decision from an earlier intent. A delegation names its own source and quote; do not copy one from an earlier intent either.
 - The engine never runs your checks or agents. Everything outside the records is yours.
