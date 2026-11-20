@@ -210,7 +210,7 @@ the repository's own instructions say more about commits, worktrees, deleting or
 3. **Build all at once.** Launch one builder per step together, each with its worktree as its working
    directory, and wait for all of them. Tell each builder: edit only files in this worktree; run only
    this step's focused tests (one test file, or one crate with a filter), or none; never run the full
-   test suite, a full or workspace build, a journey or a kgate job; never commit, merge or call
+   test suite, a full or workspace build, a journey or any other heavy job; never commit, merge or call
    `loop-engine`. For Rust, give the builders one shared `CARGO_TARGET_DIR` outside the worktrees.
 4. **Land** each finished step, in plan order:
 
