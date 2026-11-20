@@ -435,13 +435,15 @@ impl RecordKind {
 }
 
 /// The JSON a reviewer returns. The packets and the refusals show this one text, so the shape a reviewer is told and
-/// the shape a refusal quotes cannot differ. A review names the checked tree; an intent check does not.
+/// the shape a refusal quotes cannot differ. A review names the checked tree; an intent check does not. Each
+/// `question` slot takes the question's id only, with an example id of that record kind.
 pub fn return_shape(kind: RecordKind, intent_id: &str, tree: &str) -> String {
-    let tree = match kind {
-        RecordKind::Review => format!(" \"tree\": \"{tree}\","),
-        RecordKind::IntentCheck => String::new(),
+    let (tree, example) = match kind {
+        RecordKind::Review => (format!(" \"tree\": \"{tree}\","), "scope"),
+        RecordKind::IntentCheck => (String::new(), "use"),
     };
-    format!("{{\"findings_schema\": 1, \"intent\": \"{intent_id}\",{tree} \"reviewer\": {{\"name\": \"...\", \"kind\": \"agent\"}}, \"fresh_context\": true, \"answers\": [{{\"question\": \"...\", \"verdict\": \"pass|fail\", \"note\": \"...\"}}], \"findings\": [{{\"id\": \"f1\", \"severity\": \"blocking|note\", \"question\": \"...\", \"text\": \"...\", \"obligation\": \"...\", \"evidence\": \"...\", \"consequence\": \"...\", \"component\": \"...\"}}]}}")
+    let question = format!("<question id, e.g. {example}>");
+    format!("{{\"findings_schema\": 1, \"intent\": \"{intent_id}\",{tree} \"reviewer\": {{\"name\": \"...\", \"kind\": \"agent\"}}, \"fresh_context\": true, \"answers\": [{{\"question\": \"{question}\", \"verdict\": \"pass|fail\", \"note\": \"...\"}}], \"findings\": [{{\"id\": \"f1\", \"severity\": \"blocking|note\", \"question\": \"{question}\", \"text\": \"...\", \"obligation\": \"...\", \"evidence\": \"...\", \"consequence\": \"...\", \"component\": \"...\"}}]}}")
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
