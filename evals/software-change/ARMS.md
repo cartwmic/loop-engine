@@ -2,8 +2,8 @@
 
 This page documents the Stage 0 additions to the software-change harness. They let four arms run on the same
 cases: native Pi (`native`), Pi with Superpowers (`superpowers`), Pi with OpenSpec (`openspec`) and Pi with
-Loop Engine (`loop-engine`). Two more arms, `lean-b` and `lean-c`, run the lean-change provider that replaced the
-software-change provider; `loop-engine` is kept for historical comparison only (section 3). The design and the gap list (G1 to G10) are in the
+Loop Engine (`loop-engine`), and two lean-change arms, `lean-b` and `lean-c`, that run the provider that replaced the
+software-change provider. `loop-engine` is kept for historical comparison only (section 3). The design and the gap list (G1 to G10) are in the
 [Stage 0 spec](../specs/stage0-native-vs-workflow-vs-loop-engine.md), sections 5 to 8.
 
 Everything here is opt-in. With no `arm` option set, prompts, scoring, captures and reports are the ones in the
@@ -112,8 +112,16 @@ The default image is for campaigns without an arm: an omitted `image` on `loop-e
 `lean-b` and `lean-c` drive the lean-change provider through `sc-driver`; `SC_PROVIDER_SKILL` names the provider skill
 that `pi-role.py` loads (default `using-software-change-provider`). They need the lean image, which carries the
 `lean-change` binary and its skill. A trial's `providers.toml` names `lean-change` for these arms. Their lean metrics
-(denials, criteria, verifications, intent-check and review findings with dispositions) are stored under
-`target_metrics.lean_change` and are diagnostics only, never a success rule.
+(denials, criteria, verifications, and the intent-check and review findings, with the review findings' dispositions) are stored under
+`target_metrics.lean_change` and are diagnostics only, never a success rule. The loop-engine diagnostics of section 5
+(`engine_lifecycle`, `run_health` and the rest) are not written for them: `engine_lifecycle` is `null`, so read
+`lean_change.lifecycle` and `lean_change.final_state` instead.
+
+The lean image keeps the base image's revision label, because the trial's image check compares that label with the
+campaign's `loop_engine_version` and `provider_version`. A lean campaign therefore sets both to the base image's commit
+(`8aeedb5ee4ef58d4a0fcbab8fef98b2a195e0d46`, as `test_lean_campaign.py` does), and its report records that commit as both
+refs. The refs do not identify which commit the lean programs were built from: the image tag and `image_id` in the
+trial evidence do, and `LEAN_SOURCE_SHA` is the label `com.loop-engine.lean-change.source-sha256`.
 
 Decision for the `loop-engine` arm: it is kept for **historical comparison only**. It drives the software-change
 provider, which `main` no longer has, so it cannot run on a current build. It still runs on the pinned older image
