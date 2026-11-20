@@ -384,6 +384,8 @@ Incomplete, ambiguous, or improvable work belongs in the workflow's initial stat
 
 If the initial state is final, the run is created final.
 
+A start with a run id that already exists in the catalog is `rejected` (exit code 10) with the code `run-already-exists` and a message that names the id; the existing run is not changed.
+
 When object initial input contains `work_slot_bindings`, the engine freezes the initial map from slot ID to `{command, args, context_filter?}`. An optional filter is `{command,args}`. Ordered owner-attested amendments derive effective future bindings without rewriting this initial map. Omitted key and `{}` both mean no bindings. Start rejects an unknown slot ID (not in the provider `describe` catalog snapshot for this workflow), unknown fields on a binding object, and non-object values. Start does not parse `fan-out` or `run-plan-graph` argv. If the initial state is a work slot, the engine mints a **slot-visit** subject for that visit via set-current-subject.
 
 ### 6.2 Show

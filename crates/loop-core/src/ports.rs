@@ -995,6 +995,9 @@ pub enum PersistenceRejection {
     DuplicateContextRecord {
         record_id: ContextRecordId,
     },
+    DuplicateRun {
+        run_id: RunId,
+    },
     AppendSequenceChanged {
         expected: SemanticSequence,
         observed: SemanticSequence,
@@ -1007,6 +1010,7 @@ impl PersistenceRejection {
             Self::RunNotActive { .. } => "run-not-active",
             Self::RunNotObserved { .. } => "run-not-observed",
             Self::DuplicateContextRecord { .. } => "duplicate-context-record",
+            Self::DuplicateRun { .. } => "run-already-exists",
             Self::AppendSequenceChanged { .. } => "append-sequence-changed",
         }
     }
@@ -1020,6 +1024,8 @@ impl fmt::Display for PersistenceRejection {
             }
             Self::DuplicateContextRecord { record_id } => write!(formatter,
                 "context record `{record_id}` already exists on this run"),
+            Self::DuplicateRun { run_id } => write!(formatter,
+                "run `{run_id}` already exists; start with a different --id"),
             Self::AppendSequenceChanged { expected, observed } => write!(formatter,
                 "append inputs changed (expected sequence {expected}, observed {observed}); re-observe and retry"),
             Self::RunNotObserved { run_id } => write!(
