@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.59.0] - 2026-11-20
+
+- lean-change docs: "the owner" means the user. When the user's instructions name someone else to approve a repo's intents, that approver records a standing-grant delegation citing those instructions and quoting the user's words (#172).
+
 ## [0.58.0] - 2026-11-20
 
 Finding triage in the provider skills: four tests, and name the one a finding fails.
