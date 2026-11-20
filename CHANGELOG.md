@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.57.0] - 2026-11-20
+
+PRD prose check follow-ups: hidden prose, clearer labels, and the check now ships with its skill.
+
+- using-generate-prd skill: `check-prd-prose.py` moved to `skills/using-generate-prd/scripts/`, so it ships with the skill and in `data-dump`. It now fails with the new label `hidden` when an accepted line appears in the converted file only inside an HTML comment or a code fence. A dropped list item reports as `dropped`, a converted line is named "closest" for one accepted line only, and a leading byte order mark on either file is ignored. Exit codes are unchanged. AGENTS.md lists its tests among what `baseline.sh` and the `tests` job run. (#168)
+
 ## [0.56.0] - 2026-11-20
 
 Packet wording, a generate-PRD conversion section with a prose check, and documentation pointers.
