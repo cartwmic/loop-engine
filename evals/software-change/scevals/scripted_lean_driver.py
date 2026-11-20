@@ -85,7 +85,7 @@ def main(argv=None):
         setup += ["--principles", PRINCIPLES]
     (WORK / "profile.json").write_text(run(setup))
     engine("start", "--id", RUN_ID, "lean-change", "@" + str(WORK / "profile.json"), "scripted lean run")
-    # labels.py does not exist at the base commit, so the check fails on the old tree: old "fails".
+    # The example case's labels.py at the base commit returns the label unchanged, so the check fails on the old tree: old "fails".
     intent = {"author": WORKER, "goal": "label_key groups different spellings of one label.", "constraints": ["Edit labels.py only."],
               "hard": False, "criteria": [{"id": "keys", "statement": "whitespace, casefold and blank fallback",
                                            "check": {"argv": ["env", "PYTHONDONTWRITEBYTECODE=1", "python3", "-c", CHECK],
