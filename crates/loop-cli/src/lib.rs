@@ -88,7 +88,7 @@ pub enum PrimaryCommand {
         advice_exception: Option<core::AdviceExceptionAttestation>,
     },
     History(RunId),
-    Terminate(RunId),
+    Terminate(RunId, Option<String>),
 }
 
 impl PrimaryCommand {
@@ -100,7 +100,7 @@ impl PrimaryCommand {
             Self::Append(_) => "append",
             Self::Event { .. } => "event",
             Self::History(_) => "history",
-            Self::Terminate(_) => "terminate",
+            Self::Terminate(..) => "terminate",
         }
     }
 }
@@ -984,6 +984,7 @@ fn parse_primary_command(
         "terminate" => {
             let run = run_id.or_else(|| take_positional(&mut positionals));
             let run = required(run, "run ID")?;
+            let reason = take_positional(&mut positionals);
             ensure_no_positionals(&positionals, name)?;
             reject_unrelated_options(
                 name,
@@ -996,7 +997,7 @@ fn parse_primary_command(
                 record_id,
                 event,
             )?;
-            Ok(PrimaryCommand::Terminate(run.into()))
+            Ok(PrimaryCommand::Terminate(run.into(), reason))
         }
         _ => Err(CliError::new(
             "invalid-operation",
@@ -1275,9 +1276,12 @@ fn execute_operation(
             }
             rendered
         }
-        PrimaryCommand::Terminate(run_id) => {
-            let outcome = core::execute_terminate(TerminateRunRequest::new(run_id), &persistence)
-                .map(CliTerminateResult::from);
+        PrimaryCommand::Terminate(run_id, reason) => {
+            let outcome = core::execute_terminate(
+                TerminateRunRequest::new(run_id).with_reason(reason),
+                &persistence,
+            )
+            .map(CliTerminateResult::from);
             render_operation(operation, output, &outcome)
         }
     }
@@ -1716,6 +1720,8 @@ struct CliShowProjection {
     initial_input: Value,
     state_visit: u64,
     binding_amendments: Vec<core::BindingAmendment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    termination_reason: Option<String>,
     context: Vec<core::ContextRecord>,
     requestable_events: Vec<core::RequestableEvent>,
     latest_evaluations: Vec<core::DurableEvaluation>,
@@ -1741,6 +1747,7 @@ impl From<core::ShowProjection> for CliShowProjection {
             initial_input: projection.initial_input,
             state_visit: projection.state_visit,
             binding_amendments: projection.binding_amendments,
+            termination_reason: projection.termination_reason,
             context: projection.context,
             requestable_events: projection.requestable_events,
             latest_evaluations: projection.latest_evaluations,
@@ -1927,6 +1934,9 @@ fn bounded_show_packet(
         "uncertainty":{"state":if snapshot["completeness"].as_object().is_some_and(|o| o.values().any(|v| v == "unavailable" || v == "partial")) {"partial"} else {"sampled"},"sources":[snapshot["completeness"]]},
         "next_action":next_action,"locators":bounded_locators(&run_id,database)
     });
+    if let Some(reason) = snapshot["run"].get("termination_reason") {
+        packet["termination_reason"] = reason.clone();
+    }
     if view == "status" {
         packet
             .as_object_mut()
@@ -1955,6 +1965,9 @@ fn render_bounded_show_human(packet: &Value, view: &str) -> String {
         packet["mutation_armed"].as_bool().unwrap_or(false),
         packet["override_summary"]
     ));
+    if let Some(reason) = packet["termination_reason"].as_str() {
+        lines.push(format!("terminated: {reason}"));
+    }
     if view == "action" {
         lines.push(format!(
             "instructions: {}",
@@ -2466,9 +2479,9 @@ fn usage(command: Option<&str>) -> String {
         }
         Some("history") => "Usage: loop-engine [options] history <run-id>\n".to_owned(),
         Some("explore") => "Usage: loop-engine [--database DB] explore RUN_ID\n\nRead-only interactive workflow navigator. Requires a TTY; arrows or j/k move the one-column list, [ and ] scroll detail, g/G jump, and q exits.\n".to_owned(),
-        Some("terminate") => "Usage: loop-engine [options] terminate <run-id>\n".to_owned(),
+        Some("terminate") => "Usage: loop-engine [options] terminate <run-id> [reason]\n".to_owned(),
         Some("list") => "Usage: loop-engine [options] list [--lifecycle active|final|terminated] [--label SUBSTRING] [--provider NAME]\n\nFilters narrow the unchanged run list; with none, every run is listed.\n".to_owned(),
-        _ => "Usage: loop-engine [options] COMMAND\n\nCommands:\n  start PROVIDER JSON [LABEL]\n  list\n  show RUN_ID\n  append RUN_ID KIND JSON\n  event RUN_ID EVENT\n  history RUN_ID\n  terminate RUN_ID\n  read RUN_ID --kind KIND\n  explore RUN_ID\n  monitor --run RUN_ID --database PATH\n  reclaim [--apply]\n\nGlobal options:\n  --json, -j\n  --database PATH\n  --config PATH\n  --timeout-ms MILLISECONDS\n  --help, -h\n  --version, -V\n".to_owned(),
+        _ => "Usage: loop-engine [options] COMMAND\n\nCommands:\n  start PROVIDER JSON [LABEL]\n  list\n  show RUN_ID\n  append RUN_ID KIND JSON\n  event RUN_ID EVENT\n  history RUN_ID\n  terminate RUN_ID [REASON]\n  read RUN_ID --kind KIND\n  explore RUN_ID\n  monitor --run RUN_ID --database PATH\n  reclaim [--apply]\n\nGlobal options:\n  --json, -j\n  --database PATH\n  --config PATH\n  --timeout-ms MILLISECONDS\n  --help, -h\n  --version, -V\n".to_owned(),
     }
 }
 #[cfg(test)]

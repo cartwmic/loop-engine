@@ -109,8 +109,9 @@ This table lists where the owner's words are required, and whether a delegation 
 
 ## Ending a run the owner has decided to stop
 
-`terminate` takes only the run ID and records one history entry. It carries no reason and
-does not verify the decision or any cited proof, so put the decision on the run first:
+`terminate RUN [REASON]` takes the run ID and an optional reason. It records one history
+entry, stores the reason on it and `show` displays it as `termination_reason`. It still does not
+verify the decision or any cited proof, so put the decision on the run first:
 
 1. Observe with `show`. Confirm no owned work is live; cancel and verify cleanup first if any.
 2. Append the owner's decision with the owner's exact words, in the record kind the

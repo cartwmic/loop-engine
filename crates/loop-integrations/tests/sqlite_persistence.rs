@@ -500,7 +500,7 @@ fn termination_is_atomic_and_advances_only_control_revision(
     assert_eq!(terminated.run.last_sequence.as_u64(), 2);
     assert!(matches!(
         terminated.history.action,
-        HistoryAction::Terminated
+        HistoryAction::Terminated { reason: None }
     ));
 
     let error = adapter
@@ -576,7 +576,10 @@ fn stale_conditional_writes_after_termination_are_conflicts_and_noops(
     let history = adapter.load_history(&"run-stale-after-termination".into())?;
     assert_eq!(history.len(), 2);
     assert!(matches!(history[0].action, HistoryAction::RunCreated));
-    assert!(matches!(history[1].action, HistoryAction::Terminated));
+    assert!(matches!(
+        history[1].action,
+        HistoryAction::Terminated { .. }
+    ));
     assert!(adapter
         .load_checked_evaluations(&"run-stale-after-termination".into())?
         .is_empty());

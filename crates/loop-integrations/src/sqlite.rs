@@ -807,7 +807,7 @@ impl Persistence for SqlitePersistence {
             let sequence = next_sequence(run.last_sequence)?;
             let revision = next_revision(run.control_revision)?;
             let occurred_at = current_timestamp()?;
-            let history = HistoryEntry::terminated(sequence, occurred_at);
+            let history = HistoryEntry::terminated(sequence, occurred_at, request.reason.clone());
             transaction
                 .execute(
                     "UPDATE runs
@@ -1346,6 +1346,10 @@ fn load_required_run(connection: &Connection, run_id: &RunId) -> Result<Run, Per
     let mut run = decode_run(raw)?;
     let history = read_history_entries(connection, run_id)?;
     run.override_summary = loop_core::OverrideSummary::from_history(&history, run.lifecycle);
+    run.termination_reason = history.iter().find_map(|entry| match &entry.action {
+        HistoryAction::Terminated { reason } => reason.clone(),
+        _ => None,
+    });
     run.binding_amendments = history
         .into_iter()
         .filter_map(|entry| match entry.action {

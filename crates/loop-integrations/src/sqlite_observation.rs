@@ -61,6 +61,7 @@ pub(super) fn read_bounded_observation(
                 })
             })
             .unwrap_or(serde_json::Value::Null);
+        let termination_reason = run.termination_reason.clone();
         let mut output = json!({
             "schema_version":1,
             "sampled_at_ms":sampled_at_ms,
@@ -79,6 +80,9 @@ pub(super) fn read_bounded_observation(
             "acceptance":{"state":"unknown","reason":"status does not infer provider or driver acceptance"},
             "completeness":{"run":"available","invocations":"unavailable","assignments":"unavailable"}
         });
+        if let Some(reason) = termination_reason {
+            output["run"]["termination_reason"] = json!(reason);
+        }
         if std::time::Instant::now() < deadline {
             match load_advice_policy(&transaction, &run, deadline) {
                 Ok(policy) => {

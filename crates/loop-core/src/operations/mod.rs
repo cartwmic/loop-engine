@@ -927,7 +927,7 @@ mod tests {
         let later = HistoryEntry::new(
             3_u64.into(),
             Timestamp::from_unix_millis(3),
-            HistoryAction::Terminated,
+            HistoryAction::Terminated { reason: None },
         );
         let earlier = HistoryEntry::run_created(1_u64.into(), Timestamp::from_unix_millis(1));
         let persistence = FakePersistence {
@@ -944,7 +944,7 @@ mod tests {
 
     #[test]
     fn terminate_success_returns_the_terminated_run_and_history() {
-        let history = HistoryEntry::terminated(2_u64.into(), Timestamp::from_unix_millis(12));
+        let history = HistoryEntry::terminated(2_u64.into(), Timestamp::from_unix_millis(12), None);
         let run = Run::new(
             "run-1",
             None,

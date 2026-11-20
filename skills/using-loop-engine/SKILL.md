@@ -73,7 +73,7 @@ loop-engine --json show RUN --view full
 loop-engine --json append --record-id RECORD RUN KIND @/absolute/data.json
 loop-engine --json event RUN EVENT
 loop-engine --json history RUN
-loop-engine --json terminate RUN
+loop-engine --json terminate RUN [REASON]
 loop-engine --json --database /absolute/loop.db reclaim [--apply]
 ```
 
@@ -82,9 +82,9 @@ start returns result.run.id. Initial input and append data accept inline JSON,
 Use the same resolved database for every operation; pass --database explicitly when
 isolation is authorized. terminate changes workflow state, never cancels external work.
 
-Ending a run the owner has decided to stop: `terminate` takes only the run ID and records
-one history entry. It carries no reason and does not verify the decision or any cited proof, so put the decision on the
-run first.
+Ending a run the owner has decided to stop: `terminate RUN [REASON]` takes the run ID and an
+optional reason, stores the reason on its one history entry and `show` displays it. It still does not verify the
+decision or any cited proof, so put the decision on the run first.
 1. Observe with show. Confirm no owned work is live; cancel and verify cleanup first if any.
 2. Append the owner's decision as the provider's owner record (for lean-change,
    `owner-decision`; see docs/agent-usage.md), holding the owner's exact words. A lead can instead record a delegated approval ([Delegated approval](../../docs/agent-usage.md#delegated-approval)). Ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome.

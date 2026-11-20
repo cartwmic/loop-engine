@@ -413,7 +413,10 @@ fn assert_only_creation_and_termination(
     let history = adapter.load_history(&run_id.into())?;
     assert_eq!(history.len(), 2);
     assert!(matches!(history[0].action, HistoryAction::RunCreated));
-    assert!(matches!(history[1].action, HistoryAction::Terminated));
+    assert!(matches!(
+        history[1].action,
+        HistoryAction::Terminated { .. }
+    ));
     Ok(run)
 }
 
