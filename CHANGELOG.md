@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.56.0] - 2026-11-20
+
+Packet wording, a generate-PRD conversion section with a prose check, and documentation pointers.
+
+- lean-change: the intent-check and review packets print each question as `- id: use` with its text on the next line, and the answer template asks for the question id only (`"question": "<question id, e.g. use>"`). The parse refusal quotes the same template. The using-lean-change-provider skill now says the engine records one intent check per run and one review per intent, each the first well-formed one. (#121 was partly out of date; engine behaviour unchanged.) (#164)
+- using-generate-prd skill: new section "Converting an accepted PRD", and `scripts/check-prd-prose.py`, which fails when an accepted line is dropped, changed or moved in the converted file and allows added lines. Its tests run in the `tests` job and `scripts/baseline.sh`. (#162)
+- Release docs point at each other once: `scripts/release-after-merge.sh`'s header and AGENTS.md's authority list name docs/release-procedure.md. The policy-document and research crate guides say the release dry run's archive check is the required archive proof and `scripts/packaged-smoke.py` is optional. (#161)
+
 ## [0.55.0] - 2026-11-17
 
 Instruction text, the lean-change skill's clean-up block, and its journey; no engine or provider code changes.
