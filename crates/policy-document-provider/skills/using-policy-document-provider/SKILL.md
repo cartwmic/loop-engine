@@ -79,7 +79,8 @@ crate-local Markdown cannot link to root guidance.
    Packet includes show, assignment, author, request and result; assignment subject
    and subject_revision both equal the current target digest. Preserve request.text
    and result.text, policy_ids and declared review_stage/self-review facts.
-6. Inspect candidates/diagnostics and semantic fitness, then append review-evidence.
+6. Inspect candidates/diagnostics and semantic fitness, triage each candidate on the four tests
+   (see Triage reviewer candidates), then append review-evidence.
    The projector computes target identity; it does not judge the reviewer claim.
 7. Observe and request semantic passed. This rechecks deterministic current bytes.
    On target edits, revise, rerun deterministic checks, recompute digest and obtain
@@ -95,6 +96,17 @@ change only through authorized durable author-count amendment.
 
 Passing semantic review retains the target's exact bytes as an engine-committed
 `retained-artifacts` record; keep the target unchanged until the event completes.
+
+## Triage reviewer candidates
+
+**Triage each finding on four tests** in a reviewer candidate before you append it, whoever raised it. A reviewer calling something a failure does not make it one. Run the tests in order. When `~/.local/share/agent-harness/finding-triage.md` exists, it states the same rule at more length; this text stands alone.
+
+1. **Real.** It holds when checked against the code, the document or a run. Say how you checked.
+2. **Useful.** Fixing it changes something a user, a caller or the next maintainer would notice. Taste and hypotheticals fail, and so does a fix that an existing job or check already does.
+3. **Maintainable.** The finding and its fix hold up against the owner's design principles (`~/.local/share/agent-harness/design-principles.md`). A fix that breaks a principle fails. So does a fix that adds machinery the need does not require.
+4. **In intent.** It fits the frozen target and policies under review. In audit mode the whole existing target is in scope. In a draft run, a problem the target had before this run started fails this test; anything this run wrote is in scope, and a defect it introduces always passes, even when the profile does not mention it.
+
+**Name the failed test:** a finding that fails one is declined with a reason that starts with it (`real:`, `useful:`, `maintainable:` or `in intent:`). A finding that fails `in intent` is a follow-up: mention it as "for a follow-up: ...". When a candidate's failure rests only on such findings, the driver does not append it as a blocking failure and never edits the reviewer's original return. If that leaves an axis without a conforming judgment, ask for focused reconsideration of that candidate. A finding that passes all four and is material stays blocking: append it as conforming failure evidence and fix it. Report the declined findings with their failed tests, and the follow-ups, to the owner.
 
 ## Explicit historical review context
 
@@ -148,7 +160,7 @@ word counts, style preferences or speculative obligations. Late material finding
 still require evidence, violated obligation and concrete consequence.
 Verify external cleanup and inspect partial edits before retry. End only on checked
 terminal completion; return exact target digest/profile, run/catalog identity,
-review decisions, residual risks and any pending owner application/Git authorization.
+review decisions, declined findings with their failed tests, follow-ups, residual risks and any pending owner application/Git authorization.
 
 Small pre-start overrides use `--set review.GATE.AXIS.required_authors=N`,
 `--set review.GATE.AXIS.self_review=true`, and `--set review.GATE.AXIS.group=NAME`.
