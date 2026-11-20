@@ -26,6 +26,8 @@ Preserve review groups, self-review declarations, author counts and amendments. 
 
 ## Delegated approval
 
+Who approves an intent is decided outside the engine: it is whoever the user's instructions name for this repo, by default the owner. Below, "the owner" means that person.
+
 A lead or driver may record the owner's approval of an intent itself, in two cases: an approval the owner gave earlier of the design or plan, or a standing grant from the owner. Cite that approval or grant by its id, and quote the owner's words exactly. Ask the owner when no delegation covers the step, or the step adds, drops or changes an approved outcome. Also ask the owner if an intent was rejected earlier in this run.
 
 The lead judges whether the cited source covers the step, and writes the reason in `text`. The engine does not judge that. Under a delegation, `text` is the lead's own statement of why the source covers the step. It is not the owner's words. The `quote` holds the owner's words.

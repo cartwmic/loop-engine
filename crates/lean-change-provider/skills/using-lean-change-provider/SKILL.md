@@ -1,6 +1,6 @@
 ---
 name: using-lean-change-provider
-description: Use when driving a lean-change run in Loop Engine: explore, owner-approved intent, implement, verify with digest-bound checks, and (profile b) one fresh-context intent check and one fresh-context diff review.
+description: Use when driving a lean-change run in Loop Engine: explore, approved intent, implement, verify with digest-bound checks, and (profile b) one fresh-context intent check and one fresh-context diff review.
 ---
 
 # Using the lean-change provider
@@ -8,6 +8,8 @@ description: Use when driving a lean-change run in Loop Engine: explore, owner-a
 lean-change checks; it does not work. You do the work and append records. The provider refuses
 a transition until the records for it are complete. Load the `using-loop-engine` skill for
 the engine commands (`start`, `show`, `append`, `event`). Use explicit `--database` and `--config`.
+
+Who approves a run's intent is decided outside the engine: it is whoever the user's instructions name for this repo, by default the owner. Where this guide says "the owner" for an approval, it means that person, and a delegated approval stands in for them as described below.
 
 Two profiles, one provider: **b** has an intent check and a review state, **c** has neither. The profile is frozen at start.
 The old-vs-new check is on by default in both (see its section below).
@@ -89,7 +91,7 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    `intent-ready`: spelled the way the criterion's statement spells it (a name written `Alice` in the statement is `Alice` in
    the sample) it must pass, and with one promise broken it must fail. A check that refuses the first or accepts the second is
    wrong. Nothing in the provider enforces this step.
-2. **intent-approval.** Show the owner the intent verbatim, with the check's findings and how each was disposed (profile b), and ask: "What do you expect that is not listed?" Their answer may change the intent. Append their exact words (do not edit them):
+2. **intent-approval.** Show the approver (whoever the user's instructions name for this repo, by default the owner) the intent verbatim, with the check's findings and how each was disposed (profile b), and ask: "What do you expect that is not listed?" Their answer may change the intent. Append their exact words (do not edit them):
 
    ```sh
    loop-engine ... append RUN owner-decision '{"checkpoint": "intent", "subject": "intent",
@@ -152,7 +154,7 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    expectation, or the tree changed after the run (any edit, even a comment, to a tracked or not-ignored file;
    git-ignored files are not covered, so a check must not depend on them). Checks run in their own process group and are killed at their timeout.
    If the checks rewrite the repository between them, verify refuses; make them read-only. If a check fails, fix the code and verify again. Do not edit the intent
-   to make a check pass; that needs a new intent and the owner's approval.
+   to make a check pass; that needs a new intent and a new approval.
 6. **review** (profile b only). Produce the packet and give it to a reviewer who has not seen this work
    (a fresh session or a different model), unchanged:
 
@@ -332,6 +334,6 @@ exit code. Each criterion that is not `none` adds one run
 - The intent check has six fixed questions and the review has seven (six in a record without `findings_schema`), including whether the diff breaks the owner's design principles and whether a materially smaller design exists.
   Do not shorten or reword them. Do not pre-answer them for the reviewer.
 - The engine records one review per intent (and one intent check per run), the first well-formed one. A further review round is driver procedure that follows `~/.local/share/agent-harness/reviewer-brief.md` and the review-round rule it names (playbook 58fdb05d).
-- A blocking finding needs an obligation, evidence and a consequence a user would hit in ordinary single-user use; everything else is a note, and a note needs no disposition. Code checks that the three fields are present, not that they are true. Triage each effectively-blocking finding on the four tests, fix what passes, and reject only with a reason that names the failed test.
+- A blocking finding needs an obligation, evidence and a consequence a user would hit in ordinary use; everything else is a note, and a note needs no disposition. Code checks that the three fields are present, not that they are true. Triage each effectively-blocking finding on the four tests, fix what passes, and reject only with a reason that names the failed test.
 - Never write a `verification` record by hand. Never copy an owner decision from an earlier intent. A delegation names its own source and quote; do not copy one from an earlier intent either.
 - The engine never runs your checks or agents. Everything outside the records is yours.
