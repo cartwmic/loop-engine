@@ -178,7 +178,7 @@ is `null`.
 | A text has fewer than two parsed readings, or a leaf has no majority | infrastructure failure naming the text ids; the readings stay in the capture folder, but are not reused | exit 2, nothing written (`--save-forms`) |
 | The reader step passes 600 s | infrastructure failure | not capped |
 
-An infrastructure failure is retried by the campaign and never counts against the trial.
+An infrastructure failure never counts against the trial: it is left out of the success rate. The campaign does not retry it by itself.
 
 ### Cost, metrics and rescoring
 

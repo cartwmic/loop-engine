@@ -232,11 +232,14 @@ class TextReading:
 async def _one_call(model, reader, kind, text):
     config = GenerateConfig(temperature=TEMPERATURE, max_tokens=MAX_TOKENS, timeout=CALL_TIMEOUT_SECONDS,
                             max_retries=CALL_RETRIES, cache_prompt=False)  # the proxy refuses Inspect's cache headers
+    failed = False
     try:
         output = await model.generate([ChatMessageSystem(content=reader.guide),
                                        ChatMessageUser(content=json.dumps({"kind": kind, "text": text}))], config=config)
     except Exception:
-        raise ReaderCallError("reader failed") from None
+        failed = True
+    if failed:  # raised outside the handler: the campaign's classifier follows __context__ and must not see a TimeoutError
+        raise ReaderCallError("reader failed")
     usage = output.usage
     return output.completion or "", (usage.input_tokens or 0) if usage else 0, (usage.output_tokens or 0) if usage else 0
 
@@ -431,6 +434,7 @@ async def run_reader_step(trial):
     """
     spec = trial.case.reader
     reader = load_reader(spec)
+    bad_collector = False
     try:
         result = await trial.env.exec(["python3", f"/opt/scoring/tests/{spec.collector}"],
                                       cwd="/workspace/public/repo", timeout=COLLECTOR_SECONDS)
@@ -438,15 +442,20 @@ async def run_reader_step(trial):
             raise ReaderInputError("collector exit")
         texts = parse_collected(result.stdout, reader.shapes)
     except (ReaderInputError, TimeoutError, OSError):
-        raise InfrastructureError("reader collector failed") from None
+        bad_collector = True
+    if bad_collector:  # raised outside the handler so no TimeoutError is left in __context__ (see _one_call)
+        raise InfrastructureError("reader collector failed")
     items = [entry for entry in texts if entry["text"] is not None]
     capture_dir = getattr(trial, "capture_dir", None)
     cache = ReadingCache(capture_dir) if capture_dir is not None else None
+    out_of_time = False
     try:
         with anyio.fail_after(STEP_SECONDS):
             readings = await read_texts(get_model(reader.model), reader, items, cache=cache)
     except TimeoutError:
-        raise InfrastructureError("reader failed") from None
+        out_of_time = True
+    if out_of_time:
+        raise InfrastructureError("reader failed")
     unread = [r.id for r in readings if r.form is None]
     if unread:
         raise InfrastructureError("reader failed: no usable vote for " + ", ".join(unread))

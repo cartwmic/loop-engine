@@ -657,3 +657,38 @@ def test_case_check_save_forms_writes_the_saved_file_and_a_later_check_reads_it_
     monkeypatch.setattr(cases, "run_hidden_tests", fake_container_work(case, lambda reference: [{**texts[0], "text": TEXT + "!"}]))
     assert cases.case_check(args) == 1
     assert "run case-check --save-forms" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- the campaign's classifier sees infrastructure
+
+def classified(run):
+    from evalcore.accounting import classify_exception
+    try:
+        run()
+    except Exception as error:
+        return classify_exception(error)[0]
+    raise AssertionError("no failure was raised")
+
+
+def test_a_model_call_that_times_out_is_classified_as_infrastructure(tmp_path):
+    case = load_case(make_case(tmp_path))
+    text = collected(("m", "message", TEXT))
+    assert classified(lambda: step(trial_of(case, Env(text)), scripted({TEXT: [MESSAGE, TimeoutError("slow"), MESSAGE]}))) == "infrastructure"
+
+
+def test_the_step_cap_is_classified_as_infrastructure(tmp_path, monkeypatch):
+    case = load_case(make_case(tmp_path))
+    monkeypatch.setattr(reader, "STEP_SECONDS", 0.05)
+
+    async def slow(*args, **kwargs):
+        await asyncio.sleep(5)
+    monkeypatch.setattr(reader, "read_texts", slow)
+    assert classified(lambda: step(trial_of(case, Env(collected(("m", "message", TEXT)))), scripted({}))) == "infrastructure"
+
+
+def test_a_collector_timeout_is_classified_as_infrastructure(tmp_path):
+    class TimedOut(Env):
+        async def exec(self, command, **kwargs):
+            raise TimeoutError("collector")
+    case = load_case(make_case(tmp_path))
+    assert classified(lambda: step(trial_of(case, TimedOut("")), scripted({}))) == "infrastructure"
