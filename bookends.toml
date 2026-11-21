@@ -15,6 +15,7 @@ pathspecs = [
   "crates/loop-cli/tests/engine/backlog_t03.rs",
   "crates/loop-cli/tests/workers/backlog_t04.rs",
   "tests/workspace-integration/tests/model_bindings.rs",
+  "tests/workspace-integration/tests/terminate_reason.rs",
 ]
 required_ci_jobs = ["tests"]
 

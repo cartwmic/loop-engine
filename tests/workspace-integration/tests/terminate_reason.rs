@@ -104,6 +104,7 @@ impl Catalog {
 }
 
 #[test]
+// bookends:LE-214 — the reason is stored on the terminated history entry; no reason leaves it unchanged.
 fn terminate_stores_the_reason_in_history() {
     let catalog = Catalog::new();
     catalog.terminated("run", Some(REASON));
@@ -113,6 +114,7 @@ fn terminate_stores_the_reason_in_history() {
 }
 
 #[test]
+// bookends:LE-214 — show displays the reason in every view.
 fn show_displays_the_termination_reason() {
     let catalog = Catalog::new();
     catalog.terminated("run", Some(REASON));

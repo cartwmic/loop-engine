@@ -5,17 +5,22 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # A manual run on a branch is a full-suite run of that branch's head: the
+  # red-main merge gate (`ci-main-status --merge-gate --pr N`) accepts it as the
+  # proof that a fix PR passes the whole suite, which a pull_request run never is.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 # A PR runs `checks` only. A newer push to the PR cancels its superseded run.
-# A push to main runs `checks`, `tests` and `release-tests`. Each push has its
-# own group (its tip SHA) and is never cancelled: release requires a successful
-# push run for the exact commit, and the Bookends range of a cancelled push
-# would otherwise go unchecked.
+# A push to main, or a manual run on a branch (workflow_dispatch), runs
+# `checks`, `tests` and `release-tests`. Each push has its own group (its tip
+# SHA), each manual run its own (its run id), and neither is cancelled: release
+# requires a successful push run for the exact commit, and the Bookends range
+# of a cancelled push would otherwise go unchecked.
 concurrency:
-  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.event_name == 'workflow_dispatch' && github.run_id || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -37,11 +42,11 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace --locked
 
-  # Push to main only: the workspace tests, the journey self-tests and the
-  # Bookends pushed-range gate, on the pushed commit.
+  # Push to main or a manual run: the workspace tests, the journey self-tests
+  # and the Bookends range gate, on the pushed or dispatched commit.
   tests:
     runs-on: ubuntu-22.04
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
@@ -73,24 +78,42 @@ jobs:
         run: python3 scripts/generate-prd-journey.py
       - name: PRD prose check tests
         run: python3 scripts/test_prd_prose_check.py
+      # A push checks the pushed range. A manual run checks the commits the
+      # branch adds on top of main: from the merge base to the dispatched tip.
       - name: Bookends pushed-range gate
         shell: bash
         env:
+          EVENT_NAME: ${{ github.event_name }}
           PUSH_AFTER: ${{ github.event.after }}
           PUSH_BEFORE: ${{ github.event.before }}
+          DISPATCH_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          if [ "$EVENT_NAME" = push ]; then
+            AFTER="$PUSH_AFTER"
+            BEFORE="$PUSH_BEFORE"
+          else
+            AFTER="$DISPATCH_SHA"
+            BEFORE="$(git merge-base origin/main "$DISPATCH_SHA")"
+            # Fail closed: a manual run on main (or on a branch with nothing past
+            # main) would check an empty range and print GREEN, which a red main
+            # must not be able to clear. main's own push run is the proof for main.
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "$AFTER" ]; then
+              echo "A manual run is for PR branches: $AFTER adds nothing on top of origin/main, so there is no range to check. Rerun main's push run instead (gh run rerun <push run id>)." >&2
+              exit 1
+            fi
+          fi
           BIN_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"] + "/debug")')"
           export PATH="$BIN_DIR:$PATH"
           unset BOOKENDS_BYPASS
           export BOOKENDS_UPDATE_STREAM=1 BOOKENDS_REMOTE=origin
-          printf 'refs/heads/main %s refs/heads/main %s\n' "$PUSH_AFTER" "$PUSH_BEFORE" | scripts/bookends-check-gate.sh
+          printf 'refs/heads/main %s refs/heads/main %s\n' "$AFTER" "$BEFORE" | scripts/bookends-check-gate.sh
 
-  # Push to main only. release-after-merge.sh reads this run's conclusion, not
-  # its job names, so a green push run still satisfies it.
+  # Push to main or a manual run. release-after-merge.sh reads the push run's
+  # conclusion, not its job names, so a green push run still satisfies it.
   release-tests:
     runs-on: ubuntu-22.04
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
