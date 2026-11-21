@@ -102,6 +102,8 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
    Request `approved` (hard false) or `approved-hard` (hard true). If they want changes, request `revise`,
    write `intent-2`, and ask again. A rejection is the same record with `"decision": "reject"`, a `target` of `intent` and a `reason`.
 
+   For an approval in the owner's own words, put the ask id in `reason`, for example `"reason": "ask #1404"`. Never put it in `text`, which holds the owner's exact words. Never add a top-level `source`: the engine rejects it as an unknown field and ignores the record, so `approved` is refused with `owner-decision-missing`, and the refusal's `ignored` list names the field `source`.
+
    **Delegated path.** Use it only when a delegation covers the run: an approval the owner gave earlier of the design or plan, or a standing grant. User instructions that name someone else to approve this repo's intents are such a standing grant: cite them, or the decision they rest on, as `source`, and quote the user's words in `quote`. Read checkout-root `docs/agent-usage.md#delegated-approval` first. Check that every criterion of the intent is one the cited approval covers. Then append the approval yourself, with a `delegation` (`basis` `approval` or `standing-grant`, `source`, `quote`, `covers`):
 
    ```json
@@ -122,6 +124,8 @@ denial feedback. A denial names what is missing; fix that, do not argue with it.
 4. **implement.** Change the code. Stay inside the approved goal and constraints. When the work has steps
    that touch different files, build them at once ([Parallel builders](#parallel-builders)). Request `ready`.
 5. **verify.** Run the checks on the current tree and append what they print:
+
+   Commit before `lean-change verify` if your checkpoint decision lets you commit: the tree fingerprint includes `HEAD`, so a commit after verify makes the result stale even when no file content changed.
 
    ```sh
    loop-engine ... --json show --view full RUN | lean-change verify > "$WORK/v.json"
