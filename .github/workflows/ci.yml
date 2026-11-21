@@ -5,16 +5,18 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # A manual run on a branch is a full-suite run of that branch's head: the
+  # A manual run is a full-suite run of the dispatched head. On a branch the
   # red-main merge gate (`ci-main-status --merge-gate --pr N`) accepts it as the
-  # proof that a fix PR passes the whole suite, which a pull_request run never is.
+  # proof that a fix PR passes the whole suite, which a pull_request run never
+  # is. On main it re-checks main's tip commit.
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A PR runs `checks` only. A newer push to the PR cancels its superseded run.
-# A push to main, or a manual run on a branch (workflow_dispatch), runs
+# A PR runs `checks` only, which includes the Bookends gate on the PR's own
+# range. A newer push to the PR cancels its superseded run.
+# A push to main, or a manual run (workflow_dispatch), runs
 # `checks`, `tests` and `release-tests`. Each push has its own group (its tip
 # SHA), each manual run its own (its run id), and neither is cancelled: release
 # requires a successful push run for the exact commit, and the Bookends range
@@ -33,6 +35,8 @@ jobs:
           submodules: recursive
           # PRs check the PR head, not the synthetic merge commit.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # The PR Bookends gate below walks the history from the merge base.
+          fetch-depth: 0
       - uses: Swatinem/rust-cache@v2
       # Keep the check list in sync with scripts/baseline.sh.
       - name: Check formatting
@@ -41,6 +45,31 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Build workspace
         run: cargo build --workspace --locked
+      # The push gate in `tests` never runs on a PR, so a requirement edit that
+      # breaks Bookends' identity check would only turn main red after merge.
+      # This runs the same gate on the commits the PR adds on top of main, from
+      # the merge base to the PR head. The workspace build above already built
+      # `bookends-check`, so this costs no extra compile.
+      - name: Bookends PR-range gate
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          AFTER="$PR_HEAD"
+          BEFORE="$(git merge-base "$PR_BASE" "$PR_HEAD")"
+          # Fail closed: an empty range would print GREEN without checking anything.
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "$AFTER" ]; then
+            echo "$AFTER adds nothing on top of the PR base $PR_BASE, so there is no range to check." >&2
+            exit 1
+          fi
+          BIN_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"] + "/debug")')"
+          export PATH="$BIN_DIR:$PATH"
+          unset BOOKENDS_BYPASS
+          export BOOKENDS_UPDATE_STREAM=1 BOOKENDS_REMOTE=origin
+          printf 'refs/heads/main %s refs/heads/main %s\n' "$AFTER" "$BEFORE" | scripts/bookends-check-gate.sh
 
   # Push to main or a manual run: the workspace tests, the journey self-tests
   # and the Bookends range gate, on the pushed or dispatched commit.
@@ -78,8 +107,10 @@ jobs:
         run: python3 scripts/generate-prd-journey.py
       - name: PRD prose check tests
         run: python3 scripts/test_prd_prose_check.py
-      # A push checks the pushed range. A manual run checks the commits the
-      # branch adds on top of main: from the merge base to the dispatched tip.
+      # A push checks the pushed range. A manual run on a branch checks the
+      # commits the branch adds on top of main: from the merge base to the
+      # dispatched tip. A manual run on main checks main's tip commit (main is
+      # squash-merged: one commit per push), from its first parent.
       - name: Bookends pushed-range gate
         shell: bash
         env:
@@ -87,21 +118,24 @@ jobs:
           PUSH_AFTER: ${{ github.event.after }}
           PUSH_BEFORE: ${{ github.event.before }}
           DISPATCH_SHA: ${{ github.sha }}
+          DISPATCH_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = push ]; then
             AFTER="$PUSH_AFTER"
             BEFORE="$PUSH_BEFORE"
+          elif [ "$DISPATCH_REF" = refs/heads/main ]; then
+            AFTER="$DISPATCH_SHA"
+            BEFORE="$(git rev-parse --verify --quiet "$AFTER^1" || true)"
           else
             AFTER="$DISPATCH_SHA"
             BEFORE="$(git merge-base origin/main "$DISPATCH_SHA")"
-            # Fail closed: a manual run on main (or on a branch with nothing past
-            # main) would check an empty range and print GREEN, which a red main
-            # must not be able to clear. main's own push run is the proof for main.
-            if [ -z "$BEFORE" ] || [ "$BEFORE" = "$AFTER" ]; then
-              echo "A manual run is for PR branches: $AFTER adds nothing on top of origin/main, so there is no range to check. Rerun main's push run instead (gh run rerun <push run id>)." >&2
-              exit 1
-            fi
+          fi
+          # Fail closed: an empty range would print GREEN without checking
+          # anything. A branch with nothing past main, or a root commit, has none.
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "$AFTER" ]; then
+            echo "$AFTER has no commits to check ($BEFORE..$AFTER is empty). A manual run on a branch needs commits past origin/main; on main it needs a parent commit." >&2
+            exit 1
           fi
           BIN_DIR="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"] + "/debug")')"
           export PATH="$BIN_DIR:$PATH"
