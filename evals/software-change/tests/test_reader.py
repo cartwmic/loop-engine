@@ -165,6 +165,12 @@ def test_vote_set_leaf_votes_per_element():
     assert reader.vote(node, []) == (None, [])
 
 
+def test_a_voted_set_leaf_is_sorted_whatever_order_the_shape_lists_it_in():
+    node = {"offers": {"set_of": ["grant", "ask"]}}
+    forms = [{"offers": ["ask", "grant"]}] * 3
+    assert reader.vote(node, forms) == ({"offers": ["ask", "grant"]}, [])
+
+
 def test_settings_hash_changes_with_the_model_the_guide_and_the_shapes():
     base = reader.settings_sha256("m", "guide", "{}")
     assert base == reader.settings_sha256("m", "guide", "{}")
@@ -559,7 +565,8 @@ def test_read_texts_does_not_use_the_cache_and_has_no_step_cap(tmp_path, monkeyp
 
 @pytest.mark.parametrize("texts", [
     [{"id": "a", "kind": "message", "text": TEXT}, {"id": "a", "kind": "bullet", "text": OTHER_TEXT}],
-    [{"id": "a", "kind": "nope", "text": TEXT}], [{"id": "a", "kind": "message", "text": None}],
+    [{"id": "a", "kind": "nope", "text": TEXT}], [{"id": "a", "kind": ["message"], "text": TEXT}],
+    [{"id": "a", "kind": "message", "text": None}],
     [{"id": "a", "kind": "message", "text": ""}], [{"id": "a", "kind": "message"}], "not json", '{"texts": 1}', '{"other": []}'])
 def test_read_texts_refuses_bad_input_with_exit_2_and_writes_nothing(tmp_path, texts, capsys):
     code, out = run_read_texts(tmp_path, texts, scripted({}))

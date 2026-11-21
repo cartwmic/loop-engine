@@ -24,7 +24,7 @@ from evalcore.target import InfrastructureError
 
 log = logging.getLogger(__name__)
 
-# Settings step 1 proved the reader bar at. They are stamped into settings_sha256, so a change of any of them
+# The reader's settings. They are stamped into settings_sha256, so a change of any of them
 # makes saved forms and cached readings stale.
 CONTRACT = "case-reader-v1"
 READINGS = 3
@@ -161,7 +161,7 @@ def vote(node, forms):
                     decided = False
                 elif 2 * votes > total:
                     chosen.append(element)
-            return chosen if decided else None
+            return sorted(chosen) if decided else None
         result = {}
         for key, child in shape.items():
             value = walk(child, [v[key] for v in values], f"{path}.{key}" if path else key)

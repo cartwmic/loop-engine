@@ -219,7 +219,7 @@ refused: this command reads, it does not collect). Output is, in input order:
 {"settings_sha256": "…", "model": "anthropic/claude-haiku-5-5",
  "results": [{"id": "…", "kind": "…", "form": {"offers": ["ask"]},
               "readings": [{"offers": ["ask"]}, {"offers": ["ask"]}, null],
-              "failed": 1, "split": ["offers.grant"],
+              "failed": 1, "split": [],
               "usage": {"calls": 3, "input_tokens": 1830, "output_tokens": 210}}]}
 ```
 

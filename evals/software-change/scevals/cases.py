@@ -383,7 +383,7 @@ def read_texts_command(args):
                 raise ReaderInputError("each text needs an id, a kind and a nonempty string text")
             if entry["id"] in seen:
                 raise ReaderInputError(f"duplicate id: {entry['id']}")
-            if entry["kind"] not in reader.shapes:
+            if not isinstance(entry["kind"], str) or entry["kind"] not in reader.shapes:
                 raise ReaderInputError(f"unknown kind for id {entry['id']}")
             seen.add(entry["id"])
     except (CaseFormatError, ReaderInputError) as error:
