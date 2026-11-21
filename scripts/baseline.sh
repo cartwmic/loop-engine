@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Keep this check list identical to the union of the jobs in .github/workflows/ci.yml:
-# checks run on PRs and pushes; tests and release-tests run on pushes to main.
+# checks run on PRs, pushes and manual runs; tests and release-tests run on pushes to main and on manual runs (`gh workflow run ci.yml --ref BRANCH`).
 # CI uses pushed-range Bookends; this local baseline uses ordinary working-tree mode.
 set -euo pipefail
 
