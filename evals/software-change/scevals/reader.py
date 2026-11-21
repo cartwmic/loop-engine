@@ -236,8 +236,9 @@ async def _one_call(model, reader, kind, text):
     try:
         output = await model.generate([ChatMessageSystem(content=reader.guide),
                                        ChatMessageUser(content=json.dumps({"kind": kind, "text": text}))], config=config)
-    except Exception:
+    except Exception as error:
         failed = True
+        log.warning("reader call failed: %s", type(error).__name__)  # the class only: no reply or message text is logged
     if failed:  # raised outside the handler: the campaign's classifier follows __context__ and must not see a TimeoutError
         raise ReaderCallError("reader failed")
     usage = output.usage
@@ -431,8 +432,9 @@ def reader_model(reader):
     unavailable = False
     try:
         model = get_model(reader.model)
-    except Exception:
+    except Exception as error:
         unavailable = True
+        log.warning("reader model could not be built: %s", type(error).__name__)
     if unavailable:  # raised outside the handler, as in _one_call
         raise ReaderCallError("reader model unavailable")
     return model
