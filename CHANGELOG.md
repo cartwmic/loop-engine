@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.61.0] - 2026-11-21
+
+A duplicate start is refused clearly, `terminate` takes a reason, and a manual CI run can prove a fix PR when main is red.
+
+- `loop-engine start` with a run id that already exists is now refused with status `rejected`, code `run-already-exists`, exit 10 and a message that names the id. It was `error` / `persistence-failure` / exit 20 with the raw `UNIQUE constraint failed` text. The existing run is unchanged (#177).
+- `loop-engine terminate RUN [REASON]` takes an optional reason. It is stored on the termination history entry and `show` displays it as `termination_reason` in every view and as a `terminated:` line in the default text view. Without a reason nothing changes, and runs terminated before this still load. The catalog schema does not change (#178).
+- ci.yml: new `workflow_dispatch` trigger. `gh workflow run ci.yml --ref BRANCH` runs `checks`, `tests` and `release-tests` on a branch head, with Bookends over the commits the branch adds on top of main. A manual run on main refuses, because it would check an empty range. This gives a fix PR the full-suite run the red-main merge gate needs (#179).
+- docs/PRD.md: LE-214 records the terminate reason. LE-15's title also carries it, because #178 extended that title and Bookends reads a changed title as a changed identity (#179).
+- These came out of a real nested-runs proof: a parent run and two child runs, one per fix, each approved on its own.
+
 ## [0.60.0] - 2026-11-20
 
 ## [0.60.0] - 2026-11-20
