@@ -278,9 +278,23 @@ def test_one_unparseable_reading_is_counted_and_the_other_two_vote(tmp_path):
 def test_a_text_with_no_usable_vote_is_an_infrastructure_failure(tmp_path, replies):
     case = load_case(make_case(tmp_path))
     env = Env(collected(("m", "message", TEXT)))
-    with pytest.raises(InfrastructureError, match="reader failed"):
+    with pytest.raises(InfrastructureError, match="reader failed: no usable vote for m"):
         step(trial_of(case, env), scripted({TEXT: replies}))
     assert env.writes == {}
+
+
+def test_a_text_with_no_usable_vote_is_kept_to_inspect_and_is_not_reused(tmp_path):
+    case = load_case(make_case(tmp_path))
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    with pytest.raises(InfrastructureError, match="no usable vote for m"):
+        step(trial_of(case, Env(collected(("m", "message", TEXT))), capture), scripted({TEXT: ["no idea", MESSAGE, "x"]}))
+    (name,) = cache_files(capture)
+    kept = json.loads((capture / name).read_text())
+    assert kept["form"] is None and kept["raw"] == ["no idea", MESSAGE, "x"] and kept["text"] == TEXT
+    calls = []  # a rescore reads again; the kept file is not a hit, and a good reading then replaces it
+    step(trial_of(case, Env(collected(("m", "message", TEXT))), capture), scripted({TEXT: [MESSAGE] * 3}, calls))
+    assert len(calls) == 3 and json.loads((capture / name).read_text())["form"] == {"offers": ["ask"]}
 
 
 def test_a_call_that_fails_is_an_infrastructure_failure(tmp_path):
@@ -318,7 +332,8 @@ def test_readings_are_kept_per_text_and_a_rescore_reuses_them_with_no_model_call
     assert cache_files(capture) == sorted([f"reader-{key}.json", f"reader-{reader.reading_key('message', OTHER_TEXT, reader_of(tmp_path / 'third').settings_sha256)}.json"])
     assert len(first_calls) == 6 and first["cached_texts"] == 0
     saved = json.loads((capture / f"reader-{key}.json").read_text())
-    assert saved["form"] == {"offers": ["ask"]} and saved["raw"] == [MESSAGE] * 3 and "text" not in saved
+    assert saved["form"] == {"offers": ["ask"]} and saved["raw"] == [MESSAGE] * 3
+    assert saved["kind"] == "message" and saved["text"] == TEXT  # the text stays in the private capture folder
     forms = env.writes["/opt/scoring/tests/forms.json"]
 
     env2, second_calls = Env(env.stdout), []
@@ -345,15 +360,16 @@ def test_cache_writes_are_atomic_and_add_only(tmp_path):
     cache = reader.ReadingCache(tmp_path)
     first = reader.TextReading("a", "message", {"offers": ["ask"]}, [{"offers": ["ask"]}] * 3, ["r"] * 3, 0, [],
                                {"calls": 3, "input_tokens": 1, "output_tokens": 1})
-    cache.put("k", first)
+    item = {"id": "a", "kind": "message", "text": TEXT}
+    cache.put("k", first, item)
     assert [p.name for p in tmp_path.iterdir()] == ["reader-k.json"]  # no temp file left behind
     other = reader.TextReading("a", "message", {"offers": ["grant"]}, [{"offers": ["grant"]}] * 3, ["s"] * 3, 0, [],
                                {"calls": 3, "input_tokens": 1, "output_tokens": 1})
-    cache.put("k", other)  # a valid file is never replaced
+    cache.put("k", other, item)  # a valid file is never replaced
     assert cache.get("k")["form"] == {"offers": ["ask"]}
     (tmp_path / "reader-k.json").write_text("{broken")
     assert cache.get("k") is None
-    cache.put("k", other)  # a broken file is repaired
+    cache.put("k", other, item)  # a broken file is repaired
     assert cache.get("k")["form"] == {"offers": ["grant"]}
     assert [p.name for p in tmp_path.iterdir()] == ["reader-k.json"]
 

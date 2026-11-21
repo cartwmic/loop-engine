@@ -175,7 +175,7 @@ is `null`.
 | Collector fails or prints the wrong shape | infrastructure failure | `INVALID` |
 | A text is `null` | no reading, form `null`; the tests that need it fail | same |
 | A model call fails after its retries | infrastructure failure | exit 2, nothing written |
-| A text has fewer than two parsed readings, or a leaf has no majority | infrastructure failure | exit 2, nothing written (`--save-forms`) |
+| A text has fewer than two parsed readings, or a leaf has no majority | infrastructure failure naming the text ids; the readings stay in the capture folder, but are not reused | exit 2, nothing written (`--save-forms`) |
 | The reader step passes 600 s | infrastructure failure | not capped |
 
 An infrastructure failure is retried by the campaign and never counts against the trial.
@@ -186,7 +186,7 @@ The reader's calls are not a workflow role, so they are reported and never count
 stop. `hidden_tests.reader` in a trial's metrics holds the model, a settings hash, the number of texts, calls and
 tokens, failed readings and the leaves that split (`<id>:<leaf>`); it holds no text.
 
-The readings of each text are kept in the trial's capture folder as `reader-<key>.json`, where the key hashes the
+The readings of each text (the text, the raw replies, the form and the split leaves) are kept in the trial's capture folder as `reader-<key>.json`, where the key hashes the
 kind, the text and the settings (model, temperature, tokens, readings, guide and shapes). A rescore reuses a file
 whose key matches, so it gets the same forms with no model call; any other key reads again. Writes are atomic. A file that
 holds a valid reading is never replaced; one that cannot be parsed is. A trial with no capture folder, or a folder that cannot be written, keeps no cache and scoring goes on.

@@ -261,7 +261,7 @@ async def read_texts(model, reader, items, *, cache=None):
     for index, item in enumerate(items):
         hit = cache.get(reading_key(item["kind"], item["text"], reader.settings_sha256)) if cache else None
         if hit is not None:
-            results[index] = TextReading(item["id"], item["kind"], cached=True, **hit)
+            results[index] = TextReading(item["id"], item["kind"], cached=True, **{k: v for k, v in hit.items() if k not in ("kind", "text")})
         else:
             pending.append(index)
     replies = {(index, n): None for index in pending for n in range(READINGS)}
@@ -287,8 +287,8 @@ async def read_texts(model, reader, items, *, cache=None):
         parts = [replies[index, n] for n in range(READINGS)]
         reading = _assemble(items[index], reader, [p[0] for p in parts], (sum(p[1] for p in parts), sum(p[2] for p in parts)))
         results[index] = reading
-        if cache is not None and reading.form is not None:
-            cache.put(reading_key(items[index]["kind"], items[index]["text"], reader.settings_sha256), reading)
+        if cache is not None:
+            cache.put(reading_key(items[index]["kind"], items[index]["text"], reader.settings_sha256), reading, items[index])
     return results
 
 
@@ -312,7 +312,7 @@ class ReadingCache:
     def get(self, key):
         try:
             data = json.loads(self._path(key).read_text())
-            keys = {"form", "readings", "raw", "failed", "split", "usage"}
+            keys = {"kind", "text", "form", "readings", "raw", "failed", "split", "usage"}
             if (set(data) != keys or not isinstance(data["readings"], list) or len(data["readings"]) != READINGS
                     or not isinstance(data["raw"], list) or data["form"] is None):
                 return None
@@ -320,10 +320,11 @@ class ReadingCache:
         except (OSError, ValueError, TypeError):
             return None
 
-    def put(self, key, reading):
+    def put(self, key, reading, item):
+        """Keep the reading, its raw replies and the text. A reading with no form is kept to be inspected and is not a hit."""
         if self.write_failed:
             return
-        payload = {"form": reading.form, "readings": reading.readings, "raw": reading.raw,
+        payload = {"kind": item["kind"], "text": item["text"], "form": reading.form, "readings": reading.readings, "raw": reading.raw,
                    "failed": reading.failed, "split": reading.split, "usage": reading.usage}
         final = self._path(key)
         try:
@@ -446,8 +447,9 @@ async def run_reader_step(trial):
             readings = await read_texts(get_model(reader.model), reader, items, cache=cache)
     except TimeoutError:
         raise InfrastructureError("reader failed") from None
-    if any(r.form is None for r in readings):
-        raise InfrastructureError("reader failed")
+    unread = [r.id for r in readings if r.form is None]
+    if unread:
+        raise InfrastructureError("reader failed: no usable vote for " + ", ".join(unread))
     document = forms_document(texts, readings)
     await trial.env.write_file(f"/opt/scoring/tests/{FORMS_FILE}", json.dumps(document))
     trial.evidence["copy_log"].append({"kind": "reader_forms", "source": "harness/reader",

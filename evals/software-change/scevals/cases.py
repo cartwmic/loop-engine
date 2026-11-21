@@ -15,7 +15,7 @@ import tomllib
 from inspect_ai.model import get_model
 
 from evalcore.target import InfrastructureError
-from .reader import (FORMS_FILE, ReaderCallError, ReaderInputError, SavedFormsStale, forms_document, load_reader, load_saved,
+from .reader import (COLLECTOR_SECONDS, FORMS_FILE, ReaderCallError, ReaderInputError, SavedFormsStale, forms_document, load_reader, load_saved,
                      load_shapes, lookup_saved, parse_collected, read_texts, saved_entries)
 from .image import DEFAULT_IMAGE, DEFAULT_REF, verify_image, output, run, trial_container
 
@@ -167,7 +167,7 @@ def _collect_in_container(case, container):
     try:
         done = run(["docker", "exec", "--workdir", "/workspace/repo", container, "python3",
                     f"/opt/case-check/tests/{case.reader.collector}"],
-                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=COLLECTOR_SECONDS)
         return parse_collected(done.stdout, load_shapes(case.reader.shapes))
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ReaderInputError):
         raise ReaderCollectorFailed("reader collector failed") from None
