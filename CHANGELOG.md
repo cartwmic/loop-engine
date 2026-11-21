@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.63.0] - 2026-11-21
+
+The kgate profiles pin the current kgate base image, which has jq.
+
+- kgate.toml and kgate-verify.toml: the image pin moves from `41dc1792…` to `9d1f6308…`, the newest homelab kgate base image. It has jq 1.7.1, so the nested lean-change scenario no longer downloads jq. Rust, Python and Node versions are unchanged (#186).
+- scripts/lean-change-journey.py: the nested scenario's message no longer says the kgate image has no jq (#186).
+
 ## [0.62.0] - 2026-11-21
 
 Owner-decision and nested-run docs, and a CI fix so PR checks run Bookends on their own range.
