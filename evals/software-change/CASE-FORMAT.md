@@ -145,13 +145,17 @@ shape or names an unknown kind is a case bug: an infrastructure failure in a cam
 A collector may normalize what it prints (for example, replace a scratch path) so the same delivery gives the same
 text on every run.
 
+`case-check` also scans the hidden tests, collector included, for names the case never states. The reader's own
+keys (`texts`, `kind`, `forms`, `form`) are not counted. A name the collector prints that the case's request, brief
+or repository does not state (a text `id` such as `grant-message`) goes in `interface_allowlist` in `case.toml`.
+
 ### Reading and voting
 
 For each non-null text the harness calls the pinned model three times (the guide as the system prompt, a JSON
 object `{"kind", "text"}` as the user message; temperature 0.7, 8192 tokens, a 120 s timeout and two retries per
 call, at most four calls at once). Inspect drops the temperature for models that refuse it, such as Haiku 5.5. Prompt
-caching is off, because the Anthropic proxy refuses Inspect's cache headers. Each reply is parsed (the last JSON
-object in it), validated against the shape and voted leaf by leaf: a `one_of` leaf needs a strict majority, a
+caching is off, because the Anthropic proxy refuses Inspect's cache headers. Each reply is parsed (the last fenced
+JSON block in it, or if there is none, the last JSON object), validated against the shape and voted leaf by leaf: a `one_of` leaf needs a strict majority, a
 `set_of` leaf votes per element, at least two readings must parse, and any leaf with no majority leaves the text
 unreadable.
 
@@ -184,8 +188,8 @@ tokens, failed readings and the leaves that split (`<id>:<leaf>`); it holds no t
 
 The readings of each text are kept in the trial's capture folder as `reader-<key>.json`, where the key hashes the
 kind, the text and the settings (model, temperature, tokens, readings, guide and shapes). A rescore reuses a file
-whose key matches, so it gets the same forms with no model call; any other key reads again. Writes are atomic and
-add-only. A trial with no capture folder, or a folder that cannot be written, keeps no cache and scoring goes on.
+whose key matches, so it gets the same forms with no model call; any other key reads again. Writes are atomic. A file that
+holds a valid reading is never replaced; one that cannot be parsed is. A trial with no capture folder, or a folder that cannot be written, keeps no cache and scoring goes on.
 
 ### `case-check` and saved forms
 

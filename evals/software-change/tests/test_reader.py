@@ -592,3 +592,45 @@ def test_a_reader_call_inside_a_sample_is_not_recorded_under_any_role(tmp_path):
     inspect_eval(Task(dataset=[Sample(input="x")], solver=read_once()), model=MODEL, log_dir=str(tmp_path / "logs"), display="none")
     assert seen["roles"] == {}
     assert seen["models"] == {MODEL: 45}
+
+
+# ---------------------------------------------------------------- case-check end to end (container work stubbed)
+
+def test_the_readers_own_keys_in_a_collector_are_not_unstated_interfaces(tmp_path):
+    path = make_case(tmp_path)
+    (path / "hidden/tests/collect_texts.py").write_text(
+        'import json\nprint(json.dumps({"texts": [{"id": "x", "kind": "message", "text": None}]}))\n'
+        'forms = json.load(open("forms.json"))["forms"]\nforms["x"]["form"]\n')
+    assert cases.unstated_interfaces(load_case(path)) == []
+
+
+def fake_container_work(case, texts_for):
+    """Stands in for run_hidden_tests: asks for forms as the real one does, then reports the reference passing."""
+    def run(case_arg, reference, image, resolve_forms=None):
+        resolve_forms("reference" if reference else "noop", texts_for(reference))
+        statuses = ["passed" if reference or i else "failed" for i, _ in enumerate(case.test_requirements)]
+        return {"collection_error": False, "container": "stub",
+                "tests": [{"requirement_id": tag, "status": status} for tag, status in zip(case.test_requirements, statuses)]}
+    return run
+
+
+def test_case_check_save_forms_writes_the_saved_file_and_a_later_check_reads_it_with_no_model(tmp_path, monkeypatch, capsys):
+    path = make_case(tmp_path)
+    case = load_case(path)
+    texts = [{"id": "m", "kind": "message", "text": TEXT}]
+    monkeypatch.setattr(cases, "verify_image", lambda ref, tag: "image")
+    monkeypatch.setattr(cases, "run_hidden_tests", fake_container_work(case, lambda reference: texts))
+    monkeypatch.setattr(cases, "get_model", lambda name: scripted({TEXT: [MESSAGE] * 3}))
+    args = SimpleNamespace(path=path, expect_invalid=False, ref="r", tag="t", save_forms=True)
+    assert cases.case_check(args) == 0
+    saved = json.loads(case.reader.saved.read_text())
+    assert set(saved["scenarios"]) == {"reference", "noop"}
+    assert "VALID" in capsys.readouterr().out
+
+    monkeypatch.setattr(cases, "get_model", lambda name: pytest.fail("no model call is allowed"))
+    args.save_forms = False
+    assert cases.case_check(args) == 0
+
+    monkeypatch.setattr(cases, "run_hidden_tests", fake_container_work(case, lambda reference: [{**texts[0], "text": TEXT + "!"}]))
+    assert cases.case_check(args) == 1
+    assert "run case-check --save-forms" in capsys.readouterr().out

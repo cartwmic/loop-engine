@@ -15,7 +15,8 @@ import tomllib
 from inspect_ai.model import get_model
 
 from evalcore.target import InfrastructureError
-from .reader import ReaderCallError, ReaderInputError, SavedFormsStale
+from .reader import (FORMS_FILE, ReaderCallError, ReaderInputError, SavedFormsStale, forms_document, load_reader, load_saved,
+                     load_shapes, lookup_saved, parse_collected, read_texts, saved_entries)
 from .image import DEFAULT_IMAGE, DEFAULT_REF, verify_image, output, run, trial_container
 
 RUNTIME = Path(__file__).with_name("case_runtime.py")
@@ -93,7 +94,6 @@ def _reader_spec(path, table):
     collector = path / "hidden/tests" / table["collector"]
     if not guide.is_file() or not shapes.is_file() or not collector.is_file():
         raise CaseFormatError("reader guide, shapes or collector file is missing")
-    from .reader import ReaderInputError, load_shapes
     try:
         load_shapes(shapes)
     except ReaderInputError as error:
@@ -164,7 +164,6 @@ def load_case(path: Path) -> EvalCase:
 
 def _collect_in_container(case, container):
     """Run the case's collector in the check container, as scoring does. Returns the collected texts."""
-    from .reader import ReaderInputError, load_shapes, parse_collected
     try:
         done = run(["docker", "exec", "--workdir", "/workspace/repo", container, "python3",
                     f"/opt/case-check/tests/{case.reader.collector}"],
@@ -197,7 +196,6 @@ def run_hidden_tests(case: EvalCase, *, reference: bool, image=DEFAULT_IMAGE, re
         copy(str(case.tests) + "/.", "/opt/case-check/tests", "hidden_tests")
         copy(RUNTIME, "/opt/case-check/case_runtime.py", "test_runner")
         if case.reader is not None:
-            from .reader import FORMS_FILE
             forms = resolve_forms("reference" if reference else "noop", _collect_in_container(case, container))
             run(["docker", "exec", "-i", container, "sh", "-c", f"cat > /opt/case-check/tests/{FORMS_FILE}"],
                 input=json.dumps(forms), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -242,6 +240,7 @@ INTERFACE_STOPLIST = {
     "unittest", "case_runtime", "requirement", "cargo", "rustc", "build", "release",
     "--quiet", "--offline", "--manifest-path", "--target-dir", "--nocapture",
     "stdout", "stderr", "utf-8", "encoding", "check", "capture_output", "timeout",
+    "texts", "kind", "forms", "form",  # the reader's collector and forms.json keys: the harness's own, not the case's
 }
 
 
@@ -274,8 +273,6 @@ def unstated_interfaces(case):
 
 def _forms_resolver(case, save):
     """How case-check gets forms: read them now with the model (--save-forms, remembered in `saved`) or look them up."""
-    from .reader import (SavedFormsStale, forms_document, load_reader, load_saved, lookup_saved, read_texts,
-                         saved_entries)
     reader = load_reader(case.reader)
     saved = {"settings_sha256": reader.settings_sha256, "scenarios": {}} if save else load_saved(case.reader.saved)
 
@@ -367,7 +364,6 @@ def register_subcommands(subparsers: argparse._SubParsersAction):
 
 def read_texts_command(args):
     """`evalctl read-texts CASE --in FILE --out FILE`. Exit 0 written, 2 bad case or input, 3 a model call failed."""
-    from .reader import load_reader, read_texts
     try:
         case = load_case(args.path)
         if case.reader is None:
