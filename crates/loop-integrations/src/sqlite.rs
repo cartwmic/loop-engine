@@ -393,6 +393,13 @@ impl Persistence for SqlitePersistence {
         let mut connection = self.lock()?;
         let transaction = begin_immediate(&mut connection)?;
         let result = (|| {
+            if load_raw_run(&transaction, &request.id)?.is_some() {
+                return Err(PersistenceError::rejected(
+                    PersistenceRejection::DuplicateRun {
+                        run_id: request.id.clone(),
+                    },
+                ));
+            }
             transaction
                 .execute(
                     "INSERT INTO runs (
