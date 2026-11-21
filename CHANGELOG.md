@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.62.0] - 2026-11-21
+
+Owner-decision and nested-run docs, and a CI fix so PR checks run Bookends on their own range.
+
+- ci.yml: PRs now run the Bookends gate over the commits they add on top of main, so a requirement edit that Bookends reads as a changed identity fails the PR's own checks instead of turning main red. A manual run on main checks its tip commit from its first parent (#182).
+- docs/agent-usage.md and the lean-change skill: for an approval in the owner's own words, put the ask id in `reason`. Never put it in `text`, and never add a top-level `source`: the engine rejects it as an unknown field and refuses `approved` with `owner-decision-missing` (#184).
+- docs: a nested child may start, explore and draft its intent before the parent reaches implement. Its intent quotes a parent criterion only once that criterion is final (#184).
+- docs: commit before `lean-change verify`, because the tree fingerprint includes HEAD (#184).
+
 ## [0.61.0] - 2026-11-21
 
 A duplicate start is refused clearly, `terminate` takes a reason, and a manual CI run can prove a fix PR when main is red.
