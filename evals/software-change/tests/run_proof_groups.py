@@ -78,6 +78,7 @@ UNITS = (
          f"{CORE}test_pilot.py", f"{CORE}test_report.py", f"{CORE}test_settings.py", seconds=14),
     # software-change, no Docker
     unit("sc-seams", "sc-seams", f"{SC}test_target_seams.py", seconds=13),
+    unit("sc-reader", "sc-reader", f"{SC}test_reader.py", seconds=10),
     unit("sc-pure", "sc-pure", f"{SC}test_arm_commands.py", f"{SC}test_arms_descriptor.py", f"{SC}test_calibration.py",
          f"{SC}test_compare.py", f"{SC}test_findings.py", f"{SC}test_grader.py", f"{SC}test_image.py", f"{SC}test_image_reuse.py",
          f"{SC}test_ledger.py", f"{SC}test_pi_session_and_phases.py", f"{SC}test_pilot_inspection.py",

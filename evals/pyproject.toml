@@ -7,7 +7,7 @@ name = "loop-engine-evals"
 version = "0.1.0"
 description = "Local Inspect AI evaluation harness for Loop Engine workflows"
 requires-python = ">=3.12"
-dependencies = ["inspect-ai==0.3.276", "openai==3.1.0", "pytest==9.0.2"]
+dependencies = ["anthropic==1.17.0", "inspect-ai==0.3.276", "openai==3.1.0", "pytest==9.0.2"]
 
 [project.scripts]
 evalctl = "evalcore.cli:main"
