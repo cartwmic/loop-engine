@@ -426,6 +426,18 @@ def usage_metrics(reader, texts, readings):
             "split": [f"{r.id}:{leaf}" for r in readings for leaf in r.split]}
 
 
+def reader_model(reader):
+    """The pinned model, or ReaderCallError when it cannot be built (no key, unknown provider): infrastructure, not the delivery's fault."""
+    unavailable = False
+    try:
+        model = get_model(reader.model)
+    except Exception:
+        unavailable = True
+    if unavailable:  # raised outside the handler, as in _one_call
+        raise ReaderCallError("reader model unavailable")
+    return model
+
+
 async def run_reader_step(trial):
     """Collect, read, write `forms.json` beside the hidden tests. Returns the metrics for `hidden_tests.reader`.
 
@@ -451,7 +463,7 @@ async def run_reader_step(trial):
     out_of_time = False
     try:
         with anyio.fail_after(STEP_SECONDS):
-            readings = await read_texts(get_model(reader.model), reader, items, cache=cache)
+            readings = await read_texts(reader_model(reader), reader, items, cache=cache)
     except TimeoutError:
         out_of_time = True
     if out_of_time:

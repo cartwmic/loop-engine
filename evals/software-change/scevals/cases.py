@@ -12,10 +12,9 @@ import subprocess
 import sys
 import tomllib
 
-from inspect_ai.model import get_model
 
 from evalcore.target import InfrastructureError
-from .reader import (COLLECTOR_SECONDS, FORMS_FILE, ReaderCallError, ReaderInputError, SavedFormsStale, forms_document, load_reader, load_saved,
+from .reader import (COLLECTOR_SECONDS, FORMS_FILE, ReaderCallError, ReaderInputError, SavedFormsStale, forms_document, load_reader, load_saved, reader_model,
                      load_shapes, lookup_saved, parse_collected, read_texts, saved_entries)
 from .image import DEFAULT_IMAGE, DEFAULT_REF, verify_image, output, run, trial_container
 
@@ -280,7 +279,7 @@ def _forms_resolver(case, save):
         if not save:
             return lookup_saved(saved, reader, scenario, texts)
         items = [e for e in texts if e["text"] is not None]
-        readings = asyncio.run(read_texts(get_model(reader.model), reader, items))
+        readings = asyncio.run(read_texts(reader_model(reader), reader, items))
         if any(r.form is None for r in readings):
             raise InfrastructureError("a text has no majority reading")
         saved["scenarios"][scenario] = saved_entries(texts, readings)
@@ -390,7 +389,7 @@ def read_texts_command(args):
         print(f"read-texts: {error}", file=sys.stderr)
         return 2
     try:
-        readings = asyncio.run(read_texts(get_model(reader.model), reader, texts))
+        readings = asyncio.run(read_texts(reader_model(reader), reader, texts))
     except ReaderCallError:
         print("read-texts: a model call failed; nothing was written", file=sys.stderr)
         return 3

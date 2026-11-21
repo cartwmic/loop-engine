@@ -456,13 +456,13 @@ def test_save_forms_reads_with_the_model_and_the_next_check_needs_no_model(tmp_p
     case = load_case(make_case(tmp_path))
     texts = [{"id": "m", "kind": "message", "text": TEXT}, {"id": "g", "kind": "message", "text": None}]
     calls = []
-    monkeypatch.setattr(cases, "get_model", lambda name: scripted({TEXT: [MESSAGE] * 3}, calls))
+    monkeypatch.setattr(reader, "get_model", lambda name: scripted({TEXT: [MESSAGE] * 3}, calls))
     resolve, saved = cases._forms_resolver(case, True)
     assert resolve("reference", texts) == {"forms": {"m": {"form": {"offers": ["ask"]}}, "g": {"form": None}}}
     assert len(calls) == 3
     case.reader.saved.write_text(json.dumps(saved))
 
-    monkeypatch.setattr(cases, "get_model", lambda name: pytest.fail("no model call is allowed"))
+    monkeypatch.setattr(reader, "get_model", lambda name: pytest.fail("no model call is allowed"))
     resolve, _ = cases._forms_resolver(case, False)
     assert resolve("reference", texts) == {"forms": {"m": {"form": {"offers": ["ask"]}}, "g": {"form": None}}}
     with pytest.raises(reader.SavedFormsStale):
@@ -471,7 +471,7 @@ def test_save_forms_reads_with_the_model_and_the_next_check_needs_no_model(tmp_p
 
 def test_save_forms_refuses_to_write_a_text_with_no_majority(tmp_path, monkeypatch):
     case = load_case(make_case(tmp_path))
-    monkeypatch.setattr(cases, "get_model", lambda name: scripted({TEXT: ["x"] * 3}))
+    monkeypatch.setattr(reader, "get_model", lambda name: scripted({TEXT: ["x"] * 3}))
     resolve, _ = cases._forms_resolver(case, True)
     with pytest.raises(InfrastructureError):
         resolve("reference", [{"id": "m", "kind": "message", "text": TEXT}])
@@ -523,12 +523,12 @@ def run_read_texts(tmp_path, texts, model, *, case=None):
     source, out = tmp_path / "texts.json", tmp_path / "readings.json"
     source.write_text(json.dumps({"texts": texts}) if isinstance(texts, list) else texts)
     case = case or make_case(tmp_path)
-    original = cases.get_model
-    cases.get_model = lambda name: model
+    original = reader.get_model
+    reader.get_model = lambda name: model
     try:
         code = cases.read_texts_command(SimpleNamespace(path=case, source=source, out=out))
     finally:
-        cases.get_model = original
+        reader.get_model = original
     return code, out
 
 
@@ -643,14 +643,14 @@ def test_case_check_save_forms_writes_the_saved_file_and_a_later_check_reads_it_
     texts = [{"id": "m", "kind": "message", "text": TEXT}]
     monkeypatch.setattr(cases, "verify_image", lambda ref, tag: "image")
     monkeypatch.setattr(cases, "run_hidden_tests", fake_container_work(case, lambda reference: texts))
-    monkeypatch.setattr(cases, "get_model", lambda name: scripted({TEXT: [MESSAGE] * 3}))
+    monkeypatch.setattr(reader, "get_model", lambda name: scripted({TEXT: [MESSAGE] * 3}))
     args = SimpleNamespace(path=path, expect_invalid=False, ref="r", tag="t", save_forms=True)
     assert cases.case_check(args) == 0
     saved = json.loads(case.reader.saved.read_text())
     assert set(saved["scenarios"]) == {"reference", "noop"}
     assert "VALID" in capsys.readouterr().out
 
-    monkeypatch.setattr(cases, "get_model", lambda name: pytest.fail("no model call is allowed"))
+    monkeypatch.setattr(reader, "get_model", lambda name: pytest.fail("no model call is allowed"))
     args.save_forms = False
     assert cases.case_check(args) == 0
 
@@ -692,3 +692,35 @@ def test_a_collector_timeout_is_classified_as_infrastructure(tmp_path):
             raise TimeoutError("collector")
     case = load_case(make_case(tmp_path))
     assert classified(lambda: step(trial_of(case, TimedOut("")), scripted({}))) == "infrastructure"
+
+
+class NoKey(Exception):
+    """Stands in for Inspect's PrerequisiteError (no API key) or a ValueError for an unknown provider."""
+
+
+def _no_model(name):
+    raise NoKey(name)
+
+
+def test_a_model_that_cannot_be_built_is_classified_as_infrastructure(tmp_path, monkeypatch):
+    case = load_case(make_case(tmp_path))
+    monkeypatch.setattr(reader, "get_model", _no_model)
+    trial = trial_of(case, Env(collected(("m", "message", TEXT))))
+    assert classified(lambda: asyncio.run(reader.run_reader_step(trial))) == "infrastructure"
+
+
+def test_read_texts_with_a_model_that_cannot_be_built_exits_3_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(reader, "get_model", _no_model)
+    source = tmp_path / "texts.json"
+    source.write_text(json.dumps({"texts": [{"id": "a", "kind": "message", "text": TEXT}]}))
+    out = tmp_path / "readings.json"
+    code = cases.read_texts_command(SimpleNamespace(path=make_case(tmp_path), source=source, out=out))
+    assert code == 3 and not out.exists()
+
+
+def test_case_check_save_forms_with_a_model_that_cannot_be_built_is_an_infrastructure_failure(tmp_path, monkeypatch):
+    case = load_case(make_case(tmp_path))
+    monkeypatch.setattr(reader, "get_model", _no_model)
+    resolve, _ = cases._forms_resolver(case, True)
+    with pytest.raises(InfrastructureError):
+        resolve("s", [{"id": "a", "kind": "message", "text": TEXT}])
