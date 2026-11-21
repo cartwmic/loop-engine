@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.64.0] - 2026-11-21
+
+The release script runs the merge gate before it merges a release-prep PR.
+
+- scripts/release-after-merge.sh: just before it squash-merges the release-prep PR, it runs `intent-review-check cartwmic/loop-engine <PR>`. A failing check, or a missing command, stops the release at the merge step with the check's output and a resume hint; nothing is merged. `INTENT_REVIEW_CHECK` overrides the command (#188).
+- docs/release-procedure.md and AGENTS.md describe the new step (#188).
+
 ## [0.63.0] - 2026-11-21
 
 The kgate profiles pin the current kgate base image, which has jq.
