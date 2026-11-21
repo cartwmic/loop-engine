@@ -1004,6 +1004,9 @@ pub struct Run {
     /// Derived only from immutable transition history.
     #[serde(default, flatten)]
     pub override_summary: OverrideSummary,
+    /// The reason given to `terminate`, derived from the terminated history entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub termination_reason: Option<String>,
     pub current_state: StateId,
     pub lifecycle: Lifecycle,
     /// Opaque to core semantics; persistence compares it conditionally.
@@ -1034,6 +1037,7 @@ impl Run {
             initial_input,
             binding_amendments: Vec::new(),
             override_summary: OverrideSummary::new(0, lifecycle),
+            termination_reason: None,
             current_state: current_state.into(),
             lifecycle,
             control_revision,
@@ -1613,7 +1617,10 @@ pub enum HistoryAction {
         transition: Transition,
         outcome: TransitionHistoryOutcome,
     },
-    Terminated,
+    Terminated {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     InvocationStarted {
         invocation_id: InvocationId,
     },
@@ -1674,8 +1681,12 @@ impl HistoryEntry {
         )
     }
 
-    pub fn terminated(sequence: SemanticSequence, occurred_at: Timestamp) -> Self {
-        Self::new(sequence, occurred_at, HistoryAction::Terminated)
+    pub fn terminated(
+        sequence: SemanticSequence,
+        occurred_at: Timestamp,
+        reason: Option<String>,
+    ) -> Self {
+        Self::new(sequence, occurred_at, HistoryAction::Terminated { reason })
     }
 
     pub fn invocation_started(

@@ -720,13 +720,22 @@ pub struct RecordDenialResult {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TerminateRequest {
     pub run_id: RunId,
+    /// Why the owner stopped the run, stored as given.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 impl TerminateRequest {
     pub fn new(run_id: impl Into<RunId>) -> Self {
         Self {
             run_id: run_id.into(),
+            reason: None,
         }
+    }
+
+    pub fn with_reason(mut self, reason: Option<String>) -> Self {
+        self.reason = reason;
+        self
     }
 }
 

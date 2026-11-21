@@ -240,6 +240,9 @@ pub struct ShowProjection {
     pub initial_input: Value,
     pub state_visit: u64,
     pub binding_amendments: Vec<crate::BindingAmendment>,
+    /// The reason given to `terminate`; absent when none was given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub termination_reason: Option<String>,
     pub context: Vec<crate::ContextRecord>,
     pub requestable_events: Vec<RequestableEvent>,
     /// One latest durable allow/deny record for every exact checked
@@ -928,6 +931,7 @@ pub fn project_with_invocations_and_subjects_by_identity(
         override_summary: data.run.override_summary.clone(),
         state_visit: data.run.control_revision.as_u64(),
         binding_amendments: data.run.binding_amendments.clone(),
+        termination_reason: data.run.termination_reason.clone(),
         run_id: data.run.id,
         label: data.run.label,
         workflow_id: data.run.workflow.id.clone(),

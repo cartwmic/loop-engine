@@ -357,7 +357,7 @@ The proposed recovery surface contains ten primary operations. Exact CLI spellin
 | `append` | Add a context record |
 | `event` | Request workflow progress |
 | `history` | Inspect semantic run history |
-| `terminate` | Explicitly close an active run |
+| `terminate` | Explicitly close an active run; takes an optional reason (`terminate RUN [REASON]`) |
 | `invoke` | Preview or start a bound work-slot worker |
 | `amend-binding` | Owner-attested future execution correction |
 | `cancel-invocation` | Stop and verify cleanup of current invocation-owned work |
@@ -475,7 +475,7 @@ Context-only appends do not invalidate an in-flight evaluation. Its original req
 
 `history` returns the ordered semantic history of the run.
 
-It exists for understanding progression, prior review decisions, context additions, termination, and work-slot invocation started/status-changed actions. Overlay `overrun` is not a history action.
+It exists for understanding progression, prior review decisions, context additions, termination (with its optional reason), and work-slot invocation started/status-changed actions. Overlay `overrun` is not a history action.
 
 It is not required for normal continuation and is not an operational trace.
 
@@ -495,7 +495,7 @@ durable artifact location when the run has one
 
 ### 6.7 Terminate
 
-`terminate` requires a current `show` observation and quiescent invocation-owned work, then closes an active run without provider evaluation and records one termination history entry. Live work, including overrun or pending cleanup, rejects termination without changing lifecycle or semantic history; wait or cancel and verify cleanup before terminating. An unobserved termination is also rejected.
+`terminate` requires a current `show` observation and quiescent invocation-owned work, then closes an active run without provider evaluation and records one termination history entry. `terminate RUN [REASON]` takes an optional reason, stored as given on that history entry (`{"kind":"terminated","reason":"..."}`); without one the entry is `{"kind":"terminated"}`. `show` displays the reason as `termination_reason` in every view and as a `terminated:` line in the default text view, and omits it when none was given. Live work, including overrun or pending cleanup, rejects termination without changing lifecycle or semantic history; wait or cancel and verify cleanup before terminating. An unobserved termination is also rejected.
 
 Final and terminated runs cannot be terminated again.
 
@@ -993,7 +993,7 @@ active run's stored states, transitions, work-slot catalog, or instructions.
 - Status: live
 - Coverage: e2e/journey
 
-### LE-15: Terminal runs expose no requestable events and reject `append`, `event`, and `terminate` without semantic history.
+### LE-15: Terminal runs expose no requestable events and reject `append`, `event`, and `terminate` without semantic history. `terminate` takes an optional reason, stored on its history entry and shown by `show`.
 - Status: live
 - Coverage: e2e/journey
 

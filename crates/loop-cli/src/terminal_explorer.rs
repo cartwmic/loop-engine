@@ -1096,6 +1096,7 @@ mod tests {
             initial_input: json!({}),
             state_visit: 0,
             binding_amendments: Vec::new(),
+            termination_reason: None,
             context: Vec::new(),
             requestable_events: Vec::new(),
             latest_evaluations: Vec::new(),
