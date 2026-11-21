@@ -10,7 +10,7 @@ From the repository root:
 run-and-wake -- kgate -- scripts/baseline.sh
 ```
 
-Mac undo: to revert this switch, change the command above back to `scripts/baseline.sh` and run it from the repository root. kgate never runs its command on the Mac, so a baseline that did not run on the cluster is missing proof, not a Mac run. This applies whenever a baseline is required or asked for.
+A baseline that did not run on the cluster is missing proof. This applies whenever a baseline is required or asked for.
 
 ## Read the result
 
