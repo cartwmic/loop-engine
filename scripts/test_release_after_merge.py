@@ -183,6 +183,22 @@ FAKE_CI_MAIN_STATUS = textwrap.dedent(
     """
 )
 
+# Logs each call to calls.jsonl; reads intent-review-check.json ({"exit": N, "output": "..."}) in FAKE_GH_DIR; no file means pass.
+FAKE_INTENT_REVIEW_CHECK = textwrap.dedent(
+    """\
+    #!/usr/bin/env python3
+    import json, os, sys
+    from pathlib import Path
+    state = Path(os.environ["FAKE_GH_DIR"])
+    with open(state / "calls.jsonl", "a") as log:
+        log.write(json.dumps(["intent-review-check", *sys.argv[1:]]) + "\\n")
+    path = state / "intent-review-check.json"
+    scripted = json.loads(path.read_text()) if path.exists() else {"exit": 0, "output": "intent-review-check: OK"}
+    print(scripted["output"])
+    sys.exit(scripted["exit"])
+    """
+)
+
 PREPARE_STUB = textwrap.dedent(
     r'''
     #!/usr/bin/env python3
@@ -250,6 +266,8 @@ class Harness:
         (bindir / "git").chmod(0o755)
         (bindir / "ci-main-status").write_text(FAKE_CI_MAIN_STATUS)
         (bindir / "ci-main-status").chmod(0o755)
+        (bindir / "intent-review-check").write_text(FAKE_INTENT_REVIEW_CHECK)
+        (bindir / "intent-review-check").chmod(0o755)
         # The machine's own ci-main-status must never be reachable from the script under test.
         host_path = [p for p in os.environ["PATH"].split(os.pathsep) if not (Path(p) / "ci-main-status").exists()]
         self.prepare = root / "prepare-stub"
@@ -264,6 +282,8 @@ class Harness:
             "FAKE_GH_DIR": str(self.gh),
             "FAKE_ORIGIN": str(self.origin),
             "RELEASE_PREPARE_CMD": str(self.prepare),
+            # The stub, never the host's intent-review-check: a machine's real check must not reach the script under test.
+            "INTENT_REVIEW_CHECK": str(bindir / "intent-review-check"),
             "RELEASE_POLL_SECONDS": "0",
             "RELEASE_APPEAR_POLLS": "3",
             "RELEASE_LOG": str(self.log),
@@ -319,6 +339,10 @@ class Harness:
         path = self.gh / "main-status-calls.log"
         return path.read_text().splitlines() if path.exists() else []
 
+    def intent_check(self, exit_code: int, output: str) -> None:
+        """Script what the fake intent-review-check prints and exits with."""
+        (self.gh / "intent-review-check.json").write_text(json.dumps({"exit": exit_code, "output": output}))
+
     def resume_runs(self) -> None:
         """Put the last release.yml run back in progress, as if a rerun finds it still running."""
         state = self.gh_state()
@@ -339,6 +363,8 @@ class Harness:
                     labels.append("git " + call[1])
             elif call[0] == "prepare":
                 labels.append("prepare")
+            elif call[0] == "intent-review-check":
+                labels.append("intent check")
             elif call[:2] in (["pr", "create"], ["pr", "checks"], ["pr", "merge"]):
                 labels.append(" ".join(call[:2]))
             elif call[:2] == ["run", "list"] and "ci.yml" in call:
@@ -369,7 +395,7 @@ STARTS_RELEASED = ["git fetch"]  # a rerun when the release exists: straight to 
 def prep(worktree: str) -> list[str]:
     """Mutations from the start through the CI read, for a fresh or reused prep worktree."""
     return ["git fetch", "git worktree add" if worktree == "fresh" else "git merge", "prepare", "git add", "git commit",
-            "git push", "pr create", "pr checks", "pr merge", "git worktree remove", "ci list"]
+            "git push", "pr create", "pr checks", "intent check", "pr merge", "git worktree remove", "ci list"]
 
 
 def d(release: str, phase: str, run: str, action: str) -> str:
@@ -407,7 +433,7 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.assertIn(f"commit: {merge}", result.stdout)
         self.assertIn("loop_engine_bump.py v0.35.0", result.stdout)
         self.assertEqual(self.h.events(), [
-            "prepare", "pr create", "pr checks", "pr merge", "ci list", "dispatch tag=dry-run", "dispatch tag=v0.35.0",
+            "prepare", "pr create", "pr checks", "intent check", "pr merge", "ci list", "dispatch tag=dry-run", "dispatch tag=v0.35.0",
         ])
         tree = git("--git-dir", str(self.h.origin), "show", "main:CHANGELOG.md")
         self.assertRegex(tree, r"^# Changelog\n\n## \[0\.35\.0\] - \d{4}-\d{2}-\d{2}\n\n### Added\n\n- A release note\.\n\n## \[0\.34\.0\]")
@@ -444,7 +470,7 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         result = self.h.run()
         self.assert_released(result)
         self.assertEqual(self.h.events(), [
-            "prepare", "pr create", "pr checks", "pr merge", "ci list", "dispatch tag=dry-run", "dispatch tag=v0.35.0",
+            "prepare", "pr create", "pr checks", "intent check", "pr merge", "ci list", "dispatch tag=dry-run", "dispatch tag=v0.35.0",
         ])
 
     def test_mnemonic_prefix_config_still_stops_on_a_prepared_content_change(self) -> None:
@@ -551,6 +577,51 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.assert_stopped(result, "merge", "ci-main-status is not installed")
         self.assertNotIn("pr merge", self.h.events())
         self.assertEqual(self.h.gh_state()["prs"][0]["state"], "OPEN")
+
+    def test_intent_review_check_refusal_stops_before_merge(self) -> None:
+        for code, line in ((1, "intent-review-check: REFUSED cartwmic/loop-engine#100: no passing review round"),
+                           (2, "could not read the pull request: cartwmic/loop-engine#100 has no agent record")):
+            with self.subTest(exit=code):
+                self.setUp()
+                self.h.intent_check(code, line)
+                result = self.h.run()
+                self.assert_stopped(result, "merge", line)
+                self.assertIn(f"exited {code}; https://github.com/test/loop-engine/pull/100 was not merged", result.stderr)
+                self.assertIn("resume with: scripts/release-after-merge.sh --version 0.35.0", result.stderr)
+                self.assertIn(["intent-review-check", "cartwmic/loop-engine", "100"], self.h.calls())
+                self.assertEqual(self.h.events(), ["prepare", "pr create", "pr checks", "intent check"])
+                self.assertEqual(self.h.gh_state()["prs"][0]["state"], "OPEN")
+
+    def test_intent_review_check_pass_reaches_merge(self) -> None:
+        self.h.intent_check(0, "intent-review-check: OK cartwmic/loop-engine#100: out of scope")
+        result = self.h.run()
+        self.assert_released(result)
+        self.assertIn("merge gate passed: intent-review-check: OK cartwmic/loop-engine#100: out of scope", result.stdout)
+        self.assertEqual(self.h.count("intent check"), 1)
+        self.assertEqual(self.h.count("pr merge"), 1)
+
+    def test_intent_review_check_command_may_be_several_words(self) -> None:
+        stub = str(self.h.root / "bin" / "intent-review-check")
+        self.h.env["INTENT_REVIEW_CHECK"] = f"{stub} --wrapped"
+        self.assert_released(self.h.run())
+        self.assertIn(["intent-review-check", "--wrapped", "cartwmic/loop-engine", "100"], self.h.calls())
+
+    def test_missing_intent_review_check_stops_before_merge(self) -> None:
+        self.h.env["INTENT_REVIEW_CHECK"] = str(self.h.root / "no-such-intent-review-check")
+        result = self.h.run()
+        self.assert_stopped(result, "merge", "no-such-intent-review-check is not installed")
+        self.assertNotIn("pr merge", self.h.events())
+        self.assertEqual(self.h.gh_state()["prs"][0]["state"], "OPEN")
+
+    def test_rerun_after_intent_review_refusal_merges_once_it_passes(self) -> None:
+        self.h.intent_check(1, "intent-review-check: REFUSED: no passing review round")
+        self.assert_stopped(self.h.run(), "merge", "no passing review round")
+        self.assertEqual(self.h.count("pr merge"), 0)
+        self.h.intent_check(0, "intent-review-check: OK")
+        self.assert_released(self.h.run("--version", "0.35.0"))
+        self.assertEqual(self.h.count("intent check"), 2)
+        self.assertEqual(self.h.count("pr merge"), 1)
+        self.assertEqual(self.h.count("prepare"), 1)
 
     def test_rerun_after_main_green_merges(self) -> None:
         self.h.main_status(1, "RED loop-engine: ci.yml failed on 1a2b3c4")

@@ -8,7 +8,9 @@
 #   pr       commit on release/vX.Y.Z, push, open the release-prep PR
 #   checks   wait for the PR checks
 #   merge    check main is not red (ci-main-status loop-engine: exit 0 green or
-#            2 untested go on, anything else or a missing tool stops), then
+#            2 untested go on, anything else or a missing tool stops), run the
+#            merge gate intent-review-check cartwmic/loop-engine on the PR (any
+#            non-zero exit or a missing command stops before the merge), then
 #            squash-merge the PR and read the merge SHA
 #   ci       wait for push-event ci.yml green on that exact SHA
 #   dry-run  dispatch release.yml with tag=dry-run on that SHA and wait
@@ -29,6 +31,9 @@ usage: scripts/release-after-merge.sh [--version X.Y.Z] [--notes FILE]
 environment:
   RELEASE_PREPARE_CMD   prepare command run in the worktree with VERSION
                         (default: scripts/prepare-release.sh)
+  INTENT_REVIEW_CHECK   merge-gate command, run as COMMAND cartwmic/loop-engine PR
+                        (default: intent-review-check on PATH); split on spaces,
+                        so a node command line works too
   RELEASE_WORKTREE      prep worktree (default: next to the main checkout,
                         loop-engine-release-vX.Y.Z)
   RELEASE_POLL_SECONDS  seconds between polls (default 30)
@@ -510,6 +515,15 @@ else:
     0|2) say "main state (ci-main-status exit $main_rc): $main_out" ;;
     *) stop "main is not green (ci-main-status loop-engine exit $main_rc): $main_out" ;;
   esac
+  # The review gate (playbook 78cf010c) runs before any merge. A non-zero exit, or a missing command, stops here.
+  read -r -a intent_cmd <<<"${INTENT_REVIEW_CHECK:-intent-review-check}"
+  command -v "${intent_cmd[0]}" >/dev/null \
+    || stop "${intent_cmd[0]} is not installed, so the merge gate cannot run; no merge (set INTENT_REVIEW_CHECK to the command)"
+  intent_rc=0
+  intent_out=$("${intent_cmd[@]}" cartwmic/loop-engine "$pr_number" 2>&1) || intent_rc=$?
+  [[ $intent_rc -eq 0 ]] \
+    || stop "intent-review-check cartwmic/loop-engine $pr_number exited $intent_rc; $pr_url was not merged: $intent_out"
+  say "merge gate passed: $intent_out"
   say "squash-merging $pr_url"
   gh pr merge "$pr_number" --squash || stop "gh pr merge $pr_number failed"
   view=$(gh pr view "$pr_number" --json state,mergeCommit,url) || stop "gh pr view $pr_number failed"
