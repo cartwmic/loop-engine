@@ -118,7 +118,7 @@ guide, shapes or collector file, a collector name with a slash, or shapes that d
 ### The shapes file
 
 A JSON object with one entry per **kind**. A leaf is `{"one_of": [...]}` (one of these strings) or
-`{"set_of": [...]}` (any subset, a list of strings). Any other object nests more entries.
+`{"set_of": [...]}` (any subset, a list of strings). Any other object nests more entries. A kind itself must be such an object of entries, not a bare leaf, because a reply is a JSON object.
 
 ```json
 {"message": {"offers": {"set_of": ["ask", "grant", "no_key", "other"]}},

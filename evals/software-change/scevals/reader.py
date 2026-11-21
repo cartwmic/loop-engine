@@ -69,6 +69,8 @@ def check_shapes(shapes):
         if not isinstance(kind, str) or not kind:
             raise ReaderInputError("form shape kinds must be nonempty strings")
         check_node(node)
+        if _leaf(node):  # a reply is a JSON object, so a bare leaf could never be matched
+            raise ReaderInputError("a kind's shape must be an object of nodes, not a bare leaf")
     return shapes
 
 

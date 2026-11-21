@@ -115,7 +115,7 @@ def step(trial, model):
 @pytest.mark.parametrize("bad", [
     {}, {"k": {}}, {"k": {"one_of": []}}, {"k": {"one_of": ["a", "a"]}}, {"k": {"set_of": "ab"}},
     {"k": {"one_of": ["a"], "set_of": ["b"]}}, {"k": {"a": {"one_of": ["x"]}, "one_of": {"one_of": ["x"]}}}, {"": LEAF},
-    {"k": {"a": []}}, []])
+    {"k": {"a": []}}, [], {"k": LEAF}, {"k": {"set_of": ["a"]}}])
 def test_shapes_reject_malformed_documents(bad):
     with pytest.raises(reader.ReaderInputError):
         reader.check_shapes(bad)
