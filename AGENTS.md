@@ -152,7 +152,7 @@ The baseline builds and selects the current checker and clears inherited Bookend
 
 Before preparing, committing, pushing, dispatching or publishing a release, or regenerating release metadata, load [docs/release-procedure.md](docs/release-procedure.md). After a PR merges to main, first confirm that merge's push run is green (`gh run list --workflow ci.yml --branch main --event push --commit <merge sha>`; red means the red-main procedure and no release), because the script waits only on the push run of its own release-prep merge. Then run `scripts/release-after-merge.sh [--version X.Y.Z] [--notes FILE]` (`--notes` is needed only when a release-prep PR has to be made; see the script's usage): the owner's grant 19 ("cut the release when a PR merges to main") and playbook rule d9fa9f06 are the owner authorization for that run's steps, but the grant does not cover Loop Engine run starts.
 
-The script's release-prep command (`RELEASE_PREPARE_CMD`, default `scripts/prepare-release.sh` on the host; no kgate wrapper is committed) and its `ci-main-status loop-engine` check before the release-prep merge are set out in [docs/release-procedure.md](docs/release-procedure.md#running-release-after-mergesh).
+The script's release-prep command (`RELEASE_PREPARE_CMD`, default `scripts/prepare-release.sh` on the host; no kgate wrapper is committed) and its `ci-main-status loop-engine` check and merge gate (`intent-review-check cartwmic/loop-engine <PR>`, found through `INTENT_REVIEW_CHECK`) before the release-prep merge are set out in [docs/release-procedure.md](docs/release-procedure.md#running-release-after-mergesh).
 
 ## Completion and handoff
 
