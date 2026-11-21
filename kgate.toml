@@ -5,7 +5,7 @@
 # Sizing (dotfiles docs/kgate.md): memory is the scheduler request, memory_limit the OOM limit. The request is 5632Mi (5.5 GiB),
 # 1.2x the 4.46 GiB working-set peak (max of 13 baseline runs; working set 3.6 to 4.5 GiB; RSS up to 2.7 GiB) rounded up to 0.5 GiB.
 # The 3584Mi request was below the working set, so the pod was first in line for eviction. The limit stays 8Gi: the 8.0 GiB peak is page cache filling the limit, not real use.
-image  = "ghcr.io/cartwmic/kgate@sha256:41dc179299aade303686e2047a361444668e5b3237c3b95b40cef94ddacc4a2d"
+image  = "ghcr.io/cartwmic/kgate@sha256:9d1f630847066b1608cb18783ff03403734dd8442624f1055849bdf345ffeb38"
 cpu    = 12
 memory = "5632Mi"
 memory_limit = "8Gi"

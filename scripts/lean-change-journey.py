@@ -1392,7 +1392,7 @@ class Nested:
 
     def __init__(self, engine, provider, docs, work):
         if not shutil.which('jq'):
-            raise SystemExit('the nested scenario needs jq on PATH: the part check lines in docs/agent-usage.md use it (the kgate image has none; download a static jq first)')
+            raise SystemExit('the nested scenario needs jq on PATH: the part check lines in docs/agent-usage.md use it (the kgate image has it; on another machine, install jq)')
         self.engine, self.provider, self.docs, self.work = engine, provider, docs, work
         self.repo = work / 'repo'
         self.repo.mkdir()
