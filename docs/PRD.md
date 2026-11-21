@@ -999,7 +999,7 @@ active run's stored states, transitions, work-slot catalog, or instructions.
 
 ### 14.2 Durable Context and Handoff
 
-### LE-16: Initial input is immutable after creation and survives restart.
+### LE-16: Initial input is immutable after creation and survives restart (scratch title edit).
 - Status: live
 - Coverage: e2e/journey
 
