@@ -246,12 +246,18 @@ def captured_files(archive):
 async def run_hidden_tests(trial):
     """Hidden tests run in the restored trial container after the driver stopped; only the runner's report is read back."""
     await trial.copy_scoring_material()
+    reader_metrics = None
+    if trial.case.reader is not None:
+        from .reader import run_reader_step
+        reader_metrics = await run_reader_step(trial)
     result = await trial.env.exec(["python3", "/opt/scoring/case_runtime.py", "--tests", "/opt/scoring/tests",
                                    "--output", "/workspace/trial/hidden-results.json"],
                                   cwd="/workspace/public/repo", timeout=trial.case.test_timeout_seconds)
     if not result.success:
         raise InfrastructureError("hidden-test runner failed")
     tests = json.loads(await trial.env.read_file("/workspace/trial/hidden-results.json"))
+    if reader_metrics is not None:
+        tests["reader"] = reader_metrics
     trial.evidence["copy_out_log"].append({"kind": "hidden_test_results", "phase": "after_terminal",
                                            "elapsed_seconds": time.monotonic() - trial.evidence["started"]})
     return tests
@@ -362,6 +368,8 @@ class TerminalTrial:
     terminal_time: float | None
     # Arm runs only: the driver's stdout, written to FINAL_MESSAGE in the private capture.
     final_message: str = ""
+    # Where this trial's capture lives; the reader step keeps its readings there. None: it keeps no cache.
+    capture_dir: Path | None = None
 
     async def copy(self, source, destination, kind, phase):
         await self.env.write_file(destination, Path(source).read_bytes())
@@ -921,7 +929,7 @@ class SoftwareChangeTarget:
                 # Elapsed metrics use the original driver clock, not replay wall time.
                 elapsed = evidence.get("copy_out_log", [{}])[0].get("elapsed_seconds", 0)
                 evidence["started"] = time.monotonic() - elapsed
-                trial = TerminalTrial(env, case, owner, evidence, False, None)
+                trial = TerminalTrial(env, case, owner, evidence, False, None, capture_dir=Path(archive).parent)
                 await self.inspect_capture(trial)
                 if arm is not None:
                     # The driver has stopped and its capture is durable, so hidden material may be copied whatever the

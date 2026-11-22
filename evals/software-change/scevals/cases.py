@@ -1,6 +1,7 @@
 """Software-change case format and mount-free reference/no-op validation."""
 import argparse
 import ast
+import asyncio
 from collections import Counter
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
@@ -8,8 +9,13 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tomllib
 
+
+from evalcore.target import InfrastructureError
+from .reader import (COLLECTOR_SECONDS, FORMS_FILE, ReaderCallError, ReaderInputError, SavedFormsStale, forms_document, load_reader, load_saved, reader_model,
+                     load_shapes, lookup_saved, parse_collected, read_texts, saved_entries)
 from .image import DEFAULT_IMAGE, DEFAULT_REF, verify_image, output, run, trial_container
 
 RUNTIME = Path(__file__).with_name("case_runtime.py")
@@ -18,6 +24,20 @@ REQUIREMENT = r"REQ-[A-Z0-9-]+"
 
 class CaseFormatError(ValueError):
     """A fixed, export-safe explanation of an invalid case."""
+
+
+class ReaderCollectorFailed(CaseFormatError):
+    """The case's collector failed or printed something that is not the documented shape: a case bug."""
+
+
+@dataclass(frozen=True)
+class ReaderSpec:
+    """A case's optional reader (CASE-FORMAT.md): the pinned model and the case files it reads, all host-side."""
+    model: str
+    guide: Path
+    shapes: Path
+    collector: str  # a file name inside hidden/tests; it runs in the scoring sandbox
+    saved: Path     # saved forms for case-check; may not exist yet
 
 
 @dataclass(frozen=True)
@@ -30,6 +50,7 @@ class EvalCase:
     test_requirements: tuple[str, ...]
     # Hidden-test run limit; Rust cases need a cold build first.
     test_timeout_seconds: int = 60
+    reader: ReaderSpec | None = None
 
     @property
     def repository(self):
@@ -56,6 +77,27 @@ def _relative_path(value):
     return (isinstance(value, str) and bool(value) and not value.startswith("/")
             and not any(part in ("", ".", "..", ".git") for part in value.split("/"))
             and "\\" not in value)
+
+
+def _reader_spec(path, table):
+    """Read `[reader]` as data. The files must exist (but `saved`, which `case-check --save-forms` creates)."""
+    keys = {"model", "guide", "shapes", "collector", "saved"}
+    if not isinstance(table, dict) or set(table) != keys or not all(isinstance(v, str) and v for v in table.values()):
+        raise CaseFormatError("[reader] needs exactly model, guide, shapes, collector and saved as nonempty strings")
+    for key in ("guide", "shapes", "saved"):
+        if not _relative_path(table[key]):
+            raise CaseFormatError(f"reader {key} must be a relative path inside the case")
+    if not _relative_path(table["collector"]) or "/" in table["collector"]:
+        raise CaseFormatError("reader collector must be a file name in hidden/tests")
+    guide, shapes, saved = (path / table[key] for key in ("guide", "shapes", "saved"))
+    collector = path / "hidden/tests" / table["collector"]
+    if not guide.is_file() or not shapes.is_file() or not collector.is_file():
+        raise CaseFormatError("reader guide, shapes or collector file is missing")
+    try:
+        load_shapes(shapes)
+    except ReaderInputError as error:
+        raise CaseFormatError(f"reader shapes: {error}") from None
+    return ReaderSpec(table["model"], guide, shapes, table["collector"], saved)
 
 
 def load_case(path: Path) -> EvalCase:
@@ -111,18 +153,31 @@ def load_case(path: Path) -> EvalCase:
         timeout = metadata.get("test_timeout_seconds", 60)
         if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 7200:
             raise CaseFormatError("test_timeout_seconds must be an integer from 1 to 7200")
-        return EvalCase(path, case_id, version, tuple(scope), tuple(requirements), tuple(tags), timeout)
+        reader = _reader_spec(path, metadata["reader"]) if "reader" in metadata else None
+        return EvalCase(path, case_id, version, tuple(scope), tuple(requirements), tuple(tags), timeout, reader)
     except CaseFormatError:
         raise
     except (KeyError, TypeError, ValueError, SyntaxError, UnicodeError):
         raise CaseFormatError("malformed case metadata or test tags") from None
 
 
-def run_hidden_tests(case: EvalCase, *, reference: bool, image=DEFAULT_IMAGE):
+def _collect_in_container(case, container):
+    """Run the case's collector in the check container, as scoring does. Returns the collected texts."""
+    try:
+        done = run(["docker", "exec", "--workdir", "/workspace/repo", container, "python3",
+                    f"/opt/case-check/tests/{case.reader.collector}"],
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=COLLECTOR_SECONDS)
+        return parse_collected(done.stdout, load_shapes(case.reader.shapes))
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ReaderInputError):
+        raise ReaderCollectorFailed("reader collector failed") from None
+
+
+def run_hidden_tests(case: EvalCase, *, reference: bool, image=DEFAULT_IMAGE, resolve_forms=None):
     """For case-check only; campaign scoring must enforce its own terminal gate.
 
     Return per-test statuses plus copy/config evidence, without source or failure
     messages. Both attempts start in a fresh container. The brief never enters.
+    A case with a reader gets `forms.json` from `resolve_forms(scenario, texts)` before its tests run.
     """
     with trial_container(image) as (container, config):
         run(["docker", "exec", container, "mkdir", "-p", "/workspace/repo", "/opt/case-check/tests"],
@@ -139,6 +194,11 @@ def run_hidden_tests(case: EvalCase, *, reference: bool, image=DEFAULT_IMAGE):
             copy(str(case.reference) + "/.", "/workspace/repo", "reference_overlay")
         copy(str(case.tests) + "/.", "/opt/case-check/tests", "hidden_tests")
         copy(RUNTIME, "/opt/case-check/case_runtime.py", "test_runner")
+        if case.reader is not None:
+            forms = resolve_forms("reference" if reference else "noop", _collect_in_container(case, container))
+            run(["docker", "exec", "-i", container, "sh", "-c", f"cat > /opt/case-check/tests/{FORMS_FILE}"],
+                input=json.dumps(forms), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            copies.append({"kind": "reader_forms", "destination": f"/opt/case-check/tests/{FORMS_FILE}"})
         run(["docker", "exec", "--workdir", "/workspace/repo", container, "python3",
              "/opt/case-check/case_runtime.py", "--tests", "/opt/case-check/tests",
              "--output", "/tmp/case-results.json"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -179,6 +239,7 @@ INTERFACE_STOPLIST = {
     "unittest", "case_runtime", "requirement", "cargo", "rustc", "build", "release",
     "--quiet", "--offline", "--manifest-path", "--target-dir", "--nocapture",
     "stdout", "stderr", "utf-8", "encoding", "check", "capture_output", "timeout",
+    "texts", "kind", "forms", "form",  # the reader's collector and forms.json keys: the harness's own, not the case's
 }
 
 
@@ -209,6 +270,23 @@ def unstated_interfaces(case):
         r"(?<![A-Za-z0-9_-])" + re.escape(name) + r"(?![A-Za-z0-9_-])", corpus, re.IGNORECASE))
 
 
+def _forms_resolver(case, save):
+    """How case-check gets forms: read them now with the model (--save-forms, remembered in `saved`) or look them up."""
+    reader = load_reader(case.reader)
+    saved = {"settings_sha256": reader.settings_sha256, "scenarios": {}} if save else load_saved(case.reader.saved)
+
+    def resolve(scenario, texts):
+        if not save:
+            return lookup_saved(saved, reader, scenario, texts)
+        items = [e for e in texts if e["text"] is not None]
+        readings = asyncio.run(read_texts(reader_model(reader), reader, items))
+        if any(r.form is None for r in readings):
+            raise InfrastructureError("a text has no majority reading")
+        saved["scenarios"][scenario] = saved_entries(texts, readings)
+        return forms_document(texts, readings)
+    return resolve, saved
+
+
 def case_check(args):
     try:
         case = load_case(args.path)
@@ -223,12 +301,27 @@ def case_check(args):
     except RuntimeError:
         print("Trial image missing or mismatched; run image-check first.")
         return 2
-    reference = run_hidden_tests(case, reference=True, image=args.tag)
-    noop = run_hidden_tests(case, reference=False, image=args.tag)
+    resolve_forms, saved = None, None
+    try:
+        if case.reader is not None:
+            resolve_forms, saved = _forms_resolver(case, args.save_forms)
+        reference = run_hidden_tests(case, reference=True, image=args.tag, resolve_forms=resolve_forms)
+        noop = run_hidden_tests(case, reference=False, image=args.tag, resolve_forms=resolve_forms)
+    except (SavedFormsStale, ReaderCollectorFailed) as error:
+        print(f"INVALID: {error}")
+        return 0 if args.expect_invalid else 1
+    except InfrastructureError as error:
+        print(f"Reader failed ({error}); nothing was written.")
+        return 2
+    if args.save_forms and saved is not None:
+        case.reader.saved.parent.mkdir(parents=True, exist_ok=True)
+        case.reader.saved.write_text(json.dumps(saved, indent=1, sort_keys=True) + "\n")
     reasons = check_results(case, reference, noop)
     valid = not reasons
     receipt = {"id": case.id, "version": case.version, "valid": valid, "reasons": reasons,
                "image": built, "reference": _summary(case, reference), "no_op": _summary(case, noop)}
+    if case.reader is not None:
+        receipt["reader"] = {"model": case.reader.model, "forms": "read just now" if args.save_forms else "saved"}
     for name, result in (("reference", reference), ("no-op", noop)):
         summary = _summary(case, result)
         print(f"{name}: {summary['passed']}/{summary['total']} tagged hidden tests passed")
@@ -249,7 +342,14 @@ def register_subcommands(subparsers: argparse._SubParsersAction):
     parser.add_argument("--expect-invalid", action="store_true", help="succeed only for an invalid case (not infrastructure errors)")
     parser.add_argument("--ref", default=DEFAULT_REF)
     parser.add_argument("--tag", default=DEFAULT_IMAGE)
+    parser.add_argument("--save-forms", action="store_true",
+                        help="a case with a reader: read the collected texts with the model and rewrite the saved forms")
     parser.set_defaults(handler=case_check)
+    read = subparsers.add_parser("read-texts", help="read texts with a case's reader (a case's reader check)")
+    read.add_argument("path", type=Path)
+    read.add_argument("--in", dest="source", type=Path, required=True)
+    read.add_argument("--out", type=Path, required=True)
+    read.set_defaults(handler=read_texts_command)
     # Reuse the installed scevals command plugin; no new entry-point sync needed.
     from .calibration import register_subcommands as register_calibration
     register_calibration(subparsers)
@@ -259,3 +359,41 @@ def register_subcommands(subparsers: argparse._SubParsersAction):
     register_results(subparsers)
     from .lifecycle import register_subcommands as register_lifecycle
     register_lifecycle(subparsers)
+
+
+def read_texts_command(args):
+    """`evalctl read-texts CASE --in FILE --out FILE`. Exit 0 written, 2 bad case or input, 3 a model call failed."""
+    try:
+        case = load_case(args.path)
+        if case.reader is None:
+            raise ReaderInputError("the case has no [reader]")
+        reader = load_reader(case.reader)
+        try:
+            data = json.loads(args.source.read_text())
+        except (OSError, ValueError):
+            raise ReaderInputError("input is not a readable JSON file") from None
+        texts = data.get("texts") if isinstance(data, dict) and set(data) == {"texts"} else None
+        if not isinstance(texts, list):
+            raise ReaderInputError('input must be {"texts": [...]}')
+        seen = set()
+        for entry in texts:
+            if (not isinstance(entry, dict) or set(entry) != {"id", "kind", "text"} or not isinstance(entry["id"], str)
+                    or not entry["id"] or not isinstance(entry["text"], str) or not entry["text"]):
+                raise ReaderInputError("each text needs an id, a kind and a nonempty string text")
+            if entry["id"] in seen:
+                raise ReaderInputError(f"duplicate id: {entry['id']}")
+            if not isinstance(entry["kind"], str) or entry["kind"] not in reader.shapes:
+                raise ReaderInputError(f"unknown kind for id {entry['id']}")
+            seen.add(entry["id"])
+    except (CaseFormatError, ReaderInputError) as error:
+        print(f"read-texts: {error}", file=sys.stderr)
+        return 2
+    try:
+        readings = asyncio.run(read_texts(reader_model(reader), reader, texts))
+    except ReaderCallError:
+        print("read-texts: a model call failed; nothing was written", file=sys.stderr)
+        return 3
+    args.out.write_text(json.dumps({"settings_sha256": reader.settings_sha256, "model": reader.model,
+                                    "results": [r.export() for r in readings]},
+                                   indent=1) + "\n")
+    return 0
