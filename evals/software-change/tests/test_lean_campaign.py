@@ -30,7 +30,7 @@ def campaign(profile):
     settings["target_options"] = {"arm": {"id": f"lean-{profile}", "driver_command": ["python3", "-c", DRIVER, "--profile", profile],
                                           "prompt_template": f"lean-{profile}", "workflow_owned_paths": [],
                                           "completion_rule": "driver-exit", "image": IMAGE},
-                                "scripted_driver": "asks-and-builds", "intent_checkin": True}
+                                "intent_checkin": True}  # no scripted_driver: that option expects the workflow driver's receipt file, which an arm's driver does not write
     settings["campaign"] = f"lean-proof-{profile}-{uuid.uuid4().hex[:8]}"
     with tempfile.TemporaryDirectory(prefix="lean-proof-") as scratch:
         config = Path(scratch) / "settings.json"
