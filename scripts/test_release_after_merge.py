@@ -2,7 +2,8 @@
 
 The script runs for real against a scratch bare origin, with a scripted gh on
 PATH and the prepare step stubbed by RELEASE_PREPARE_CMD, so no cargo build,
-push to GitHub or workflow dispatch happens.
+push to GitHub or workflow dispatch happens. The kgate route runs the real
+scripts/prepare-release-kgate.sh against a scripted kgate, so no cluster is used.
 """
 
 from __future__ import annotations
@@ -245,6 +246,32 @@ FAKE_GIT = textwrap.dedent(
     '''
 ).lstrip()
 
+FAKE_KGATE = textwrap.dedent(
+    r'''
+    #!/usr/bin/env python3
+    """Scripted kgate: records its argv, then stands in for the pod. It bumps Cargo.toml and Cargo.lock the way
+    prepare-release.sh does, leaves them in a job folder and prints kgate's own /out note. FAKE_KGATE_EXIT makes it
+    exit as kgate does when the job never runs."""
+    import json, os, re, sys
+    from pathlib import Path
+
+    gh = Path(os.environ["FAKE_GH_DIR"])
+    argv = sys.argv[1:]
+    with open(gh / "calls.jsonl", "a") as f:
+        f.write(json.dumps(["kgate", *argv]) + "\n")
+    if os.environ.get("FAKE_KGATE_EXIT"):
+        print("kgate: job did not start (fake)", flush=True)
+        sys.exit(int(os.environ["FAKE_KGATE_EXIT"]))
+    version = argv[-1]
+    out = gh / "kgate-out"
+    out.mkdir(exist_ok=True)
+    for name in ("Cargo.toml", "Cargo.lock"):
+        text = Path(name).read_text()
+        (out / name).write_text(re.sub(r'version = "[^"]+"', f'version = "{version}"', text, count=1))
+    print(f"kgate: /out -> {out} (2 files)", flush=True)
+    '''
+).lstrip()
+
 GREEN = {"checks": "pass", "ci": "success", "dry_run": "success", "publish": "success"}
 
 
@@ -260,6 +287,7 @@ class Harness:
         self.origin = root / "origin.git"
         bindir = root / "bin"
         bindir.mkdir()
+        self.bindir = bindir
         (bindir / "gh").write_text(FAKE_GH)
         (bindir / "gh").chmod(0o755)
         (bindir / "git").write_text(FAKE_GIT.replace("REAL_GIT", shutil.which("git")))
@@ -300,6 +328,12 @@ class Harness:
         (seed / "Cargo.toml").write_text('[workspace]\nmembers = []\n\n[workspace.package]\nversion = "0.34.0"\n')
         (seed / "CHANGELOG.md").write_text("# Changelog\n\n## [0.34.0] - 2026-10-30\n\n- Earlier.\n")
         (seed / "Cargo.lock").write_text('version = 4\n\n[[package]]\nname = "loop-cli"\nversion = "0.34.0"\n')
+        # The kgate route's pin and both prepare commands: the real kgate script, and the local stub.
+        (seed / "mise.toml").write_text('[tools]\n"aqua:axodotdev/cargo-dist" = "0.31.7"\n')
+        (seed / "scripts").mkdir()
+        (seed / "scripts" / "prepare-release.sh").write_text(PREPARE_STUB)
+        (seed / "scripts" / "prepare-release.sh").chmod(0o755)
+        shutil.copy2(ROOT / "scripts" / "prepare-release-kgate.sh", seed / "scripts" / "prepare-release-kgate.sh")
         self.git(seed, "add", "-A")
         self.git(seed, "commit", "--quiet", "-m", "release: prepare v0.34.0")
         self.git(seed, "tag", "v0.34.0")
@@ -325,6 +359,30 @@ class Harness:
 
     def scenario(self, **values: object) -> None:
         (self.gh / "scenario.json").write_text(json.dumps({**GREEN, **values}))
+
+    def prepare_locally(self) -> None:
+        """A host with cargo: no RELEASE_PREPARE_CMD, a stub cargo, and a scripted kgate that must never be called."""
+        (self.bindir / "cargo").write_text("#!/bin/sh\nexit 0\n")
+        (self.bindir / "cargo").chmod(0o755)
+        self.stub_kgate()
+        self.env.pop("RELEASE_PREPARE_CMD")
+
+    def prepare_on_kgate(self, exit_code: int | None = None) -> None:
+        """A host with no cargo and a kgate on PATH (the agent-host pod): no RELEASE_PREPARE_CMD, a scripted kgate."""
+        self.stub_kgate(exit_code)
+        self.env["PATH"] = os.pathsep.join(p for p in self.env["PATH"].split(os.pathsep) if not (Path(p) / "cargo").exists())
+        self.env.pop("RELEASE_PREPARE_CMD")
+
+    def stub_kgate(self, exit_code: int | None = None) -> None:
+        (self.bindir / "kgate").write_text(FAKE_KGATE)
+        (self.bindir / "kgate").chmod(0o755)
+        if exit_code is None:
+            self.env.pop("FAKE_KGATE_EXIT", None)
+        else:
+            self.env["FAKE_KGATE_EXIT"] = str(exit_code)
+
+    def kgate_calls(self) -> list[list[str]]:
+        return [call[1:] for call in self.calls() if call[0] == "kgate"]
 
     def run(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         args = args or ("--notes", str(self.notes))
@@ -994,6 +1052,40 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         Path(self.h.env["RELEASE_PLAN_FILE"]).write_text("{}\n")
         self.stop_and_clear("plan file")
         self.assert_released(self.h.run())
+
+
+    # The prepare route: cargo on this host prepares locally; no cargo with kgate prepares on kgate.
+    def test_cargo_on_path_prepares_locally_and_never_calls_kgate(self) -> None:
+        self.h.prepare_locally()
+        result = self.h.run()
+        self.assert_released(result)
+        self.assertIn("running scripts/prepare-release.sh 0.35.0", result.stdout)
+        self.assertEqual(self.h.count("prepare"), 1)
+        self.assertEqual(self.h.kgate_calls(), [])
+
+    def test_no_cargo_prepares_on_kgate_and_copies_the_bumped_files_back(self) -> None:
+        self.h.prepare_on_kgate()
+        result = self.h.run()
+        self.assert_released(result)
+        self.assertIn("running scripts/prepare-release-kgate.sh 0.35.0", result.stdout)
+        self.assertEqual(self.h.count("prepare"), 0)
+        [argv] = self.h.kgate_calls()
+        self.assertEqual(argv[:4], ["--wait", "3600", "--", "sh"])
+        self.assertIn("scripts/prepare-release.sh", argv[5])
+        # The cargo-dist version comes from mise.toml (0.31.7 in the seed), not from the script.
+        self.assertEqual(argv[6:], ["prepare-release", "0.31.7", "0.35.0"])
+        for name in ("Cargo.toml", "Cargo.lock"):
+            self.assertIn('version = "0.35.0"', git("--git-dir", str(self.h.origin), "show", f"main:{name}"), name)
+
+    def test_kgate_exit_69_stops_at_prepare_and_opens_no_pr(self) -> None:
+        self.h.prepare_on_kgate(exit_code=69)
+        self.assert_stopped(self.h.run(), "prepare", "kgate exit 69")
+        self.assertEqual(self.h.gh_state()["prs"], [])
+
+    def test_kgate_exit_75_stops_at_prepare_and_opens_no_pr(self) -> None:
+        self.h.prepare_on_kgate(exit_code=75)
+        self.assert_stopped(self.h.run(), "prepare", "kgate exit 75")
+        self.assertEqual(self.h.gh_state()["prs"], [])
 
 
 class AgentsContractTest(unittest.TestCase):

@@ -4,7 +4,8 @@
 # Runs the release sequence in docs/release-procedure.md ("Authorized release
 # sequence") end to end and stops at the first failure, naming the step:
 #   prepare  scripts/prepare-release.sh in a fresh worktree from origin/main,
-#            plus the caller's CHANGELOG notes
+#            plus the caller's CHANGELOG notes; on a host with no cargo that
+#            has kgate, scripts/prepare-release-kgate.sh runs it on kgate
 #   pr       commit on release/vX.Y.Z, push, open the release-prep PR
 #   checks   wait for the PR checks
 #   merge    check main is not red (ci-main-status loop-engine: exit 0 green or
@@ -30,7 +31,8 @@ usage: scripts/release-after-merge.sh [--version X.Y.Z] [--notes FILE]
 
 environment:
   RELEASE_PREPARE_CMD   prepare command run in the worktree with VERSION
-                        (default: scripts/prepare-release.sh)
+                        (default: scripts/prepare-release.sh; with no cargo on
+                        PATH and kgate on it: scripts/prepare-release-kgate.sh)
   INTENT_REVIEW_CHECK   merge-gate command, run as COMMAND cartwmic/loop-engine PR
                         (default: intent-review-check on PATH); split on spaces,
                         so a node command line works too
@@ -405,7 +407,14 @@ if [[ $version != "$main_version" && -z ${pr_number:-} ]]; then
   if [[ -z $prepared ]]; then
     # prepare-release.sh writes the dist plan here; AGENTS.md keeps another run's plan from being overwritten.
     [[ ! -e $plan_file ]] || stop_leftovers "plan file $plan_file"
-    prepare_cmd=${RELEASE_PREPARE_CMD:-scripts/prepare-release.sh}
+    prepare_cmd=${RELEASE_PREPARE_CMD:-}
+    if [[ -z $prepare_cmd ]]; then
+      prepare_cmd=scripts/prepare-release.sh
+      # A host with no cargo (the agent-host pod) prepares on kgate, since heavy jobs run there; a host with cargo is unchanged.
+      if ! command -v cargo >/dev/null 2>&1 && command -v kgate >/dev/null 2>&1; then
+        prepare_cmd=scripts/prepare-release-kgate.sh
+      fi
+    fi
     say "running $prepare_cmd $version"
     (cd "$worktree" && $prepare_cmd "$version") || stop "$prepare_cmd $version failed in $worktree"
     say "adding the CHANGELOG entry from $notes"
