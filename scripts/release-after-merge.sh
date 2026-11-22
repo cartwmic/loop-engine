@@ -13,7 +13,8 @@
 #            merge gate intent-review-check cartwmic/loop-engine on the PR (any
 #            non-zero exit or a missing command stops before the merge), then
 #            squash-merge the PR and read the merge SHA
-#   ci       wait for push-event ci.yml green on that exact SHA
+#   ci       wait for push-event ci.yml green on that exact SHA, then until the
+#            same filtered run search release.yml's gate uses returns it too
 #   dry-run  dispatch release.yml with tag=dry-run on that SHA and wait
 #   publish  dispatch release.yml with tag=vX.Y.Z and wait
 # Every step reads GitHub first, so a rerun resumes where the last run stopped
@@ -39,7 +40,8 @@ environment:
   RELEASE_WORKTREE      prep worktree (default: next to the main checkout,
                         loop-engine-release-vX.Y.Z)
   RELEASE_POLL_SECONDS  seconds between polls (default 30)
-  RELEASE_APPEAR_POLLS  polls to wait for checks or a run to appear (default 20)
+  RELEASE_APPEAR_POLLS  polls to wait for checks or a run to appear, and for
+                        the push CI run to show in the run search (default 20)
   RELEASE_PLAN_FILE     dist plan path prepare-release.sh writes
                         (default: /tmp/loop-engine-dist-plan.json)
   RELEASE_LOG           log file (default:
@@ -552,6 +554,21 @@ else
 fi
 [[ -n $merge_sha ]] || stop "no merge SHA for $pr_url"
 
+# Sets ci_indexed to yes or no: whether the run search release.yml's "Require successful push CI" step
+# uses (the same gh api query, the same match) returns the green push run on $merge_sha.
+# An unreadable answer stops: it is never taken for "not yet".
+ci_search() {
+  local found
+  found=$(gh api --method GET --paginate --slurp "repos/{owner}/{repo}/actions/workflows/ci.yml/runs" \
+    -f event=push -f head_sha="$merge_sha" -f status=success -f per_page=100) || stop "gh api actions/workflows/ci.yml/runs failed"
+  ci_indexed=$(printf '%s' "$found" | python3 -c '
+import json, sys
+pages = json.load(sys.stdin)
+print("yes" if any(r["head_sha"] == sys.argv[1] and r["event"] == "push" and r["conclusion"] == "success"
+                   for page in pages for r in page["workflow_runs"]) else "no")
+' "$merge_sha") || stop "could not read the ci.yml run search"
+}
+
 step=ci
 check_main
 say "waiting for push-event ci.yml on $merge_sha"
@@ -572,6 +589,23 @@ while :; do
       break
     fi
   fi
+  sleep "$poll_seconds"
+done
+
+# release.yml refuses a SHA that its own run search does not show as green. That search lags a run's
+# completion (v0.67.0: more than 36 s), so wait until the same query returns the run, then dispatch.
+search_misses=0
+search_started=$(date +%s)
+while :; do
+  ci_search
+  if [[ $ci_indexed == yes ]]; then
+    say "the run search shows push CI green for $merge_sha (after $(( $(date +%s) - search_started ))s, $search_misses misses)"
+    break
+  fi
+  search_misses=$((search_misses + 1))
+  say "the run search does not show push CI green for $merge_sha yet (miss $search_misses of $appear_polls)"
+  [[ $search_misses -lt $appear_polls ]] \
+    || stop "the ci.yml run search still does not show push CI green for $merge_sha after $appear_polls polls, so release.yml would refuse it; rerun to resume"
   sleep "$poll_seconds"
 done
 
