@@ -1101,6 +1101,12 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.assertEqual(self.h.gh_state()["prs"], [])
         self.assertFalse(self.h.worktree.exists())
 
+    def test_script_run_by_relative_path_from_scripts_dir_matches_origin_main(self) -> None:
+        args = ["./release-after-merge.sh", "--notes", str(self.h.notes)]
+        result = subprocess.run(args, cwd=self.h.checkout / "scripts", env={**self.h.env, "FAKE_GIT_LOG": "1"},
+                                capture_output=True, text=True, timeout=120)
+        self.assert_released(result)
+
 
 class AgentsContractTest(unittest.TestCase):
     """l4: AGENTS.md names the script and its standing authorization."""

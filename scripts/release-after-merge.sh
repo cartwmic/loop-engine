@@ -122,6 +122,7 @@ else:
 ' "$1"
 }
 
+self=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")  # before the cd below, so ./release-after-merge.sh still resolves
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 log_line "begin args: version=${version:-default} notes=${notes:-none}"
@@ -130,7 +131,7 @@ step=fetch
 git fetch --quiet --tags origin main || stop "git fetch origin failed"
 # This script is the release logic, but it runs from the checkout and prepares from origin/main. A checkout
 # behind main runs old logic (on the agent-host pod it lacked the kgate prepare route and stopped at prepare).
-git show origin/main:scripts/release-after-merge.sh | cmp -s - "${BASH_SOURCE[0]}" \
+git show origin/main:scripts/release-after-merge.sh | cmp -s - "$self" \
   || stop "this copy of scripts/release-after-merge.sh differs from origin/main's: update the checkout (git -C $repo_root merge --ff-only origin/main), then rerun"
 main_version=$(git show origin/main:Cargo.toml | python3 -c '
 import re, sys
