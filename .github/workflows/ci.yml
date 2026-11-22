@@ -107,6 +107,8 @@ jobs:
         run: python3 scripts/generate-prd-journey.py
       - name: PRD prose check tests
         run: python3 scripts/test_prd_prose_check.py
+      - name: Triage skill copies tests
+        run: python3 scripts/test_triage_skills.py
       # A push checks the pushed range. A manual run on a branch checks the
       # commits the branch adds on top of main: from the merge base to the
       # dispatched tip. A manual run on main checks main's tip commit (main is
