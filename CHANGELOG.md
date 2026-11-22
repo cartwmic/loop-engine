@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.65.0] - 2026-11-22
+
+The software-change scorer can read texts with a model before it scores.
+
+- evals/software-change: an optional reader step. A case with a `[reader]` table has the scorer read the texts a delivery writes, with a pinned model, and score from those readings. A case with no `[reader]` table scores exactly as before (#190).
+- `read-texts` saves the readings beside the capture and reuses them on a rescore. `case-check --save-forms` writes a case's saved forms, and stale saved readings are INVALID until it is run again (#190).
+- A model call that still fails after its retries is an infrastructure failure (exit 3), not an empty reading. A text with no usable vote keeps its readings and text, and the failure names its id (#190).
+- anthropic is pinned to 1.17.0 for the reader, which sends `cache_prompt=False` (#190).
+- run_proof_groups.py registers test_intent_checkin_trial.py and test_owner_context.py (#190).
+
 ## [0.64.0] - 2026-11-21
 
 The release script runs the merge gate before it merges a release-prep PR.
