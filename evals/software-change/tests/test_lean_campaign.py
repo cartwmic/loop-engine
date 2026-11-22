@@ -48,6 +48,7 @@ def test_scripted_lean_run_completes_and_its_records_reach_the_metrics(profile):
     metrics = trial["target_metrics"]
     assert trial["outcome"] == "success", metrics
     lean = metrics["lean_change"]
+    print(f"lean-{profile} metrics: " + json.dumps(lean, sort_keys=True))
     assert (lean["lifecycle"], lean["final_state"], lean["review_enabled"]) == ("final", "end", profile == "b")
     assert lean["denials"] == 1 and lean["criteria"] == 1 and lean["verifications"] == 1
     if profile == "b":
