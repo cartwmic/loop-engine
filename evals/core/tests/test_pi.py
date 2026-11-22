@@ -16,6 +16,19 @@ from evalcore.report import UnsafeReportError, protected_values, scan_results
 from evalcore.settings import CampaignSettings
 
 SCRIPT = Path(__file__).with_name("scripted_pi_helper.py")
+
+
+def pi_sdk_problem():
+    """Why the real Pi SDK cannot run here, or None. Uses the production lookup so the two cannot drift."""
+    try:
+        pi.helper_command()
+    except (ValueError, OSError) as error:
+        return str(error)
+    return None
+
+
+# The skip reason starts with "Pi SDK not installed": tests/run_proof_groups.py accepts a skip only for a listed reason.
+NO_PI_SDK = pytest.mark.skipif(pi_sdk_problem() is not None, reason=f"Pi SDK not installed ({pi_sdk_problem()})")
 TOOL = ToolInfo(name="lookup", description="Find a key", parameters={
     "type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]})
 
@@ -122,6 +135,7 @@ def test_pi_auth_is_protected(tmp_path, monkeypatch, role):
             scan_results([value], protected_values({}, settings.provider_config_paths))
 
 
+@NO_PI_SDK
 @pytest.mark.parametrize("failure", [None, "transient", "non-retryable", "exhausted", "policy", "signature", "malformed"])
 def test_actual_sdk_loads_provider_extension_and_makes_one_completion(tmp_path, monkeypatch, failure):
     """Production helper + real public SDK + discovered provider, entirely scripted."""
@@ -228,6 +242,7 @@ writeSync(1, "mapping passed\\n");
     assert "mapping passed" in result.stdout
 
 
+@NO_PI_SDK
 def test_signed_replay_and_drop_through_public_bridge_real_sdk(tmp_path, monkeypatch):
     from inspect_ai.agent import agent_bridge
     from openai import AsyncOpenAI

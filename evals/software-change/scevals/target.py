@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import io
 import json
 import math
+import os
 import tarfile
 from pathlib import Path
 import re
@@ -413,8 +414,12 @@ class TerminalTrial:
 
 class SoftwareChangeTarget:
     name = "software-change"
-    results_dir = ROOT / "results"
     logs_dir = ROOT / "logs"
+
+    @property
+    def results_dir(self):
+        """Reports go under software-change/results unless SC_RESULTS_DIR names another folder (the tests use this)."""
+        return Path(os.environ.get("SC_RESULTS_DIR") or ROOT / "results")
 
     def load_cases(self, path):
         paths = [path] if (path / "case.toml").is_file() else sorted(p.parent for p in path.glob("*/case.toml"))

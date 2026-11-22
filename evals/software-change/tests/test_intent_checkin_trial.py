@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 import subprocess
 import tarfile
-import tempfile
 import tomllib
 import uuid
 
@@ -21,19 +20,21 @@ ARM = {"id": "superpowers", "driver_command": ["python3", "-c", DRIVER_SOURCE, "
        "completion_rule": "driver-exit"}
 
 
-def test_the_checkin_client_reaches_the_scripted_owner_once_and_is_recorded_apart():
+def test_the_checkin_client_reaches_the_scripted_owner_once_and_is_recorded_apart(tmp_path, monkeypatch):
     settings = tomllib.loads((ROOT / "campaigns/scripted-example.toml").read_text())
     settings["target_options"] = {"arm": ARM, "intent_checkin": True}
     settings["idle_limit_seconds"] = 60
     name = f"t-checkin-{uuid.uuid4().hex[:8]}"
     settings["campaign"] = name
-    with tempfile.TemporaryDirectory(prefix="t-checkin-") as scratch:
-        config = Path(scratch) / (name + ".json")
-        config.write_text(json.dumps(settings))
-        result = subprocess.run(["uv", "run", "--project", "evals", "evalctl", "campaign", "--settings", str(config)],
-                                cwd=REPO, text=True, capture_output=True, timeout=650)
+    # The report goes to tmp_path, not to the checkout's (untracked, not ignored) results folder.
+    monkeypatch.setenv("SC_RESULTS_DIR", str(tmp_path / "results"))
+    config = tmp_path / (name + ".json")
+    config.write_text(json.dumps(settings))
+    result = subprocess.run(["uv", "run", "--project", "evals", "evalctl", "campaign", "--settings", str(config)],
+                            cwd=REPO, text=True, capture_output=True, timeout=650)
     assert result.returncode == 0, result.stdout + result.stderr
     result_dir = Path(result.stdout.split("Report written: ", 1)[1].strip())
+    assert tmp_path in result_dir.parents, result_dir
     summary = json.loads((result_dir / "summary.json").read_text())
     (trial,) = summary["trials"]
     metrics = trial["target_metrics"]

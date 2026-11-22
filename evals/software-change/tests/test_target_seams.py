@@ -1009,3 +1009,12 @@ def test_fractional_cpus_and_megabyte_memory_are_accepted(seams):
 def test_invalid_caps_are_refused_before_any_trial(seams, options):
     with pytest.raises(ValueError, match="container_cpus"):
         seams.configure(options={"arm": NATIVE_IN_IMAGE, **options}).prepare()
+
+
+def test_results_folder_is_the_checkouts_unless_sc_results_dir_names_another(tmp_path, monkeypatch):
+    monkeypatch.delenv("SC_RESULTS_DIR", raising=False)
+    assert SoftwareChangeTarget().results_dir == Path(target.__file__).resolve().parents[1] / "results"
+    monkeypatch.setenv("SC_RESULTS_DIR", str(tmp_path / "elsewhere"))
+    assert SoftwareChangeTarget().results_dir == tmp_path / "elsewhere"
+    monkeypatch.setenv("SC_RESULTS_DIR", "")
+    assert SoftwareChangeTarget().results_dir.name == "results"
