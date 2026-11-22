@@ -68,6 +68,8 @@ rc=0
 SC_LEAN_IMAGE="$LEAN_TAG" SC_EVALCTL="$UV evalctl" $UV pytest -vv -rA -p no:cacheprovider evals/software-change/tests/test_lean_campaign.py \
   > "$OUT/campaign.txt" 2>&1 || rc=$?
 cat "$OUT/campaign.txt"
-# The harness keeps the trial's captures (driver output, engine records) under captures/; send them back with the result.
-[ -d evals/software-change/captures ] && tar -C evals/software-change -czf "$OUT/captures.tgz" captures
+# The harness keeps the trial's captures (driver output, engine records) under captures/ and a failed trial's traceback under
+# logs/errors/; print the tracebacks and send both folders back with the result.
+for f in evals/software-change/logs/errors/*.txt; do [ -f "$f" ] && { echo "--- $f"; cat "$f"; }; done
+tar -C evals/software-change -czf "$OUT/captures.tgz" $(cd evals/software-change && ls -d captures logs 2>/dev/null)
 exit "$rc"
