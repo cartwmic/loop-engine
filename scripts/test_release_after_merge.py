@@ -1070,10 +1070,10 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.assertIn("running scripts/prepare-release-kgate.sh 0.35.0", result.stdout)
         self.assertEqual(self.h.count("prepare"), 0)
         [argv] = self.h.kgate_calls()
-        self.assertEqual(argv[:4], ["--wait", "3600", "--", "sh"])
-        self.assertIn("scripts/prepare-release.sh", argv[5])
+        self.assertEqual(argv[:6], ["--profile", "kgate-verify.toml", "--wait", "3600", "--", "sh"])
+        self.assertIn("scripts/prepare-release.sh", argv[7])
         # The cargo-dist version comes from mise.toml (0.31.7 in the seed), not from the script.
-        self.assertEqual(argv[6:], ["prepare-release", "0.31.7", "0.35.0"])
+        self.assertEqual(argv[8:], ["prepare-release", "0.31.7", "0.35.0"])
         for name in ("Cargo.toml", "Cargo.lock"):
             self.assertIn('version = "0.35.0"', git("--git-dir", str(self.h.origin), "show", f"main:{name}"), name)
 

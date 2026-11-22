@@ -54,7 +54,9 @@ cp Cargo.toml Cargo.lock /out/
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 rc=0
-kgate --wait 3600 -- sh -c "$pod_script" prepare-release "$dist_version" "$version" 2>&1 | tee "$log" || rc=$?
+# kgate-verify.toml is the same image and tools as the baseline kgate.toml, on 4 CPUs: one cargo build of the
+# release crates does not need the 12-CPU baseline, and that pod often has no node with room.
+kgate --profile kgate-verify.toml --wait 3600 -- sh -c "$pod_script" prepare-release "$dist_version" "$version" 2>&1 | tee "$log" || rc=$?
 
 case $rc in
   0) ;;
