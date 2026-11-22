@@ -3,7 +3,7 @@
 ## Overview
 
 This is software-change-specific infrastructure, not the target-neutral core.
-It is the mount-free native arm64 Linux image every trial runs in. It is not a
+It is the mount-free native Linux image every trial runs in, built for the architecture of the Docker daemon (amd64 or arm64) and never emulated. It is not a
 general sandbox: it pins one Loop Engine ref, and it does not resist a deliberate
 model escape (the threat boundary is a single trusted owner).
 
@@ -16,9 +16,11 @@ uv run --project evals evalctl image-check
 ```
 
 It exports the committed tree at local Git ref `v0.26.0`, builds both Rust binaries
-inside native arm64 Linux, prints actual tool versions and a JSON `IMAGE_CHECK`
+inside native Linux of the daemon's architecture, prints actual tool versions and a JSON `IMAGE_CHECK`
 receipt, and inspects a started trial-style container's mount configuration.
-It requires native arm64 Docker and build-network access, but no models or keys.
+It requires Docker (any chip; the harness reads the daemon's architecture once) and build-network access, but no models or keys.
+The architecture is recorded in the `IMAGE_CHECK` receipt, each trial's `isolation.json`, each `case-check` container record and the
+campaign report's target versions, so results stay labelled by chip.
 No live/paid model call is made. Capture output locally under ignored `captures/`.
 Use `--ref REF --tag TAG` for another pinned local ref/image. Version assertions
 compare the executables with the archived ref's Cargo workspace version; the image
@@ -28,7 +30,7 @@ Default image: `loop-engine-sc-evals:v0.26.0`. The Dockerfile expects `source.ta
 in its build context, created with `git archive` from the resolved ref. Build args
 `LOOP_ENGINE_REF` (default `v0.26.0`) and `LOOP_ENGINE_COMMIT` record that identity;
 use `scevals.image.build_image` rather than packaging a working checkout.
-Pins: Rust 1.98.0, Node 24.18.1, official Dagu 2.14.0 Linux arm64 (SHA-256 checked),
+Pins: Rust 1.98.0, Node 24.18.1, official Dagu 2.14.0 Linux amd64 or arm64 (SHA-256 checked per architecture, from the release's `checksums.txt`),
 and the owner's npm package `@earendil-works/pi-coding-agent@1.0.0`.
 Base image tags pin versions, not immutable distribution package snapshots.
 
@@ -44,7 +46,7 @@ Its container contract:
   and guarantees cleanup. `trial_container_command(image)` supplies its Docker
   creation argv. Containers start in `/workspace` with `sleep infinity` under tini;
   copy public files in, use `docker exec`, and copy evidence out. Nothing is mounted.
-- An Inspect adapter must supply equivalent compose configuration: arm64 image,
+- An Inspect adapter must supply equivalent compose configuration: an image of the daemon's architecture (`scevals.image.daemon_arch()`),
   `/workspace`, no volumes/binds/mounts, no image `VOLUME`. Inspect may inject tools
   by copy, not mounts. Record the **actual** config on every trial, not this smoke
   check's receipt. The hidden brief stays on the host; tests/reference are copied

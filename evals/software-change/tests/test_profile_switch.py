@@ -1,7 +1,7 @@
 """AC-3: choosing another shipped profile changes what actually runs.
 
 Black-box through the public evalctl CLI with scripted models, the real engine/provider and the real
-Docker trial container, like test_target.py. Needs the arm64 trial image and a reachable Docker daemon.
+Docker trial container, like test_target.py. Needs the trial image for the daemon's architecture and a reachable Docker daemon.
 The scripted driver itself asserts that the run's frozen review policies equal the chosen profile's;
 this test adds what the report and trial record say about it.
 """

@@ -3,15 +3,16 @@
 # provider and the engine it needs from the same commit. It replaces the base's older loop-engine binary; the base's
 # software-change provider stays in the image but no lean arm uses it.
 # Build from this directory with source.tar holding the tracked tree (git archive HEAD), see ARMS.md section 10:
+# BASE_IMAGE must be an image of the daemon's architecture: rebuild the base on this daemon first when the default tag
+# was built elsewhere.
 #   docker build -f Dockerfile.lean --build-arg LEAN_SOURCE_SHA=$(sha256sum source.tar | cut -d' ' -f1) -t TAG .
 ARG BASE_IMAGE=loop-engine-sc-evals:arms-s2-8aeedb5ee
 FROM rust:1.98.0-bookworm AS build
-ARG TARGETARCH
 # Optional memory bound for the cargo build (empty = cargo default parallelism).
 ARG SC_CARGO_JOBS=
 WORKDIR /src
 COPY source.tar /tmp/source.tar
-RUN test "$TARGETARCH" = arm64 && tar -xf /tmp/source.tar -C /src \
+RUN tar -xf /tmp/source.tar -C /src \
     && cargo build --locked --release ${SC_CARGO_JOBS:+-j $SC_CARGO_JOBS} -p loop-cli -p lean-change-provider
 
 FROM ${BASE_IMAGE}

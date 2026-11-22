@@ -9,6 +9,8 @@ import anyio
 
 from evalcore.target import InfrastructureError
 
+from .image import daemon_arch
+
 
 def read_capture(path):
     path = Path(path).resolve()
@@ -70,7 +72,8 @@ class ReplayContainer:
         self.cleanup_seconds = self.CLEANUP_SECONDS if cleanup_seconds is None else cleanup_seconds
 
     async def __aenter__(self):
-        result = await anyio.run_process(["docker", "run", "-d", "--platform", "linux/arm64", "--workdir", "/workspace", *self.limits, self.image, "sleep", "infinity"])
+        arch = await anyio.to_thread.run_sync(daemon_arch)
+        result = await anyio.run_process(["docker", "run", "-d", "--platform", f"linux/{arch}", "--workdir", "/workspace", *self.limits, self.image, "sleep", "infinity"])
         self.container = result.stdout.decode().strip()
         return self
 
