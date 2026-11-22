@@ -25,10 +25,12 @@ docker info --format 'storage driver: {{.Driver}}; cpus: {{.NCPU}}; memory: {{.M
 
 step "harness install"
 python3 -m venv "$VENV"
-"$VENV/bin/pip" install --quiet ./evals
+# Editable: the harness finds the repository, its image/ folder and its git history from the source files.
+"$VENV/bin/pip" install --quiet -e ./evals
 
 step "base image at $BASE_REF"
-"$VENV/bin/evalctl" image-check --ref "$BASE_REF" --tag "$BASE_TAG" | tee "$OUT/image-check.txt"
+"$VENV/bin/evalctl" image-check --ref "$BASE_REF" --tag "$BASE_TAG" > "$OUT/image-check.txt" 2>&1 || { cat "$OUT/image-check.txt"; exit 1; }
+tail -n 15 "$OUT/image-check.txt"
 
 step "arms image"
 docker build -f evals/software-change/image/Dockerfile.arms --build-arg BASE_IMAGE="$BASE_TAG" -t "$ARMS_TAG" evals/software-change/image
@@ -39,9 +41,10 @@ cp evals/software-change/image/Dockerfile.lean evals/software-change/image/pi-ro
 git archive --format=tar --output="$CTX/source.tar" HEAD
 docker build -f "$CTX/Dockerfile.lean" --build-arg SC_CARGO_JOBS="$JOBS" --build-arg LEAN_SOURCE_SHA="$(sha256sum "$CTX/source.tar" | cut -d' ' -f1)" \
   -t "$LEAN_TAG" "$CTX"
-docker image inspect --format '{{.Id}} {{.Architecture}} {{.Size}}' "$LEAN_TAG" | tee "$OUT/lean-image.txt"
-docker run --rm "$LEAN_TAG" cat /opt/sc-evals/arms/versions.txt | tee "$OUT/lean-versions.txt"
-docker system df | tee "$OUT/docker-df.txt"
+docker image inspect --format '{{.Id}} {{.Architecture}} {{.Size}}' "$LEAN_TAG" > "$OUT/lean-image.txt"
+docker run --rm "$LEAN_TAG" cat /opt/sc-evals/arms/versions.txt > "$OUT/lean-versions.txt"
+docker system df > "$OUT/docker-df.txt"
+cat "$OUT/lean-image.txt" "$OUT/lean-versions.txt" "$OUT/docker-df.txt"
 
 step "scripted lean campaign, profiles b and c, in $LEAN_TAG"
 rc=0
