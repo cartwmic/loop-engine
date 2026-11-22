@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.66.0] - 2026-11-22
+
+The release script can prepare a release on a host with no Rust toolchain, by running the prepare step on kgate.
+
+- scripts/release-after-merge.sh: with `RELEASE_PREPARE_CMD` unset, the prepare step runs `scripts/prepare-release.sh` when cargo is on PATH, as before. With no cargo and kgate on PATH, it runs the new `scripts/prepare-release-kgate.sh` (#195).
+- scripts/prepare-release-kgate.sh: runs `prepare-release.sh VERSION` as a kgate job on the `kgate-verify.toml` profile, with cargo-dist at the version `mise.toml` pins, and copies `Cargo.toml` and `Cargo.lock` back. A kgate exit 69 or 75 stops the step as a job that did not run; any other failure stops with its exit code. Nothing is copied back unless the job exited 0 (#195).
+- docs/release-procedure.md describes both routes (#195).
+
 ## [0.65.0] - 2026-11-22
 
 The software-change scorer can read texts with a model before it scores.
