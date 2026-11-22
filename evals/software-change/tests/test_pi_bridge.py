@@ -14,7 +14,7 @@ from inspect_ai.solver import solver
 from inspect_ai.util import sandbox
 
 from evalcore import pi
-from scevals.image import DEFAULT_IMAGE
+from scevals.image import DEFAULT_IMAGE, daemon_arch
 
 
 @pytest.mark.parametrize("backend", ["model", "transient", "signed-replay", "signed-drop"])
@@ -56,7 +56,7 @@ def test_pi_scripted_helper_through_real_pi_trial_role(tmp_path, monkeypatch, ba
         return solve
 
     compose = tmp_path / "compose.yaml"
-    compose.write_text(f"services:\n  default:\n    image: {DEFAULT_IMAGE}\n    platform: linux/arm64\n"
+    compose.write_text(f"services:\n  default:\n    image: {DEFAULT_IMAGE}\n    platform: linux/{daemon_arch()}\n"
                        "    working_dir: /workspace\n    command: [sleep, infinity]\n")
     capture = Path(__file__).resolve().parents[1] / "captures/F3/pi-bridge"
     capture.mkdir(parents=True, exist_ok=True)

@@ -432,7 +432,7 @@ the configured refs. The arms image inherits the base image's labels, so that ch
 from the source tree it is given and replaces the base image's older `loop-engine`, so a lean trial runs the
 provider and the engine it needs from one commit. It adds the two skills and the `pi-role.py` that loads
 `SC_PROVIDER_SKILL`, and records both versions in `/opt/sc-evals/arms/versions.txt`. The arm's `image` names its tag.
-The build compiles Rust natively for arm64 and is heavy (the final image is about 3.4 GB and the three images
+The build compiles Rust natively for the daemon's architecture and is heavy (the final image is about 3.4 GB and the three images
 together about 10 GB of disk). Build, from the checkout root, with the base images in place (the base is the
 `image-check` image at the recorded ref, then the arms image):
 

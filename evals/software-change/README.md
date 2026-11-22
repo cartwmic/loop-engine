@@ -20,7 +20,7 @@ Arm comparison options and commands (the `arm` option, the independent grader, s
 
 ## Setup
 
-From the checkout root, with native arm64 Docker, build the pinned trial image
+From the checkout root, with native Docker (amd64 or arm64), build the pinned trial image
 once (build-network access, no model credentials):
 
 ```sh
@@ -101,7 +101,7 @@ for an invalid case, not an infrastructure error.
 
 ### Image and unattended execution
 
-The [image](image/README.md) contains native arm64 Linux binaries built from the
+The [image](image/README.md) contains native Linux binaries (of the daemon's architecture) built from the
 campaign's pinned local Git ref, Dagu, Pi, the two shipped skills, and role/owner
 commands. Run `uv run --project evals evalctl image-check` from the checkout root;
 no host mounts or image volumes are permitted. An image's commit identity must
@@ -170,7 +170,7 @@ timeouts. Scripted proof hooks: `target_options.scripted_capture_delay_seconds` 
 The Tier 0 campaign is `campaigns/tier0.toml`; see [TIERS.md](TIERS.md). The trial solver enforces the hard limit; Inspect's sample limit is a 10-second backstop. The driver-finally hook captures even bridge/owner/driver exceptions before
 scoring. Docker loss, host disk failure or abrupt host process death during a copy
 can still prevent a complete capture; partial chunks remain private and unknown
-dimensions stay null. `case-check` now verifies/reuses the pinned arm64 image and
+dimensions stay null. `case-check` now verifies/reuses the pinned image (it must be of the daemon's architecture) and
 never implicitly rebuilds it; building is explicit `image-check` only.
 
 Metric definitions (computed in `scevals/target.py`):

@@ -1,13 +1,12 @@
 # Source is exported by scevals.image from this checkout at LOOP_ENGINE_REF.
 FROM rust:1.98.0-bookworm AS build
-ARG TARGETARCH
 ARG LOOP_ENGINE_REF=v0.26.0
 ARG LOOP_ENGINE_COMMIT
 # Optional eval-only memory bound (empty = cargo default parallelism, unchanged behaviour).
 ARG SC_CARGO_JOBS=
 WORKDIR /src
 COPY source.tar /tmp/source.tar
-RUN test "$TARGETARCH" = arm64 && tar -xf /tmp/source.tar -C /src \
+RUN tar -xf /tmp/source.tar -C /src \
     && cargo build --locked --release ${SC_CARGO_JOBS:+-j $SC_CARGO_JOBS} -p loop-cli -p software-change-provider
 
 FROM node:24.18.1-bookworm
@@ -16,13 +15,18 @@ ARG LOOP_ENGINE_REF=v0.26.0
 ARG LOOP_ENGINE_COMMIT
 LABEL org.opencontainers.image.version=$LOOP_ENGINE_REF \
       org.opencontainers.image.revision=$LOOP_ENGINE_COMMIT
-RUN test "$TARGETARCH" = arm64 \
-    && apt-get update \
+RUN apt-get update \
     && apt-get install -y --no-install-recommends git python3 ca-certificates curl tini \
     && rm -rf /var/lib/apt/lists/*
-# Official arm64 release, checked against the release's published checksum.
-RUN curl -fsSL https://github.com/dagu-org/dagu/releases/download/v2.14.0/dagu_2.14.0_linux_arm64.tar.gz -o /tmp/dagu.tar.gz \
-    && echo 'c1061503cfe729593ac5433b29e6959830cc2dad50205f1003f4287998ee0cd6  /tmp/dagu.tar.gz' | sha256sum -c - \
+# Official Dagu release for the build's architecture (amd64 or arm64), checked against the release's published
+# checksum (https://github.com/dagu-org/dagu/releases/download/v2.14.0/checksums.txt). Any other TARGETARCH fails.
+RUN case "$TARGETARCH" in \
+      amd64) dagu_sha=ca902060f08ad69f7e68be53b0c6f8146cef9ae3f3558529d31d773db202d00d ;; \
+      arm64) dagu_sha=c1061503cfe729593ac5433b29e6959830cc2dad50205f1003f4287998ee0cd6 ;; \
+      *) echo "no Dagu checksum for TARGETARCH='$TARGETARCH'" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://github.com/dagu-org/dagu/releases/download/v2.14.0/dagu_2.14.0_linux_${TARGETARCH}.tar.gz" -o /tmp/dagu.tar.gz \
+    && echo "$dagu_sha  /tmp/dagu.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/dagu.tar.gz -C /usr/local/bin dagu \
     && rm /tmp/dagu.tar.gz
 RUN npm install --global @earendil-works/pi-coding-agent@1.0.0 \

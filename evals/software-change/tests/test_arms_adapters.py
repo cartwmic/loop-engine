@@ -28,6 +28,7 @@ from inspect_ai.solver import solver
 from inspect_ai.tool import ToolCall
 from inspect_ai.util import sandbox, sandbox_service
 
+from scevals.image import daemon_arch
 from scevals.arms import is_workflow_owned, load_arm, render_prompt
 from scevals.cases import load_case
 from scevals.grader import CLAIM_INSTRUCTION, FIDELITY_INSTRUCTION, build_evidence, grade
@@ -266,7 +267,7 @@ def arm_adapter_proof():
 
 def test_four_arms_launch_through_real_pi_and_score_through_the_common_rule(tmp_path):
     compose = tmp_path / "compose.yaml"
-    compose.write_text(f"services:\n  default:\n    image: {ARMS_IMAGE}\n    platform: linux/arm64\n"
+    compose.write_text(f"services:\n  default:\n    image: {ARMS_IMAGE}\n    platform: linux/{daemon_arch()}\n"
                        "    working_dir: /workspace\n    command: [sleep, infinity]\n")
     CAPTURES.mkdir(parents=True, exist_ok=True)
     task = Task(name="t10-arms-adapters", dataset=[Sample(input=REQUEST)], solver=arm_adapter_proof(),

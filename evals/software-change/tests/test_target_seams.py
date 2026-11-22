@@ -251,6 +251,8 @@ class Seams:
     def __init__(self, monkeypatch, tmp_path):
         self.tmp_path = tmp_path
         self.inspected = []  # trial images the harness asked Docker to inspect
+        self.daemon = "amd64"  # the chip of the fake daemon; a test sets it, and the image chip, to prove the match
+        self.image_arch = None  # None = the image is of the daemon's chip
         self.replays = []  # images of replay containers created for scoring
         self.replay_limits = []  # docker run limit arguments of each replay container
         self.trial = None
@@ -264,14 +266,14 @@ class Seams:
 
         async def run_process(command, **kwargs):
             if command[:2] == ["docker", "inspect"]:
-                config = {"Id": "fake-trial-container", "Image": "sha256:trial", "Mounts": [], "Platform": "linux/arm64",
+                config = {"Id": "fake-trial-container", "Image": "sha256:trial", "Mounts": [], "Platform": f"linux/{self.daemon}",
                           "HostConfig": {"Binds": None, "NanoCpus": 2_000_000_000, "Memory": 8 * 1024 ** 3}, "Config": {"WorkingDir": "/workspace"}}
                 return SimpleNamespace(stdout=json.dumps([config]).encode())
             return await original_run_process(command, **kwargs)
 
         def docker_image_inspect(command, timeout=None):
             self.inspected.append(command[-1])
-            identity = {"Id": "sha256:image", "Architecture": "arm64", "Os": "linux",
+            identity = {"Id": "sha256:image", "Architecture": self.image_arch or self.daemon, "Os": "linux",
                         "Config": {"Labels": {"org.opencontainers.image.revision": "abc123"}}}
             return json.dumps([identity])
 
@@ -299,6 +301,7 @@ class Seams:
         monkeypatch.setattr(target, "get_model", lambda *args, **kwargs: None)
         monkeypatch.setattr(target, "resolve_ref", lambda ref: "abc123")
         monkeypatch.setattr(target, "output", docker_image_inspect)
+        monkeypatch.setattr(target, "daemon_arch", lambda: self.daemon)
         monkeypatch.setattr(target, "ReplayContainer", ReplayContainer)
         monkeypatch.setattr(target, "judge_intent", fake_judge)
         monkeypatch.setattr(target, "grade", scripted_grade)
@@ -978,6 +981,27 @@ def test_container_caps_reach_the_compose_the_replay_and_the_isolation_record(se
     assert seams.replay_limits == [["--cpus", "2", "--memory", "8g"]]
     isolation = json.loads((run.capture / "isolation.json").read_text())
     assert isolation["cpus"] == 2.0 and isolation["memory_bytes"] == 8 * 1024 ** 3
+
+
+@pytest.mark.parametrize("daemon", ["arm64", "amd64"])
+def test_the_compose_and_the_isolation_record_carry_the_daemons_arch(seams, daemon):
+    seams.daemon = daemon
+    run = seams.configure(options={"arm": NATIVE_IN_IMAGE}).run()
+    assert f"    platform: linux/{daemon}\n" in run.compose
+    assert json.loads((run.capture / "isolation.json").read_text())["architecture"] == daemon
+
+
+def test_the_campaign_report_names_the_arch_of_the_daemon(seams):
+    seams.daemon = "amd64"
+    assert seams.configure().target.versions(seams.context.settings)["architecture"] == "amd64"
+
+
+@pytest.mark.parametrize("daemon,image_arch", [("amd64", "arm64"), ("arm64", "amd64")])
+def test_an_image_of_another_arch_than_the_daemons_is_refused(seams, daemon, image_arch):
+    seams.daemon, seams.image_arch = daemon, image_arch
+    with pytest.raises(ValueError, match=f"for the daemon's architecture \\({daemon}\\)"):
+        seams.configure(options={"arm": NATIVE_IN_IMAGE}).prepare()
+    assert seams.target.run_directory.exists() and not list(seams.target.run_directory.glob("*.yaml"))
 
 
 def test_without_caps_nothing_is_added(seams):

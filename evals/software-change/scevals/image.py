@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import tomllib
 from contextlib import contextmanager
+from functools import cache
 
 REPOSITORY = Path(__file__).resolve().parents[3]
 IMAGE_DIR = Path(__file__).resolve().parents[1] / "image"
@@ -36,11 +37,24 @@ def output(command, timeout=60):
     return stdout.strip()
 
 
+_ARCH_NAMES = {"aarch64": "arm64", "x86_64": "amd64"}
+
+
+def normalise_arch(name):
+    """Docker's own names for the chip: arm64 and amd64, whatever spelling the daemon or an image uses."""
+    return _ARCH_NAMES.get(name, name)
+
+
+@cache
+def daemon_arch():
+    """The chip the Docker daemon runs on, read once. Every image, container and receipt uses it, so a trial always runs
+    natively (never emulated) on whatever chip the daemon has."""
+    return normalise_arch(output(["docker", "version", "--format", "{{.Server.Arch}}"]))
+
+
 def build_image(ref=DEFAULT_REF, tag=DEFAULT_IMAGE):
     """Export only the pinned committed tree, never local changes or credentials."""
-    arch = output(["docker", "version", "--format", "{{.Server.Arch}}"])
-    if arch not in ("arm64", "aarch64"):
-        raise RuntimeError("native arm64 Docker is required (no emulation)")
+    arch = daemon_arch()
     commit = output(["git", "-C", str(REPOSITORY), "rev-parse", "--verify", f"{ref}^{{commit}}"])
     manifest = output(["git", "-C", str(REPOSITORY), "show", f"{commit}:Cargo.toml"])
     version = tomllib.loads(manifest)["workspace"]["package"]["version"]
@@ -53,11 +67,11 @@ def build_image(ref=DEFAULT_REF, tag=DEFAULT_IMAGE):
         jobs = os.environ.get("SC_IMAGE_CARGO_JOBS", "")  # eval-only memory bound; unset = unchanged build
         if jobs and not jobs.isdigit():
             raise ValueError("SC_IMAGE_CARGO_JOBS must be a positive integer")
-        run(["docker", "build", "--platform", "linux/arm64", "--tag", tag,
+        run(["docker", "build", "--platform", f"linux/{arch}", "--tag", tag,
              "--build-arg", f"LOOP_ENGINE_REF={ref}",
              "--build-arg", f"LOOP_ENGINE_COMMIT={commit}",
              *(["--build-arg", f"SC_CARGO_JOBS={jobs}"] if jobs else []), str(context)])
-    return {"ref": ref, "commit": commit, "version": version, "image": tag}
+    return {"ref": ref, "commit": commit, "version": version, "image": tag, "architecture": arch}
 
 
 def verify_image(ref=DEFAULT_REF, tag=DEFAULT_IMAGE):
@@ -67,11 +81,11 @@ def verify_image(ref=DEFAULT_REF, tag=DEFAULT_IMAGE):
         identity = json.loads(output(["docker", "image", "inspect", tag]))[0]
     except (subprocess.CalledProcessError, ValueError, IndexError):
         raise RuntimeError("trial image missing; run image-check first") from None
-    if (identity.get("Architecture") != "arm64" or identity.get("Os") != "linux" or
+    if (normalise_arch(identity.get("Architecture")) != daemon_arch() or identity.get("Os") != "linux" or
             (identity["Config"].get("Labels") or {}).get("org.opencontainers.image.revision") != commit or
             identity["Config"].get("Volumes")):
         raise RuntimeError("trial image mismatch; run image-check first")
-    return {"ref": ref, "commit": commit, "image": tag}
+    return {"ref": ref, "commit": commit, "image": tag, "architecture": daemon_arch()}
 
 
 def trial_container_command(image=DEFAULT_IMAGE):
@@ -80,7 +94,7 @@ def trial_container_command(image=DEFAULT_IMAGE):
     Inspect adapters must mirror these mount-free options in their compose file.
     Public files enter through docker cp / sandbox.write_file, not host mounts.
     """
-    return ["docker", "create", "--platform", "linux/arm64", "--workdir", "/workspace",
+    return ["docker", "create", "--platform", f"linux/{daemon_arch()}", "--workdir", "/workspace",
             image, "sleep", "infinity"]
 
 
@@ -117,8 +131,8 @@ def check_image(args):
         if versions["pi"] != "1.0.0":
             raise RuntimeError("unexpected pi version")
         image_config = json.loads(output(["docker", "image", "inspect", config["Image"]]))[0]
-        if image_config["Architecture"] != "arm64":
-            raise RuntimeError("trial image is not native arm64")
+        if normalise_arch(image_config["Architecture"]) != daemon_arch():
+            raise RuntimeError(f"trial image is {image_config['Architecture']}, not the daemon's {daemon_arch()}")
         labels = image_config["Config"]["Labels"]
         if labels["org.opencontainers.image.revision"] != built["commit"]:
             raise RuntimeError("image source commit mismatch")
@@ -131,7 +145,7 @@ def check_image(args):
              "test -s /opt/sc-evals/skills/using-loop-engine/SKILL.md && "
              "test -s /opt/sc-evals/skills/using-software-change-provider/SKILL.md && "
              "for tool in sc-driver sc-implement sc-review ask-owner; do command -v \"$tool\" || exit 1; done"])
-        receipt = {**built, "image_id": config["Image"], "architecture": "arm64",
+        receipt = {**built, "image_id": config["Image"], "architecture": daemon_arch(),
                    "versions": versions, "mounts": config["Mounts"],
                    "binds": config["HostConfig"].get("Binds"),
                    "host_mounts": config["HostConfig"].get("Mounts", [])}
@@ -141,7 +155,7 @@ def check_image(args):
 
 
 def register_subcommands(subparsers: argparse._SubParsersAction):
-    parser = subparsers.add_parser("image-check", help="build pinned arm64 trial image and check versions/no mounts")
+    parser = subparsers.add_parser("image-check", help="build the pinned trial image for the daemon's architecture and check versions/no mounts")
     parser.add_argument("--ref", default=DEFAULT_REF, help="local Git ref to archive (default v0.26.0)")
     parser.add_argument("--tag", default=DEFAULT_IMAGE, help="local Docker image tag")
     parser.set_defaults(handler=check_image)

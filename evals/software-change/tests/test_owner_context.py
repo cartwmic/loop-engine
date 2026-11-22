@@ -19,6 +19,8 @@ import threading
 
 import pytest
 
+from scevals.image import daemon_arch
+
 IMAGE_DIR = Path(__file__).resolve().parents[1] / "image"
 CONTEXT = IMAGE_DIR / "owner-context" / "design-principles.md"
 # design-principles.md at chezmoi commit 3517fd6, unedited. A changed file is a decision, not a drive-by edit.
@@ -125,7 +127,7 @@ def test_real_pi_in_the_image_sends_the_owner_context(name):
         script = ("mkdir -p /workspace/public/repo && cd /workspace/public/repo && git init -q && "
                   f"sha256sum /opt/sc-evals/owner-context/design-principles.md 2>/dev/null; {name} 'say done'")
         result = subprocess.run(
-            ["docker", "run", "--rm", "--platform", "linux/arm64",
+            ["docker", "run", "--rm", "--platform", f"linux/{daemon_arch()}",
              "-e", f"SC_BRIDGE_URL=http://host.docker.internal:{server.server_port}/v1",
              IMAGE, "sh", "-c", script], capture_output=True, text=True, timeout=600)
     finally:

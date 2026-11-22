@@ -10,7 +10,7 @@ import re
 import subprocess
 import tomllib
 
-from .image import DEFAULT_IMAGE, DEFAULT_REF, verify_image, output, run, trial_container
+from .image import DEFAULT_IMAGE, DEFAULT_REF, daemon_arch, verify_image, output, run, trial_container
 
 RUNTIME = Path(__file__).with_name("case_runtime.py")
 REQUIREMENT = r"REQ-[A-Z0-9-]+"
@@ -144,7 +144,7 @@ def run_hidden_tests(case: EvalCase, *, reference: bool, image=DEFAULT_IMAGE):
              "--output", "/tmp/case-results.json"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             timeout=case.test_timeout_seconds)
         report = json.loads(output(["docker", "exec", container, "cat", "/tmp/case-results.json"]))
-        report["container"] = {"image_id": config["Image"], "mounts": config["Mounts"],
+        report["container"] = {"image_id": config["Image"], "architecture": daemon_arch(), "mounts": config["Mounts"],
                                "copies": copies}
         return report
 
