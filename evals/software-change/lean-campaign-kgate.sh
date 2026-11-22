@@ -15,6 +15,8 @@ OUT=${OUT:-/out}
 JOBS=${SC_CARGO_JOBS:-4}
 VENV=${VENV:-/tmp/lean-venv}
 export SC_IMAGE_CARGO_JOBS=$JOBS
+# The harness's own environment, from evals/uv.lock (a plain pip install resolves a newer agent-client-protocol that inspect-ai cannot import).
+export UV_PROJECT_ENVIRONMENT=/tmp/lean-env
 mkdir -p "$OUT"
 
 # The Docker sidecar's default bridge has MTU 1500 but the pod's own network has 1280, so a large download inside a build step
@@ -39,11 +41,12 @@ docker info --format 'storage driver: {{.Driver}}; cpus: {{.NCPU}}; memory: {{.M
 
 step "harness install"
 python3 -m venv "$VENV"
-# Editable: the harness finds the repository, its image/ folder and its git history from the source files.
-"$VENV/bin/pip" install --quiet -e ./evals
+"$VENV/bin/pip" install --quiet uv
+UV="$VENV/bin/uv run --frozen --project evals"
+$VENV/bin/uv sync --frozen --project evals
 
 step "base image at $BASE_REF"
-"$VENV/bin/evalctl" image-check --ref "$BASE_REF" --tag "$BASE_TAG" > "$OUT/image-check.txt" 2>&1 || { cat "$OUT/image-check.txt"; exit 1; }
+$UV evalctl image-check --ref "$BASE_REF" --tag "$BASE_TAG" > "$OUT/image-check.txt" 2>&1 || { cat "$OUT/image-check.txt"; exit 1; }
 tail -n 15 "$OUT/image-check.txt"
 
 step "arms image"
@@ -62,7 +65,7 @@ cat "$OUT/lean-image.txt" "$OUT/lean-versions.txt" "$OUT/docker-df.txt"
 
 step "scripted lean campaign, profiles b and c, in $LEAN_TAG"
 rc=0
-SC_LEAN_IMAGE="$LEAN_TAG" SC_EVALCTL="$VENV/bin/evalctl" "$VENV/bin/pytest" -v -rA -p no:cacheprovider evals/software-change/tests/test_lean_campaign.py \
+SC_LEAN_IMAGE="$LEAN_TAG" SC_EVALCTL="$UV evalctl" $UV pytest -v -rA -p no:cacheprovider evals/software-change/tests/test_lean_campaign.py \
   > "$OUT/campaign.txt" 2>&1 || rc=$?
 cat "$OUT/campaign.txt"
 exit "$rc"
