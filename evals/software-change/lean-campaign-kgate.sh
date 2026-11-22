@@ -17,6 +17,20 @@ VENV=${VENV:-/tmp/lean-venv}
 export SC_IMAGE_CARGO_JOBS=$JOBS
 mkdir -p "$OUT"
 
+# The Docker sidecar's default bridge has MTU 1500 but the pod's own network has 1280, so a large download inside a build step
+# (the Dagu tarball, 50 MB) stalls and is reset. Measured 2026-11-22 on the G14: from a container on the default bridge the download
+# timed out after 150 s; with --network host it took 13 s. The harness calls the build with no network option, so every
+# image build here goes through this wrapper, which builds on the pod's network.
+REAL_DOCKER=$(command -v docker)
+WRAP=$(mktemp -d)
+cat > "$WRAP/docker" <<WRAPPER
+#!/bin/sh
+if [ "\${1:-}" = build ]; then shift; exec "$REAL_DOCKER" build --network host "\$@"; fi
+exec "$REAL_DOCKER" "\$@"
+WRAPPER
+chmod 755 "$WRAP/docker"
+export PATH="$WRAP:$PATH"
+
 step() { printf '\n=== %s (%s)\n' "$1" "$(date -u +%H:%M:%S)"; }
 
 step "daemon"
