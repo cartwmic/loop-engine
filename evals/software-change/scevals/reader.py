@@ -483,13 +483,13 @@ async def run_reader_step(trial):
     unread = [r.id for r in readings if r.form is None]
     if unread:
         raise InfrastructureError("reader failed: no usable vote for " + ", ".join(unread))
-    document = forms_document(texts, readings)
+    forms_json = json.dumps(forms_document(texts, readings))  # ours: a bug here is not a sandbox failure
     write_failed = False
     try:
-        await trial.env.write_file(f"/opt/scoring/tests/{FORMS_FILE}", json.dumps(document))
+        await trial.env.write_file(f"/opt/scoring/tests/{FORMS_FILE}", forms_json)
     except Exception as error:
         write_failed = True
-        log.warning("reader forms could not be written: %s", type(error).__name__)
+        log.warning("reader forms could not be written: %s: %s", type(error).__name__, error)
     if write_failed:  # raised outside the handler, as in _one_call: the sandbox, not the delivery, failed
         raise InfrastructureError("reader forms could not be written")
     trial.evidence["copy_log"].append({"kind": "reader_forms", "source": "harness/reader",

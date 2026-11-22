@@ -81,6 +81,9 @@ with pinned image identity, mounts and copy logs. Default invalid exit is 1;
 `--expect-invalid` inverts validity only, never infrastructure/build failures
 (which exit 2 through evalctl). A case with a `[reader]` whose saved readings are stale is
 not checked and exits 3 (see "`case-check` and saved forms"). `--ref`/`--tag` choose a different pinned image.
+Every run appends one JSON line to `${XDG_STATE_HOME:-~/.local/state}/loop-engine/case-check.jsonl`: `time` (UTC), `case`
+(the path given), `outcome` (`ok`, `invalid`, `stale` or `failed`) and `exit_code`. `--expect-invalid` changes the exit
+code, not the outcome. Count a month of runs with `jq -r .outcome case-check.jsonl | sort | uniq -c`.
 Keep stdout/receipts under ignored `captures/`, especially for private cases.
 
 T4/T5 can import `scevals.cases.load_case(Path) -> EvalCase`: fields `path`, `id`,

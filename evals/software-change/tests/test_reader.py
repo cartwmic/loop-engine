@@ -5,6 +5,7 @@ scoring sandbox is a small object with `exec`, `write_file` and `read_file`. The
 the real collector of a real case is exercised by that case's own checks.
 """
 import asyncio
+import datetime
 from collections import deque
 import json
 import logging
@@ -822,6 +823,22 @@ def test_a_failed_write_of_forms_is_infrastructure_not_a_failed_trial(tmp_path, 
     assert trial.evidence["copy_log"] == []
 
 
+def test_the_warning_for_a_failed_forms_write_names_the_reason(tmp_path, caplog):
+    class WriteFails(Env):
+        async def write_file(self, path, content):
+            raise OSError("disk full")
+    trial = trial_of(load_case(make_case(tmp_path)), WriteFails(collected(("m", "message", TEXT))))
+    with caplog.at_level(logging.WARNING), pytest.raises(InfrastructureError):
+        step(trial, scripted({TEXT: [MESSAGE] * 3}))
+    assert "OSError: disk full" in caplog.text
+
+
+def test_a_bug_in_building_the_forms_document_is_not_scored_as_infrastructure(tmp_path, monkeypatch):
+    monkeypatch.setattr(reader, "forms_document", lambda texts, readings: {"bad": object()})
+    trial = trial_of(load_case(make_case(tmp_path)), Env(collected(("m", "message", TEXT))))
+    assert classified(lambda: step(trial, scripted({TEXT: [MESSAGE] * 3}))) != "infrastructure"
+
+
 def test_a_snapshot_replay_of_a_case_with_a_reader_says_it_cannot_be_replayed(tmp_path):
     from scevals import snapshots
     case = load_case(make_case(tmp_path))
@@ -838,3 +855,61 @@ def test_a_snapshot_replay_of_a_case_with_a_reader_says_it_cannot_be_replayed(tm
     with pytest.raises(ValueError, match="reader"):
         asyncio.run(snapshots.replay_hidden_tests(directory / "snapshot-000001.tar", case, "image:test"))
     assert ran == []
+
+
+# ---------------------------------------------------------------- case-check keeps a log (principle 14)
+
+def case_check_lines():
+    log = cases.case_check_log()
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+def test_case_check_appends_one_json_line_per_run_with_the_outcome_exit_code_and_time(tmp_path, monkeypatch):
+    path = make_case(tmp_path)
+    case = load_case(path)
+    texts = [{"id": "m", "kind": "message", "text": TEXT}]
+    monkeypatch.setattr(cases, "verify_image", lambda ref, tag: "image")
+    monkeypatch.setattr(cases, "run_hidden_tests", fake_container_work(case, lambda reference: texts))
+    args = SimpleNamespace(path=path, expect_invalid=False, ref="r", tag="t", save_forms=False)
+    assert cases.case_check(args) == 3  # stale: no saved readings yet
+    monkeypatch.setattr(reader, "get_model", lambda name: scripted({TEXT: [MESSAGE] * 3}))
+    args.save_forms = True
+    assert cases.case_check(args) == 0
+
+    def failing(*a, **k):
+        raise InfrastructureError("sandbox gone")
+    monkeypatch.setattr(cases, "run_hidden_tests", failing)
+    assert cases.case_check(args) == 2
+    monkeypatch.setattr(cases, "run_hidden_tests", lambda *a, **k: (_ for _ in ()).throw(cases.ReaderCollectorFailed("bad collector")))
+    args.expect_invalid = True
+    assert cases.case_check(args) == 0  # invalid, as expected
+
+    lines = case_check_lines()
+    assert [(l["outcome"], l["exit_code"]) for l in lines] == [("stale", 3), ("ok", 0), ("failed", 2), ("invalid", 0)]
+    assert all(l["case"] == str(path) for l in lines)
+    assert all(datetime.datetime.fromisoformat(l["time"]).utcoffset() == datetime.timedelta(0) for l in lines)
+
+
+def test_case_check_logs_a_run_that_stops_before_the_image_check(tmp_path, monkeypatch):
+    def missing(*args):
+        raise RuntimeError("no image")
+    monkeypatch.setattr(cases, "verify_image", missing)
+    path = make_case(tmp_path)
+    assert cases.case_check(SimpleNamespace(path=path, expect_invalid=False, ref="r", tag="t", save_forms=False)) == 2
+    assert [(l["outcome"], l["exit_code"]) for l in case_check_lines()] == [("failed", 2)]
+
+
+def test_a_case_check_that_crashes_is_logged_as_failed_and_still_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(cases, "_case_check", lambda args: 1 / 0)
+    with pytest.raises(ZeroDivisionError):
+        cases.case_check(SimpleNamespace(path=tmp_path, expect_invalid=False))
+    assert [l["outcome"] for l in case_check_lines()] == ["failed"]
+
+
+def test_a_log_that_cannot_be_written_does_not_hide_the_result(tmp_path, monkeypatch, capsys):
+    blocker = tmp_path / "state-is-a-file"
+    blocker.write_text("")
+    monkeypatch.setenv("XDG_STATE_HOME", str(blocker))
+    monkeypatch.setattr(cases, "_case_check", lambda args: (3, "stale"))
+    assert cases.case_check(SimpleNamespace(path=tmp_path)) == 3
+    assert "case-check log not written" in capsys.readouterr().err
