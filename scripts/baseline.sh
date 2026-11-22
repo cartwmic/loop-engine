@@ -27,6 +27,7 @@ python3 scripts/lean-change-mutations.py
 python3 scripts/generate-prd-journey.py
 python3 scripts/run-release-tests-sharded.py
 python3 scripts/test_prd_prose_check.py
+python3 scripts/test_triage_skills.py
 
 # Capture metadata separately so a Cargo failure retains its own exit status.
 metadata="$(cargo metadata --format-version 1 --no-deps)"
