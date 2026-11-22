@@ -46,7 +46,7 @@ def campaign(profile):
 def test_scripted_lean_run_completes_and_its_records_reach_the_metrics(profile):
     trial = campaign(profile)
     metrics = trial["target_metrics"]
-    assert trial["outcome"] == "success", metrics
+    assert trial["outcome"] == "success", f"{trial['outcome']}: {trial.get('reason')}; {metrics}"
     lean = metrics["lean_change"]
     print(f"lean-{profile} metrics: " + json.dumps(lean, sort_keys=True))
     assert (lean["lifecycle"], lean["final_state"], lean["review_enabled"]) == ("final", "end", profile == "b")

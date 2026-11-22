@@ -65,7 +65,9 @@ cat "$OUT/lean-image.txt" "$OUT/lean-versions.txt" "$OUT/docker-df.txt"
 
 step "scripted lean campaign, profiles b and c, in $LEAN_TAG"
 rc=0
-SC_LEAN_IMAGE="$LEAN_TAG" SC_EVALCTL="$UV evalctl" $UV pytest -v -rA -p no:cacheprovider evals/software-change/tests/test_lean_campaign.py \
+SC_LEAN_IMAGE="$LEAN_TAG" SC_EVALCTL="$UV evalctl" $UV pytest -vv -rA -p no:cacheprovider evals/software-change/tests/test_lean_campaign.py \
   > "$OUT/campaign.txt" 2>&1 || rc=$?
 cat "$OUT/campaign.txt"
+# The harness keeps the trial's captures (driver output, engine records) under captures/; send them back with the result.
+[ -d evals/software-change/captures ] && tar -C evals/software-change -czf "$OUT/captures.tgz" captures
 exit "$rc"
