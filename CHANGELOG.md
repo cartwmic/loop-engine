@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.67.0] - 2026-11-22
+
+Finding triage reads the same in every skill, and eval skips must give a listed reason.
+
+- research and policy-document skills: a candidate fails only on findings that fail a test (any of the four); an in-intent finding is not declined but moved to a follow-up (#170).
+- scripts/test_triage_skills.py: pins the triage text the four skills share; it runs in ci.yml's tests job and scripts/baseline.sh (#170).
+- evals: the proof runner accepts a skip only with a reason listed for that test's file, and fails the unit on any other skip; the software-change target writes reports to `SC_RESULTS_DIR` when set, so the check-in test leaves the checkout clean (#192).
+
 ## [0.66.0] - 2026-11-22
 
 The release script can prepare a release on a host with no Rust toolchain, by running the prepare step on kgate.
