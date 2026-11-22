@@ -79,7 +79,8 @@ Every reference test must pass; at least one executed no-op test must fail/error
 It prints per-requirement counts, `VALID`/`INVALID` and a `CASE_CHECK` JSON receipt
 with pinned image identity, mounts and copy logs. Default invalid exit is 1;
 `--expect-invalid` inverts validity only, never infrastructure/build failures
-(which exit 2 through evalctl). `--ref`/`--tag` choose a different pinned image.
+(which exit 2 through evalctl). A case with a `[reader]` whose saved readings are stale is
+not checked and exits 3 (see "`case-check` and saved forms"). `--ref`/`--tag` choose a different pinned image.
 Keep stdout/receipts under ignored `captures/`, especially for private cases.
 
 T4/T5 can import `scevals.cases.load_case(Path) -> EvalCase`: fields `path`, `id`,
@@ -142,6 +143,7 @@ else:
 raise: a missing text, a refusal that printed nothing or a crashed tool gives `null`, which fails the tests that
 need that form but is never an infrastructure failure. A collector that exits non-zero, prints anything but this
 shape or names an unknown kind is a case bug: an infrastructure failure in a campaign, `INVALID` in case-check.
+The collector has its own 120 s cap. A guide file that is not UTF-8 text is refused when the case loads.
 A collector may normalize what it prints (for example, replace a scratch path) so the same delivery gives the same
 text on every run.
 
@@ -176,7 +178,8 @@ is `null`.
 | A text is `null` | no reading, form `null`; the tests that need it fail | same |
 | A model call fails after its retries, or the model cannot be built (no API key, unknown provider) | infrastructure failure | exit 2, nothing written |
 | A text has fewer than two parsed readings, or a leaf has no majority | infrastructure failure naming the text ids; the readings stay in the capture folder, but are not reused | exit 2, nothing written (`--save-forms`) |
-| The reader step passes 600 s | infrastructure failure | not capped |
+| The forms file cannot be written into the sandbox | infrastructure failure | n/a (`case-check` writes it with `docker exec`) |
+| The model reading passes 600 s (the collector has its own 120 s cap first, so the step as a whole can run about 720 s) | infrastructure failure | not capped |
 
 An infrastructure failure never counts against the trial: it is left out of the success rate. The campaign does not retry it by itself.
 
@@ -194,8 +197,10 @@ holds a valid reading is never replaced; one that cannot be parsed, or that hold
 ### `case-check` and saved forms
 
 `case-check` runs the collector in the reference and the no-op containers and looks each text up in `saved` by its
-SHA-256. It makes no model call. It is `INVALID` ("saved readings are stale; run case-check --save-forms") when the
-saved file is missing, its settings hash differs from today's, or any text's hash or entry differs.
+SHA-256. It makes no model call. The case is not checked ("saved readings are stale; run case-check --save-forms") when the
+saved file is missing, its settings hash differs from today's, or any text's hash or entry differs. That is exit 3,
+neither a verdict on the case nor an infrastructure failure, and `--expect-invalid` does not turn it into success.
+A collector that prints bytes that are not UTF-8 is read with replacement characters, as campaign scoring reads it.
 `case-check --save-forms` reads each non-null text with the model, rewrites `saved` and then checks as usual.
 
 ```json

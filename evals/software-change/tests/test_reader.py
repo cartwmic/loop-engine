@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import sys
 import time
 from types import SimpleNamespace
 
@@ -655,7 +656,7 @@ def test_case_check_save_forms_writes_the_saved_file_and_a_later_check_reads_it_
     assert cases.case_check(args) == 0
 
     monkeypatch.setattr(cases, "run_hidden_tests", fake_container_work(case, lambda reference: [{**texts[0], "text": TEXT + "!"}]))
-    assert cases.case_check(args) == 1
+    assert cases.case_check(args) == 3
     assert "run case-check --save-forms" in capsys.readouterr().out
 
 
@@ -724,3 +725,116 @@ def test_case_check_save_forms_with_a_model_that_cannot_be_built_is_an_infrastru
     resolve, _ = cases._forms_resolver(case, True)
     with pytest.raises(InfrastructureError):
         resolve("s", [{"id": "a", "kind": "message", "text": TEXT}])
+
+
+# ---------------------------------------------------------------- follow-ups from #190's review (#193)
+
+def test_a_rescore_whose_readings_are_all_cached_builds_no_model(tmp_path, monkeypatch):
+    case = load_case(make_case(tmp_path))
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    text = collected(("m", "message", TEXT))
+    step(trial_of(case, Env(text), capture), scripted({TEXT: [MESSAGE] * 3}))
+    monkeypatch.setattr(reader, "get_model", _no_model)  # no API key now: the cache must be enough
+    metrics = asyncio.run(reader.run_reader_step(trial_of(case, Env(text), capture)))
+    assert metrics["cached_texts"] == 1 and metrics["calls"] == 0
+
+
+def test_the_model_is_built_once_on_the_first_cache_miss(tmp_path):
+    rd = reader_of(tmp_path)
+    built = []
+
+    def build():
+        built.append(1)
+        return scripted({TEXT: [MESSAGE] * 3, OTHER_TEXT: [MESSAGE] * 3})
+    items = [{"id": "a", "kind": "message", "text": TEXT}, {"id": "b", "kind": "message", "text": OTHER_TEXT}]
+    asyncio.run(reader.read_texts(build, rd, items))
+    assert built == [1]
+    built.clear()
+    asyncio.run(reader.read_texts(build, rd, []))
+    assert built == []
+
+
+def test_a_guide_that_is_not_utf8_is_refused_when_the_case_loads(tmp_path):
+    path = make_case(tmp_path)
+    (path / "hidden/reader/guide.md").write_bytes(b"Fill the form \xff\xfe.\n")
+    with pytest.raises(CaseFormatError, match="reader guide"):
+        load_case(path)
+
+
+def test_a_collector_that_prints_bytes_that_are_not_utf8_is_read_with_replacement(tmp_path, monkeypatch):
+    """case-check decodes the collector's output with replacement, as campaign scoring does; it does not crash."""
+    case = load_case(make_case(tmp_path))
+    printed = (b'{"texts": [{"id": "m", "kind": "message", "text": "caf\xff"}]}')
+    script = "import sys; sys.stdout.buffer.write(" + repr(printed) + ")"
+    real_run = cases.run
+    monkeypatch.setattr(cases, "run", lambda command, **kwargs: real_run([sys.executable, "-c", script], **kwargs))
+    texts = cases._collect_in_container(case, "ignored")
+    assert texts == [{"id": "m", "kind": "message", "text": "caf\ufffd"}]
+
+
+def test_failed_readings_leave_out_cached_texts_like_calls_and_tokens(tmp_path):
+    case = load_case(make_case(tmp_path))
+    capture = tmp_path / "capture"
+    capture.mkdir()
+    text = collected(("m", "message", TEXT))
+    first = step(trial_of(case, Env(text), capture), scripted({TEXT: [MESSAGE, "no idea", MESSAGE]}))
+    assert first["failed_readings"] == 1 and first["calls"] == 3
+    second = step(trial_of(case, Env(text), capture), scripted({}))
+    assert (second["cached_texts"], second["calls"], second["input_tokens"], second["failed_readings"]) == (1, 0, 0, 0)
+
+
+@pytest.mark.parametrize("expect_invalid", [False, True])
+def test_stale_saved_readings_have_their_own_exit_code_that_expect_invalid_does_not_flip(tmp_path, monkeypatch, capsys, expect_invalid):
+    path = make_case(tmp_path)
+    case = load_case(path)
+    texts = [{"id": "m", "kind": "message", "text": TEXT}]
+    monkeypatch.setattr(cases, "verify_image", lambda ref, tag: "image")
+    monkeypatch.setattr(cases, "run_hidden_tests", fake_container_work(case, lambda reference: texts))
+    args = SimpleNamespace(path=path, expect_invalid=expect_invalid, ref="r", tag="t", save_forms=False)
+    assert cases.case_check(args) == 3  # no saved file at all
+    assert "run case-check --save-forms" in capsys.readouterr().out
+
+
+def test_a_collector_bug_is_still_invalid_and_expect_invalid_still_flips_it(tmp_path, monkeypatch):
+    path = make_case(tmp_path)
+    case = load_case(path)
+    monkeypatch.setattr(cases, "verify_image", lambda ref, tag: "image")
+    saved = {"settings_sha256": reader.load_reader(case.reader).settings_sha256, "scenarios": {}}
+    case.reader.saved.write_text(json.dumps(saved))
+
+    def broken(*args, **kwargs):
+        raise cases.ReaderCollectorFailed("reader collector failed")
+    monkeypatch.setattr(cases, "run_hidden_tests", broken)
+    for expect_invalid, code in ((False, 1), (True, 0)):
+        args = SimpleNamespace(path=path, expect_invalid=expect_invalid, ref="r", tag="t", save_forms=False)
+        assert cases.case_check(args) == code
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("sandbox write failed"), OSError("disk full"), PermissionError("denied")])
+def test_a_failed_write_of_forms_is_infrastructure_not_a_failed_trial(tmp_path, failure):
+    class WriteFails(Env):
+        async def write_file(self, path, content):
+            raise failure
+    case = load_case(make_case(tmp_path))
+    trial = trial_of(case, WriteFails(collected(("m", "message", TEXT))))
+    assert classified(lambda: step(trial, scripted({TEXT: [MESSAGE] * 3}))) == "infrastructure"
+    assert trial.evidence["copy_log"] == []
+
+
+def test_a_snapshot_replay_of_a_case_with_a_reader_says_it_cannot_be_replayed(tmp_path):
+    from scevals import snapshots
+    case = load_case(make_case(tmp_path))
+    directory = tmp_path / "snapshots"
+    directory.mkdir()
+    (directory / "snapshots.json").write_text(json.dumps([{"sequence": 1, "file": "snapshot-000001.tar", "elapsed_seconds": 1.0}]))
+    ran = []
+
+    async def replay(archive, case_arg, image):
+        ran.append(archive)
+        return {"tests": []}
+    with pytest.raises(ValueError, match="reader"):
+        asyncio.run(snapshots.replay_snapshots(directory, case, "image:test", replay=replay))
+    with pytest.raises(ValueError, match="reader"):
+        asyncio.run(snapshots.replay_hidden_tests(directory / "snapshot-000001.tar", case, "image:test"))
+    assert ran == []

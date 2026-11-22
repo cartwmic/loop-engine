@@ -238,7 +238,8 @@ Limits:
 Replay, which needs Docker: `scevals.snapshots.replay_snapshots(directory, case, image)` runs the hidden tests on
 each snapshot in a fresh mount-free container and returns one point per snapshot, oldest first:
 `sequence`, `elapsed_seconds`, `delivery_recall` and `delivery_by_requirement`. Pass the arm's image explicitly.
-The default is the default image. No `evalctl` command calls replay, and campaign reports do not include the
+The default is the default image. A case with a `[reader]` cannot be replayed: replay runs no reader step, so
+`replay_snapshots` and `replay_hidden_tests` raise a `ValueError` for it. No `evalctl` command calls replay, and campaign reports do not include the
 trajectory yet.
 
 With the option absent, no snapshot directory is made and the capture is unchanged.

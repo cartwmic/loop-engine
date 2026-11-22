@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import anyio
-from inspect_ai.model import ChatMessageSystem, ChatMessageUser, GenerateConfig, get_model
+from inspect_ai.model import ChatMessageSystem, ChatMessageUser, GenerateConfig, Model, get_model
 
 from evalcore.target import InfrastructureError
 
@@ -33,7 +33,7 @@ MAX_TOKENS = 8192
 CALL_TIMEOUT_SECONDS = 120
 CALL_RETRIES = 2
 CONCURRENT_CALLS = 4
-STEP_SECONDS = 600  # the scoring step as a whole; read-texts has no cap
+STEP_SECONDS = 600  # the model reading only: it starts after the collector, which has its own cap below; read-texts has no cap
 COLLECTOR_SECONDS = 120
 FORMS_FILE = "forms.json"
 
@@ -259,8 +259,10 @@ def _assemble(item, reader, raws, tokens):
 async def read_texts(model, reader, items, *, cache=None):
     """Read each {"id","kind","text"} READINGS times. At most CONCURRENT_CALLS model calls run at once.
 
-    Returns one TextReading per item, in order. A text whose readings are in the cache costs no call. A call that
-    fails after its retries raises ReaderCallError; a text with no usable vote comes back with form None.
+    `model` is a model, or a function that builds one; a function is called once, on the first text that is not in the
+    cache, so a rescore whose readings are all cached needs no API key. Returns one TextReading per item, in order. A
+    text whose readings are in the cache costs no call. A call that fails after its retries raises ReaderCallError; a
+    text with no usable vote comes back with form None.
     """
     results = [None] * len(items)
     pending = []
@@ -270,6 +272,8 @@ async def read_texts(model, reader, items, *, cache=None):
             results[index] = TextReading(item["id"], item["kind"], cached=True, **{k: v for k, v in hit.items() if k not in ("kind", "text")})
         else:
             pending.append(index)
+    if pending and not isinstance(model, Model):
+        model = model()
     replies = {(index, n): None for index in pending for n in range(READINGS)}
     gate = anyio.Semaphore(CONCURRENT_CALLS)
     failure = []
@@ -419,13 +423,16 @@ def lookup_saved(saved, reader, scenario, texts):
 # ---------------------------------------------------------------- the scoring hook
 
 def usage_metrics(reader, texts, readings):
-    """Counts only: no text, no raw reply. `split` names `<id>:<leaf>`; ids are the collector's labels."""
+    """Counts only: no text, no raw reply. `split` names `<id>:<leaf>`; ids are the collector's labels.
+
+    `calls`, the token counts and `failed_readings` count the texts read now; a cached text adds to `cached_texts` only.
+    """
     fresh = [r for r in readings if not r.cached]
     return {"model": reader.model, "settings_sha256": reader.settings_sha256, "texts": len(texts),
             "unread_null_texts": sum(entry["text"] is None for entry in texts), "cached_texts": len(readings) - len(fresh),
             "calls": sum(r.usage["calls"] for r in fresh), "input_tokens": sum(r.usage["input_tokens"] for r in fresh),
             "output_tokens": sum(r.usage["output_tokens"] for r in fresh),
-            "failed_readings": sum(r.failed for r in readings),
+            "failed_readings": sum(r.failed for r in fresh),
             "split": [f"{r.id}:{leaf}" for r in readings for leaf in r.split]}
 
 
@@ -446,7 +453,8 @@ async def run_reader_step(trial):
     """Collect, read, write `forms.json` beside the hidden tests. Returns the metrics for `hidden_tests.reader`.
 
     Runs after the hidden tests were copied and before they run. A bad collector, a failed call, a text with no
-    usable vote or a step past STEP_SECONDS is an infrastructure failure: the delivery did not cause it.
+    usable vote, a forms file that cannot be written or a reading past STEP_SECONDS is an infrastructure failure: the
+    delivery did not cause it.
     """
     spec = trial.case.reader
     reader = load_reader(spec)
@@ -467,7 +475,7 @@ async def run_reader_step(trial):
     out_of_time = False
     try:
         with anyio.fail_after(STEP_SECONDS):
-            readings = await read_texts(reader_model(reader), reader, items, cache=cache)
+            readings = await read_texts(lambda: reader_model(reader), reader, items, cache=cache)
     except TimeoutError:
         out_of_time = True
     if out_of_time:
@@ -476,7 +484,14 @@ async def run_reader_step(trial):
     if unread:
         raise InfrastructureError("reader failed: no usable vote for " + ", ".join(unread))
     document = forms_document(texts, readings)
-    await trial.env.write_file(f"/opt/scoring/tests/{FORMS_FILE}", json.dumps(document))
+    write_failed = False
+    try:
+        await trial.env.write_file(f"/opt/scoring/tests/{FORMS_FILE}", json.dumps(document))
+    except Exception as error:
+        write_failed = True
+        log.warning("reader forms could not be written: %s", type(error).__name__)
+    if write_failed:  # raised outside the handler, as in _one_call: the sandbox, not the delivery, failed
+        raise InfrastructureError("reader forms could not be written")
     trial.evidence["copy_log"].append({"kind": "reader_forms", "source": "harness/reader",
                                        "destination": f"/opt/scoring/tests/{FORMS_FILE}", "phase": "after_terminal",
                                        "elapsed_seconds": time.monotonic() - trial.evidence["started"]})

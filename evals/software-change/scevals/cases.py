@@ -19,6 +19,7 @@ from .reader import (COLLECTOR_SECONDS, FORMS_FILE, ReaderCallError, ReaderInput
 from .image import DEFAULT_IMAGE, DEFAULT_REF, verify_image, output, run, trial_container
 
 RUNTIME = Path(__file__).with_name("case_runtime.py")
+STALE_EXIT = 3  # case-check: the saved readings are stale, so the case was not checked (1 is invalid, 2 infrastructure)
 REQUIREMENT = r"REQ-[A-Z0-9-]+"
 
 
@@ -97,6 +98,10 @@ def _reader_spec(path, table):
         load_shapes(shapes)
     except ReaderInputError as error:
         raise CaseFormatError(f"reader shapes: {error}") from None
+    try:
+        guide.read_text()  # read at load, so a guide that is not UTF-8 is a case bug here and not a failed trial later
+    except (OSError, UnicodeError):
+        raise CaseFormatError("reader guide is not readable UTF-8 text") from None
     return ReaderSpec(table["model"], guide, shapes, table["collector"], saved)
 
 
@@ -166,7 +171,8 @@ def _collect_in_container(case, container):
     try:
         done = run(["docker", "exec", "--workdir", "/workspace/repo", container, "python3",
                     f"/opt/case-check/tests/{case.reader.collector}"],
-                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=COLLECTOR_SECONDS)
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=COLLECTOR_SECONDS,
+                   errors="replace")  # as campaign scoring decodes: bytes that are not UTF-8 never crash the check
         return parse_collected(done.stdout, load_shapes(case.reader.shapes))
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ReaderInputError):
         raise ReaderCollectorFailed("reader collector failed") from None
@@ -279,7 +285,7 @@ def _forms_resolver(case, save):
         if not save:
             return lookup_saved(saved, reader, scenario, texts)
         items = [e for e in texts if e["text"] is not None]
-        readings = asyncio.run(read_texts(reader_model(reader), reader, items))
+        readings = asyncio.run(read_texts(lambda: reader_model(reader), reader, items))
         if any(r.form is None for r in readings):
             raise InfrastructureError("a text has no majority reading")
         saved["scenarios"][scenario] = saved_entries(texts, readings)
@@ -307,7 +313,10 @@ def case_check(args):
             resolve_forms, saved = _forms_resolver(case, args.save_forms)
         reference = run_hidden_tests(case, reference=True, image=args.tag, resolve_forms=resolve_forms)
         noop = run_hidden_tests(case, reference=False, image=args.tag, resolve_forms=resolve_forms)
-    except (SavedFormsStale, ReaderCollectorFailed) as error:
+    except SavedFormsStale as error:  # not a verdict on the case: exit 3 whatever --expect-invalid says
+        print(f"Not checked: {error}")
+        return STALE_EXIT
+    except ReaderCollectorFailed as error:
         print(f"INVALID: {error}")
         return 0 if args.expect_invalid else 1
     except InfrastructureError as error:
@@ -389,7 +398,7 @@ def read_texts_command(args):
         print(f"read-texts: {error}", file=sys.stderr)
         return 2
     try:
-        readings = asyncio.run(read_texts(reader_model(reader), reader, texts))
+        readings = asyncio.run(read_texts(lambda: reader_model(reader), reader, texts))
     except ReaderCallError:
         print("read-texts: a model call failed; nothing was written", file=sys.stderr)
         return 3

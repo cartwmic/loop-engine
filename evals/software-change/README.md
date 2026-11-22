@@ -97,7 +97,8 @@ that look like identifiers can need an explicit allowlist.
 
 Reference/no-op attempts use separate mount-free containers. Invalid references,
 collection mismatches and skips reject the case. `--expect-invalid` succeeds only
-for an invalid case, not an infrastructure error.
+for an invalid case, not an infrastructure error. A case with a reader whose saved readings are stale is
+not checked: exit 3, and `--expect-invalid` does not change it.
 
 ### Image and unattended execution
 
