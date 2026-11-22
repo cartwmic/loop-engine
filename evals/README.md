@@ -202,7 +202,8 @@ A normal campaign writes exactly `report.md` and `summary.json` under
 `20261005T024904.964511Z`. Each rerun gets a new directory; reports are never
 replaced. `ac5-demo` groups its three report pairs under
 `software-change/results/ac5-demo/<UTC timestamp>/<driver>/`.
-The command prints the actual destination. **results/ is not gitignored**: the
+The command prints the actual destination. Set `SC_RESULTS_DIR` to write reports under another folder (the check-in
+test does, so it leaves nothing in the checkout); `logs/` and `captures/` stay put. **results/ is not gitignored**: the
 owner selects only report/summary pairs to commit, never all runtime evidence.
 Old report layouts are still scanned by the recursive audit; no old results are
 migrated or deleted. Raw Inspect logs and captures remain under ignored `logs/` and `captures/`,

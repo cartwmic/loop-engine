@@ -18,6 +18,11 @@ Why the units are shaped this way (the constraints come from the tests, not from
 After every unit has finished, one serial sweep asserts the machine-wide properties the tests no longer assert one by one:
 no container of the default image is left, and no evalcore.publish or `evalctl campaign` process is left.
 
+A test may be skipped on purpose when the machine lacks something it needs (the Pi SDK, the arms image, the owner-context
+image). SKIPPED_ON_PURPOSE names each such file and the start of the reason its skip must give. A listed skip is counted
+as skipped on purpose and written to summary.json with its reason; any other skip, or a listed file skipped for another
+reason, fails the unit like a missing test.
+
 Exit status is nonzero when a unit fails, when a unit's executed IDs differ from its collected IDs, when a collected test
 is in no unit or in two units, when a --baseline-ids test is no longer collected (a removed test), or when the sweep finds
 a leftover. Collected tests that the baseline does not list are new: they are counted as extra, reported, and must run too.
@@ -39,6 +44,13 @@ DEFAULT_JOBS = 6
 LIMIT_ENV = {"TIME_SCALE": "0.5"}  # the limit proofs' scaled values (perf/limit-test-notes.md)
 SC = "software-change/tests/"
 CORE = "core/tests/"
+# File (relative to evals/) -> the reason prefixes its tests may give when skipped. The prefix is also the start of the
+# `reason=` in that file, so the two are changed together.
+SKIPPED_ON_PURPOSE = {
+    f"{CORE}test_pi.py": ("Pi SDK not installed",),
+    f"{SC}test_arms_adapters.py": ("arms image not available",),
+    f"{SC}test_owner_context.py": ("SC_OWNER_CONTEXT_IMAGE not set",),
+}
 
 
 @dataclass(frozen=True)
@@ -84,7 +96,8 @@ UNITS = (
     unit("sc-pure", "sc-pure", f"{SC}test_arm_commands.py", f"{SC}test_arms_descriptor.py", f"{SC}test_calibration.py",
          f"{SC}test_compare.py", f"{SC}test_findings.py", f"{SC}test_grader.py", f"{SC}test_image.py", f"{SC}test_image_reuse.py",
          f"{SC}test_ledger.py", f"{SC}test_pi_session_and_phases.py", f"{SC}test_pilot_inspection.py",
-         f"{SC}test_provenance_merge.py", f"{SC}test_provider_route.py", f"{SC}test_results.py", f"{SC}test_scoring_common.py",
+         f"{SC}test_provenance_merge.py", f"{SC}test_provider_route.py", f"{SC}test_results.py", f"{SC}test_run_proof_groups.py",
+         f"{SC}test_scoring_common.py",
          seconds=100),
     # lifecycle: one unit per test (the file has no shared state between its tests)
     unit("lifecycle-merge-rescored", "lifecycle", test("test_lifecycle.py", "test_merge_rescored_captures_and_resume_only_missing_trial"), seconds=149),
@@ -211,7 +224,7 @@ def new_test_ids(collected: list[str], baseline: list[str]) -> list[str]:
 def run_unit(u: Unit, expected: list[str], log_dir: Path, origin: float) -> dict:
     env = {key: value for key, value in os.environ.items() if key != "TIME_SCALE"}  # only the limit units set it
     env.update(u.env)
-    command = ["uv", "run", "--project", "evals", "pytest", "-q", "-rA", "-p", "no:cacheprovider",
+    command = ["uv", "run", "--project", "evals", "pytest", "-q", "-rA", "--no-fold-skipped", "-p", "no:cacheprovider",
                *(f"evals/{selector}" for selector in u.selectors)]
     started = time.monotonic() - origin
     result = subprocess.run(command, cwd=REPO, env=env, text=True, capture_output=True)
@@ -221,7 +234,31 @@ def run_unit(u: Unit, expected: list[str], log_dir: Path, origin: float) -> dict
         f"$ {' '.join(command)}\nTIME_SCALE={u.env.get('TIME_SCALE', '(unset)')}\nexit {result.returncode}\n\n" + text)
     summary_text = text.split("short test summary info", 1)[-1]
     expected_set = set(expected)
+    outcomes, reasons, unexpected = parse_outcomes(summary_text, expected)
+    on_purpose, refused = judge_skips(outcomes, reasons)
+    unexpected += [f"skipped for an unlisted reason: {e['id']} - {e['reason']}" for e in refused]
+    counts: dict[str, int] = {}
+    for kind in outcomes.values():
+        counts[kind] = counts.get(kind, 0) + 1
+    missing = sorted(expected_set - set(outcomes))
+    last_line = next((line for line in reversed(text.splitlines()) if re.search(r"\d+ (passed|failed|error)", line)), "")
+    return {"unit": u.name, "group": u.group, "selectors": list(u.selectors), "exit": result.returncode,
+            "start_seconds": round(started, 1), "end_seconds": round(ended, 1), "wall_seconds": round(ended - started, 1),
+            "expected": len(expected), "executed": len(outcomes), "outcomes": counts, "skipped_on_purpose": on_purpose,
+            "missing": missing, "unexpected": unexpected, "summary_line": last_line.strip("= ").strip(),
+            "log": str(log_dir / f"{u.name}.log"),
+            "ok": result.returncode == 0 and not missing and not unexpected and len(outcomes) == len(expected)
+                  and set(counts) <= {"PASSED", "SKIPPED"}}
+
+
+def parse_outcomes(summary_text: str, expected: list[str]):
+    """Read pytest's short summary (run with -rA --no-fold-skipped).
+
+    Returns (outcomes, reasons, unexpected): test ID -> outcome, test ID -> skip reason, and the lines that name no
+    expected test or name one twice.
+    """
     outcomes: dict[str, str] = {}
+    reasons: dict[str, str] = {}
     unexpected = []
     for line in summary_text.splitlines():
         match = OUTCOME.match(line.strip())
@@ -235,18 +272,21 @@ def run_unit(u: Unit, expected: list[str], log_dir: Path, origin: float) -> dict
             unexpected.append("duplicate result: " + line.strip())
         else:
             outcomes[test_id] = match.group(1)
-    counts: dict[str, int] = {}
-    for kind in outcomes.values():
-        counts[kind] = counts.get(kind, 0) + 1
-    missing = sorted(expected_set - set(outcomes))
-    last_line = next((line for line in reversed(text.splitlines()) if re.search(r"\d+ (passed|failed|error)", line)), "")
-    return {"unit": u.name, "group": u.group, "selectors": list(u.selectors), "exit": result.returncode,
-            "start_seconds": round(started, 1), "end_seconds": round(ended, 1), "wall_seconds": round(ended - started, 1),
-            "expected": len(expected), "executed": len(outcomes), "outcomes": counts,
-            "missing": missing, "unexpected": unexpected, "summary_line": last_line.strip("= ").strip(),
-            "log": str(log_dir / f"{u.name}.log"),
-            "ok": result.returncode == 0 and not missing and not unexpected and len(outcomes) == len(expected)
-                  and set(counts) <= {"PASSED"}}
+            if match.group(1) == "SKIPPED":
+                reasons[test_id] = rest[len(test_id):].removeprefix(" - ").removeprefix("Skipped: ")
+    return outcomes, reasons, unexpected
+
+
+def judge_skips(outcomes: dict[str, str], reasons: dict[str, str]):
+    """Split the skipped tests into (on_purpose, refused). Each is a list of {"id", "reason"}."""
+    on_purpose, refused = [], []
+    for test_id, outcome in sorted(outcomes.items()):
+        if outcome != "SKIPPED":
+            continue
+        entry = {"id": test_id, "reason": reasons[test_id]}
+        allowed = SKIPPED_ON_PURPOSE.get(test_id.split("::", 1)[0], ())
+        (on_purpose if any(entry["reason"].startswith(prefix) for prefix in allowed) else refused).append(entry)
+    return on_purpose, refused
 
 
 def sweep(log_dir: Path) -> dict:
@@ -342,10 +382,13 @@ def main(argv=None) -> int:
     partition_ok = executed == len(collected)
     if not partition_ok:
         print(f"executed {executed} of {len(collected)} collected IDs", flush=True)
+    skipped = [entry for r in results for entry in r["skipped_on_purpose"]]
+    for entry in skipped:
+        print(f"skipped on purpose: {entry['id']} ({entry['reason']})", flush=True)
     report = {"head": head, "checkout_changes_before": dirty, "jobs": args.jobs,
               "collected": len(collected), "baseline": baseline_count,
               "extra": None if baseline_count is None else len(new_ids), "extra_ids": new_ids,
-              "executed": executed, "total_wall_seconds": round(total_wall, 1),
+              "executed": executed, "skipped_on_purpose": skipped, "total_wall_seconds": round(total_wall, 1),
               "sum_of_unit_wall_seconds": round(sum(r["wall_seconds"] for r in results), 1),
               "groups": [{**g, "span_seconds": round(g["last_end"] - g["first_start"], 1)} for g in groups.values()],
               "units": results, "sweep": sweep_result,

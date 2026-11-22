@@ -14,11 +14,14 @@ import io
 import json
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import tarfile
 import tempfile
 import time
 
 import anyio
+import pytest
 from inspect_ai import Task, eval
 from inspect_ai.agent import sandbox_agent_bridge
 from inspect_ai.dataset import Sample
@@ -42,6 +45,21 @@ CASE = ROOT / "example-case"
 CAPTURES = ROOT / "captures/T10/adapters"
 PROOF = ROOT / "tests/proofs/arms-adapters.txt"
 ARMS_IMAGE = "loop-engine-sc-evals:arms-test"
+
+
+def arms_image_problem():
+    """Why the arms image cannot be used here, or None."""
+    if shutil.which("docker") is None:
+        return "docker is not installed"
+    try:
+        found = subprocess.run(["docker", "image", "inspect", ARMS_IMAGE], capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return "docker did not answer"
+    return None if found else f"image {ARMS_IMAGE} is not built"
+
+
+# The skip reason starts with "arms image not available": tests/run_proof_groups.py accepts a skip only for a listed reason.
+NO_ARMS_IMAGE = pytest.mark.skipif(arms_image_problem() is not None, reason=f"arms image not available ({arms_image_problem()})")
 BRIDGE_PORT = 14142
 QUESTION = "Which label rule applies to whitespace?"
 FINAL_MESSAGE = "Label keys trim and collapse whitespace, casefold, and fall back to inbox."
@@ -264,6 +282,7 @@ def arm_adapter_proof():
     return solve
 
 
+@NO_ARMS_IMAGE
 def test_four_arms_launch_through_real_pi_and_score_through_the_common_rule(tmp_path):
     compose = tmp_path / "compose.yaml"
     compose.write_text(f"services:\n  default:\n    image: {ARMS_IMAGE}\n    platform: linux/arm64\n"
