@@ -356,6 +356,8 @@ class Harness:
         (seed / "scripts" / "prepare-release.sh").write_text(PREPARE_STUB)
         (seed / "scripts" / "prepare-release.sh").chmod(0o755)
         shutil.copy2(ROOT / "scripts" / "prepare-release-kgate.sh", seed / "scripts" / "prepare-release-kgate.sh")
+        # The script under test is also on origin/main, as in the real repo: the stale-copy check compares with it.
+        shutil.copy2(SCRIPT, seed / "scripts" / "release-after-merge.sh")
         self.git(seed, "add", "-A")
         self.git(seed, "commit", "--quiet", "-m", "release: prepare v0.34.0")
         self.git(seed, "tag", "v0.34.0")
@@ -1134,6 +1136,24 @@ class ReleaseAfterMergeTest(unittest.TestCase):
         self.h.prepare_on_kgate(exit_code=75)
         self.assert_stopped(self.h.run(), "prepare", "kgate exit 75")
         self.assertEqual(self.h.gh_state()["prs"], [])
+
+    # A checkout behind origin/main runs old release logic, so the run stops before it changes anything.
+    def test_script_differing_from_origin_main_stops_at_fetch_and_changes_nothing(self) -> None:
+        seed = self.h.root / "seed"
+        (seed / "scripts" / "release-after-merge.sh").write_text("# newer logic on main\n")
+        self.h.git(seed, "commit", "--quiet", "-am", "release logic moved on")
+        self.h.git(seed, "push", "--quiet", str(self.h.origin), "main")
+        result = self.h.run("--version", "0.35.0", "--notes", str(self.h.notes))
+        self.assert_stopped(result, "fetch", "differs from origin/main's")
+        self.assertIn(f"git -C {self.h.checkout} merge --ff-only origin/main", result.stderr)
+        self.assertEqual(self.h.gh_state()["prs"], [])
+        self.assertFalse(self.h.worktree.exists())
+
+    def test_script_run_by_relative_path_from_scripts_dir_matches_origin_main(self) -> None:
+        args = ["./release-after-merge.sh", "--notes", str(self.h.notes)]
+        result = subprocess.run(args, cwd=self.h.checkout / "scripts", env={**self.h.env, "FAKE_GIT_LOG": "1"},
+                                capture_output=True, text=True, timeout=120)
+        self.assert_released(result)
 
 
 class AgentsContractTest(unittest.TestCase):
