@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import tomllib
 
 
@@ -21,6 +22,7 @@ from .reader import (COLLECTOR_SECONDS, FORMS_FILE, ReaderCallError, ReaderInput
 from .image import DEFAULT_IMAGE, DEFAULT_REF, verify_image, output, run, trial_container
 
 RUNTIME = Path(__file__).with_name("case_runtime.py")
+CRASH_EXIT = 2  # what evalctl returns for any exception (evalcore.cli.main), so the log says what the user saw
 STALE_EXIT = 3  # case-check: the saved readings are stale, so the case was not checked (1 is invalid, 2 infrastructure)
 REQUIREMENT = r"REQ-[A-Z0-9-]+"
 
@@ -301,9 +303,10 @@ def case_check_log() -> Path:
     return state / "loop-engine" / "case-check.jsonl"
 
 
-def _log_case_check(args, code: int, outcome: str) -> None:
+def _log_case_check(args, code: int, outcome: str, reason, started: float) -> None:
     record = {"time": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-              "case": str(args.path), "outcome": outcome, "exit_code": code}
+              "case": str(args.path), "outcome": outcome, "exit_code": code, "reason": reason,
+              "duration_ms": round((time.monotonic() - started) * 1000)}
     try:
         log = case_check_log()
         log.parent.mkdir(parents=True, exist_ok=True)
@@ -314,18 +317,21 @@ def _log_case_check(args, code: int, outcome: str) -> None:
 
 
 def case_check(args):
-    """Run the check and append one JSON line to `case_check_log()`: case, outcome (ok, stale, invalid or failed), exit code, UTC time."""
+    """Run the check and append one JSON line to `case_check_log()`: UTC time, case, outcome (ok, stale, invalid or
+    failed), exit code, the reason (null for ok) and the duration in milliseconds."""
+    started = time.monotonic()
     try:
-        code, outcome = _case_check(args)
-    except Exception:  # a crash is a failed run too; the traceback still reaches the terminal
-        _log_case_check(args, 1, "failed")
+        code, outcome, reason = _case_check(args)
+    except Exception as error:  # a crash is a failed run too; evalctl turns it into exit CRASH_EXIT
+        _log_case_check(args, CRASH_EXIT, "failed", f"crash: {type(error).__name__}: {error}", started)
         raise
-    _log_case_check(args, code, outcome)
+    _log_case_check(args, code, outcome, reason, started)
     return code
 
 
 def _case_check(args):
-    """The check itself: (exit code, outcome). The outcome is about the case: --expect-invalid changes the code, not the outcome."""
+    """The check itself: (exit code, outcome, reason). The outcome is about the case: --expect-invalid changes the code,
+    not the outcome. The reason is the text printed for a run that is not ok, null for ok."""
     try:
         case = load_case(args.path)
         unstated = unstated_interfaces(case)
@@ -333,12 +339,12 @@ def _case_check(args):
             raise CaseFormatError("hidden tests depend on unstated interface identifiers: " + ", ".join(unstated[:20]))
     except CaseFormatError as error:
         print(f"INVALID: {error}")
-        return (0 if args.expect_invalid else 1), "invalid"
+        return (0 if args.expect_invalid else 1), "invalid", str(error)
     try:
         built = verify_image(args.ref, args.tag)
-    except RuntimeError:
+    except RuntimeError as error:
         print("Trial image missing or mismatched; run image-check first.")
-        return 2, "failed"
+        return 2, "failed", f"trial image missing or mismatched: {error}"
     resolve_forms, saved = None, None
     try:
         if case.reader is not None:
@@ -347,13 +353,13 @@ def _case_check(args):
         noop = run_hidden_tests(case, reference=False, image=args.tag, resolve_forms=resolve_forms)
     except SavedFormsStale as error:  # not a verdict on the case: exit 3 whatever --expect-invalid says
         print(f"Not checked: {error}")
-        return STALE_EXIT, "stale"
+        return STALE_EXIT, "stale", str(error)
     except ReaderCollectorFailed as error:
         print(f"INVALID: {error}")
-        return (0 if args.expect_invalid else 1), "invalid"
+        return (0 if args.expect_invalid else 1), "invalid", str(error)
     except InfrastructureError as error:
         print(f"Reader failed ({error}); nothing was written.")
-        return 2, "failed"
+        return 2, "failed", f"reader failed: {error}"
     if args.save_forms and saved is not None:
         case.reader.saved.parent.mkdir(parents=True, exist_ok=True)
         case.reader.saved.write_text(json.dumps(saved, indent=1, sort_keys=True) + "\n")
@@ -372,10 +378,10 @@ def _case_check(args):
     for reason in reasons:
         print(f"  reason: {reason}")
     print("CASE_CHECK " + json.dumps(receipt, sort_keys=True))
-    outcome = "ok" if valid else "invalid"
+    outcome, reason = ("ok", None) if valid else ("invalid", "; ".join(reasons))
     if args.expect_invalid:
-        return (1 if valid else 0), outcome
-    return (0 if valid else 1), outcome
+        return (1 if valid else 0), outcome, reason
+    return (0 if valid else 1), outcome, reason
 
 
 def register_subcommands(subparsers: argparse._SubParsersAction):

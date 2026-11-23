@@ -864,52 +864,140 @@ def case_check_lines():
     return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
-def test_case_check_appends_one_json_line_per_run_with_the_outcome_exit_code_and_time(tmp_path, monkeypatch):
-    path = make_case(tmp_path)
-    case = load_case(path)
+def reasons_log():
+    return [(line["outcome"], line["exit_code"], line["reason"]) for line in case_check_lines()]
+
+
+def check_args(path, **options):
+    return SimpleNamespace(path=path, expect_invalid=options.get("expect_invalid", False), ref="r", tag="t",
+                           save_forms=options.get("save_forms", False))
+
+
+def fake_image_and_tests(monkeypatch, case):
     texts = [{"id": "m", "kind": "message", "text": TEXT}]
     monkeypatch.setattr(cases, "verify_image", lambda ref, tag: "image")
     monkeypatch.setattr(cases, "run_hidden_tests", fake_container_work(case, lambda reference: texts))
-    args = SimpleNamespace(path=path, expect_invalid=False, ref="r", tag="t", save_forms=False)
-    assert cases.case_check(args) == 3  # stale: no saved readings yet
+
+
+def test_case_check_logs_each_ok_and_stale_run_with_its_reason_and_duration(tmp_path, monkeypatch):
+    path = make_case(tmp_path)
+    fake_image_and_tests(monkeypatch, load_case(path))
+    assert cases.case_check(check_args(path)) == 3  # stale: no saved readings yet
     monkeypatch.setattr(reader, "get_model", lambda name: scripted({TEXT: [MESSAGE] * 3}))
-    args.save_forms = True
-    assert cases.case_check(args) == 0
-
-    def failing(*a, **k):
-        raise InfrastructureError("sandbox gone")
-    monkeypatch.setattr(cases, "run_hidden_tests", failing)
-    assert cases.case_check(args) == 2
-    monkeypatch.setattr(cases, "run_hidden_tests", lambda *a, **k: (_ for _ in ()).throw(cases.ReaderCollectorFailed("bad collector")))
-    args.expect_invalid = True
-    assert cases.case_check(args) == 0  # invalid, as expected
-
+    assert cases.case_check(check_args(path, save_forms=True)) == 0
+    monkeypatch.setattr(reader, "get_model", lambda name: pytest.fail("no model call is allowed"))
+    assert cases.case_check(check_args(path)) == 0
     lines = case_check_lines()
-    assert [(l["outcome"], l["exit_code"]) for l in lines] == [("stale", 3), ("ok", 0), ("failed", 2), ("invalid", 0)]
+    assert [(l["outcome"], l["exit_code"]) for l in lines] == [("stale", 3), ("ok", 0), ("ok", 0)]
+    assert "saved file is missing or unreadable" in lines[0]["reason"] and "run case-check --save-forms" in lines[0]["reason"]
+    assert lines[1]["reason"] is None and lines[2]["reason"] is None
     assert all(l["case"] == str(path) for l in lines)
+    assert all(isinstance(l["duration_ms"], int) and l["duration_ms"] >= 0 for l in lines)
     assert all(datetime.datetime.fromisoformat(l["time"]).utcoffset() == datetime.timedelta(0) for l in lines)
 
 
-def test_case_check_logs_a_run_that_stops_before_the_image_check(tmp_path, monkeypatch):
-    def missing(*args):
-        raise RuntimeError("no image")
-    monkeypatch.setattr(cases, "verify_image", missing)
+@pytest.mark.parametrize("change, why", [
+    ("settings", "reader settings changed"),
+    ("scenario", "no saved readings for the noop scenario"),
+    ("text", "reference scenario, texts that changed, appeared or went: m")])
+def test_a_stale_line_says_which_part_of_the_saved_readings_is_stale(tmp_path, monkeypatch, change, why):
     path = make_case(tmp_path)
-    assert cases.case_check(SimpleNamespace(path=path, expect_invalid=False, ref="r", tag="t", save_forms=False)) == 2
-    assert [(l["outcome"], l["exit_code"]) for l in case_check_lines()] == [("failed", 2)]
+    case = load_case(path)
+    fake_image_and_tests(monkeypatch, case)
+    monkeypatch.setattr(reader, "get_model", lambda name: scripted({TEXT: [MESSAGE] * 3}))
+    assert cases.case_check(check_args(path, save_forms=True)) == 0
+    saved = json.loads(case.reader.saved.read_text())
+    if change == "settings":
+        saved["settings_sha256"] = "0" * 64
+    elif change == "scenario":
+        del saved["scenarios"]["noop"]
+    else:
+        saved["scenarios"]["reference"]["m"]["text_sha256"] = "0" * 64
+    case.reader.saved.write_text(json.dumps(saved))
+    assert cases.case_check(check_args(path)) == 3
+    outcome, code, reason = reasons_log()[-1]
+    assert (outcome, code) == ("stale", 3) and why in reason
 
 
-def test_a_case_check_that_crashes_is_logged_as_failed_and_still_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr(cases, "_case_check", lambda args: 1 / 0)
+def test_an_invalid_line_carries_the_case_format_error(tmp_path):
+    path = make_case(tmp_path)
+    (path / "hidden/reader/guide.md").write_bytes(b"\xff\xfe")
+    assert cases.case_check(check_args(path)) == 1
+    assert reasons_log() == [("invalid", 1, "reader guide is not readable UTF-8 text")]
+    assert cases.case_check(check_args(path, expect_invalid=True)) == 0  # the outcome stays invalid; only the code flips
+    assert reasons_log()[-1] == ("invalid", 0, "reader guide is not readable UTF-8 text")
+
+
+def test_an_invalid_line_carries_the_receipts_reasons(tmp_path, monkeypatch):
+    path = make_case(tmp_path)
+    case = load_case(path)
+    monkeypatch.setattr(cases, "verify_image", lambda ref, tag: "image")
+
+    def everything_passes(case_arg, reference, image, resolve_forms=None):
+        resolve_forms("reference" if reference else "noop", [{"id": "m", "kind": "message", "text": TEXT}])
+        return {"collection_error": False, "container": "stub",
+                "tests": [{"requirement_id": tag, "status": "passed"} for tag in case.test_requirements]}
+    monkeypatch.setattr(cases, "run_hidden_tests", everything_passes)
+    monkeypatch.setattr(reader, "get_model", lambda name: scripted({TEXT: [MESSAGE] * 3}))
+    assert cases.case_check(check_args(path, save_forms=True)) == 1
+    assert reasons_log() == [("invalid", 1, "no-op: at least one tagged hidden test must fail")]
+
+
+def test_an_invalid_line_carries_a_collector_failure(tmp_path, monkeypatch):
+    path = make_case(tmp_path)
+    case = load_case(path)
+    case.reader.saved.write_text(json.dumps({"settings_sha256": reader.load_reader(case.reader).settings_sha256, "scenarios": {}}))
+    monkeypatch.setattr(cases, "verify_image", lambda ref, tag: "image")
+
+    def collector_broken(*args, **kwargs):
+        raise cases.ReaderCollectorFailed("reader collector failed")
+    monkeypatch.setattr(cases, "run_hidden_tests", collector_broken)
+    assert cases.case_check(check_args(path)) == 1
+    assert reasons_log() == [("invalid", 1, "reader collector failed")]
+
+
+def test_a_failed_line_carries_the_missing_image(tmp_path, monkeypatch):
+    def missing(*args):
+        raise RuntimeError("no such image: trial:1")
+    monkeypatch.setattr(cases, "verify_image", missing)
+    assert cases.case_check(check_args(make_case(tmp_path))) == 2
+    assert reasons_log() == [("failed", 2, "trial image missing or mismatched: no such image: trial:1")]
+
+
+def test_a_failed_line_carries_the_reader_failure(tmp_path, monkeypatch):
+    path = make_case(tmp_path)
+    case = load_case(path)
+    monkeypatch.setattr(cases, "verify_image", lambda ref, tag: "image")
+
+    def sandbox_gone(*args, **kwargs):
+        raise InfrastructureError("a text has no majority reading")
+    monkeypatch.setattr(cases, "run_hidden_tests", sandbox_gone)
+    case.reader.saved.write_text(json.dumps({"settings_sha256": reader.load_reader(case.reader).settings_sha256, "scenarios": {}}))
+    assert cases.case_check(check_args(path)) == 2
+    assert reasons_log() == [("failed", 2, "reader failed: a text has no majority reading")]
+
+
+def test_a_crash_is_logged_with_the_exit_code_evalctl_returns_and_the_exception(tmp_path, monkeypatch):
+    def boom(ref, tag):
+        raise ZeroDivisionError("division by zero")
+    monkeypatch.setattr(cases, "verify_image", boom)
     with pytest.raises(ZeroDivisionError):
-        cases.case_check(SimpleNamespace(path=tmp_path, expect_invalid=False))
-    assert [l["outcome"] for l in case_check_lines()] == ["failed"]
+        cases.case_check(check_args(make_case(tmp_path)))
+    (line,) = case_check_lines()
+    assert (line["outcome"], line["exit_code"], line["reason"]) == ("failed", 2, "crash: ZeroDivisionError: division by zero")
+    assert isinstance(line["duration_ms"], int)
+    from evalcore.cli import main  # the code the user sees for the same crash
+    assert main(["case-check", str(make_case(tmp_path / "again"))]) == 2
+    assert [l["exit_code"] for l in case_check_lines()] == [2, 2]
 
 
 def test_a_log_that_cannot_be_written_does_not_hide_the_result(tmp_path, monkeypatch, capsys):
     blocker = tmp_path / "state-is-a-file"
     blocker.write_text("")
     monkeypatch.setenv("XDG_STATE_HOME", str(blocker))
-    monkeypatch.setattr(cases, "_case_check", lambda args: (3, "stale"))
-    assert cases.case_check(SimpleNamespace(path=tmp_path)) == 3
+
+    def missing(*args):
+        raise RuntimeError("no image")
+    monkeypatch.setattr(cases, "verify_image", missing)
+    assert cases.case_check(check_args(make_case(tmp_path))) == 2
     assert "case-check log not written" in capsys.readouterr().err

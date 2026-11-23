@@ -82,8 +82,11 @@ with pinned image identity, mounts and copy logs. Default invalid exit is 1;
 (which exit 2 through evalctl). A case with a `[reader]` whose saved readings are stale is
 not checked and exits 3 (see "`case-check` and saved forms"). `--ref`/`--tag` choose a different pinned image.
 Every run appends one JSON line to `${XDG_STATE_HOME:-~/.local/state}/loop-engine/case-check.jsonl`: `time` (UTC), `case`
-(the path given), `outcome` (`ok`, `invalid`, `stale` or `failed`) and `exit_code`. `--expect-invalid` changes the exit
-code, not the outcome. Count a month of runs with `jq -r .outcome case-check.jsonl | sort | uniq -c`.
+(the path given), `outcome` (`ok`, `invalid`, `stale` or `failed`), `exit_code` (the one you saw: a crash is logged as 2,
+which is what evalctl returns), `reason` (`null` for `ok`; otherwise the text printed for the run, such as the case
+format error, the receipt's reasons joined by `; `, which texts have stale readings, the reader failure, or
+`crash: <exception class>: <message>`) and `duration_ms`. `--expect-invalid` changes the exit code, not the outcome.
+Count a month of runs with `jq -r .outcome case-check.jsonl | sort | uniq -c`, and read why with `jq -r 'select(.outcome != "ok") | .reason' case-check.jsonl`.
 Keep stdout/receipts under ignored `captures/`, especially for private cases.
 
 T4/T5 can import `scevals.cases.load_case(Path) -> EvalCase`: fields `path`, `id`,

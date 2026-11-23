@@ -398,7 +398,7 @@ def load_saved(path):
             raise ValueError()
         return data
     except (OSError, ValueError):
-        raise SavedFormsStale(STALE) from None
+        raise SavedFormsStale(f"{STALE} (the saved file is missing or unreadable)") from None
 
 
 def saved_entries(texts, readings):
@@ -411,12 +411,15 @@ def saved_entries(texts, readings):
 def lookup_saved(saved, reader, scenario, texts):
     """The forms document for one scenario from saved forms. Any difference at all is stale; no model is called."""
     entries = saved.get("scenarios", {}).get(scenario)
-    if saved.get("settings_sha256") != reader.settings_sha256 or not isinstance(entries, dict):
-        raise SavedFormsStale(STALE)
+    if saved.get("settings_sha256") != reader.settings_sha256:
+        raise SavedFormsStale(f"{STALE} (the reader settings changed: model, guide or shapes)")
+    if not isinstance(entries, dict):
+        raise SavedFormsStale(f"{STALE} (no saved readings for the {scenario} scenario)")
     wanted = {e["id"]: None if e["text"] is None else text_sha256(e["text"]) for e in texts}
-    if set(entries) != set(wanted) or any(
-            not isinstance(entries[i], dict) or entries[i].get("text_sha256") != sha for i, sha in wanted.items()):
-        raise SavedFormsStale(STALE)
+    differ = sorted(set(entries) ^ set(wanted) | {i for i, sha in wanted.items() if i in entries and (
+        not isinstance(entries[i], dict) or entries[i].get("text_sha256") != sha)})
+    if differ:  # ids are the collector's labels, never text
+        raise SavedFormsStale(f"{STALE} ({scenario} scenario, texts that changed, appeared or went: {', '.join(differ)})")
     return {"forms": {i: {"form": entries[i].get("form")} for i in wanted}}
 
 
