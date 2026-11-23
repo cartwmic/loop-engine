@@ -10,7 +10,15 @@
 
 **Run it.** `formal/check.sh`. Exit 0: every rule holds. Exit 1: a rule breaks; the report names it and prints the shortest path. Exit 2: the check could not run (tool missing, download failed). CI runs it as a step of the `checks` job.
 
-**What passing means.** The check proves the *model*. It does not read the Rust. The link from model to code is the mapping table below, and the tests in `crates/loop-integrations/tests/concurrency.rs`. A pass covers only the bounds and the omissions below.
+**What passing means.** The check proves the *model*. It does not read the Rust. The link from model to code is the mapping table below, the sync check (next section) and the tests in `crates/loop-integrations/tests/concurrency.rs`. A pass covers only the bounds and the omissions below.
+
+## Keeping the model in step with the code
+
+`formal/COVERS` lists each source file the model covers, with the git blob hash that file had when the model was last confirmed against it. `formal/check.sh` runs `formal/check-sync.py` first, then `formal/test_check_sync.py`, both before any Java or TLC setup, so the sync answer does not depend on the model tools. The check recomputes each hash and exits 1, naming the file, when one has changed or is gone; it exits 2 when `COVERS` is missing or malformed. The test checks the failure path on a temp copy of the files.
+
+When it fails, read the diff of the named file, update `LoopRun.tla` from the code (not from a check result), rerun `formal/check.sh`, then run `formal/check-sync.py --update` to record the new hashes. A PR that changes a covered file does all of this in the same PR. The check needs no git history, so a shallow clone works.
+
+A sync pass says only that the covered files are unchanged since the last confirmation. It does not say the model is right.
 
 ## What is modelled
 
