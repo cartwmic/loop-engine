@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.70.1] - 2026-11-23
+
+## Fixes
+
+- Tests that run a bounded `show` or `read` rerun when the engine reports a missed read budget, for up to 30 seconds, so a starved CI runner no longer fails them. The product's 1.1 s budget is unchanged. (#211)
+
 ## [0.70.0] - 2026-11-23
 
 The eval harness gains the lean-change arms, and images follow the Docker daemon's own chip.
