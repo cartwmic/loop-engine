@@ -14,8 +14,9 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 pub const HANDOFF_ENV: &str = "LOOP_ENGINE_TEST_BINARY_HANDOFF";
@@ -644,6 +645,55 @@ fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
+/// How long a test keeps re-running a `show` or `read` whose read budget a
+/// loaded runner used up.  Far above the 1.1 s budget, so a runner has to stay
+/// starved for the whole window to fail.
+const READ_BUDGET_RETRY_WINDOW: Duration = Duration::from_secs(30);
+
+/// Whether `output` says the engine ran out of its fixed 1.1 s read budget.
+///
+/// The budget runs from process start, so spawn and database open on a starved
+/// runner use it up. Three shapes carry that miss:
+/// - an armed `show` fails with a `status-read-deadline` error (the armed
+///   transaction rolls back, so a rerun is safe);
+/// - an unarmed `show --view status` completes with `"deadline":"partial"`,
+///   or with "observation deadline reached ..." as the reason a sample is
+///   unavailable;
+/// - the human form of either error.
+pub fn read_budget_missed(output: &Output) -> bool {
+    const MARKERS: [&str; 3] = [
+        "status-read-deadline",
+        "observation deadline reached",
+        "\"deadline\":\"partial\"",
+    ];
+    let text = [&output.stdout, &output.stderr]
+        .map(|stream| String::from_utf8_lossy(stream).into_owned())
+        .join("\n");
+    MARKERS.iter().any(|marker| text.contains(marker))
+}
+
+/// Run `spawn` until its output is not a missed read budget, for at most
+/// [`READ_BUDGET_RETRY_WINDOW`], and return the last output.
+///
+/// Each run is a fresh process with a fresh 1.1 s budget, so a test fails only
+/// if every run in the window misses it. The engine's budget is not changed,
+/// and a caller's assertions still see the real output, so a `show` that is
+/// always over budget still fails them. Only `show` and `read` print these
+/// markers, so every other command runs once.
+pub fn retry_on_read_budget_miss(spawn: impl FnMut() -> Output) -> Output {
+    retry_within(READ_BUDGET_RETRY_WINDOW, spawn)
+}
+
+fn retry_within(window: Duration, mut spawn: impl FnMut() -> Output) -> Output {
+    let give_up_at = Instant::now() + window;
+    loop {
+        let output = spawn();
+        if !read_budget_missed(&output) || Instant::now() >= give_up_at {
+            return output;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1044,5 +1094,81 @@ mod tests {
         let error = resolve_binary_from_handoff("loop-engine", &handoff).expect_err("must reject");
         assert!(error.contains("under target/deps"), "{error}");
         assert!(!root.path().join("executed").exists());
+    }
+
+    #[cfg(unix)]
+    fn printed(stdout: &str, stderr: &str) -> Output {
+        use std::os::unix::process::ExitStatusExt;
+        Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_budget_miss_is_seen_in_every_shape_the_engine_prints_it() {
+        // Armed `show`, JSON (the CI failure for the terminate-reason test).
+        let armed = r#"{"code":"persistence-failure","message":"status-read-deadline: bounded observation could not finish before its deadline","operation":"show","status":"error"}"#;
+        assert!(read_budget_missed(&printed(armed, "")));
+        // Armed `show`, human text.
+        assert!(read_budget_missed(&printed(
+            "",
+            "error: status-read-deadline: bounded observation could not finish before its deadline"
+        )));
+        // `show --view status` completes with a partial sample.
+        let partial = r#"{"operation":"show","status":"completed","result":{"completeness":{"deadline":"partial"}}}"#;
+        assert!(read_budget_missed(&printed(partial, "")));
+        // `show --view status` that could not sample a part in time.
+        let unavailable = r#"{"result":{"model_bindings":{"state":"unavailable","reason":"observation deadline reached before model binding sampling"}}}"#;
+        assert!(read_budget_missed(&printed(unavailable, "")));
+        // A normal result, and a real error, are not a missed budget.
+        let fine =
+            r#"{"operation":"show","status":"completed","result":{"termination_reason":"x"}}"#;
+        assert!(!read_budget_missed(&printed(fine, "")));
+        let rejected = r#"{"code":"run-not-found","status":"error"}"#;
+        assert!(!read_budget_missed(&printed(rejected, "")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retry_reruns_a_missed_budget_until_a_run_finishes_in_time() {
+        let miss = r#"{"code":"persistence-failure","message":"status-read-deadline: x","status":"error"}"#;
+        let mut calls = 0;
+        let output = retry_within(Duration::from_secs(30), || {
+            calls += 1;
+            if calls < 3 {
+                printed(miss, "")
+            } else {
+                printed(r#"{"status":"completed"}"#, "")
+            }
+        });
+        assert_eq!(calls, 3);
+        assert!(!read_budget_missed(&output));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retry_gives_up_and_returns_the_real_output_so_a_regression_still_fails() {
+        let miss = r#"{"message":"status-read-deadline: x","status":"error"}"#;
+        let mut calls = 0;
+        let output = retry_within(Duration::ZERO, || {
+            calls += 1;
+            printed(miss, "")
+        });
+        assert_eq!(calls, 1);
+        assert!(read_budget_missed(&output));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retry_runs_a_command_that_does_not_miss_exactly_once() {
+        let mut calls = 0;
+        retry_within(Duration::from_secs(30), || {
+            calls += 1;
+            printed(r#"{"status":"rejected"}"#, "")
+        });
+        assert_eq!(calls, 1);
     }
 }

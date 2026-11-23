@@ -39,26 +39,30 @@ impl Catalog {
     }
 
     fn run(&self, json: bool, parts: &[&str]) -> Output {
-        let mut command = Command::new(workspace_integration::binary("loop-engine"));
-        command
-            .current_dir(self._root.path())
-            .env("HOME", &self.home)
-            .env("XDG_DATA_HOME", self.home.join("xdg-data"))
-            .env("XDG_CONFIG_HOME", self.home.join("xdg-config"))
-            .env("LOOP_ENGINE_HOME", self.home.join("loop-engine"))
-            .env_remove("LOOP_ENGINE_DATABASE")
-            .env_remove("LOOP_ENGINE_PROVIDER_CONFIG")
-            .env_remove("LOOP_ENGINE_MONITOR_DIR");
-        if json {
-            command.arg("--json");
-        }
-        command
-            .arg("--database")
-            .arg(&self.database)
-            .arg("--config")
-            .arg(&self.config)
-            .args(parts);
-        command.output().expect("run loop-engine")
+        // `show` reads under a fixed 1.1 s budget that a loaded runner can use
+        // up before the read starts; rerun only when that is what happened.
+        workspace_integration::retry_on_read_budget_miss(|| {
+            let mut command = Command::new(workspace_integration::binary("loop-engine"));
+            command
+                .current_dir(self._root.path())
+                .env("HOME", &self.home)
+                .env("XDG_DATA_HOME", self.home.join("xdg-data"))
+                .env("XDG_CONFIG_HOME", self.home.join("xdg-config"))
+                .env("LOOP_ENGINE_HOME", self.home.join("loop-engine"))
+                .env_remove("LOOP_ENGINE_DATABASE")
+                .env_remove("LOOP_ENGINE_PROVIDER_CONFIG")
+                .env_remove("LOOP_ENGINE_MONITOR_DIR");
+            if json {
+                command.arg("--json");
+            }
+            command
+                .arg("--database")
+                .arg(&self.database)
+                .arg("--config")
+                .arg(&self.config)
+                .args(parts);
+            command.output().expect("run loop-engine")
+        })
     }
 
     fn cli(&self, parts: &[&str]) -> Value {

@@ -43,23 +43,27 @@ impl Catalog {
     }
 
     fn cli(&self, parts: &[&str]) -> Value {
-        let mut command = Command::new(workspace_integration::binary("loop-engine"));
-        command
-            .current_dir(self._root.path())
-            .env("HOME", &self.home)
-            .env("XDG_DATA_HOME", self.home.join("xdg-data"))
-            .env("XDG_CONFIG_HOME", self.home.join("xdg-config"))
-            .env("LOOP_ENGINE_HOME", self.home.join("loop-engine"))
-            .env_remove("LOOP_ENGINE_DATABASE")
-            .env_remove("LOOP_ENGINE_PROVIDER_CONFIG")
-            .env_remove("LOOP_ENGINE_MONITOR_DIR")
-            .arg("--json")
-            .arg("--database")
-            .arg(&self.database)
-            .arg("--config")
-            .arg(&self.config)
-            .args(parts);
-        let output = command.output().expect("run loop-engine");
+        // `show` reads under a fixed 1.1 s budget that a loaded runner can use
+        // up before the read starts; rerun only when that is what happened.
+        let output = workspace_integration::retry_on_read_budget_miss(|| {
+            let mut command = Command::new(workspace_integration::binary("loop-engine"));
+            command
+                .current_dir(self._root.path())
+                .env("HOME", &self.home)
+                .env("XDG_DATA_HOME", self.home.join("xdg-data"))
+                .env("XDG_CONFIG_HOME", self.home.join("xdg-config"))
+                .env("LOOP_ENGINE_HOME", self.home.join("loop-engine"))
+                .env_remove("LOOP_ENGINE_DATABASE")
+                .env_remove("LOOP_ENGINE_PROVIDER_CONFIG")
+                .env_remove("LOOP_ENGINE_MONITOR_DIR")
+                .arg("--json")
+                .arg("--database")
+                .arg(&self.database)
+                .arg("--config")
+                .arg(&self.config)
+                .args(parts);
+            command.output().expect("run loop-engine")
+        });
         serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
             panic!(
                 "{parts:?}: {error}\nstdout: {}\nstderr: {}",

@@ -279,9 +279,13 @@ fn slotted_workflow(id: &str, title: &str, event: &str) -> Workflow {
 }
 
 fn output_for(fixture: &ProviderFixture, cwd: &Path, parts: Vec<String>) -> Output {
-    let mut command = command_for(fixture, cwd);
-    command.args(parts);
-    command.output().expect("run loop-engine subprocess")
+    // A loaded runner can use up `show`'s fixed 1.1 s read budget before the
+    // read starts; rerun only when that is what happened.
+    workspace_integration::retry_on_read_budget_miss(|| {
+        let mut command = command_for(fixture, cwd);
+        command.args(&parts);
+        command.output().expect("run loop-engine subprocess")
+    })
 }
 
 fn command_for(fixture: &ProviderFixture, cwd: &Path) -> Command {
