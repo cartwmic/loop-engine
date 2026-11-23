@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.0] - 2026-11-23
+
+The release script waits for the CI run the release workflow checks, and stops when its own copy is out of date.
+
+- scripts/release-after-merge.sh: before dispatching release.yml, waits until the same run search the workflow's exact-commit CI gate uses returns the green push run, logging each miss; a failing search stops the release (#206).
+- scripts/release-after-merge.sh: stops at step fetch, changing nothing, when its own file differs from origin/main's, and prints the fast-forward command (#202).
+
 ## [0.67.0] - 2026-11-22
 
 Finding triage reads the same in every skill, and eval skips must give a listed reason.
