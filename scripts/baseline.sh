@@ -18,6 +18,7 @@ trap finish EXIT
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo build --workspace --locked
+formal/check.sh
 cargo test --workspace
 python3 scripts/external-work-journey.py
 python3 scripts/policy-document-journey.py
