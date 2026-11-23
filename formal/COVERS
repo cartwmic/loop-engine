@@ -1,0 +1,7 @@
+# Source files the formal model covers: <path from the repo root> <git blob hash at the last confirmation>.
+# formal/check.sh runs formal/check-sync.py, which fails when a hash below no longer matches the file.
+# After re-reading formal/LoopRun.tla against the change, run formal/check-sync.py --update.
+# The files are the ones in the mapping table of formal/README.md.
+crates/loop-core/src/operations/event.rs af1871be3d13ffdea20fbba5da7edd73a69c8662
+crates/loop-core/src/operations/terminate.rs f32f488e4ab12bab9e6067260ba09bcb65a2eb49
+crates/loop-integrations/src/sqlite.rs 73d132f6e6b0c870daf19fd20fd2471c75cf2c61

@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# The one command for the formal model: model-check formal/LoopRun.tla with TLC,
-# through statechart. Exit 0: every rule holds. Exit 1: a rule breaks (the
-# report below names it and prints the shortest path). Exit 2: the check could
-# not run (a tool is missing or a download failed).
+# The one command for the formal model. It runs the sync check first (exit 1 if a
+# file the model covers changed since the model was last confirmed), then
+# model-checks formal/LoopRun.tla with TLC through statechart. Exit 0: every rule
+# holds. Exit 1: a rule breaks (the report below names it and prints the shortest
+# path), or the sync check failed. Exit 2: the check could not run (a tool is
+# missing or a download failed).
 #
 # Everything it fetches is pinned: statechart by git commit, the TLC jar by
 # sha256. Both are cached under $LOOP_FORMAL_CACHE (default
@@ -73,7 +75,10 @@ fi
 
 command -v node >/dev/null || die "node (22.18 or later) is not on PATH"
 
-# Piece B adds the model-to-code sync check here, before the model check.
+# The model-to-code sync check: fails when a file the model covers has changed since
+# the model was last confirmed against it (formal/COVERS, formal/check-sync.py).
+command -v python3 >/dev/null || die "python3 is needed for the sync check"
+python3 "$here/check-sync.py" || exit $?
 
 work="$(mktemp -d)"
 out="$work/out"          # statechart writes only to a new folder
