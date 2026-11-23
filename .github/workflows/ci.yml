@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, scratch/le-214-queue-proof-2]
   pull_request:
     branches: [main]
   # A manual run is a full-suite run of the dispatched head. On a branch the
