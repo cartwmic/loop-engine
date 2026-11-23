@@ -11,6 +11,9 @@ A run that failed earlier (before the Bookends step ran) or was cancelled does n
 never checked its commits. A run whose Bookends step failed does count: its commits were
 judged, and a revert after it must not be judged against the bad commit again.
 
+This and step 1 of docs/culprit-hunt.md are the only places that define the range; keep them in
+agreement. Every other file points to them (scripts/test_bookends_base.py fails if one restates it).
+
 Usage: bookends-base.py AFTER     (run from a checkout with full history; needs `gh`)
 Prints the base sha on stdout. Exits 1, printing the reason on stderr, when no commit
 before AFTER has such a run: the gate then has no range to check and must not pass.
