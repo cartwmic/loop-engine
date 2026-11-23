@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.71.1] - 2026-11-23
+
+The Bookends range is defined in one place and guarded by a test, and the overlapping-attempts race has a TLA+ model that CI checks.
+
+- docs: the range definition lives only in step 1 of docs/culprit-hunt.md and the docstring of scripts/bookends-base.py; ci.yml comments, AGENTS.md and docs/PRD.md point to it; a test in scripts/test_bookends_base.py fails when another file restates which runs the range skips, and it runs in the checks job so it gates every PR. (#221)
+- scripts/test_bookends_base.py: the range-restatement test skips CHANGELOG.md, which records history. (#224)
+- formal/: a TLA+ model of the overlapping-attempts race, and a CI step that fails `checks` when the model breaks. (#218)
+- formal/: the formal check fails when a source file the model covers changes. (#222)
+
 ## [0.71.0] - 2026-11-23
 
 A queue of merges to main runs the full suite once, and no merged commit goes unchecked.
