@@ -2,7 +2,7 @@
 
 Use this when a push run of ci.yml on main is still red after one `gh run rerun --failed <run id>`. It gives one culprit sha for each failing step. Go cheapest first and stop as soon as a step has its culprit. Run every check with kgate, not on the driver host: the host may have no cargo, and its PATH may hold an installed `bookends-check` that the gate wrapper would pick up before the source build.
 
-## 1. List the pushes since the last green run (no compute)
+## 1. List the heads since the last green run, and the suspect commits (no compute)
 
 ```sh
 R=<head sha of the red run>
@@ -17,18 +17,26 @@ while read -r after before; do
 done
 ```
 
-- The activity API lists every update to main, newest first, with GitHub's own `before` and `after`. GitHub's `before` is not the range a push run's Bookends step judged: a newer push cancels the run before it, so the run that completes judges every commit back to the newest earlier push whose run finished its own Bookends step. The line `range starts at <sha>` under a push is that start, read from the run's `bookends-base:` log line (nothing prints when the run never got that far, or its log is gone; then read it from the next run's log, or run `python3 scripts/bookends-base.py <after>`). Use it, not `github-before`, as `before` in section 4. Take it from the red run: under a `cancelled` run it is only where that run's own base step pointed, and that run judged nothing.
-- `sed` starts the list at the red push. The loop stops at the first push whose run concluded `success`, which is the last green run.
-- Each line shows the steps that failed or were skipped. A skipped step after a failed one never ran on that push.
-- A push with an empty `run=` was not run on its own, and a push whose run is `cancelled` was superseded by a newer push. Either way its commits count as part of the next push's range.
+- The activity API lists every update to main, newest first. `github-before` is printed for reference only; no step below uses it.
+- `sed` starts the list at the red head. The loop stops at the first head whose run concluded `success`, the last green run.
+- Each line shows the steps that failed or were skipped. A `cancelled` run passed nothing, even when no failed or skipped step is listed for it (the step the cancel stopped shows as neither). A head with an empty `run=` or a `cancelled` run was not judged on its own.
+- `range starts at <sha>` is the start of the range that run's Bookends step judged, read from its `bookends-base:` log line. It is missing when the run never got that far or its log is gone; then run `python3 scripts/bookends-base.py <after>`.
 - If a run shows `in_progress`, wait with `gh run watch <run id> --interval 60 --exit-status`, then list again.
+
+**The suspect commits.** For the red run, take `<base>` from its `range starts at` line (never from a cancelled run's) and list them once:
+
+```sh
+git fetch origin && git log --oneline --first-parent --reverse <base>..<after>
+```
+
+These are "the commits listed in step 1". The steps below use this list.
 
 ## 2. Tree-based steps: cargo test, journeys, `release-tests`, `checks`
 
-These steps judge the tree at the pushed head. A failing step's culprit lies between two heads:
+These steps judge the tree at a head. A failing step's culprit lies between two heads:
 
-- **L**: the newest listed push head where that step passed. A push whose run is `cancelled` passed nothing, even when the list shows no failed or skipped step for it (the step the cancel stopped is shown as neither). If it never ran on any listed push, use the last green head.
-- **U**: the oldest push head after L where that step failed with the same failure.
+- **L**: the newest listed head where that step passed. If it never passed on any listed head, use the last green head.
+- **U**: the oldest head after L where that step failed with the same failure.
 
 Then list the candidates:
 
@@ -65,7 +73,7 @@ run-and-wake -- kgate -- sh -c 'set -u; check=$1; shift; export PYTHONDONTWRITEB
 - kgate ships this worktree and the shared Git folder to one pod, so every candidate commit is there. `git checkout` changes only the pod's copy.
 - kgate takes argv, so the loop is one `sh -c` script in single quotes. CHECK goes in as `$1`, as one argument in double quotes, and the inner `sh -c "$check"` runs it. The candidate shas follow as the loop's `$@`.
 - One pod tests the candidates in order and keeps one `target/` directory, so later builds can reuse the first one's output. The central tests may still rebuild their own binaries, which is slower, not wrong. The loop stops at the first commit that fails.
-- U is left out on purpose: its own push run already failed this step. `NO RED` therefore means U is the culprit by elimination.
+- U is left out on purpose: its own run already failed this step. `NO RED` therefore means U is the culprit by elimination.
 - `PYTHONDONTWRITEBYTECODE=1` matches the `tests` and `release-tests` jobs.
 - Exit 2 means a checkout failed. That is a setup failure, not a result.
 - Add `--cpu 2 --mem 2Gi` before `--` when CHECK is Python only. The profile's 12 CPUs can wait a long time to be scheduled on a busy cluster.
@@ -81,15 +89,15 @@ Remove the worktree when you are done: `git worktree remove "$HUNT"`.
 
 ## 4. Bookends pushed-range gate
 
-Bookends judges a run's range, not a tree. The range runs from the sha on the run's `bookends-base:` log line (`gh run view <run id> --repo cartwmic/loop-engine --log | grep bookends-base:`; `before` below means that sha, never GitHub's `before`) to `after`, so after a queue of merges it holds the commits of the cancelled pushes too. It evaluates every commit in the range and prints each finding with that commit's sha. On RED it prints the blocking findings first, then the intermediate ones.
+Bookends judges the commits listed in step 1, not a tree. It prints each finding with that commit's sha. On RED it prints the blocking findings first, then the intermediate ones.
 
 **The step failed** (no compute). Run `gh run view <run id> --repo cartwmic/loop-engine --log-failed` and read the lines after `RED`:
 
 - `<sha> (parent <p>): …`: a continuity finding. `<sha>` is the culprit.
-- `<after>: …`: a finding on the pushed head's tree. If the range holds one commit, that commit is the culprit (after a queue the range holds the cancelled pushes' commits too, so a single push is not a single commit). Otherwise the culprit is the earliest commit in `git rev-list --first-parent --reverse <before>..<after>` whose own `<sha>: …` line has the same text after the sha. The checker prints findings in sha order, not history order, so match them against the rev-list.
+- `<after>: …`: a finding on the head's tree. If step 1 lists one commit, that commit is the culprit. Otherwise the culprit is the earliest listed commit whose own `<sha>: …` line has the same text after the sha. The checker prints findings in sha order, not history order, so match them against the list.
 - `history acquisition incomplete`, `publication history is incomplete`, `historical … unavailable` or `local Git state …`: these are about acquiring history, not about a commit. Nothing is reverted. Report it to the lead.
 
-**The step was skipped** (an earlier `tests` step failed, or the base step did): this run checked nothing, and its commits are checked only when a later push run finishes its Bookends step, since that run's base walk passes over this one. To check them now, run the gate on the range yourself, with `before` from `python3 scripts/bookends-base.py <after>` (the newest earlier push whose run finished Bookends) and that push's `after`. Do it from a worktree at that `after`, so the checker is the one CI would have built:
+**The step was skipped** (an earlier `tests` step failed, or the base step did): this run checked nothing. Run the gate on the commits listed in step 1 yourself, with `<before>` = `<base>` and `<after>` as in step 1. Do it from a worktree at that `after`, so the checker is the one CI would have built:
 
 ```sh
 git fetch origin
@@ -101,7 +109,7 @@ run-and-wake -- kgate --cpu 4 --mem 3Gi -- sh -c 'set -u; before=$1; shift; carg
 - The pod's checker is built from the worktree's source with cargo. That avoids the gate wrapper, which takes the first `bookends-check` on PATH, and any inherited `BOOKENDS_*` variables, so no bypass applies.
 - The arguments are the ones the wrapper passes in CI: `--updates-stdin --remote origin`. The `printf` line is the same update line the CI step pipes.
 - `--receipt-root /tmp/bookends-receipts` keeps the receipt in the pod, outside the repository, as the checker requires.
-- `before` is passed as `$1`. Each further argument becomes the pushed head, so `<before> <after>` checks exactly that range.
+- `before` is passed as `$1`. Each further argument becomes the head, so `<before> <after>` checks the commits listed in step 1.
 - Exit 2 means the build failed. That is no result.
 - If the replay prints `RED`, read its findings as in "The step failed" above.
 - Remove the worktree when you are done: `git worktree remove "$HUNT"`.
