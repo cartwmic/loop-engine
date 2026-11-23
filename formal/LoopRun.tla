@@ -54,7 +54,7 @@ Replay(h) ==   \* the workflow state that a history implies
 \* operators so that the scratch breaks in formal/README.md can delete one.
 ActiveGuard == lifecycle = "Active"                 \* require_active / is_active
 ObservedGuard == observed = rev                     \* require_observed
-RevisionGuard(a) == rev = expRev[a]                 \* verify_revision_and_source
+RevisionGuard(a) == TRUE
 SourceGuard(a) == state = Src(ev[a])                \* verify_revision_and_source
 CommitGuard(a) ==
     /\ ActiveGuard
