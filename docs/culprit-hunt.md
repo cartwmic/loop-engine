@@ -17,7 +17,7 @@ while read -r after before; do
 done
 ```
 
-- The activity API lists every update to main, newest first, with GitHub's own `before` and `after`. GitHub's `before` is not the range a push run's Bookends step judged: a newer push cancels the run before it, so the run that completes judges every commit back to the newest earlier push whose run finished its own Bookends step. The line `range starts at <sha>` under a push is that start, read from the run's `bookends-base:` log line (nothing prints when the run never got that far, or its log is gone; then read it from the next run's log, or run `python3 scripts/bookends-base.py <after>`). Use it, not `github-before`, as `before` in section 4.
+- The activity API lists every update to main, newest first, with GitHub's own `before` and `after`. GitHub's `before` is not the range a push run's Bookends step judged: a newer push cancels the run before it, so the run that completes judges every commit back to the newest earlier push whose run finished its own Bookends step. The line `range starts at <sha>` under a push is that start, read from the run's `bookends-base:` log line (nothing prints when the run never got that far, or its log is gone; then read it from the next run's log, or run `python3 scripts/bookends-base.py <after>`). Use it, not `github-before`, as `before` in section 4. Take it from the red run: under a `cancelled` run it is only where that run's own base step pointed, and that run judged nothing.
 - `sed` starts the list at the red push. The loop stops at the first push whose run concluded `success`, which is the last green run.
 - Each line shows the steps that failed or were skipped. A skipped step after a failed one never ran on that push.
 - A push with an empty `run=` was not run on its own, and a push whose run is `cancelled` was superseded by a newer push. Either way its commits count as part of the next push's range.
@@ -27,7 +27,7 @@ done
 
 These steps judge the tree at the pushed head. A failing step's culprit lies between two heads:
 
-- **L**: the newest listed push head where that step passed. If it never ran on any listed push, use the last green head.
+- **L**: the newest listed push head where that step passed. A push whose run is `cancelled` passed nothing, even when the list shows no failed or skipped step for it (the step the cancel stopped is shown as neither). If it never ran on any listed push, use the last green head.
 - **U**: the oldest push head after L where that step failed with the same failure.
 
 Then list the candidates:
@@ -86,7 +86,7 @@ Bookends judges a run's range, not a tree. The range runs from the sha on the ru
 **The step failed** (no compute). Run `gh run view <run id> --repo cartwmic/loop-engine --log-failed` and read the lines after `RED`:
 
 - `<sha> (parent <p>): …`: a continuity finding. `<sha>` is the culprit.
-- `<after>: …`: a finding on the pushed head's tree. If the push carried one commit, that commit is the culprit. Otherwise the culprit is the earliest commit in `git rev-list --first-parent --reverse <before>..<after>` whose own `<sha>: …` line has the same text after the sha. The checker prints findings in sha order, not history order, so match them against the rev-list.
+- `<after>: …`: a finding on the pushed head's tree. If the range holds one commit, that commit is the culprit (after a queue the range holds the cancelled pushes' commits too, so a single push is not a single commit). Otherwise the culprit is the earliest commit in `git rev-list --first-parent --reverse <before>..<after>` whose own `<sha>: …` line has the same text after the sha. The checker prints findings in sha order, not history order, so match them against the rev-list.
 - `history acquisition incomplete`, `publication history is incomplete`, `historical … unavailable` or `local Git state …`: these are about acquiring history, not about a commit. Nothing is reverted. Report it to the lead.
 
 **The step was skipped** (an earlier `tests` step failed, or the base step did): this run checked nothing, and its commits are checked only when a later push run finishes its Bookends step, since that run's base walk passes over this one. To check them now, run the gate on the range yourself, with `before` from `python3 scripts/bookends-base.py <after>` (the newest earlier push whose run finished Bookends) and that push's `after`. Do it from a worktree at that `after`, so the checker is the one CI would have built:
