@@ -2,7 +2,8 @@
 
 This page documents the Stage 0 additions to the software-change harness. They let four arms run on the same
 cases: native Pi (`native`), Pi with Superpowers (`superpowers`), Pi with OpenSpec (`openspec`) and Pi with
-Loop Engine (`loop-engine`). The design and the gap list (G1 to G10) are in the
+Loop Engine (`loop-engine`), and two lean-change arms, `lean-b` and `lean-c`, that run the provider that replaced the
+software-change provider. `loop-engine` is kept for historical comparison only (section 3). The design and the gap list (G1 to G10) are in the
 [Stage 0 spec](../specs/stage0-native-vs-workflow-vs-loop-engine.md), sections 5 to 8.
 
 Everything here is opt-in. With no `arm` option set, prompts, scoring, captures and reports are the ones in the
@@ -79,11 +80,11 @@ Use one campaign per trial, as the Tier 0 campaigns do, so each campaign has one
 The arm table has these keys: `id`, `driver_command`, `prompt_template`, `workflow_owned_paths`, `completion_rule`
 and optional `image`. Validation enforces:
 
-- `id` is one of `native`, `superpowers`, `openspec`, `loop-engine`.
+- `id` is one of `native`, `superpowers`, `openspec`, `loop-engine`, `lean-b`, `lean-c`.
 - `driver_command` is a nonempty list of nonempty strings. The harness appends the prompt.
 - `prompt_template` equals `id`. No other template exists.
 - `workflow_owned_paths` is a list of repo-relative glob strings. Absolute paths, `..` and backslashes are refused.
-  It must be nonempty for `superpowers` and `openspec`, and empty for `native` and `loop-engine`.
+  It must be nonempty for `superpowers` and `openspec`, and empty for the other arms.
 - `completion_rule` is `driver-exit`, the only rule.
 - `image` is an optional nonempty tag. Without it, the default trial image is used, which is for campaigns without an arm (see the note under the table).
 
@@ -93,6 +94,8 @@ and optional `image`. Validation enforces:
 | `superpowers` | `["arm-superpowers"]` | "Use the Superpowers workflow installed in this Pi session for this request." | required, for example the four globs below | the arms image |
 | `openspec` | `["arm-openspec"]` | "Use the OpenSpec workflow initialised in this repository for this request." | required, for example the four globs below | the arms image |
 | `loop-engine` | `["sc-driver"]` | Loop Engine addition: profile, the two installed skills, `sc-implement` and `sc-review`, run ID and artifact paths | `[]` | the arms image (section 10) |
+| `lean-b` | `["env", "SC_PROVIDER_SKILL=using-lean-change-provider", "sc-driver"]` | lean-change profile b: the one intent check and the one diff review, each by `sc-review` | `[]` | the lean image (section 10) |
+| `lean-c` | `["env", "SC_PROVIDER_SKILL=using-lean-change-provider", "sc-driver"]` | lean-change profile c: the same provider with neither the intent check nor the review | `[]` | the lean image (section 10) |
 
 The design's four workflow-owned globs are `openspec/**`, `.pi/**`, `docs/superpowers/**` and `.superpowers/**`.
 Any declared workflow-owned path leaves the grader's file inputs and the discipline scope, and is counted as artifact volume.
@@ -103,6 +106,28 @@ driver exit. Check the image before a paid run. The launcher must exist in the i
 example with `docker run --rm TAG sh -c 'command -v arm-native'`. That command was not run while writing this page.
 
 The default image is for campaigns without an arm: an omitted `image` on `loop-engine` also passes validation, but it runs Pi 1.0.0 beside the other arms' Pi 1.2.0, so every arm in one comparison, Loop Engine included, names the arms image.
+
+### The lean arms and the `loop-engine` arm
+
+`lean-b` and `lean-c` drive the lean-change provider through `sc-driver`; `SC_PROVIDER_SKILL` names the provider skill
+that `pi-role.py` loads (default `using-software-change-provider`). They need the lean image, which carries the
+`lean-change` binary and its skill. A trial's `providers.toml` names `lean-change` for these arms. Their lean metrics
+(denials, criteria, verifications, and the intent-check and review findings, with the review findings' dispositions) are stored under
+`target_metrics.lean_change` and are diagnostics only, never a success rule. The loop-engine diagnostics of section 5
+(`engine_lifecycle`, `run_health` and the rest) are not written for them: `engine_lifecycle` is `null`, so read
+`lean_change.lifecycle` and `lean_change.final_state` instead.
+
+The lean image keeps the base image's revision label, because the trial's image check compares that label with the
+campaign's `loop_engine_version` and `provider_version`. A lean campaign therefore sets both to the base image's commit
+(`8aeedb5ee4ef58d4a0fcbab8fef98b2a195e0d46`, as `test_lean_campaign.py` does), and its report records that commit as both
+refs. The refs do not identify which commit the lean programs were built from: the image tag and `image_id` in the
+trial evidence do, and `LEAN_SOURCE_SHA` is the label `com.loop-engine.lean-change.source-sha256`.
+
+Decision for the `loop-engine` arm: it is kept for **historical comparison only**. It drives the software-change
+provider, which `main` no longer has, so it cannot run on a current build. It still runs on the pinned older image
+(`loop-engine-sc-evals:arms-s2-8aeedb5ee`, built from the recorded ref) that the recorded results came from; deleting
+the arm would make those results unreproducible and their campaigns unreadable. Do not use it in new comparisons: use
+`lean-b` and `lean-c`. The arm's code, prompt and tests are unchanged.
 
 Superpowers arm:
 
@@ -402,6 +427,31 @@ Any tag works, as long as the arm's `image` names it. The trial's image check st
 the configured refs. The arms image inherits the base image's labels, so that check still applies.
 `evalctl image-check` does not check the arms image.
 
+### Lean image
+
+`image/Dockerfile.lean` layers on the arms image for `lean-b` and `lean-c`. It builds `loop-engine` and `lean-change`
+from the source tree it is given and replaces the base image's older `loop-engine`, so a lean trial runs the
+provider and the engine it needs from one commit. It adds the two skills and the `pi-role.py` that loads
+`SC_PROVIDER_SKILL`, and records both versions in `/opt/sc-evals/arms/versions.txt`. The arm's `image` names its tag.
+The build compiles Rust natively for the daemon's architecture and is heavy (the final image is about 3.4 GB and the three images
+together about 10 GB of disk). Build, from the checkout root, with the base images in place (the base is the
+`image-check` image at the recorded ref, then the arms image):
+
+```sh
+docker build -f evals/software-change/image/Dockerfile.arms --build-arg BASE_IMAGE=loop-engine-sc-evals:8aeedb5ee \
+  -t loop-engine-sc-evals:arms-s2-8aeedb5ee evals/software-change/image
+CTX=$(mktemp -d) && cp evals/software-change/image/Dockerfile.lean evals/software-change/image/pi-role.py "$CTX" \
+  && git archive --format=tar --output="$CTX/source.tar" HEAD \
+  && docker build -f "$CTX/Dockerfile.lean" --build-arg LEAN_SOURCE_SHA="$(sha256sum "$CTX/source.tar" | cut -d' ' -f1)" \
+     -t loop-engine-sc-evals:lean-TAG "$CTX"
+```
+
+Prove the lean arms with the scripted driver (no model call), through the real campaign path, once per profile:
+
+```sh
+SC_LEAN_IMAGE=loop-engine-sc-evals:lean-TAG uv run --project evals pytest evals/software-change/tests/test_lean_campaign.py
+```
+
 Launchers, all with the role-driver model alias through the bridge and prompt arguments only:
 
 - `arm-native`: Pi print mode with `--no-extensions --no-skills --no-prompt-templates`. Loads nothing else.
@@ -620,6 +670,7 @@ is right.
 | `evalctl findings-check FILE` | Validates a finding ledger | No |
 | `python -m scevals.phases RECORD` (run with `uv run --project evals python -m`) | Splits a Pi session record by phase and role | No |
 | `docker build -f evals/software-change/image/Dockerfile.arms ...` | Builds the arms image | Network for npm and git; no model |
+| `docker build -f ... Dockerfile.lean ...` | Builds the lean image from `git archive HEAD` | Network for crates; no model |
 
 The arm launchers (`arm-native`, `arm-superpowers`, `arm-openspec`) run inside the trial container, through the
 bridge. There is no separate host command for them.
@@ -649,6 +700,8 @@ bridge. There is no separate host command for them.
 ## Tests that cover this page
 
 - `tests/test_arms_descriptor.py`: arm validation, prompt rendering, the golden default preamble.
+- `tests/test_lean_arms.py`: the lean arm descriptors and prompts, and the lean metrics read from engine records.
+- `tests/test_lean_campaign.py`: the scripted lean driver through a real campaign per profile (needs `SC_LEAN_IMAGE`).
 - `tests/test_scoring_common.py`: the completion and success rule.
 - `tests/test_target_seams.py`: option-gated target behaviour, the margin, the baseline, snapshots, the grade option,
   the grade detail, the visible-test receipt and the block label.

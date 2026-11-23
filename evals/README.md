@@ -4,7 +4,7 @@
 
 This local, uv-managed Python harness uses Inspect AI to compare whole unattended
 software-change runs, not isolated chat answers. Each trial starts with a vague
-request in a fresh native arm64 Docker container. A pinned host-side simulated
+request in a fresh native Docker container (the chip the Docker daemon runs on: amd64 or arm64; never emulated). A pinned host-side simulated
 owner answers questions; hidden tests score the delivered code after the run
 reaches a terminal state. The owner chooses models, approves private cases and
 paid calls, and decides which reports to publish. Small samples are a gut check,
@@ -19,7 +19,7 @@ software-change workflow on their own private cases. Do not use it when you need
   millions of workflow tokens. Budgeted small campaigns exist for that reason:
   [software-change/TIERS.md](software-change/TIERS.md) defines Tier 0, a 30-minute, 5-dollar
   cost-and-time floor, and the single-step build-up from it.
-- Another host setup. It needs native arm64 Docker, uv, host Pi/Node for `pi/`
+- Another host setup. It needs native Docker (amd64 or arm64), uv, host Pi/Node for `pi/`
   models, and an image built from a pinned local Loop Engine ref (default `v0.26.0`).
 - A trustworthy intent-quality verdict. The first owner-labelled calibration of the
   intent judge agreed with the owner on 4 of 10 labelled intents (0 of 2 deficient
@@ -56,7 +56,7 @@ intent scores when owner-confirmed calibration is available, otherwise pending.
 
 ## Setup
 
-Run from the checkout root with uv, Python 3.12+ and native arm64 Docker available.
+Run from the checkout root with uv, Python 3.12+ and native Docker (amd64 or arm64) available.
 Only the project-local Python environment is needed:
 
 ```sh
@@ -69,7 +69,7 @@ uv run --project evals evalctl case-check evals/software-change/example-case
 `image-check` builds from a pinned local Git ref (default `v0.26.0`), records the
 resolved commit and executable versions, and checks an empty mount list. Building
 requires network access for image-layer dependencies, but no model credentials.
-Use `--ref REF --tag TAG` for another pinned image. `case-check` verifies and reuses the existing pinned arm64 image; it never builds.
+Use `--ref REF --tag TAG` for another pinned image. `case-check` verifies and reuses the existing pinned image, which must be of the daemon's architecture; it never builds.
 If the image is missing/mismatched, run `image-check` first (only when image changes
 are authorized). Every reference test must pass and at least one no-op test must
 fail; an invalid case exits nonzero. Private cases stay in a separate repository, never under this checkout.

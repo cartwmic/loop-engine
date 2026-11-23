@@ -19,7 +19,7 @@ import tomllib
 from evalcore.target import InfrastructureError
 from .reader import (COLLECTOR_SECONDS, FORMS_FILE, ReaderCallError, ReaderInputError, SavedFormsStale, forms_document, load_reader, load_saved, reader_model,
                      load_shapes, lookup_saved, parse_collected, read_texts, saved_entries)
-from .image import DEFAULT_IMAGE, DEFAULT_REF, verify_image, output, run, trial_container
+from .image import DEFAULT_IMAGE, DEFAULT_REF, daemon_arch, verify_image, output, run, trial_container
 
 RUNTIME = Path(__file__).with_name("case_runtime.py")
 CRASH_EXIT = 2  # what evalctl returns for any exception (evalcore.cli.main), so the log says what the user saw
@@ -214,7 +214,7 @@ def run_hidden_tests(case: EvalCase, *, reference: bool, image=DEFAULT_IMAGE, re
              "--output", "/tmp/case-results.json"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             timeout=case.test_timeout_seconds)
         report = json.loads(output(["docker", "exec", container, "cat", "/tmp/case-results.json"]))
-        report["container"] = {"image_id": config["Image"], "mounts": config["Mounts"],
+        report["container"] = {"image_id": config["Image"], "architecture": daemon_arch(), "mounts": config["Mounts"],
                                "copies": copies}
         return report
 

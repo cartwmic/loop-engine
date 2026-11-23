@@ -163,16 +163,20 @@ def test_abandoned_removal_is_handed_off_detached_and_named(monkeypatch, tmp_pat
     assert (tmp_path / "docker-calls").read_text().count("rm -f c1") == 2
 
 
-def test_replay_container_passes_its_limits_to_docker_run(monkeypatch, tmp_path):
+@pytest.mark.parametrize("arch", ["arm64", "amd64"])
+def test_replay_container_passes_its_limits_to_docker_run(monkeypatch, tmp_path, arch):
     import stat
     shim = tmp_path / "docker"
-    shim.write_text(f"#!/bin/sh\necho \"$@\" >> {tmp_path}/docker-calls\necho cid\n")
+    # The shim is a daemon of the chip in $DAEMON_ARCH: it answers `docker version` with it and any other call with a container id.
+    shim.write_text(f"#!/bin/sh\necho \"$@\" >> {tmp_path}/docker-calls\n"
+                    "if [ \"$1\" = version ]; then echo \"$DAEMON_ARCH\"; else echo cid; fi\n")
     shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    monkeypatch.setenv("DAEMON_ARCH", arch)
 
     async def enter():
         async with ReplayContainer("image", limits=["--cpus", "2", "--memory", "8g"]):
             pass
     anyio.run(enter)
-    first = (tmp_path / "docker-calls").read_text().splitlines()[0]
-    assert first == "run -d --platform linux/arm64 --workdir /workspace --cpus 2 --memory 8g image sleep infinity"
+    first = next(call for call in (tmp_path / "docker-calls").read_text().splitlines() if call.startswith("run "))
+    assert first == f"run -d --platform linux/{arch} --workdir /workspace --cpus 2 --memory 8g image sleep infinity"

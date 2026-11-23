@@ -13,7 +13,7 @@ from inspect_ai.solver import solver
 from inspect_ai.tool import ToolCall
 from inspect_ai.util import sandbox_service, sandbox
 
-from scevals.image import DEFAULT_IMAGE
+from scevals.image import DEFAULT_IMAGE, daemon_arch
 
 CAPTURES = Path(__file__).resolve().parents[1] / "captures" / "bridge"
 CALLS = []
@@ -117,7 +117,7 @@ def test_real_pi_role_bridge_and_owner_service(tmp_path):
     CALLS.clear()
     ANSWERS.clear()
     compose = tmp_path / "compose.yaml"
-    compose.write_text(f"services:\n  default:\n    image: {DEFAULT_IMAGE}\n    platform: linux/arm64\n"
+    compose.write_text(f"services:\n  default:\n    image: {DEFAULT_IMAGE}\n    platform: linux/{daemon_arch()}\n"
                        "    working_dir: /workspace\n    command: [sleep, infinity]\n")
     CAPTURES.mkdir(parents=True, exist_ok=True)
     task = Task(name="t2-image-public-pi", dataset=[Sample(input="scripted image contract")],
@@ -207,7 +207,7 @@ def test_codex_scripted_stream_through_real_pi_bridge(tmp_path, monkeypatch):
         return solve
 
     compose = tmp_path / "compose.yaml"
-    compose.write_text(f"services:\n  default:\n    image: {DEFAULT_IMAGE}\n    platform: linux/arm64\n"
+    compose.write_text(f"services:\n  default:\n    image: {DEFAULT_IMAGE}\n    platform: linux/{daemon_arch()}\n"
                        "    working_dir: /workspace\n    command: [sleep, infinity]\n")
     capture = CAPTURES / "codex"
     capture.mkdir(parents=True, exist_ok=True)

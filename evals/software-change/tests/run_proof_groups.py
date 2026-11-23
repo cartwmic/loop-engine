@@ -95,7 +95,7 @@ UNITS = (
     unit("sc-owner-context", "sc-owner-context", f"{SC}test_owner_context.py", seconds=2),
     unit("sc-pure", "sc-pure", f"{SC}test_arm_commands.py", f"{SC}test_arms_descriptor.py", f"{SC}test_calibration.py",
          f"{SC}test_compare.py", f"{SC}test_findings.py", f"{SC}test_grader.py", f"{SC}test_image.py", f"{SC}test_image_reuse.py",
-         f"{SC}test_ledger.py", f"{SC}test_pi_session_and_phases.py", f"{SC}test_pilot_inspection.py",
+         f"{SC}test_ledger.py", f"{SC}test_lean_arms.py", f"{SC}test_pi_session_and_phases.py", f"{SC}test_pilot_inspection.py",
          f"{SC}test_provenance_merge.py", f"{SC}test_provider_route.py", f"{SC}test_results.py", f"{SC}test_run_proof_groups.py",
          f"{SC}test_scoring_common.py",
          seconds=100),

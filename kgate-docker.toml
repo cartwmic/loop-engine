@@ -1,0 +1,25 @@
+# kgate profile for the scripted lean campaign (evals/software-change/lean-campaign-kgate.sh): jobs that build and run containers.
+# Run (pin the node: the campaign needs about 25 GB of Docker disk and most nodes have less free):
+#   run-and-wake -- kgate --profile kgate-docker.toml --node cartwmic-g14-wsl -- sh evals/software-change/lean-campaign-kgate.sh
+# Contract: dotfiles docs/kgate.md, "Docker jobs". The job image is the kgate variant with the docker CLI, buildx and compose
+# (the base image of kgate-verify.toml has no docker client); the daemon is the privileged dind sidecar. The images are built
+# for the daemon's chip, which is amd64 here.
+# CPU: the job's 2 plus the sidecar's 6 make one pod of 8 (two whole 4-CPU slots). The Rust builds run in the sidecar, so it
+# takes the CPU and the memory; the job container only runs pip, docker and pytest.
+image  = "ghcr.io/cartwmic/kgate@sha256:be170720691c03c7edca206d34220863142de522d32ae3c52306d94a117aa69b"
+cpu    = 2
+memory = "2Gi"
+memory_limit = "4Gi"
+services = ["docker"]
+# No ephemeral_storage keys: a Docker profile gets the campaign default (24Gi request, 40Gi limit), which holds the daemon's
+# data root (the three images are about 10 GB, plus the builder's cache).
+
+[tools]
+python3 = "3.14.6"
+
+[docker]
+image  = "docker@sha256:7bf70dcb85c822e3fa6f2d332143e474b99147b9d7b39102b0cfe8b04a7dd61b"
+cpu    = 6
+memory = "8Gi"
+memory_limit = "12Gi"
+ready_s = 120

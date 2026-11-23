@@ -28,7 +28,8 @@ from evalcore.target import InfrastructureError, LimitReached, ModelError, Trial
 from .cases import RUNTIME, load_case
 from .calibration import calibration_for_report
 from .judge import JUDGE_CONTRACT, judge_intent
-from .arms import is_workflow_owned, load_arm, render_prompt
+from .arms import LEAN_ARM_IDS, is_workflow_owned, load_arm, render_prompt
+from .lean_metrics import lean_metrics
 from .grader import GRADER_CONTRACT, grade, independence_refusal, provider_family
 from .scoring_common import completion, hidden_tests_passed, intent_is_valid, score_common
 from .snapshots import snapshot_step
@@ -152,7 +153,7 @@ def note_cleanup_handoff(context):
 def limit_reason(context):
     guard = getattr(context, "guard", None)
     return guard.step_stop_reason() if guard is not None else "campaign_wall_time"
-from .image import DEFAULT_IMAGE, REPOSITORY, output
+from .image import DEFAULT_IMAGE, REPOSITORY, daemon_arch, normalise_arch, output
 from .owner import CHECKIN_KIND, SimulatedOwner
 from .scoring import discipline, honesty, recall, reviews_passed, run_health
 from . import scripted_models  # Registers only local scripted backends and the owner gate.
@@ -541,8 +542,10 @@ class SoftwareChangeTarget:
                     raise ValueError("trial image does not match the configured engine/provider ref; run image-check")
         except subprocess.TimeoutExpired:
             raise LimitReached(limit_reason(context), "image_inspection") from None
-        if identity["Architecture"] != "arm64" or identity["Os"] != "linux":
-            raise ValueError("trial image must be native arm64 Linux")
+        arch = daemon_arch()
+        if normalise_arch(identity["Architecture"]) != arch or identity["Os"] != "linux":
+            raise ValueError(f"trial image must be Linux for the daemon's architecture ({arch}), not "
+                             f"{identity['Os']}/{identity['Architecture']}")
         if identity["Config"].get("Volumes"):
             raise ValueError("trial image must not declare volumes")
         check_projection_label_gate(context.settings, identity)
@@ -552,7 +555,7 @@ class SoftwareChangeTarget:
         compose_dir.mkdir(parents=True, exist_ok=True)
         compose = compose_dir / (context.assignment.sample_id + ".yaml")
         caps = container_caps(context.settings.target_options)
-        compose.write_text("services:\n  default:\n    image: " + json.dumps(image) + "\n    platform: linux/arm64\n"
+        compose.write_text("services:\n  default:\n    image: " + json.dumps(image) + "\n    platform: linux/" + arch + "\n"
                            "    working_dir: /workspace\n    command: [sleep, infinity]\n    init: true\n"
                            + (f"    cpus: {caps[0]}\n    mem_limit: {caps[1]}\n" if caps else ""))
         return Sample(input=load_case(context.case.path).request.read_text(), sandbox=("docker", str(compose)))
@@ -573,7 +576,7 @@ class SoftwareChangeTarget:
         owner = SimulatedOwner(case, context.settings.simulator_model)
         evidence = {"started": time.monotonic(), "copy_log": [],
                     "container": {"id": config["Id"], "image_id": config["Image"], "mounts": mounts,
-                                  "binds": config["HostConfig"].get("Binds") or [],
+                                  "architecture": daemon_arch(), "binds": config["HostConfig"].get("Binds") or [],
                                   "platform": config["Platform"], "working_dir": config["Config"]["WorkingDir"],
                                   **({"cpus": config["HostConfig"].get("NanoCpus", 0) / 1e9,
                                       "memory_bytes": config["HostConfig"].get("Memory", 0)}
@@ -588,7 +591,11 @@ class SoftwareChangeTarget:
             evidence["resumed"] = True
         else:
             await trial.copy_tree(case.path / "public", "/workspace/public", "public", "before_driver")
-        await env.write_file("/workspace/trial/providers.toml", '[providers.software-change]\ncommand = "software-change"\nargs = []\n')
+        providers = '[providers.software-change]\ncommand = "software-change"\nargs = []\n'
+        lean_arm = load_arm(context.settings.target_options)
+        if lean_arm is not None and lean_arm.id in LEAN_ARM_IDS:
+            providers += '\n[providers.lean-change]\ncommand = "lean-change"\nargs = []\n'
+        await env.write_file("/workspace/trial/providers.toml", providers)
         # The isolated local remote is harness infrastructure, not the case repo.
         # Its hook counts successful receive operations without making any push.
         remote = await env.exec(["git", "init", "--bare", "-q", "/workspace/local-remote.git"], timeout=30)
@@ -1016,6 +1023,7 @@ class SoftwareChangeTarget:
         push_events = files.get("trial/local-push-log", b"").decode().splitlines()
         tests = await run_hidden_tests(trial)
         snapshot, history = (await read_engine_records(trial.env, evidence["run_id"])) if loop_engine else (None, None)
+        lean_records = (await read_engine_records(trial.env, evidence["run_id"])) if arm.id in LEAN_ARM_IDS else (None, None)
         owner_history = evidence.get("owner_history_available", True)
         scored = score_common(
             trial.case, evidence=evidence, delivered=delivered, tests=tests,
@@ -1029,6 +1037,8 @@ class SoftwareChangeTarget:
         metrics = trial.metrics() | {"hidden_tests": tests, **scored}
         if context.settings.target_options.get("intent_checkin"):
             metrics["intent_checkin"] = intent_checkin_record(trial.owner.answers)
+        if lean_records[0] is not None:
+            metrics["lean_change"] = lean_metrics(*lean_records)
         if snapshot is not None:
             metrics |= await self.engine_diagnostics(trial, context, snapshot, history, artifacts, delivered, tests, success)
         if context.settings.target_options.get("grade"):
@@ -1155,7 +1165,8 @@ class SoftwareChangeTarget:
 
     def versions(self, settings):
         return {"loop_engine": settings.loop_engine_version, "provider": settings.provider_version,
-                "loop_engine_commit": resolve_ref(settings.loop_engine_version), "target": "software-change-scorers-v1"}
+                "loop_engine_commit": resolve_ref(settings.loop_engine_version), "target": "software-change-scorers-v1",
+                "architecture": daemon_arch()}
 
     def report_metrics(self, scores):
         return {"terminal_trials": sum(s.get("lifecycle") == "final" for s in scores),
