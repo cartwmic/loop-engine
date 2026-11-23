@@ -14,17 +14,25 @@
 # When there is no java, mise installs the Temurin 25 that statechart pins.
 set -euo pipefail
 
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+die() { printf 'formal/check.sh: %s\n' "$*" >&2; exit 2; }
+
+# The sync check and its test come first. They need only python3 and git, so they
+# answer on any machine, with no Java and no downloads. The test runs in CI too,
+# because the `checks` job runs this script.
+command -v python3 >/dev/null || die "python3 is needed for the sync check"
+python3 "$here/test_check_sync.py" || exit $?
+python3 "$here/check-sync.py" || exit $?
+
 STATECHART_REPO=https://github.com/cursor/plugins
 STATECHART_COMMIT=7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9   # pstack/skills/statechart
 TLA2TOOLS_URL=https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
 TLA2TOOLS_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 JAVA_TOOL=java@temurin-25
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cache="${LOOP_FORMAL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/loop-engine-formal}"
 mkdir -p "$cache"
-
-die() { printf 'formal/check.sh: %s\n' "$*" >&2; exit 2; }
 
 sha256_of() {
   if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1
@@ -74,11 +82,6 @@ if [ -z "${JAVA:-}" ]; then
 fi
 
 command -v node >/dev/null || die "node (22.18 or later) is not on PATH"
-
-# The model-to-code sync check: fails when a file the model covers has changed since
-# the model was last confirmed against it (formal/COVERS, formal/check-sync.py).
-command -v python3 >/dev/null || die "python3 is needed for the sync check"
-python3 "$here/check-sync.py" || exit $?
 
 work="$(mktemp -d)"
 out="$work/out"          # statechart writes only to a new folder
