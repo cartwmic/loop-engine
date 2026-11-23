@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.71.0] - 2026-11-23
+
+A queue of merges to main runs the full suite once, and no merged commit goes unchecked.
+
+- ci.yml: a newer push to main cancels the push run before it; the Bookends step of the run that finishes checks every commit since the last push run whose own Bookends step finished (found by scripts/bookends-base.py), so a cancelled run leaves no commit unchecked. A release-prep commit keeps its own, never cancelled run, because release.yml needs a green push run on that exact commit. (#219)
+
 ## [0.70.2] - 2026-11-23
 
 Docs only: the merge-queue rule in AGENTS.md and the release procedure.
