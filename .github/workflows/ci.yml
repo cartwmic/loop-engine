@@ -27,8 +27,8 @@ permissions:
 # successful push run for that exact commit. Each manual run has its own group
 # (its run id) and is never cancelled.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.event_name == 'workflow_dispatch' && github.run_id || startsWith(github.event.head_commit.message, 'release: prepare v') && github.sha || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'release: prepare v')) }}
+  group: "ci-${{ github.event_name == 'pull_request' && github.ref || github.event_name == 'workflow_dispatch' && github.run_id || startsWith(github.event.head_commit.message, 'release: prepare v') && github.sha || github.ref }}"
+  cancel-in-progress: "${{ github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'release: prepare v')) }}"
 
 jobs:
   checks:
