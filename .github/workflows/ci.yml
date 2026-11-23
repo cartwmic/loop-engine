@@ -17,13 +17,18 @@ permissions:
 # A PR runs `checks` only, which includes the Bookends gate on the PR's own
 # range. A newer push to the PR cancels its superseded run.
 # A push to main, or a manual run (workflow_dispatch), runs
-# `checks`, `tests` and `release-tests`. Each push has its own group (its tip
-# SHA), each manual run its own (its run id), and neither is cancelled: release
-# requires a successful push run for the exact commit, and the Bookends range
-# of a cancelled push would otherwise go unchecked.
+# `checks`, `tests` and `release-tests`. All pushes to main share one group (its ref) and a
+# newer push cancels the run before it, so a queue of merges completes one full
+# run, the last. The Bookends step of that run checks every commit back to the
+# last push run that finished its own Bookends step (scripts/bookends-base.py),
+# so a cancelled run leaves nothing unchecked. A release-prep commit
+# (`release: prepare vX.Y.Z`, the title release-after-merge.sh gives its PR) has
+# its own group and is never cancelled, because release.yml requires a
+# successful push run for that exact commit. Each manual run has its own group
+# (its run id) and is never cancelled.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.event_name == 'workflow_dispatch' && github.run_id || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: "ci-${{ github.event_name == 'pull_request' && github.ref || github.event_name == 'workflow_dispatch' && github.run_id || startsWith(github.event.head_commit.message, 'release: prepare v') && github.sha || github.ref }}"
+  cancel-in-progress: "${{ github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'release: prepare v')) }}"
 
 jobs:
   checks:
@@ -76,6 +81,10 @@ jobs:
   tests:
     runs-on: ubuntu-22.04
     if: github.event_name != 'pull_request'
+    # The Bookends step reads earlier push runs through the API.
+    permissions:
+      contents: read
+      actions: read
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
@@ -109,18 +118,35 @@ jobs:
         run: python3 scripts/test_prd_prose_check.py
       - name: Triage skill copies tests
         run: python3 scripts/test_triage_skills.py
-      # A push checks the pushed range. A manual run on a branch checks the
+      - name: Bookends base script tests
+        run: python3 scripts/test_bookends_base.py
+      # A push checks every commit since the last push run that finished its
+      # Bookends step: the commits this push added and those of any run a newer
+      # push cancelled. The base is found in its own step, so a lookup that fails
+      # leaves the Bookends step skipped, and a skipped step is not read as a
+      # finished check by the next push. A manual run on a branch checks the
       # commits the branch adds on top of main: from the merge base to the
       # dispatched tip. A manual run on main checks main's tip commit (main is
       # squash-merged: one commit per push), from its first parent.
+      - name: Bookends pushed-range base
+        id: base
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          PUSH_AFTER: ${{ github.event.after }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          before="$(python3 scripts/bookends-base.py "$PUSH_AFTER")"
+          printf 'before=%s\n' "$before" >> "$GITHUB_OUTPUT"
       - name: Bookends pushed-range gate
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
           PUSH_AFTER: ${{ github.event.after }}
-          PUSH_BEFORE: ${{ github.event.before }}
           DISPATCH_SHA: ${{ github.sha }}
           DISPATCH_REF: ${{ github.ref }}
+          PUSH_BEFORE: ${{ steps.base.outputs.before }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = push ]; then
