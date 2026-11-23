@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.70.0] - 2026-11-23
+
+The eval harness gains the lean-change arms, and images follow the Docker daemon's own chip.
+
+- evals: lean-b and lean-c arms (the lean-change provider, profiles b and c) with their prompts, the lean image layer (image/Dockerfile.lean, which builds loop-engine and lean-change from the checked-out source), lean metrics that count the intent check, and a scripted lean driver; lean-campaign-kgate.sh runs the scripted campaign for both profiles as one kgate Docker job, part of issue 61 (#166).
+- evals: images are built and run for the Docker daemon's chip (amd64 or arm64) instead of a fixed linux/arm64, an image built for a different chip is refused, and the chip is recorded as `architecture` in the image check and results (#166).
+
 ## [0.69.0] - 2026-11-23
 
 Follow-ups to the eval reader step: rescores and case checks no longer fail for reasons the delivery did not cause, and case-check logs each run.
