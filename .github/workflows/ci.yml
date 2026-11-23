@@ -50,6 +50,11 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Build workspace
         run: cargo build --workspace --locked
+      # Also guards that no other file restates the Bookends range, so it runs on
+      # every PR: `tests` never does, and a restated range would only turn main red
+      # after merge.
+      - name: Bookends base script tests
+        run: python3 scripts/test_bookends_base.py
       # The push gate in `tests` never runs on a PR, so a requirement edit that
       # breaks Bookends' identity check would only turn main red after merge.
       # This runs the same gate on the commits the PR adds on top of main, from
@@ -118,8 +123,6 @@ jobs:
         run: python3 scripts/test_prd_prose_check.py
       - name: Triage skill copies tests
         run: python3 scripts/test_triage_skills.py
-      - name: Bookends base script tests
-        run: python3 scripts/test_bookends_base.py
       # A push checks the commits from the base scripts/bookends-base.py picks
       # (defined in docs/culprit-hunt.md step 1). The base is found in its own
       # step, so a lookup that fails leaves the Bookends step skipped, and a
