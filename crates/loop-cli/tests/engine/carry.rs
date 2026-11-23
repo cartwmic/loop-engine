@@ -74,15 +74,19 @@ fn create_completed_invocation(
 }
 
 fn cli(database: &Path, args: &[&str]) -> (i32, Value, String) {
-    let output = Command::new(workspace_integration::binary("loop-engine"))
-        .args([
-            "--database",
-            database.to_str().expect("database path"),
-            "--json",
-        ])
-        .args(args)
-        .bounded_output("loop-engine stable references")
-        .expect("loop-engine");
+    // A loaded runner can use up `show`'s fixed 1.1 s read budget before the
+    // read starts; rerun only when that is what happened.
+    let output = workspace_integration::retry_on_read_budget_miss(|| {
+        Command::new(workspace_integration::binary("loop-engine"))
+            .args([
+                "--database",
+                database.to_str().expect("database path"),
+                "--json",
+            ])
+            .args(args)
+            .bounded_output("loop-engine stable references")
+            .expect("loop-engine")
+    });
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let value = serde_json::from_slice(&output.stdout).expect("JSON envelope");
     (output.status.code().unwrap_or(-1), value, stdout)
