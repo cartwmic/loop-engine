@@ -119,6 +119,24 @@ FAKE_GH = textwrap.dedent(
         out(pr)
     if cmd[0] == "api" and argv[1] == "repos/{owner}/{repo}/commits/main":
         out({"sha": main_sha()})
+    if cmd[0] == "api" and any(a.endswith("/actions/workflows/ci.yml/runs") for a in argv):
+        # The run search release.yml's gate reads: it must be a GET with the filters as query fields. With ci_search_lag = N,
+        # the first N searches come back empty (the search lags the run's completion), and a release.yml dispatched before
+        # the search has returned the run is refused by the gate, so its run fails.
+        fields = dict(a.split("=", 1) for i, a in enumerate(argv) if i and argv[i - 1] == "-f")
+        if opt("--method") != "GET" or "--paginate" not in argv or "--slurp" not in argv:
+            print("fake gh: the run search must be gh api --method GET --paginate --slurp", file=sys.stderr)
+            sys.exit(2)
+        state["search_calls"] = state.get("search_calls", 0) + 1
+        if scenario.get("ci_search_error"):
+            save()
+            print("HTTP 502: Server Error", file=sys.stderr)
+            sys.exit(1)
+        found = state["search_calls"] > scenario.get("ci_search_lag", 0) and fields.get("status") == "success" and fields.get("event") == "push"
+        if found:
+            state["search_hits"] = state.get("search_hits", 0) + 1
+        out([{"total_count": int(found), "workflow_runs": [
+            {"id": 1, "head_sha": fields["head_sha"], "event": "push", "conclusion": "success"}] if found else []}])
     if cmd == ["run", "list"] and opt("--workflow") == "ci.yml":
         sha, mode = opt("--commit"), scenario["ci"]
         if mode == "missing":
@@ -151,6 +169,10 @@ FAKE_GH = textwrap.dedent(
         run = {"databaseId": run_id, "status": "in_progress", "conclusion": "", "headSha": main_sha(),
                "createdAt": tick(), "url": f"{BASE}/actions/runs/{run_id}", "tag": tag, "views": 0}
         state["runs"].append(run)
+        if scenario.get("ci_search_lag") and not state.get("search_hits"):
+            run["status"], run["conclusion"] = "completed", "failure"  # the gate: "no successful ci.yml push run for exact commit"
+            save()
+            sys.exit(0)
         if tag != "dry-run" and scenario.get("publish_release_early"):
             make_release(run)  # release.yml makes the release before its announce job, which can still fail
         if scenario.get("fast_runs"):
@@ -607,6 +629,32 @@ class ReleaseAfterMergeTest(unittest.TestCase):
                 self.assert_stopped(self.h.run(), "ci", text)
                 self.assertEqual(self.h.count("pr merge"), 1)
                 self.assertFalse([e for e in self.h.events() if e.startswith("dispatch")])
+
+    def test_waits_for_the_run_search_to_show_the_push_ci_before_dispatching(self) -> None:
+        # The search release.yml's gate reads lags the run's completion (v0.67.0). Without the wait, the dry run is
+        # dispatched at once, refused by the gate, and the release stops at the dry run.
+        self.h.scenario(ci_search_lag=2)
+        result = self.h.run()
+        self.assert_released(result)
+        self.assertEqual(self.h.gh_state()["search_calls"], 3)
+        self.assertEqual(result.stdout.count("the run search does not show push CI green"), 2)
+        self.assertIn("the run search shows push CI green", result.stdout)
+        log = self.h.log.read_text()
+        self.assertEqual(log.count("the run search does not show push CI green"), 2)
+        self.assertLess(log.index("the run search shows push CI green"), log.index("dispatching release.yml tag=dry-run"))
+        self.assertEqual(self.h.events()[-3:], ["ci list", "dispatch tag=dry-run", "dispatch tag=v0.35.0"])
+
+    def test_stop_when_the_run_search_never_shows_the_push_ci(self) -> None:
+        self.h.scenario(ci_search_lag=99)
+        self.assert_stopped(self.h.run(), "ci", "run search still does not show push CI green")
+        self.assertEqual(self.h.gh_state()["search_calls"], 3)  # RELEASE_APPEAR_POLLS in the harness
+        self.assertEqual(self.h.count("pr merge"), 1)
+        self.assertFalse([e for e in self.h.events() if e.startswith("dispatch")])
+
+    def test_stop_when_the_run_search_errors(self) -> None:
+        self.h.scenario(ci_search_error=True)
+        self.assert_stopped(self.h.run(), "ci", "gh api actions/workflows/ci.yml/runs failed")
+        self.assertFalse([e for e in self.h.events() if e.startswith("dispatch")])
 
     def test_stop_main_red_before_merge(self) -> None:
         for code, line in ((1, "RED loop-engine: ci.yml failed on 1a2b3c4 (https://github.com/test/loop-engine/actions/runs/9)"),
