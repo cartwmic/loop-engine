@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.70.2] - 2026-11-23
+
+Docs only: the merge-queue rule in AGENTS.md and the release procedure.
+
+- AGENTS.md and docs/release-procedure.md: read the full suite once at the end of a merge queue, not once per merged change. (#213)
+
 ## [0.70.1] - 2026-11-23
 
 Tests no longer fail when a slow CI runner misses the engine's read budget.
