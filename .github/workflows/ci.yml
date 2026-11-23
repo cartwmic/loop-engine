@@ -19,10 +19,10 @@ permissions:
 # A push to main, or a manual run (workflow_dispatch), runs
 # `checks`, `tests` and `release-tests`. All pushes to main share one group (its ref) and a
 # newer push cancels the run before it, so a queue of merges completes one full
-# run, the last. The Bookends step of that run checks every commit back to the
-# last push run that finished its own Bookends step (scripts/bookends-base.py),
-# so a cancelled run leaves nothing unchecked. A release-prep commit
-# (`release: prepare vX.Y.Z`, the title release-after-merge.sh gives its PR) has
+# run, the last. Its Bookends step checks the commits from the base
+# scripts/bookends-base.py picks (defined in docs/culprit-hunt.md step 1).
+# A release-prep commit (`release: prepare vX.Y.Z`, the title
+# release-after-merge.sh gives its PR) has
 # its own group and is never cancelled, because release.yml requires a
 # successful push run for that exact commit. Each manual run has its own group
 # (its run id) and is never cancelled.
@@ -50,6 +50,11 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Build workspace
         run: cargo build --workspace --locked
+      # Also guards that no other file restates the Bookends range, so it runs on
+      # every PR: `tests` never does, and a restated range would only turn main red
+      # after merge.
+      - name: Bookends base script tests
+        run: python3 scripts/test_bookends_base.py
       # The push gate in `tests` never runs on a PR, so a requirement edit that
       # breaks Bookends' identity check would only turn main red after merge.
       # This runs the same gate on the commits the PR adds on top of main, from
@@ -118,13 +123,11 @@ jobs:
         run: python3 scripts/test_prd_prose_check.py
       - name: Triage skill copies tests
         run: python3 scripts/test_triage_skills.py
-      - name: Bookends base script tests
-        run: python3 scripts/test_bookends_base.py
-      # A push checks every commit since the last push run that finished its
-      # Bookends step: the commits this push added and those of any run a newer
-      # push cancelled. The base is found in its own step, so a lookup that fails
-      # leaves the Bookends step skipped, and a skipped step is not read as a
-      # finished check by the next push. A manual run on a branch checks the
+      # A push checks the commits from the base scripts/bookends-base.py picks
+      # (defined in docs/culprit-hunt.md step 1). The base is found in its own
+      # step, so a lookup that fails leaves the Bookends step skipped, and a
+      # skipped step is not read as a finished check by the next push. A manual
+      # run on a branch checks the
       # commits the branch adds on top of main: from the merge base to the
       # dispatched tip. A manual run on main checks main's tip commit (main is
       # squash-merged: one commit per push), from its first parent.

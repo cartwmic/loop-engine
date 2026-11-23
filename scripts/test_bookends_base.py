@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -126,6 +127,46 @@ class BaseTests(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertEqual(done.stdout, "")
         self.assertIn("no range to check", done.stderr)
+
+
+ROOT = Path(__file__).resolve().parent.parent
+# The range is defined in two places only; every other file points to them.
+OWNERS = {"docs/culprit-hunt.md", "scripts/bookends-base.py", "scripts/test_bookends_base.py"}
+SCANNED = {".md", ".yml", ".yaml", ".py", ".sh"}
+# A sentence that gives the base's rule ("the push run that finished its Bookends step"), or
+# that ties a cancelled or failed run to the Bookends step or the range.
+BASE_RULE = re.compile(r"(finished|reached) its (own )?Bookends step", re.I)
+RUN_CASE = re.compile(r"cancel|failed before|did not finish", re.I)
+RANGE_WORD = re.compile(r"\bBookends\b|\brange\b", re.I)
+
+
+def restated_range_sentences(text: str) -> list[str]:
+    """Sentences of one file that restate the range's cases (comment markers and wrapping removed)."""
+    flat = re.sub(r"\s+", " ", re.sub(r"(?m)^\s*(#|//|\*|-)\s?", " ", text))
+    return [
+        s
+        for s in re.split(r"(?<=[.;:!?])\s+", flat)
+        if BASE_RULE.search(s) or (RUN_CASE.search(s) and RANGE_WORD.search(s))
+    ]
+
+
+class RangeHasOneOwnerTest(unittest.TestCase):
+    def test_no_other_file_restates_the_range(self) -> None:
+        tracked = subprocess.run(
+            ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
+        ).stdout.split("\n")
+        found = []
+        for name in tracked:
+            path = ROOT / name
+            if not name or name in OWNERS or name.startswith("crates/") or path.suffix not in SCANNED:
+                continue
+            found += [f"{name}: {s[:160]}" for s in restated_range_sentences(path.read_text(encoding="utf-8"))]
+        self.assertEqual(
+            found,
+            [],
+            "these sentences describe which runs the Bookends range skips or starts from: "
+            "point to docs/culprit-hunt.md step 1 instead of restating the range\n" + "\n".join(found),
+        )
 
 
 if __name__ == "__main__":

@@ -23,7 +23,9 @@ done
 - `range starts at <sha>` is the start of the range that run's Bookends step judged, read from its `bookends-base:` log line. It is missing when the run never got that far or its log is gone; then run `python3 scripts/bookends-base.py <after>`.
 - If a run shows `in_progress`, wait with `gh run watch <run id> --interval 60 --exit-status`, then list again.
 
-**The suspect commits.** For the red run, take `<base>` from its `range starts at` line (never from a cancelled run's) and list them once:
+**The range.** A push run's Bookends step judges the commits from `<base>` to that run's head (`<after>`). `<base>` is the newest earlier main commit, walking first-parent, whose push run finished its Bookends step, passing or failing. A run that was cancelled, or failed before that step ran, is passed over, so its commits fall in the next run's range. `scripts/bookends-base.py <after>` prints `<base>`. This is the one definition of the range: `scripts/bookends-base.py`'s docstring must agree with it, and no other file restates it (`scripts/test_bookends_base.py` fails if one does).
+
+**The suspect commits.** For the red run, take `<base>` from its `range starts at` line (never from a cancelled run's) and `<after>` is the red run's head (`$R`). List them once:
 
 ```sh
 git fetch origin && git log --oneline --first-parent --reverse <base>..<after>
