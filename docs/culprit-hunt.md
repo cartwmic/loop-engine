@@ -19,7 +19,7 @@ done
 - The activity API lists every update to main, newest first, with GitHub's own `before` and `after`. That is the exact range each push run's Bookends step judged.
 - `sed` starts the list at the red push. The loop stops at the first push whose run concluded `success`, which is the last green run.
 - Each line shows the steps that failed or were skipped. A skipped step after a failed one never ran on that push.
-- A push with an empty `run=` was not run on its own. Its commits count as part of the next push's range.
+- A push with an empty `run=` was not run on its own, and a push whose run is `cancelled` was superseded by a newer push. Either way its commits count as part of the next push's range.
 - If a run shows `in_progress`, wait with `gh run watch <run id> --interval 60 --exit-status`, then list again.
 
 ## 2. Tree-based steps: cargo test, journeys, `release-tests`, `checks`
