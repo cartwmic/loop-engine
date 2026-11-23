@@ -10,13 +10,14 @@ gh api 'repos/cartwmic/loop-engine/activity?ref=main&per_page=100' --jq '.[] | "
 sed -n "/^$R /,\$p" |
 while read -r after before; do
   run=$(gh run list --repo cartwmic/loop-engine --workflow ci.yml --branch main --event push --commit "$after" --json databaseId,status,conclusion --jq '.[0] // empty | "\(.databaseId) \(.status) \(.conclusion)"')
-  echo "PUSH $after before=$before run=$run"
+  echo "PUSH $after github-before=$before run=$run"
   [ -n "$run" ] && gh run view "${run%% *}" --repo cartwmic/loop-engine --json jobs --jq '.jobs[] | .name as $j | .steps[] | select(.conclusion == "failure" or .conclusion == "skipped") | "  \($j) | \(.name) | \(.conclusion)"'
+  [ -n "$run" ] && gh run view "${run%% *}" --repo cartwmic/loop-engine --log 2>/dev/null | grep -m1 -o 'bookends-base: [0-9a-f]*' | sed 's/^bookends-base: /  range starts at /'
   case $run in *success) break ;; esac
 done
 ```
 
-- The activity API lists every update to main, newest first, with GitHub's own `before` and `after`. That is the exact range each push run's Bookends step judged.
+- The activity API lists every update to main, newest first, with GitHub's own `before` and `after`. GitHub's `before` is not the range a push run's Bookends step judged: a newer push cancels the run before it, so the run that completes judges every commit back to the newest earlier push whose run finished its own Bookends step. The line `range starts at <sha>` under a push is that start, read from the run's `bookends-base:` log line (nothing prints when the run never got that far, or its log is gone; then read it from the next run's log, or run `python3 scripts/bookends-base.py <after>`). Use it, not `github-before`, as `before` in section 4.
 - `sed` starts the list at the red push. The loop stops at the first push whose run concluded `success`, which is the last green run.
 - Each line shows the steps that failed or were skipped. A skipped step after a failed one never ran on that push.
 - A push with an empty `run=` was not run on its own, and a push whose run is `cancelled` was superseded by a newer push. Either way its commits count as part of the next push's range.
@@ -80,7 +81,7 @@ Remove the worktree when you are done: `git worktree remove "$HUNT"`.
 
 ## 4. Bookends pushed-range gate
 
-Bookends judges a push's `before..after` range, not a tree. It evaluates every commit the push introduced and prints each finding with that commit's sha. On RED it prints the blocking findings first, then the intermediate ones.
+Bookends judges a run's range, not a tree. The range runs from the sha on the run's `bookends-base:` log line (`gh run view <run id> --repo cartwmic/loop-engine --log | grep bookends-base:`; `before` below means that sha, never GitHub's `before`) to `after`, so after a queue of merges it holds the commits of the cancelled pushes too. It evaluates every commit in the range and prints each finding with that commit's sha. On RED it prints the blocking findings first, then the intermediate ones.
 
 **The step failed** (no compute). Run `gh run view <run id> --repo cartwmic/loop-engine --log-failed` and read the lines after `RED`:
 
@@ -88,7 +89,7 @@ Bookends judges a push's `before..after` range, not a tree. It evaluates every c
 - `<after>: …`: a finding on the pushed head's tree. If the push carried one commit, that commit is the culprit. Otherwise the culprit is the earliest commit in `git rev-list --first-parent --reverse <before>..<after>` whose own `<sha>: …` line has the same text after the sha. The checker prints findings in sha order, not history order, so match them against the rev-list.
 - `history acquisition incomplete`, `publication history is incomplete`, `historical … unavailable` or `local Git state …`: these are about acquiring history, not about a commit. Nothing is reverted. Report it to the lead.
 
-**The step was skipped** (an earlier `tests` step failed): no later push will check this push's range. Run the gate on that range yourself, with that push's own `before` and `after` from step 1. Do it from a worktree at that `after`, so the checker is the one CI would have built:
+**The step was skipped** (an earlier `tests` step failed, or the base step did): this run checked nothing, and its commits are checked only when a later push run finishes its Bookends step, since that run's base walk passes over this one. To check them now, run the gate on the range yourself, with `before` from `python3 scripts/bookends-base.py <after>` (the newest earlier push whose run finished Bookends) and that push's `after`. Do it from a worktree at that `after`, so the checker is the one CI would have built:
 
 ```sh
 git fetch origin
@@ -100,7 +101,7 @@ run-and-wake -- kgate --cpu 4 --mem 3Gi -- sh -c 'set -u; before=$1; shift; carg
 - The pod's checker is built from the worktree's source with cargo. That avoids the gate wrapper, which takes the first `bookends-check` on PATH, and any inherited `BOOKENDS_*` variables, so no bypass applies.
 - The arguments are the ones the wrapper passes in CI: `--updates-stdin --remote origin`. The `printf` line is the same update line the CI step pipes.
 - `--receipt-root /tmp/bookends-receipts` keeps the receipt in the pod, outside the repository, as the checker requires.
-- `before` is passed as `$1`. Each further argument becomes the pushed head, so `<before> <after>` checks exactly that push's range.
+- `before` is passed as `$1`. Each further argument becomes the pushed head, so `<before> <after>` checks exactly that range.
 - Exit 2 means the build failed. That is no result.
 - If the replay prints `RED`, read its findings as in "The step failed" above.
 - Remove the worktree when you are done: `git worktree remove "$HUNT"`.
