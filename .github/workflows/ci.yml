@@ -55,6 +55,17 @@ jobs:
       # after merge.
       - name: Bookends base script tests
         run: python3 scripts/test_bookends_base.py
+      # Model-checks the overlapping-attempts race in formal/LoopRun.tla with TLC
+      # (see formal/README.md). It must sit in `checks`: a PR runs only this job.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: Formal model check
+        run: formal/check.sh
       # The push gate in `tests` never runs on a PR, so a requirement edit that
       # breaks Bookends' identity check would only turn main red after merge.
       # This runs the same gate on the commits the PR adds on top of main, from

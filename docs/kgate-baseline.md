@@ -12,6 +12,8 @@ run-and-wake -- kgate -- scripts/baseline.sh
 
 A baseline that did not run on the cluster is missing proof. This applies whenever a baseline is required or asked for.
 
+The formal model check (`formal/check.sh`) is not in the kgate path: the kgate image has node but no java, git or curl, so `scripts/baseline.sh` skips it unless given `--with-formal` and prints `SKIPPED`. CI `checks` runs it on every PR, and agents run it locally.
+
 ## Read the result
 
 `run-and-wake` returns at once: it prints the job id, the pid and the output file, and its own exit status says nothing about the baseline. The baseline's real exit lands later as an `end` record for that job id in `${XDG_STATE_HOME:-~/.local/state}/run-and-wake/log.jsonl`. The wake goes to the Pi/Herdr pane or T3 thread that started the job, and it is best effort: `run-and-wake` prints `nothing will wake you` when it has no target (a session outside Pi and T3). A subagent that has no T3 thread of its own cannot be woken: ending its turn ends the subagent and the wake goes to its parent, which has none of the job context.
