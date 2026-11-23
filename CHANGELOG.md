@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.69.0] - 2026-11-23
+
+Follow-ups to the eval reader step: rescores and case checks no longer fail for reasons the delivery did not cause, and case-check logs each run.
+
+- evals: the reader step builds its model only for uncached texts, refuses a non-UTF-8 guide at load, counts failed readings for this run only, scores a failed forms.json write as an infrastructure failure, and snapshot replay refuses a case with a [reader] (#200).
+- evals: case-check decodes collector output with replacement characters, exits 3 on stale saved readings, and appends one JSON line per run to $XDG_STATE_HOME/loop-engine/case-check.jsonl (#200).
+
 ## [0.68.0] - 2026-11-23
 
 The release script waits for the CI run the release workflow checks, and stops when its own copy is out of date.
