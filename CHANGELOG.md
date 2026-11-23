@@ -2,7 +2,7 @@
 
 ## [0.70.1] - 2026-11-23
 
-## Fixes
+Tests no longer fail when a slow CI runner misses the engine's read budget.
 
 - Tests that run a bounded `show` or `read` rerun when the engine reports a missed read budget, for up to 30 seconds, so a starved CI runner no longer fails them. The product's 1.1 s budget is unchanged. (#211)
 
