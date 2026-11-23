@@ -14,7 +14,7 @@
 
 ## Keeping the model in step with the code
 
-`formal/COVERS` lists each source file the model covers, with the git blob hash that file had when the model was last confirmed against it. `formal/check.sh` runs `formal/test_check_sync.py` and then `formal/check-sync.py` first, before any Java or TLC setup, so the sync answer does not depend on the model tools. The check recomputes each hash and exits 1, naming the file, when one has changed or is gone. The test checks that behaviour on a temp copy of the files.
+`formal/COVERS` lists each source file the model covers, with the git blob hash that file had when the model was last confirmed against it. `formal/check.sh` runs `formal/check-sync.py` first, then `formal/test_check_sync.py`, both before any Java or TLC setup, so the sync answer does not depend on the model tools. The check recomputes each hash and exits 1, naming the file, when one has changed or is gone; it exits 2 when `COVERS` is missing or malformed. The test checks the failure path on a temp copy of the files.
 
 When it fails, read the diff of the named file, update `LoopRun.tla` from the code (not from a check result), rerun `formal/check.sh`, then run `formal/check-sync.py --update` to record the new hashes. A PR that changes a covered file does all of this in the same PR. The check needs no git history, so a shallow clone works.
 

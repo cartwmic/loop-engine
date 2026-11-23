@@ -3,8 +3,8 @@
 # file the model covers changed since the model was last confirmed), then
 # model-checks formal/LoopRun.tla with TLC through statechart. Exit 0: every rule
 # holds. Exit 1: a rule breaks (the report below names it and prints the shortest
-# path), or the sync check failed. Exit 2: the check could not run (a tool is
-# missing or a download failed).
+# path), the sync check failed, or its test failed. Exit 2: the check could not run
+# (a tool is missing, a download failed, or formal/COVERS is missing or malformed).
 #
 # Everything it fetches is pinned: statechart by git commit, the TLC jar by
 # sha256. Both are cached under $LOOP_FORMAL_CACHE (default
@@ -18,12 +18,12 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 die() { printf 'formal/check.sh: %s\n' "$*" >&2; exit 2; }
 
-# The sync check and its test come first. They need only python3 and git, so they
+# The sync check comes first, then its test. Both need only python3 and git, so they
 # answer on any machine, with no Java and no downloads. The test runs in CI too,
 # because the `checks` job runs this script.
 command -v python3 >/dev/null || die "python3 is needed for the sync check"
-python3 "$here/test_check_sync.py" || exit $?
 python3 "$here/check-sync.py" || exit $?
+python3 "$here/test_check_sync.py" || exit $?
 
 STATECHART_REPO=https://github.com/cursor/plugins
 STATECHART_COMMIT=7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9   # pstack/skills/statechart
