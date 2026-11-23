@@ -63,8 +63,15 @@ async def snapshot_step(env, options, directory: Path, *, driver_started: float,
     return now
 
 
+def _refuse_reader_case(case: EvalCase):
+    """Replay copies the hidden tests and runs no reader step, so a reader case's tests would have no forms.json."""
+    if case.reader is not None:
+        raise ValueError("snapshot replay cannot replay a case with a [reader]: it runs no reader step")
+
+
 async def replay_hidden_tests(archive: Path, case: EvalCase, image: str):
     """Restore one snapshot into a fresh mount-free container and run the hidden tests as final scoring does."""
+    _refuse_reader_case(case)
     async with ReplayContainer(image) as env:
         await restore(env, archive)
         for file in sorted(case.tests.rglob("*")):
@@ -84,6 +91,7 @@ async def replay_snapshots(directory: Path, case: EvalCase, image: str = DEFAULT
 
     Each point carries only the sequence, elapsed time and the recall() fractions, never test names or output.
     """
+    _refuse_reader_case(case)
     trajectory = []
     for entry in read_index(directory):
         tests = await replay(directory / entry["file"], case, image)

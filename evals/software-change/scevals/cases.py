@@ -5,11 +5,14 @@ import asyncio
 from collections import Counter
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
+import datetime
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import tomllib
 
 
@@ -19,6 +22,8 @@ from .reader import (COLLECTOR_SECONDS, FORMS_FILE, ReaderCallError, ReaderInput
 from .image import DEFAULT_IMAGE, DEFAULT_REF, verify_image, output, run, trial_container
 
 RUNTIME = Path(__file__).with_name("case_runtime.py")
+CRASH_EXIT = 2  # what evalctl returns for any exception (evalcore.cli.main), so the log says what the user saw
+STALE_EXIT = 3  # case-check: the saved readings are stale, so the case was not checked (1 is invalid, 2 infrastructure)
 REQUIREMENT = r"REQ-[A-Z0-9-]+"
 
 
@@ -97,6 +102,10 @@ def _reader_spec(path, table):
         load_shapes(shapes)
     except ReaderInputError as error:
         raise CaseFormatError(f"reader shapes: {error}") from None
+    try:
+        guide.read_text()  # read at load, so a guide that is not UTF-8 is a case bug here and not a failed trial later
+    except (OSError, UnicodeError):
+        raise CaseFormatError("reader guide is not readable UTF-8 text") from None
     return ReaderSpec(table["model"], guide, shapes, table["collector"], saved)
 
 
@@ -166,7 +175,8 @@ def _collect_in_container(case, container):
     try:
         done = run(["docker", "exec", "--workdir", "/workspace/repo", container, "python3",
                     f"/opt/case-check/tests/{case.reader.collector}"],
-                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=COLLECTOR_SECONDS)
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=COLLECTOR_SECONDS,
+                   errors="replace")  # as campaign scoring decodes: bytes that are not UTF-8 never crash the check
         return parse_collected(done.stdout, load_shapes(case.reader.shapes))
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ReaderInputError):
         raise ReaderCollectorFailed("reader collector failed") from None
@@ -279,7 +289,7 @@ def _forms_resolver(case, save):
         if not save:
             return lookup_saved(saved, reader, scenario, texts)
         items = [e for e in texts if e["text"] is not None]
-        readings = asyncio.run(read_texts(reader_model(reader), reader, items))
+        readings = asyncio.run(read_texts(lambda: reader_model(reader), reader, items))
         if any(r.form is None for r in readings):
             raise InfrastructureError("a text has no majority reading")
         saved["scenarios"][scenario] = saved_entries(texts, readings)
@@ -287,7 +297,41 @@ def _forms_resolver(case, save):
     return resolve, saved
 
 
+def case_check_log() -> Path:
+    """The one-line-per-run record of case-check, in the state folder (XDG_STATE_HOME, else ~/.local/state)."""
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+    return state / "loop-engine" / "case-check.jsonl"
+
+
+def _log_case_check(args, code: int, outcome: str, reason, started: float) -> None:
+    record = {"time": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+              "case": str(args.path), "outcome": outcome, "exit_code": code, "reason": reason,
+              "duration_ms": round((time.monotonic() - started) * 1000)}
+    try:
+        log = case_check_log()
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    except OSError as error:  # the result still reaches the terminal
+        print(f"case-check log not written: {error}", file=sys.stderr)
+
+
 def case_check(args):
+    """Run the check and append one JSON line to `case_check_log()`: UTC time, case, outcome (ok, stale, invalid or
+    failed), exit code, the reason (null for ok) and the duration in milliseconds."""
+    started = time.monotonic()
+    try:
+        code, outcome, reason = _case_check(args)
+    except Exception as error:  # a crash is a failed run too; evalctl turns it into exit CRASH_EXIT
+        _log_case_check(args, CRASH_EXIT, "failed", f"crash: {type(error).__name__}: {error}", started)
+        raise
+    _log_case_check(args, code, outcome, reason, started)
+    return code
+
+
+def _case_check(args):
+    """The check itself: (exit code, outcome, reason). The outcome is about the case: --expect-invalid changes the code,
+    not the outcome. The reason is the text printed for a run that is not ok, null for ok."""
     try:
         case = load_case(args.path)
         unstated = unstated_interfaces(case)
@@ -295,24 +339,27 @@ def case_check(args):
             raise CaseFormatError("hidden tests depend on unstated interface identifiers: " + ", ".join(unstated[:20]))
     except CaseFormatError as error:
         print(f"INVALID: {error}")
-        return 0 if args.expect_invalid else 1
+        return (0 if args.expect_invalid else 1), "invalid", str(error)
     try:
         built = verify_image(args.ref, args.tag)
-    except RuntimeError:
+    except RuntimeError as error:
         print("Trial image missing or mismatched; run image-check first.")
-        return 2
+        return 2, "failed", f"trial image missing or mismatched: {error}"
     resolve_forms, saved = None, None
     try:
         if case.reader is not None:
             resolve_forms, saved = _forms_resolver(case, args.save_forms)
         reference = run_hidden_tests(case, reference=True, image=args.tag, resolve_forms=resolve_forms)
         noop = run_hidden_tests(case, reference=False, image=args.tag, resolve_forms=resolve_forms)
-    except (SavedFormsStale, ReaderCollectorFailed) as error:
+    except SavedFormsStale as error:  # not a verdict on the case: exit 3 whatever --expect-invalid says
+        print(f"Not checked: {error}")
+        return STALE_EXIT, "stale", str(error)
+    except ReaderCollectorFailed as error:
         print(f"INVALID: {error}")
-        return 0 if args.expect_invalid else 1
+        return (0 if args.expect_invalid else 1), "invalid", str(error)
     except InfrastructureError as error:
         print(f"Reader failed ({error}); nothing was written.")
-        return 2
+        return 2, "failed", f"reader failed: {error}"
     if args.save_forms and saved is not None:
         case.reader.saved.parent.mkdir(parents=True, exist_ok=True)
         case.reader.saved.write_text(json.dumps(saved, indent=1, sort_keys=True) + "\n")
@@ -331,9 +378,10 @@ def case_check(args):
     for reason in reasons:
         print(f"  reason: {reason}")
     print("CASE_CHECK " + json.dumps(receipt, sort_keys=True))
+    outcome, reason = ("ok", None) if valid else ("invalid", "; ".join(reasons))
     if args.expect_invalid:
-        return 1 if valid else 0
-    return 0 if valid else 1
+        return (1 if valid else 0), outcome, reason
+    return (0 if valid else 1), outcome, reason
 
 
 def register_subcommands(subparsers: argparse._SubParsersAction):
@@ -389,7 +437,7 @@ def read_texts_command(args):
         print(f"read-texts: {error}", file=sys.stderr)
         return 2
     try:
-        readings = asyncio.run(read_texts(reader_model(reader), reader, texts))
+        readings = asyncio.run(read_texts(lambda: reader_model(reader), reader, texts))
     except ReaderCallError:
         print("read-texts: a model call failed; nothing was written", file=sys.stderr)
         return 3
