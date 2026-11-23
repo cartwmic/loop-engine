@@ -5,3 +5,4 @@
 crates/loop-core/src/operations/event.rs af1871be3d13ffdea20fbba5da7edd73a69c8662
 crates/loop-core/src/operations/terminate.rs f32f488e4ab12bab9e6067260ba09bcb65a2eb49
 crates/loop-integrations/src/sqlite.rs 73d132f6e6b0c870daf19fd20fd2471c75cf2c61
+crates/loop-integrations/src/sqlite_observation.rs 43efa8d75f04470f56c5b0b5a9b7ba5282e9fff2
