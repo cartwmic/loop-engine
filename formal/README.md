@@ -42,8 +42,9 @@ Provider evaluation content; the owned-work barrier; advice closure (LE-166); co
 | `TypeOK` | Variables stay in their types. | |
 | `AtMostOneCommitPerRevision` | No two history entries that advance `control_revision` (transition or termination) assert the same revision. | 726-728 |
 | `StaleWritesNothing` | Every transition, denial and termination on record asserted exactly the revision and source state the run had when it was written. | 728, 730 |
-| `NoWriteAfterTerminal` | Nothing follows a termination or a transition into a final state; a run is terminated at most once. | 155, 500, 504 |
-| `StoredStateMatchesHistory` | Stored state, revision and lifecycle equal what the history says. A denial, an append or a refused request moves none of them; an append does not stale an in-flight evaluation (it does not change the revision). | 157, 334, 340, 730 |
+| `NoWriteAfterTerminal` | Nothing follows a termination or a transition into a final state; a run is terminated at most once. | 500, 504 |
+| `StoredStateMatchesHistory` | Stored state, revision and lifecycle equal what the history says. A denial, an append or a refused request moves none of them; an append does not stale an in-flight evaluation (it does not change the revision). | 334, 340, 341, 730 |
+| `WritesNeedObservation` | Every history entry was written while the run was observed: an unobserved attempt, append or `terminate` is refused and writes nothing. | 421, 457, 498 |
 | `NoDeadlock` (statechart's own) | Every state has a way out; the end state is the `Done` action. | |
 
 ## Mapping: action to code
@@ -52,7 +53,7 @@ Each action is one indivisible step in the code. Lines are at the commit that la
 
 | Action | Code | Note |
 |---|---|---|
-| `Observe` | `sqlite.rs:1012-1030` (`load_show_data`, the `UPDATE` at `:1022-1027`) | Works on a run in any lifecycle. |
+| `Observe` | `sqlite.rs:1012-1030` (`load_show_data`, the `UPDATE` at `:1022-1027`); `sqlite_observation.rs:25-31` (the `arm` write) | Two writers set `observed_control_revision = control_revision`. Works on a run in any lifecycle. |
 | `AppendContext` | `sqlite.rs:448-512` (guards at `:459-460`) | `require_active` then `require_observed`. No revision change. |
 | `Terminate` | `sqlite.rs:797-830` (guards at `:804-805`); `terminate.rs:15-22` | One transaction: lifecycle, revision, one history entry. |
 | `LoadOk`, `LoadRejected` | `event.rs:90-143` (`load_authoritative_run`, active check, event resolution, `require_current_observation`) | Two reads in the code (`load_authoritative_run`, then `observation_is_current`, `sqlite.rs:832-851`) are one action here. Sound: revision only grows, and `observation_is_current` matches on `control_revision`, so a write between the two reads fails it. The extra refusal is an attempt ending with no write, which the model already has. |
@@ -64,16 +65,19 @@ Each action is one indivisible step in the code. Lines are at the commit that la
 | `WriteRefused` | `sqlite.rs:656-670`, `:755-768` (the guard fails) | The stale attempt ends, nothing written (PRD.md:730). |
 | `Done` | | End state only; no code. |
 
+PRD.md:155 (an event ID identifies at most one transition) and 157 (workflow validation) hold by the shape of the workflow in this model, so no rule checks them.
+
 Guards in the model are separate operators (`ActiveGuard`, `ObservedGuard`, `RevisionGuard`, `SourceGuard`) so a scratch break can delete exactly one.
 
 ## Seeing it fail
 
-A check never seen failing proves nothing. Edit `LoopRun.tla` in a scratch copy, run `formal/check.sh`, then drop the edit. Results seen on 2026-11-23 (main at b011838):
+A check never seen failing proves nothing. Edit `LoopRun.tla` in a scratch copy, run `formal/check.sh`, then drop the edit. Results seen on 2026-11-23 (main at b011838, with `WritesNeedObservation` added):
 
 | Edit | Exit | Rule that breaks | Shortest path |
 |---|---|---|---|
 | `RevisionGuard(a) == TRUE` | 1 | `AtMostOneCommitPerRevision`, `StaleWritesNothing` | 10 steps: two attempts snapshot revision 0; one commits; after `show` the other commits on revision 1 |
 | `ActiveGuard == TRUE` | 1 | `NoWriteAfterTerminal`, `StoredStateMatchesHistory` | 4 steps: show, terminate, show, append |
+| `ObservedGuard == TRUE` | 1 | `WritesNeedObservation` | 1 step: terminate with no `show` first |
 | Remove only the `ActiveGuard` line inside `CommitGuard` | 0 | none | Defence in depth, see below |
 
 **Finding, not a bug.** The lifecycle-active check in the commit transaction (`sqlite.rs:656-662`) is redundant in this protocol. Every way out of `Active` (terminate, a commit into a final state) also advances `control_revision`, and an attempt can only read its revision while the run is active, so the revision guard already refuses every late commit. The same lifecycle guard in `AppendContext` is not redundant: appends assert no revision, and `show` works on a terminated run. Deleting the append guard is the break that shows the lifecycle rule.

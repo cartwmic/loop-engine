@@ -39,8 +39,11 @@ VARIABLES
 vars == <<lifecycle, state, rev, observed, hist, appends, pc, ev, expRev, res>>
 
 (***************************** history entries *****************************)
-\* Every entry names the revision and source state its writer asserted.
-Entry(kind, r, from, to) == [kind |-> kind, rev |-> r, from |-> from, to |-> to]
+\* Every entry names the revision and source state its writer asserted, and
+\* whether the run was observed (observed_control_revision = control_revision)
+\* when it was written.
+Entry(kind, r, from, to) ==
+    [kind |-> kind, rev |-> r, from |-> from, to |-> to, obs |-> (observed = rev)]
 IsAdv(e) == e.kind \in {"transition", "terminated"}   \* advances control_revision
 
 RECURSIVE Replay(_)
@@ -221,7 +224,8 @@ TypeOK ==
     /\ expRev \in [Attempts -> Nat]
     /\ res \in [Attempts -> {"none", "allow", "deny"}]
     /\ \A i \in 1..Len(hist) :
-        hist[i].kind \in {"transition", "denied", "terminated", "context"}
+        /\ hist[i].kind \in {"transition", "denied", "terminated", "context"}
+        /\ hist[i].obs \in BOOLEAN
 
 \* PRD.md:726-728. When overlapping attempts compete against the same
 \* pre-mutation run state, at most one may commit. A transition and a
@@ -243,15 +247,14 @@ StaleWritesNothing ==
                 /\ e.rev = Len(SelectSeq(before, IsAdv))
                 /\ e.kind /= "terminated" => e.from = Replay(before)
 
-\* PRD.md:155, 334 (invariant 8), 500, 504. Final and terminated runs take no
-\* further writes: nothing follows a termination or a transition into a final
+\* PRD.md:500, 504. Final and terminated runs take no further writes: nothing follows a termination or a transition into a final
 \* state, and a run is terminated at most once.
 NoWriteAfterTerminal ==
     \A i \in 1..Len(hist) :
         (hist[i].kind = "terminated"
             \/ (hist[i].kind = "transition" /\ hist[i].to = "F")) => i = Len(hist)
 
-\* PRD.md:157, 330-345 (invariants 1, 8, 10). The engine owns current state,
+\* PRD.md:334, 340-341 (invariants 1, 7, 8). The engine owns current state,
 \* and a committed transition and its history entry are one atomic write:
 \* the stored state, revision and lifecycle always equal what the history
 \* says. A denial, a context append or a refused request moves none of them.
@@ -260,5 +263,11 @@ StoredStateMatchesHistory ==
     /\ rev = Len(SelectSeq(hist, IsAdv))
     /\ lifecycle = IF \E i \in 1..Len(hist) : hist[i].kind = "terminated" THEN "Terminated"
                    ELSE IF state = "F" THEN "Final" ELSE "Active"
+
+\* PRD.md:421, 457, 498. Every mutation needs a current `show` observation: an
+\* unobserved request is rejected and creates no semantic history. Every entry
+\* on record was written while the run was observed.
+WritesNeedObservation ==
+    \A i \in 1..Len(hist) : hist[i].obs
 
 =============================================================================
