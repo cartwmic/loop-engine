@@ -132,6 +132,8 @@ class BaseTests(unittest.TestCase):
 ROOT = Path(__file__).resolve().parent.parent
 # The range is defined in two places only; every other file points to them.
 OWNERS = {"docs/culprit-hunt.md", "scripts/bookends-base.py", "scripts/test_bookends_base.py"}
+# A released changelog entry is history: it records what shipped, so it keeps its text.
+HISTORY = {"CHANGELOG.md"}
 SCANNED = {".md", ".yml", ".yaml", ".py", ".sh"}
 # A sentence that gives the base's rule ("the push run that finished its Bookends step"), or
 # that ties a cancelled or failed run to the Bookends step or the range.
@@ -158,7 +160,7 @@ class RangeHasOneOwnerTest(unittest.TestCase):
         found = []
         for name in tracked:
             path = ROOT / name
-            if not name or name in OWNERS or name.startswith("crates/") or path.suffix not in SCANNED:
+            if not name or name in OWNERS or name in HISTORY or name.startswith("crates/") or path.suffix not in SCANNED:
                 continue
             found += [f"{name}: {s[:160]}" for s in restated_range_sentences(path.read_text(encoding="utf-8"))]
         self.assertEqual(
