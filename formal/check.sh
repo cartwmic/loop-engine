@@ -8,7 +8,10 @@
 #
 # Everything it fetches is pinned: statechart by git commit, the TLC jar by
 # sha256. Both are cached under $LOOP_FORMAL_CACHE (default
-# ~/.cache/loop-engine-formal), so a second run downloads nothing.
+# ~/.cache/loop-engine-formal), so a second run downloads nothing. A download that
+# fails is retried with backoff, since GitHub answers 429 under load.
+# $LOOP_FORMAL_STATECHART_REPO points the statechart fetch at another repo (a mirror,
+# or a test stub).
 #
 # Java 11 or later and Node 22.18 or later (or 23.6 or later) must be on PATH.
 # When there is no java, mise installs the Temurin 25 that statechart pins.
@@ -25,7 +28,7 @@ command -v python3 >/dev/null || die "python3 is needed for the sync check"
 python3 "$here/check-sync.py" || exit $?
 python3 "$here/test_check_sync.py" || exit $?
 
-STATECHART_REPO=https://github.com/cursor/plugins
+STATECHART_REPO="${LOOP_FORMAL_STATECHART_REPO:-https://github.com/cursor/plugins}"
 STATECHART_COMMIT=7a583913eb1b8d1a0ee76753d1a2cf072e7b54f9   # pstack/skills/statechart
 TLA2TOOLS_URL=https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
 TLA2TOOLS_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
@@ -42,15 +45,7 @@ sha256_of() {
 # statechart, at the pinned commit.
 statechart_dir="$cache/statechart-$STATECHART_COMMIT"
 if [ ! -x "$statechart_dir/pstack/skills/statechart/scripts/statechart" ]; then
-  command -v git >/dev/null || die "git is needed to fetch statechart"
-  tmp="$(mktemp -d "$cache/statechart.XXXXXX")"
-  git -C "$tmp" init -q
-  git -C "$tmp" fetch -q --depth 1 "$STATECHART_REPO" "$STATECHART_COMMIT" \
-    || die "could not fetch statechart $STATECHART_COMMIT from $STATECHART_REPO"
-  git -C "$tmp" checkout -q FETCH_HEAD
-  [ "$(git -C "$tmp" rev-parse HEAD)" = "$STATECHART_COMMIT" ] || die "fetched the wrong statechart commit"
-  rm -rf "$statechart_dir"
-  mv "$tmp" "$statechart_dir"
+  "$here/fetch-statechart.sh" "$STATECHART_REPO" "$STATECHART_COMMIT" "$statechart_dir" || exit 2
 fi
 statechart="$statechart_dir/pstack/skills/statechart/scripts/statechart"
 
@@ -59,7 +54,7 @@ if [ -z "${TLA2TOOLS:-}" ]; then
   jar="$cache/tla2tools-1.7.4.jar"
   if [ ! -f "$jar" ] || [ "$(sha256_of "$jar")" != "$TLA2TOOLS_SHA256" ]; then
     command -v curl >/dev/null || die "curl is needed to fetch tla2tools.jar"
-    curl -fsSL -o "$jar.part" "$TLA2TOOLS_URL" || die "could not download $TLA2TOOLS_URL"
+    curl -fsSL --retry 4 -o "$jar.part" "$TLA2TOOLS_URL" || die "could not download $TLA2TOOLS_URL"
     [ "$(sha256_of "$jar.part")" = "$TLA2TOOLS_SHA256" ] || die "tla2tools.jar does not match its pinned sha256"
     mv "$jar.part" "$jar"
   fi

@@ -8,7 +8,7 @@
 
 **What breaking it costs.** Two drivers (or a driver and `terminate`) act on one run. A stale `allow` lands after another transition or after a `terminate`: the run moves twice from one state, or an event commits on a run that was closed. History then disagrees with state.
 
-**Run it.** `formal/check.sh`. Exit 0: every rule holds. Exit 1: a rule breaks; the report names it and prints the shortest path. Exit 2: the check could not run (tool missing, download failed). CI runs it as a step of the `checks` job.
+**Run it.** `formal/check.sh`. Exit 0: every rule holds. Exit 1: a rule breaks; the report names it and prints the shortest path. Exit 2: the check could not run (tool missing, download failed after its retries). CI runs it as a step of the `checks` job. The statechart download is `formal/fetch-statechart.sh`, which retries a 429 from GitHub; `formal/test_fetch_statechart.py` tests it against a local stub.
 
 **What passing means.** The check proves the *model*. It does not read the Rust. The link from model to code is the mapping table below, the sync check (next section) and the tests in `crates/loop-integrations/tests/concurrency.rs`. A pass covers only the bounds and the omissions below.
 
