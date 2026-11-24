@@ -55,6 +55,10 @@ jobs:
       # after merge.
       - name: Bookends base script tests
         run: python3 scripts/test_bookends_base.py
+      # The statechart download retry in formal/fetch-statechart.sh, against a local git
+      # HTTP stub that answers 429, so this step needs no network.
+      - name: Statechart fetch tests
+        run: python3 formal/test_fetch_statechart.py
       # Model-checks the overlapping-attempts race in formal/LoopRun.tla with TLC
       # (see formal/README.md). It must sit in `checks`: a PR runs only this job.
       - uses: actions/setup-node@v7
@@ -64,7 +68,30 @@ jobs:
         with:
           distribution: temurin
           java-version: "25"
+      # GitHub rate-limits downloads (429). The statechart and the TLC jar are cached
+      # under their pins, so a cache hit downloads nothing; a miss runs the download in
+      # formal/check.sh, which retries it.
+      - name: Read the formal model pins
+        id: pins
+        run: |
+          set -euo pipefail
+          statechart="$(sed -n 's/^STATECHART_COMMIT=\([0-9a-f]\{40\}\).*/\1/p' formal/check.sh)"
+          jar="$(sed -n 's/^TLA2TOOLS_SHA256=\([0-9a-f]\{64\}\)$/\1/p' formal/check.sh)"
+          if [ -z "$statechart" ] || [ -z "$jar" ]; then
+            echo "formal/check.sh has no STATECHART_COMMIT or TLA2TOOLS_SHA256 to read" >&2
+            exit 1
+          fi
+          echo "statechart=$statechart" >> "$GITHUB_OUTPUT"
+          echo "tla2tools=$jar" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ${{ runner.temp }}/loop-engine-formal/statechart-${{ steps.pins.outputs.statechart }}
+            ${{ runner.temp }}/loop-engine-formal/tla2tools-1.7.4.jar
+          key: formal-statechart-${{ steps.pins.outputs.statechart }}-tla2tools-${{ steps.pins.outputs.tla2tools }}
       - name: Formal model check
+        env:
+          LOOP_FORMAL_CACHE: ${{ runner.temp }}/loop-engine-formal
         run: formal/check.sh
       # The push gate in `tests` never runs on a PR, so a requirement edit that
       # breaks Bookends' identity check would only turn main red after merge.
