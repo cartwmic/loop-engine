@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.71.2] - 2026-11-24
+
+The formal check no longer fails main on a GitHub rate limit: it retries and caches its statechart and TLC downloads.
+
+- ci.yml and formal/: the formal check fetches its statechart and TLC jar through a script that retries failed downloads and caches the downloads in CI, so a rate-limited download no longer fails `checks` on main. (#228)
+
 ## [0.71.1] - 2026-11-23
 
 The Bookends range is defined in one place and guarded by a test, and the overlapping-attempts race has a TLA+ model that CI checks.
