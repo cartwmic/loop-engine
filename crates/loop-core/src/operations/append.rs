@@ -134,11 +134,6 @@ fn prepare_data<P>(
 where
     P: Persistence + ?Sized,
 {
-    if request.carry.is_some() {
-        return Err(PreparationError::legacy_carry(
-            "legacy carry requests are no longer accepted; use an evidence-applicability record",
-        ));
-    }
     if matches!(request.kind.as_str(), "unchanged-carry" | "override-carry") {
         return Err(PreparationError::legacy_carry(format!(
             "context kind `{}` is retired; use `{EVIDENCE_APPLICABILITY_KIND}`",
@@ -221,7 +216,6 @@ where
 /// Compatibility entry point for workflows without required admission. Durable
 /// adapters preflight integrity before engine record checks and guard insertion;
 /// callers of admission-enabled workflows must use `execute_with_gateway`.
-/// Legacy carry requests remain decodable but are rejected here.
 pub fn execute<P>(request: Request, persistence: &P) -> OperationOutcome<Result>
 where
     P: Persistence + ?Sized,
@@ -373,12 +367,4 @@ where
         Ok(result) => OperationOutcome::completed(result),
         Err(error) => persistence_error(error),
     }
-}
-
-/// Execute `append` with the persistence port first.
-pub fn execute_with_persistence<P>(persistence: &P, request: Request) -> OperationOutcome<Result>
-where
-    P: Persistence + ?Sized,
-{
-    execute(request, persistence)
 }

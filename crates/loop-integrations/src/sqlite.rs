@@ -12,11 +12,11 @@ mod sqlite_observation;
 mod sqlite_reads;
 
 use loop_core::{
-    AppendAdviceAttemptRequest, AppendContextRequest, AppendContextResult,
-    CheckedEvaluationSnapshot, CheckedEvaluationSnapshotRequest, CommitTransitionRequest,
-    CommitTransitionResult, ContextRecord, CreateRunRequest, CreateRunResult, DurableEvaluation,
-    DurableEvaluationResult, HistoryAction, HistoryEntry, InnerWorker, InvocationId, Lifecycle,
-    Persistence, PersistenceConflict, PersistenceError, PersistenceFailure, PersistenceRejection,
+    AppendContextRequest, AppendContextResult, CheckedEvaluationSnapshot,
+    CheckedEvaluationSnapshotRequest, CommitTransitionRequest, CommitTransitionResult,
+    ContextRecord, CreateRunRequest, CreateRunResult, DurableEvaluation, DurableEvaluationResult,
+    HistoryAction, HistoryEntry, InnerWorker, InvocationId, Lifecycle, Persistence,
+    PersistenceConflict, PersistenceError, PersistenceFailure, PersistenceRejection,
     RecordDenialRequest, RecordDenialResult, Run, RunId, RunSummary, SemanticSequence, ShowData,
     StateId, TerminateRequest, TerminateResult, Timestamp, TransitionHistoryOutcome,
     WaiterWrittenStatus, WorkSlotId, WorkSlotInvocation,
@@ -337,16 +337,6 @@ impl SqlitePersistence {
         result
     }
 
-    pub fn load_work_slot_invocation(
-        &self,
-        run_id: &RunId,
-        invocation_id: &InvocationId,
-    ) -> Result<Option<WorkSlotInvocation>, PersistenceError> {
-        let connection = self.lock()?;
-        let _ = load_required_run(&connection, run_id)?;
-        load_one_work_slot_invocation(&connection, run_id, invocation_id)
-    }
-
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, PersistenceError> {
         self.connection.lock().map_err(|_| {
             PersistenceError::failure(PersistenceFailure::new(
@@ -533,65 +523,6 @@ impl Persistence for SqlitePersistence {
             Ok(loop_core::AppendSnapshot { run, context })
         })();
         finish_transaction(transaction, result)
-    }
-
-    fn append_advice_attempt(
-        &self,
-        request: AppendAdviceAttemptRequest,
-    ) -> Result<AppendContextResult, PersistenceError> {
-        let data_json = encode_json(&request.data, "advice attempt")?;
-        let mut connection = self.lock()?;
-        let transaction = begin_immediate(&mut connection)?;
-        let result = (|| {
-            let run = load_required_run(&transaction, &request.run_id)?;
-            let sequence = next_sequence(run.last_sequence)?;
-            let context = ContextRecord::new(
-                request.record_id.clone(),
-                loop_core::ADVICE_CAPTURE_KIND,
-                request.data,
-                sequence,
-                request.created_at,
-            );
-            transaction
-                .execute(
-                    "INSERT INTO context_records (
-                        run_id, record_id, sequence, kind, data_json, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![
-                        request.run_id.as_str(),
-                        request.record_id.as_str(),
-                        to_sqlite_i64(sequence.as_u64(), "semantic sequence")?,
-                        loop_core::ADVICE_CAPTURE_KIND,
-                        data_json,
-                        request.created_at.as_unix_millis(),
-                    ],
-                )
-                .map_err(sqlite_failure)?;
-            let history =
-                HistoryEntry::context_appended(sequence, request.created_at, request.record_id);
-            insert_history(&transaction, &request.run_id, &history)?;
-            update_last_sequence(&transaction, &request.run_id, sequence)?;
-            let run = load_required_run(&transaction, &request.run_id)?;
-            Ok(AppendContextResult {
-                run,
-                context,
-                history,
-            })
-        })();
-        finish_transaction(transaction, result)
-    }
-
-    fn load_run_artifact_root(&self, run_id: &RunId) -> Result<Option<String>, PersistenceError> {
-        let connection = self.lock()?;
-        let artifact_root = connection
-            .query_row(
-                "SELECT artifact_root FROM runs WHERE id = ?1",
-                params![run_id.as_str()],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()
-            .map_err(sqlite_failure)?;
-        artifact_root.ok_or_else(|| PersistenceError::not_found(run_id.clone()))
     }
 
     fn commit_transition(
@@ -1862,80 +1793,6 @@ fn invocation_row_from_query(row: &rusqlite::Row<'_>) -> rusqlite::Result<Invoca
     ))
 }
 
-fn load_one_work_slot_invocation(
-    connection: &Connection,
-    run_id: &RunId,
-    invocation_id: &InvocationId,
-) -> Result<Option<WorkSlotInvocation>, PersistenceError> {
-    connection
-        .query_row(
-            "SELECT invocation_id, slot_id, binding_json, instruction_digest, subject,
-                    waiter_pid, waiter_identity_json, started_at, allowed_time_ms, status,
-                    exit_code, completed_at, capture_dir, inner_workers_json,
-                    assignment_selection_json, invocation_input_json, routed_inputs_json,
-                    frozen_run_identity_json, completion_snapshot_json, controls_json,
-                    assignment_labels_json, state_visit
-             FROM work_slot_invocations
-             WHERE run_id = ?1 AND invocation_id = ?2",
-            params![run_id.as_str(), invocation_id.as_str()],
-            invocation_row_from_query,
-        )
-        .optional()
-        .map_err(sqlite_failure)?
-        .map(
-            |(
-                invocation_id,
-                slot_id,
-                binding_json,
-                instruction_digest,
-                subject,
-                waiter_pid,
-                waiter_identity_json,
-                started_at,
-                allowed_time_ms,
-                status,
-                exit_code,
-                completed_at,
-                capture_dir,
-                inner_workers_json,
-                assignment_selection_json,
-                invocation_input_json,
-                routed_inputs_json,
-                frozen_run_identity_json,
-                completion_snapshot_json,
-                controls_json,
-                assignment_labels_json,
-                state_visit,
-            )| {
-                decode_work_slot_invocation(
-                    invocation_id,
-                    slot_id,
-                    binding_json,
-                    instruction_digest,
-                    subject,
-                    waiter_pid,
-                    waiter_identity_json,
-                    started_at,
-                    allowed_time_ms,
-                    status,
-                    exit_code,
-                    completed_at,
-                    capture_dir,
-                    inner_workers_json,
-                    assignment_selection_json,
-                    invocation_input_json,
-                    routed_inputs_json,
-                    frozen_run_identity_json,
-                    completion_snapshot_json,
-                    controls_json,
-                    assignment_labels_json,
-                    state_visit,
-                )
-            },
-        )
-        .transpose()
-}
-
 fn read_work_slot_invocations(
     connection: &Connection,
     run_id: &RunId,
@@ -2062,48 +1919,6 @@ mod tests {
             "test-provider",
             Some("/allocated/run-dir".to_owned()),
         )
-    }
-
-    #[test]
-    fn advice_attempt_is_immutable_run_history_without_arming_primary_work() {
-        let adapter = SqlitePersistence::open_in_memory().expect("open sqlite");
-        adapter
-            .create_run(create_run("run-advice-capture"))
-            .expect("create run");
-        assert_eq!(
-            adapter
-                .load_run_artifact_root(&"run-advice-capture".into())
-                .expect("load run artifact root"),
-            Some("/allocated/run-dir".to_owned())
-        );
-
-        let appended = adapter
-            .append_advice_attempt(AppendAdviceAttemptRequest::new(
-                "run-advice-capture",
-                "advice-attempt-1",
-                json!({"attempt_id":"advice-attempt-1","typed_result":null,"exit_code":7}),
-                Timestamp::from_unix_millis(200),
-            ))
-            .expect("retain advice attempt without show or slot invocation");
-        assert_eq!(appended.context.kind, loop_core::ADVICE_CAPTURE_KIND);
-        assert_eq!(appended.context.id.as_str(), "advice-attempt-1");
-        assert_eq!(appended.context.data["exit_code"], 7);
-        assert_eq!(appended.run.current_state.as_str(), "start");
-        assert_eq!(appended.run.last_sequence.as_u64(), 2);
-        assert!(!adapter
-            .observation_is_current(&"run-advice-capture".into(), 0_u64.into())
-            .expect("observe arming remains separate"));
-        assert!(adapter
-            .load_work_slot_invocations(&"run-advice-capture".into())
-            .expect("primary slots remain empty")
-            .is_empty());
-        let history = adapter
-            .load_history(&"run-advice-capture".into())
-            .expect("load immutable history");
-        assert!(matches!(
-            history.last().map(|entry| &entry.action),
-            Some(HistoryAction::ContextAppended { context_record_id }) if context_record_id.as_str() == "advice-attempt-1"
-        ));
     }
 
     struct AdmissionGateway<'a> {

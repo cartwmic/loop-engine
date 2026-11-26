@@ -143,22 +143,6 @@ where
     }
 }
 
-/// Execute `start` with ports first, which is convenient for composition
-/// roots that keep their adapters together.
-pub fn execute_with_ports<R, G, P>(
-    resolver: &R,
-    gateway: &G,
-    persistence: &P,
-    request: Request,
-) -> OperationOutcome<Result>
-where
-    R: ProviderResolver + ?Sized,
-    G: ProviderGateway + ?Sized,
-    P: crate::Persistence + ?Sized,
-{
-    execute(request, resolver, gateway, persistence)
-}
-
 fn work_slot_bindings_rejection(initial_input: &Value) -> Option<OperationOutcome<Result>> {
     let bindings = initial_input.as_object()?.get("work_slot_bindings")?;
     if bindings

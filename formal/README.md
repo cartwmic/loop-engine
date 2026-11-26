@@ -61,16 +61,16 @@ Each action is one indivisible step in the code. Lines are at the commit that la
 
 | Action | Code | Note |
 |---|---|---|
-| `Observe` | `sqlite.rs:1012-1030` (`load_show_data`, the `UPDATE` at `:1022-1027`); `sqlite_observation.rs:25-31` (the `arm` write) | Two writers set `observed_control_revision = control_revision`. Works on a run in any lifecycle. |
-| `AppendContext` | `sqlite.rs:448-512` (guards at `:459-460`) | `require_active` then `require_observed`. No revision change. |
-| `Terminate` | `sqlite.rs:797-830` (guards at `:804-805`); `terminate.rs:15-22` | One transaction: lifecycle, revision, one history entry. |
-| `LoadOk`, `LoadRejected` | `event.rs:90-143` (`load_authoritative_run`, active check, event resolution, `require_current_observation`) | Two reads in the code (`load_authoritative_run`, then `observation_is_current`, `sqlite.rs:832-851`) are one action here. Sound: revision only grows, and `observation_is_current` matches on `control_revision`, so a write between the two reads fails it. The extra refusal is an attempt ending with no write, which the model already has. |
-| `CommitFree` | `event.rs:285-314`; `sqlite.rs:597-743` | The commit transaction. Guards: active `:656-662`, revision and source `:664-668`, observed `:670`. |
-| `Snapshot`, `SnapshotRejected` | `event.rs:382-398`; `sqlite.rs:960-998` | A read (deferred transaction). Takes the run's revision at that moment. `:970` active, `:971-981` source and edge still present. |
-| `ProviderAllows`, `ProviderDenies` | `event.rs:402-416` | Outside every persistence transaction: either answer can arrive after the run moved. |
-| `CommitAllowed` | `event.rs:454-487`; `sqlite.rs:597-743` | The same commit transaction, asserting the snapshot's revision (`event.rs:473-476`). |
-| `RecordDenial` | `event.rs:489-510`; `sqlite.rs:745-795` | Same guards. Writes one history entry; state and revision unchanged. |
-| `WriteRefused` | `sqlite.rs:656-670`, `:755-768` (the guard fails) | The stale attempt ends, nothing written (PRD.md:730). |
+| `Observe` | `sqlite.rs:943-961` (`load_show_data`, the `UPDATE` at `:953-958`); `sqlite_observation.rs:25-31` (the `arm` write) | Two writers set `observed_control_revision = control_revision`. Works on a run in any lifecycle. |
+| `AppendContext` | `sqlite.rs:438-502` (guards at `:449-450`) | `require_active` then `require_observed`. No revision change. |
+| `Terminate` | `sqlite.rs:728-761` (guards at `:735-736`); `terminate.rs:15-22` | One transaction: lifecycle, revision, one history entry. |
+| `LoadOk`, `LoadRejected` | `event.rs:80-133` (`load_authoritative_run`, active check, event resolution, `require_current_observation`) | Two reads in the code (`load_authoritative_run`, then `observation_is_current`, `sqlite.rs:763-782`) are one action here. Sound: revision only grows, and `observation_is_current` matches on `control_revision`, so a write between the two reads fails it. The extra refusal is an attempt ending with no write, which the model already has. |
+| `CommitFree` | `event.rs:248-277`; `sqlite.rs:528-674` | The commit transaction. Guards: active `:587-593`, revision and source `:595-599`, observed `:601`. |
+| `Snapshot`, `SnapshotRejected` | `event.rs:345-361`; `sqlite.rs:891-929` | A read (deferred transaction). Takes the run's revision at that moment. `:901` active, `:902-912` source and edge still present. |
+| `ProviderAllows`, `ProviderDenies` | `event.rs:365-379` | Outside every persistence transaction: either answer can arrive after the run moved. |
+| `CommitAllowed` | `event.rs:417-450`; `sqlite.rs:528-674` | The same commit transaction, asserting the snapshot's revision (`event.rs:436-439`). |
+| `RecordDenial` | `event.rs:452-473`; `sqlite.rs:676-726` | Same guards. Writes one history entry; state and revision unchanged. |
+| `WriteRefused` | `sqlite.rs:587-601`, `:686-699` (the guard fails) | The stale attempt ends, nothing written (PRD.md:730). |
 | `Done` | | End state only; no code. |
 
 PRD.md:155 (an event ID identifies at most one transition) and 157 (workflow validation) hold by the shape of the workflow in this model, so no rule checks them.
@@ -88,7 +88,7 @@ A check never seen failing proves nothing. Edit `LoopRun.tla` in a scratch copy,
 | `ObservedGuard == TRUE` | 1 | `WritesNeedObservation` | 1 step: terminate with no `show` first |
 | Remove only the `ActiveGuard` line inside `CommitGuard` | 0 | none | Defence in depth, see below |
 
-**Finding, not a bug.** The lifecycle-active check in the commit transaction (`sqlite.rs:656-662`) is redundant in this protocol. Every way out of `Active` (terminate, a commit into a final state) also advances `control_revision`, and an attempt can only read its revision while the run is active, so the revision guard already refuses every late commit. The same lifecycle guard in `AppendContext` is not redundant: appends assert no revision, and `show` works on a terminated run. Deleting the append guard is the break that shows the lifecycle rule.
+**Finding, not a bug.** The lifecycle-active check in the commit transaction (`sqlite.rs:587-593`) is redundant in this protocol. Every way out of `Active` (terminate, a commit into a final state) also advances `control_revision`, and an attempt can only read its revision while the run is active, so the revision guard already refuses every late commit. The same lifecycle guard in `AppendContext` is not redundant: appends assert no revision, and `show` works on a terminated run. Deleting the append guard is the break that shows the lifecycle rule.
 
 After a break statechart reruns TLC with a 100,000-state cap, so the report lists some rules under "Rules not checked". The exit code is still 1.
 
