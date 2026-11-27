@@ -459,6 +459,7 @@ fn backlog_t08_annotated_tag_tip_with_deleted_prd_blocks() {
     let tip = commit(&repo, "tip deletes the PRD");
     git(&repo, &["tag", "-a", "-m", "release", "v1", &tip]);
     let tag_oid = git(&repo, &["rev-parse", "refs/tags/v1"]);
+    assert_ne!(tag_oid, tip, "fixture must be an annotated tag object");
 
     let receipts = root.path().join("receipts");
     let updates = format!("refs/tags/v1 {tag_oid} refs/tags/v1 {old}\n");
@@ -466,6 +467,107 @@ fn backlog_t08_annotated_tag_tip_with_deleted_prd_blocks() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert_eq!(first_line(&output), "RED", "{stdout}");
+    assert!(
+        stdout.contains("docs/PRD.md is missing"),
+        "missing-PRD reason absent: {stdout}"
+    );
+}
+
+/// The action log sits in the receipt root's parent, one JSON line per run.
+fn log_records(root: &Path) -> Vec<serde_json::Value> {
+    fs::read_to_string(root.join("log.jsonl"))
+        .expect("action log beside the receipt root")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("log line is JSON"))
+        .collect()
+}
+
+fn assert_log_ties_to_receipt(record: &serde_json::Value, receipt_text: &str) {
+    let id = record["id"].as_str().expect("log id");
+    assert!(
+        receipt_text.contains(&format!("run_id: {id}")),
+        "receipt lacks run_id {id}: {receipt_text}"
+    );
+}
+
+#[test]
+fn backlog_t08_red_annotated_tag_push_writes_one_log_line() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(root.path());
+    enable_graph(&repo, &live("LE-1", "One"), "# bookends:LE-1\n");
+    let old = commit(&repo, "base");
+    write_file(
+        &repo,
+        "docs/PRD.md",
+        &(live("LE-1", "One") + &live("LE-3", "Three")),
+    );
+    let tip = commit(&repo, "tip adds uncovered LE-3");
+    git(&repo, &["tag", "-a", "-m", "release", "v1", &tip]);
+    let tag_oid = git(&repo, &["rev-parse", "refs/tags/v1"]);
+
+    let receipts = root.path().join("receipts");
+    let updates = format!("refs/tags/v1 {tag_oid} refs/tags/v1 {old}\n");
+    let output = run_checker(&repo, &updates, &receipts, &[]);
+    assert_eq!(output.status.code(), Some(1));
+
+    let records = log_records(root.path());
+    assert_eq!(records.len(), 1, "one line per run: {records:?}");
+    let record = &records[0];
+    assert_eq!(record["action"], "publication");
+    assert_eq!(record["outcome"], "red");
+    assert!(record["duration_ms"].is_u64(), "duration: {record}");
+    assert!(
+        record["ts"].as_str().is_some_and(|ts| ts.ends_with('Z')),
+        "UTC timestamp: {record}"
+    );
+    assert!(record["findings"].as_u64().unwrap_or(0) >= 1, "{record}");
+    assert_eq!(record["refs"][0], "refs/tags/v1");
+    assert_log_ties_to_receipt(record, &one_receipt(&receipts));
+}
+
+#[test]
+fn backlog_t08_green_push_writes_one_log_line() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(root.path());
+    enable_graph(&repo, &live("LE-1", "One"), "# bookends:LE-1\n");
+    let old = commit(&repo, "base");
+    write_file(&repo, "tests/journey.py", "# bookends:LE-1\n# touched\n");
+    let new = commit(&repo, "harmless change");
+
+    let receipts = root.path().join("receipts");
+    let updates = format!("refs/heads/main {new} refs/heads/main {old}\n");
+    let output = run_checker(&repo, &updates, &receipts, &[]);
+    assert_eq!(first_line(&output), "GREEN");
+
+    let records = log_records(root.path());
+    assert_eq!(records.len(), 1, "one line per run: {records:?}");
+    assert_eq!(records[0]["action"], "publication");
+    assert_eq!(records[0]["outcome"], "green");
+    assert!(records[0]["duration_ms"].is_u64(), "{}", records[0]);
+    assert_log_ties_to_receipt(&records[0], &one_receipt(&receipts));
+}
+
+#[test]
+fn backlog_t08_unwritable_log_does_not_change_the_verdict() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(root.path());
+    enable_graph(&repo, &live("LE-1", "One"), "# bookends:LE-1\n");
+    let old = commit(&repo, "base");
+    write_file(&repo, "tests/journey.py", "# bookends:LE-1\n# touched\n");
+    let new = commit(&repo, "harmless change");
+    // A directory where the log file belongs makes the append fail.
+    fs::create_dir(root.path().join("log.jsonl")).expect("block log path");
+
+    let receipts = root.path().join("receipts");
+    let updates = format!("refs/heads/main {new} refs/heads/main {old}\n");
+    let output = run_checker(&repo, &updates, &receipts, &[]);
+    assert_eq!(first_line(&output), "GREEN");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("action log unavailable"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

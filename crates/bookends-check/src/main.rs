@@ -11,17 +11,27 @@ use bookends_check::{
 use serde::Serialize;
 
 fn main() -> ExitCode {
-    match run(env::args().collect()) {
+    let started = std::time::Instant::now();
+    let invoked_at = std::time::SystemTime::now();
+    let mut action = ActionLog::new(invoked_at);
+    let code = match run(env::args().collect(), invoked_at, &mut action) {
         Ok(code) => code,
         Err(err) => {
             let _ = writeln!(io::stderr(), "{err}");
+            action.outcome = "error";
+            action.error = Some(err.to_string());
             ExitCode::from(1)
         }
-    }
+    };
+    action.write(started.elapsed());
+    code
 }
 
-fn run(args: Vec<String>) -> Result<ExitCode, io::Error> {
-    let invoked_at = std::time::SystemTime::now();
+fn run(
+    args: Vec<String>,
+    invoked_at: std::time::SystemTime,
+    action: &mut ActionLog,
+) -> Result<ExitCode, io::Error> {
     let invocation = match parse_args(&args) {
         Ok(invocation) => invocation,
         Err(ParseOutcome::Help) => {
@@ -35,12 +45,14 @@ fn run(args: Vec<String>) -> Result<ExitCode, io::Error> {
         Err(ParseOutcome::Usage(msg)) => {
             let _ = writeln!(io::stderr(), "{msg}");
             print_help_stderr();
+            action.skip = true;
             return Ok(ExitCode::from(2));
         }
     };
 
     if let Invocation::Candidate(path) = invocation {
-        return run_candidate(&path);
+        action.action = "candidate";
+        return run_candidate(&path, action);
     }
     let Invocation::Check(opts) = invocation else {
         unreachable!("candidate handled above");
@@ -50,6 +62,9 @@ fn run(args: Vec<String>) -> Result<ExitCode, io::Error> {
         None => env::current_dir()?,
     };
     let bypass = opts.bypass.as_ref().map(|(c, r)| (c.as_str(), r.as_str()));
+    action.action = "check";
+    action.repo = Some(repo.display().to_string());
+    action.receipt_root = opts.receipt_root.clone();
 
     if opts.updates_stdin {
         let mut input = String::new();
@@ -57,6 +72,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, io::Error> {
             let mut stdout = io::stdout();
             writeln!(stdout, "RED")?;
             writeln!(stdout, "cannot read pre-push updates: {error}")?;
+            action.red(error.to_string());
             return Ok(ExitCode::from(1));
         }
         let updates = match parse_ref_updates(&input) {
@@ -65,10 +81,13 @@ fn run(args: Vec<String>) -> Result<ExitCode, io::Error> {
                 let mut stdout = io::stdout();
                 writeln!(stdout, "RED")?;
                 writeln!(stdout, "invalid pre-push updates: {error}")?;
+                action.red(error.to_string());
                 return Ok(ExitCode::from(1));
             }
         };
         if !updates.is_empty() {
+            action.action = "publication";
+            action.refs = updates.iter().map(|u| u.remote_ref.clone()).collect();
             let options = PublicationOptions {
                 remote: opts.remote.unwrap_or_else(|| "origin".to_owned()),
                 max_commits: opts.max_commits,
@@ -79,6 +98,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, io::Error> {
                     let mut stdout = io::stdout();
                     writeln!(stdout, "RED")?;
                     writeln!(stdout, "{error}")?;
+                    action.red(error.to_string());
                     return Ok(ExitCode::from(1));
                 }
             };
@@ -88,6 +108,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, io::Error> {
                 &options,
                 opts.receipt_root.as_deref(),
                 invoked_at,
+                action,
             );
         }
     }
@@ -100,12 +121,15 @@ fn run(args: Vec<String>) -> Result<ExitCode, io::Error> {
             // the CLI still fails closed with the required status line.
             writeln!(stdout, "RED")?;
             writeln!(stdout, "{err}")?;
+            action.red(err.to_string());
             return Ok(ExitCode::from(1));
         }
     };
+    action.findings = report.findings.len();
     match &report.status {
         CheckStatus::Green => {
             writeln!(stdout, "GREEN")?;
+            action.outcome = "green";
             Ok(ExitCode::from(0))
         }
         CheckStatus::Red => {
@@ -113,23 +137,31 @@ fn run(args: Vec<String>) -> Result<ExitCode, io::Error> {
             for finding in &report.findings {
                 writeln!(stdout, "{finding}")?;
             }
+            action.outcome = "red";
             Ok(ExitCode::from(1))
         }
         CheckStatus::Bypass { class, reason } => {
-            if let Err(error) = retain_bypass(
+            action.bypass_class = Some(class.clone());
+            match retain_bypass(
                 &repo,
                 opts.receipt_root.as_deref(),
                 class,
                 reason,
                 invoked_at,
+                &action.id,
             ) {
-                writeln!(stdout, "RED")?;
-                writeln!(
-                    stdout,
-                    "bypass receipt unavailable; permission refused: {error}"
-                )?;
-                return Ok(ExitCode::from(1));
+                Ok(path) => action.receipt = Some(path),
+                Err(error) => {
+                    writeln!(stdout, "RED")?;
+                    writeln!(
+                        stdout,
+                        "bypass receipt unavailable; permission refused: {error}"
+                    )?;
+                    action.refused(error.to_string());
+                    return Ok(ExitCode::from(1));
+                }
             }
+            action.outcome = "bypass";
             writeln!(stdout, "BYPASS")?;
             writeln!(stdout, "{class}")?;
             writeln!(stdout, "{reason}")?;
@@ -270,7 +302,7 @@ fn parse_args(args: &[String]) -> Result<Invocation, ParseOutcome> {
     }))
 }
 
-fn run_candidate(path: &PathBuf) -> Result<ExitCode, io::Error> {
+fn run_candidate(path: &PathBuf, action: &mut ActionLog) -> Result<ExitCode, io::Error> {
     let text = if path == std::path::Path::new("-") {
         let mut text = String::new();
         io::stdin().read_to_string(&mut text)?;
@@ -282,6 +314,7 @@ fn run_candidate(path: &PathBuf) -> Result<ExitCode, io::Error> {
                 let mut stdout = io::stdout();
                 writeln!(stdout, "RED")?;
                 writeln!(stdout, "cannot read candidate {}: {error}", path.display())?;
+                action.red(error.to_string());
                 return Ok(ExitCode::from(1));
             }
         }
@@ -289,9 +322,12 @@ fn run_candidate(path: &PathBuf) -> Result<ExitCode, io::Error> {
     match validate_candidate(&text) {
         Ok(_) => {
             println!("GREEN");
+            action.outcome = "green";
             Ok(ExitCode::from(0))
         }
         Err(findings) => {
+            action.outcome = "red";
+            action.findings = findings.len();
             let mut stdout = io::stdout();
             writeln!(stdout, "RED")?;
             for finding in findings {
@@ -319,6 +355,7 @@ fn parse_bypass(value: &str) -> Result<(String, String), ParseOutcome> {
 #[derive(Serialize)]
 struct PublicationReceipt {
     schema: u32,
+    run_id: String,
     invoked_at_utc_unix_seconds: String,
     repository: String,
     remote: String,
@@ -337,21 +374,30 @@ fn run_publication(
     options: &PublicationOptions,
     receipt_root: Option<&std::path::Path>,
     invoked_at: std::time::SystemTime,
+    action: &mut ActionLog,
 ) -> Result<ExitCode, io::Error> {
-    if let Err(error) = retain_publication_receipt(repo, report, options, receipt_root, invoked_at)
-    {
-        let mut stdout = io::stdout();
-        writeln!(stdout, "RED")?;
-        writeln!(
-            stdout,
-            "publication receipt unavailable; permission refused: {error}"
-        )?;
-        return Ok(ExitCode::from(1));
+    action.remote = Some(options.remote.clone());
+    action.findings = report.findings.len();
+    action.commits_checked = report.checked_commits.len();
+    action.complete = Some(report.complete);
+    match retain_publication_receipt(repo, report, options, receipt_root, invoked_at, &action.id) {
+        Ok(path) => action.receipt = Some(path),
+        Err(error) => {
+            let mut stdout = io::stdout();
+            writeln!(stdout, "RED")?;
+            writeln!(
+                stdout,
+                "publication receipt unavailable; permission refused: {error}"
+            )?;
+            action.refused(error.to_string());
+            return Ok(ExitCode::from(1));
+        }
     }
 
     let mut stdout = io::stdout();
     match &report.status {
         CheckStatus::Green => {
+            action.outcome = "green";
             writeln!(stdout, "GREEN")?;
             for diagnostic in &report.diagnostics {
                 writeln!(stdout, "note: {diagnostic}")?;
@@ -359,6 +405,7 @@ fn run_publication(
             Ok(ExitCode::from(0))
         }
         CheckStatus::Red => {
+            action.outcome = "red";
             writeln!(stdout, "RED")?;
             for finding in &report.findings {
                 writeln!(stdout, "{finding}")?;
@@ -366,14 +413,21 @@ fn run_publication(
             Ok(ExitCode::from(1))
         }
         CheckStatus::Bypass { class, reason } => {
-            if let Err(error) = retain_bypass(repo, receipt_root, class, reason, invoked_at) {
+            action.bypass_class = Some(class.clone());
+            // The bypass receipt is a second record; the log names the
+            // publication receipt, which carries the same id.
+            if let Err(error) =
+                retain_bypass(repo, receipt_root, class, reason, invoked_at, &action.id)
+            {
                 writeln!(stdout, "RED")?;
                 writeln!(
                     stdout,
                     "bypass receipt unavailable; permission refused: {error}"
                 )?;
+                action.refused(error.to_string());
                 return Ok(ExitCode::from(1));
             }
+            action.outcome = "bypass";
             writeln!(stdout, "BYPASS")?;
             writeln!(stdout, "{class}")?;
             writeln!(stdout, "{reason}")?;
@@ -388,7 +442,8 @@ fn retain_publication_receipt(
     options: &PublicationOptions,
     root: Option<&std::path::Path>,
     invoked_at: std::time::SystemTime,
-) -> io::Result<()> {
+    run_id: &str,
+) -> io::Result<PathBuf> {
     use std::process::Command;
     use std::time::UNIX_EPOCH;
 
@@ -427,6 +482,7 @@ fn retain_publication_receipt(
     };
     let receipt = PublicationReceipt {
         schema: 1,
+        run_id: run_id.to_owned(),
         invoked_at_utc_unix_seconds: format!("{}.{:09}", now.as_secs(), now.subsec_nanos()),
         repository: repository.display().to_string(),
         remote: options.remote.clone(),
@@ -457,7 +513,7 @@ fn retain_publication_receipt(
     fs::hard_link(&pending, &path)?;
     fs::remove_file(pending)?;
     fs::File::open(root)?.sync_all()?;
-    Ok(())
+    Ok(path)
 }
 
 // A receipt is write-once, synced before permission, and outside the checkout.
@@ -467,7 +523,8 @@ fn retain_bypass(
     class: &str,
     reason: &str,
     invoked_at: std::time::SystemTime,
-) -> io::Result<()> {
+    run_id: &str,
+) -> io::Result<PathBuf> {
     use std::process::Command;
     use std::time::UNIX_EPOCH;
     let repository = fs::canonicalize(repo)?;
@@ -519,6 +576,7 @@ fn retain_bypass(
         ("class", class.to_owned()),
         ("reason", reason.to_owned()),
         ("outcome", "BYPASS".to_owned()),
+        ("run_id", run_id.to_owned()),
     ]);
     let bytes = serde_yaml::to_string(&receipt).map_err(io::Error::other)?;
     let path = root.join(format!("{}-{}.yaml", now.as_nanos(), std::process::id()));
@@ -536,7 +594,147 @@ fn retain_bypass(
     fs::hard_link(&pending, &path)?;
     fs::remove_file(pending)?;
     fs::File::open(root)?.sync_all()?;
-    Ok(())
+    Ok(path)
+}
+
+/// One structured log line per run of a check or candidate command, kept
+/// beside the receipts. It never changes the verdict: a failed write is
+/// reported on stderr only.
+struct ActionLog {
+    id: String,
+    invoked_at: std::time::SystemTime,
+    action: &'static str,
+    outcome: &'static str,
+    skip: bool,
+    repo: Option<String>,
+    remote: Option<String>,
+    refs: Vec<String>,
+    findings: usize,
+    commits_checked: usize,
+    complete: Option<bool>,
+    bypass_class: Option<String>,
+    receipt: Option<PathBuf>,
+    receipt_root: Option<PathBuf>,
+    error: Option<String>,
+}
+
+impl ActionLog {
+    fn new(invoked_at: std::time::SystemTime) -> Self {
+        let nanos = invoked_at
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        Self {
+            // Same shape as the receipt file name stem, so the id is
+            // unique per process and run.
+            id: format!("{nanos}-{}", std::process::id()),
+            invoked_at,
+            action: "check",
+            outcome: "error",
+            skip: false,
+            repo: None,
+            remote: None,
+            refs: Vec::new(),
+            findings: 0,
+            commits_checked: 0,
+            complete: None,
+            bypass_class: None,
+            receipt: None,
+            receipt_root: None,
+            error: None,
+        }
+    }
+
+    fn red(&mut self, error: String) {
+        self.outcome = "red";
+        self.error = Some(error);
+    }
+
+    fn refused(&mut self, error: String) {
+        self.outcome = "refused";
+        self.error = Some(error);
+    }
+
+    fn log_path(&self) -> io::Result<PathBuf> {
+        if let Some(root) = &self.receipt_root {
+            return Ok(root.parent().unwrap_or(root).join("log.jsonl"));
+        }
+        Ok(env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+            .ok_or_else(|| io::Error::other("no local state directory"))?
+            .join("bookends-check/log.jsonl"))
+    }
+
+    fn write(&self, duration: std::time::Duration) {
+        if self.skip {
+            return;
+        }
+        if let Err(error) = self.append(duration) {
+            let _ = writeln!(
+                io::stderr(),
+                "bookends-check: action log unavailable: {error}"
+            );
+        }
+    }
+
+    fn append(&self, duration: std::time::Duration) -> io::Result<()> {
+        let path = self.log_path()?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let record = serde_json::json!({
+            "ts": utc_timestamp(self.invoked_at),
+            "action": self.action,
+            "outcome": self.outcome,
+            "duration_ms": u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
+            "id": self.id,
+            "repo": self.repo,
+            "remote": self.remote,
+            "refs": self.refs,
+            "findings": self.findings,
+            "commits_checked": self.commits_checked,
+            "complete": self.complete,
+            "bypass_class": self.bypass_class,
+            "receipt": self.receipt.as_ref().map(|p| p.display().to_string()),
+            "error": self.error,
+        });
+        let mut line = serde_json::to_vec(&record).map_err(io::Error::other)?;
+        line.push(b'\n');
+        // One write call on an append handle keeps concurrent runs' lines whole.
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?
+            .write_all(&line)
+    }
+}
+
+/// `YYYY-MM-DDTHH:MM:SS.mmmZ` in UTC.
+fn utc_timestamp(time: std::time::SystemTime) -> String {
+    let since = time
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = since.as_secs();
+    let days = i64::try_from(secs / 86_400).unwrap_or(0);
+    let rem = secs % 86_400;
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
+        rem / 3_600,
+        rem % 3_600 / 60,
+        rem % 60,
+        since.subsec_millis()
+    )
 }
 
 fn print_help() {
@@ -549,7 +747,12 @@ fn print_help() {
          or BYPASS.\n\
          --receipt-root <absolute-path> overrides local receipt storage.\n\
          Publication checks retain a synced range/completeness receipt; bypass\n\
-         permission also requires a synced write-once receipt."
+         permission also requires a synced write-once receipt.\n\
+         Every run of a check or candidate command appends one JSON line to\n\
+         log.jsonl in the receipt root's parent directory (default\n\
+         $XDG_STATE_HOME/bookends-check/log.jsonl). Its run_id matches the\n\
+         receipt's. A log write failure is reported on stderr and never\n\
+         changes the verdict."
     );
 }
 
@@ -564,6 +767,14 @@ fn print_help_stderr() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utc_timestamp_is_calendar_correct() {
+        let at = |secs| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+        assert_eq!(utc_timestamp(at(0)), "1970-01-01T00:00:00.000Z");
+        assert_eq!(utc_timestamp(at(951_782_400)), "2000-02-29T00:00:00.000Z");
+        assert_eq!(utc_timestamp(at(1_795_779_078)), "2026-11-27T11:31:18.000Z");
+    }
 
     #[test]
     fn parse_version() {

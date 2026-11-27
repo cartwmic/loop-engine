@@ -72,6 +72,7 @@ name = "bookends-check"
 version = "0.71.2"
 dependencies = [
  "serde",
+ "serde_json",
  "serde_yaml",
  "toml",
 ]
