@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.71.3] - 2026-11-27
+
+Code that nothing calls is removed, and `bookends-check` handles annotated-tag pushes.
+
+- loop-core, loop-integrations, formal/: removes 838 non-test lines that no running program calls (fan-out recovery types, the retired carry request, the advice command contract, wrappers only tests used, the SQLite single-invocation reader and half of `proof_metadata.rs`), the `jsonschema` dependency only they used (74 fewer `Cargo.lock` packages) and the schema file only they read. No command, option, output or stored table changes: the help text of every command, the schema of a new database, the six boundary journeys and the formal model give the same results before and after. (#231)
+- scripts/behavior-snapshot.py: prints one result line per check (format, lint, build, tests, journeys, help-text and schema hashes, line and package counts, and a search for names that should be gone) so a change can be compared before and after. (#231)
+- bookends-check: a pushed annotated tag with a tip finding now blocks, because the tip is matched by the commit the tag points to; every check and candidate run appends one JSON line to a log in the state directory. (#232)
+- bookends-check: the log line of a failed `check` run names the commit that was checked, the line of a failed `candidate` run names the file, and both carry the text of every finding; `--help` names the fallback log location. (#236)
+
 ## [0.71.2] - 2026-11-24
 
 The formal check no longer fails main on a GitHub rate limit: it retries and caches its statechart and TLC downloads.
