@@ -371,8 +371,7 @@ impl EvidenceApplicability {
 /// The adapter allocates the context record's semantic sequence.  The
 /// supplied record ID, kind, data, and timestamp remain caller-owned data.
 /// Stable origins embedded in `data` are the one generic exception: core
-/// validates same-run engine identities and adds its reserved resolved
-/// projection before persistence.
+/// validates a same-run `context-record` origin before persistence.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AppendContextRequest {
     pub run_id: RunId,

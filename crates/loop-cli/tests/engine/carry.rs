@@ -153,19 +153,44 @@ fn append_refuses_the_retired_origin_kind_and_stores_old_record_kinds_and_keys()
     );
     assert_eq!(verbose["status"], "completed", "{verbose}");
 
-    // On an evidence-applicability record an old key is still refused, under that kind's own code.
-    let (_, applicability, _) = cli(
+    // On an evidence-applicability record an old key is still refused, under that kind's own
+    // code. The origin names a record that exists, so the key alone decides the outcome.
+    persistence
+        .append_context(AppendContextRequest::new(
+            "stable-run",
+            "source",
+            "review-evidence",
+            json!({"result": "pass"}),
+            Timestamp::from_unix_millis(2),
+        ))
+        .expect("append source evidence");
+    let applicability_data = |extra: &str| {
+        format!(
+            r#"{{"origin":{{"kind":"context-record","id":"source"}},"target":{{"revision":"2"}},"attesting_driver":{{"name":"driver"}},"reason":"reason"{extra}}}"#
+        )
+    };
+    let (_, with_key, _) = cli(
         &database,
         &[
             "append",
             "stable-run",
             "evidence-applicability",
-            r#"{"origin":{"kind":"context-record","id":"old"},"target":{"revision":"2"},"attesting_driver":{"name":"driver"},"reason":"reason","command":"old"}"#,
+            &applicability_data(r#","command":"old""#),
         ],
     );
-    assert_eq!(applicability["status"], "rejected", "{applicability}");
-    let code = &applicability["code"];
-    assert_eq!(code, "evidence-applicability-refused", "{applicability}");
+    assert_eq!(with_key["status"], "rejected", "{with_key}");
+    let code = &with_key["code"];
+    assert_eq!(code, "evidence-applicability-refused", "{with_key}");
+    let (_, without_key, _) = cli(
+        &database,
+        &[
+            "append",
+            "stable-run",
+            "evidence-applicability",
+            &applicability_data(""),
+        ],
+    );
+    assert_eq!(without_key["status"], "completed", "{without_key}");
 }
 
 #[test]
