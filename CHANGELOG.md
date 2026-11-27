@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.72.0] - 2026-11-27
+
+A release can no longer be tagged when the dotfiles pin bump would fail on it, and the `append` help names an origin the tool accepts.
+
+- release.yml and scripts/check-downstream-bump.sh: every build job starts with a gate step that reads the dotfiles default branch and runs the importer's `check` mode on the commit being released, so a release that removes a file the importer still lists, leaves an orphan in a skill bundle, or breaks a pin stops before the tag with the file or pin named. (#238)
+- loop-engine append: the help text names an origin the tool accepts. (#240)
+
 ## [0.71.3] - 2026-11-27
 
 Code that nothing calls is removed, and `bookends-check` handles annotated-tag pushes.
