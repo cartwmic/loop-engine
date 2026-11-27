@@ -47,6 +47,19 @@ test "$(gh api 'repos/{owner}/{repo}/commits/main' --jq .sha)" = "$COMMIT"
 gh workflow run release.yml --ref main -f "tag=$TAG"
 ```
 
+## The downstream bump check
+
+The dotfiles repository (`cartwmic/dotfiles`) installs every release: its skill importer copies the release's skill bundles and moves the tool pins. A release the importer cannot take turns dotfiles red once the tag is out (v0.71.3 removed a file the importer still listed).
+
+So `release.yml` runs `scripts/check-downstream-bump.sh` as the first gate step of every build job (`downstream-bump-check`, from `.github/release-gate-steps.yml`). It runs on the dry-run and the publishing dispatch, on both release paths above, and before `host` can create the tag; `scripts/assert-release-gates.py` fails if the step is missing, conditional or after the build. It reads the dotfiles default branch (public: no secret, nothing written there) and runs the importer's `check` mode on the exact commit being released. It stops the release, with the file or pin named, when:
+
+- the importer lists a file the commit no longer has (`ROOT_REFERENCES`);
+- a file in the commit is empty, a symlink, or has a name chezmoi would read as an attribute;
+- the dotfiles skill bundles hold a file the commit no longer ships (the bump stops on such an orphan);
+- a Loop Engine pin's `matching_regex` in the dotfiles mise config matches none of the archives in this release's dist plan, so mise could not resolve the tool.
+
+When it stops, change dotfiles first (drop the list entry and delete the bundle file, or fix the pin), merge that, and rerun the release; or restore the file here. A dotfiles repository that cannot be read also stops the release, so a rerun picks it up. The same check runs by hand with `scripts/check-downstream-bump.sh --plan <dist plan json> [--rev <commit>]` from a checkout.
+
 ## Running release-after-merge.sh
 
 `scripts/release-after-merge.sh` runs `ci-main-status loop-engine` before it squash-merges the release-prep PR: exit 0 (green) or 2 (untested) go on; exit 1 (red, or main's state cannot be read), any other exit or a missing `ci-main-status` stop it at step `merge` with no merge, quoting the output, and a rerun after main is green resumes and merges. Right before the squash merge it runs the merge gate `intent-review-check cartwmic/loop-engine <PR>`, the command is `intent-review-check` on PATH; `INTENT_REVIEW_CHECK` overrides it, and its value is split on spaces, so a `node ... intent-review-check.ts` command line works. Any non-zero exit (a refusal, or exit 2 when the check could not decide) or a missing command stops it at step `merge` with no merge, quoting the output; a rerun after the gate passes resumes and merges. The check passes an exempt loop-engine release-prep PR without an agent record: its diff is only the version lines of `Cargo.toml` and `Cargo.lock`, and every bullet of its CHANGELOG section cites a loop-engine PR merged since the previous tag that has a passing review round. Any other PR needs a passing review round on its head.
