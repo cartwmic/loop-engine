@@ -4,45 +4,12 @@
 //! caller supplies all state, target and question meaning; core validates only
 //! the closed transport shape and typed answer arithmetic.
 
-use serde::{de, Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Number, Value};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const ADVICE_COMMAND_INPUT_KEY: &str = "advice_command";
-pub const ADVICE_CAPTURE_KIND: &str = "advice-attempt";
 pub const ADVICE_PROTOCOL_VERSION: u32 = 1;
 const PROBABILITY_TOLERANCE: f64 = 1e-9;
-
-/// Frozen optional external command and positive per-call bounds stored in a
-/// run's initial input under [`ADVICE_COMMAND_INPUT_KEY`]. There is no
-/// provider default or lifetime call quota.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AdviceCommandConfig {
-    pub command: String,
-    pub args: Vec<String>,
-    pub timeout_ms: u64,
-    pub max_request_bytes: u64,
-    pub max_response_bytes: u64,
-}
-
-impl AdviceCommandConfig {
-    pub fn validate(&self) -> Result<(), String> {
-        if self.command.trim().is_empty() || self.command.contains('\0') {
-            return Err("advice command must be a non-empty executable name".to_owned());
-        }
-        if self.args.iter().any(|argument| argument.contains('\0')) {
-            return Err("advice argv must not contain NUL bytes".to_owned());
-        }
-        if self.timeout_ms == 0 {
-            return Err("advice timeout_ms must be positive".to_owned());
-        }
-        if self.max_request_bytes == 0 || self.max_response_bytes == 0 {
-            return Err("advice request and response byte limits must be positive".to_owned());
-        }
-        Ok(())
-    }
-}
 
 /// Explicit caller assessment, not an engine judgment of semantic sufficiency.
 /// All questions in a batch must meet both conditions before any backend runs.
@@ -78,14 +45,6 @@ pub struct AdviceRequest {
 }
 
 impl AdviceRequest {
-    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
-        let value = parse_json_rejecting_duplicate_keys(bytes)?;
-        let request = serde_json::from_value::<Self>(value)
-            .map_err(|error| format!("invalid advice request: {error}"))?;
-        request.validate()?;
-        Ok(request)
-    }
-
     pub fn validate(&self) -> Result<(), String> {
         if self.version != ADVICE_PROTOCOL_VERSION {
             return Err(format!(
@@ -216,12 +175,6 @@ pub struct AdviceResponse {
 }
 
 impl AdviceResponse {
-    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
-        let value = parse_json_rejecting_duplicate_keys(bytes)?;
-        serde_json::from_value::<Self>(value)
-            .map_err(|error| format!("invalid advice response: {error}"))
-    }
-
     pub fn validate_for(&self, request: &AdviceRequest) -> Result<(), String> {
         let expected: BTreeSet<_> = request.questions.keys().cloned().collect();
         let actual: BTreeSet<_> = self.answers.keys().cloned().collect();
@@ -444,107 +397,6 @@ fn require_text(value: &str, field: &str) -> Result<(), String> {
     }
 }
 
-/// Parse JSON while preserving the one-object/one-key meaning of the closed
-/// protocol. `serde_json::Value` alone would silently keep the last duplicate
-/// key, so duplicate detection happens before typed deserialization.
-pub fn parse_json_rejecting_duplicate_keys(bytes: &[u8]) -> Result<Value, String> {
-    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    let value = NoDuplicateValue::deserialize(&mut deserializer)
-        .map_err(|error| format!("invalid JSON: {error}"))?;
-    deserializer
-        .end()
-        .map_err(|error| format!("invalid JSON: {error}"))?;
-    Ok(value.0)
-}
-
-struct NoDuplicateValue(Value);
-
-impl<'de> Deserialize<'de> for NoDuplicateValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(NoDuplicateValueVisitor)
-    }
-}
-
-struct NoDuplicateValueVisitor;
-
-impl<'de> de::Visitor<'de> for NoDuplicateValueVisitor {
-    type Value = NoDuplicateValue;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a JSON value without duplicate object keys")
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(NoDuplicateValue(Value::Null))
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(NoDuplicateValue(Value::Null))
-    }
-
-    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
-        Ok(NoDuplicateValue(Value::Bool(value)))
-    }
-
-    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
-        Ok(NoDuplicateValue(Value::Number(Number::from(value))))
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(NoDuplicateValue(Value::Number(Number::from(value))))
-    }
-
-    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Number::from_f64(value)
-            .map(Value::Number)
-            .map(NoDuplicateValue)
-            .ok_or_else(|| E::custom("JSON number is not finite"))
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
-        Ok(NoDuplicateValue(Value::String(value.to_owned())))
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-        Ok(NoDuplicateValue(Value::String(value)))
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: de::SeqAccess<'de>,
-    {
-        let mut values = Vec::new();
-        while let Some(value) = sequence.next_element::<NoDuplicateValue>()? {
-            values.push(value.0);
-        }
-        Ok(NoDuplicateValue(Value::Array(values)))
-    }
-
-    fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
-    where
-        A: de::MapAccess<'de>,
-    {
-        let mut values = Map::new();
-        while let Some(key) = object.next_key::<String>()? {
-            if values.contains_key(&key) {
-                return Err(de::Error::custom(format!("duplicate JSON key `{key}`")));
-            }
-            let value = object.next_value::<NoDuplicateValue>()?;
-            values.insert(key, value.0);
-        }
-        Ok(NoDuplicateValue(Value::Object(values)))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,11 +427,17 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("admissibility");
-        assert!(AdviceRequest::parse(&serde_json::to_vec(&missing).unwrap()).is_err());
+        assert!(serde_json::from_value::<AdviceRequest>(missing)
+            .unwrap()
+            .validate()
+            .is_err());
         for field in ["bounded_judgment", "evidence_sufficient"] {
             let mut value = original.clone();
             value["state"]["admissibility"][field] = json!(false);
-            assert!(AdviceRequest::parse(&serde_json::to_vec(&value).unwrap()).is_err());
+            assert!(serde_json::from_value::<AdviceRequest>(value)
+                .unwrap()
+                .validate()
+                .is_err());
         }
     }
 
@@ -623,7 +481,7 @@ mod tests {
         let mut body = serde_json::to_value(response()).unwrap();
         assert!(body["answers"]["noul"].get("confidence").is_none());
         body["answers"]["noul"]["confidence"] = json!(0.8);
-        let parsed = AdviceResponse::parse(&serde_json::to_vec(&body).unwrap()).unwrap();
+        let parsed = serde_json::from_value::<AdviceResponse>(body.clone()).unwrap();
         request.validate_response(&parsed).unwrap();
         assert_eq!(
             serde_json::to_value(parsed).unwrap()["answers"]["noul"]["confidence"],
@@ -631,7 +489,7 @@ mod tests {
         );
         for value in [json!(-0.1), json!(1.1)] {
             body["answers"]["noul"]["confidence"] = value;
-            let parsed = AdviceResponse::parse(&serde_json::to_vec(&body).unwrap()).unwrap();
+            let parsed = serde_json::from_value::<AdviceResponse>(body.clone()).unwrap();
             assert!(request
                 .validate_response(&parsed)
                 .unwrap_err()
@@ -639,36 +497,32 @@ mod tests {
         }
         for value in [Value::Null, json!("0.8"), json!(true)] {
             body["answers"]["noul"]["confidence"] = value;
-            assert!(AdviceResponse::parse(&serde_json::to_vec(&body).unwrap()).is_err());
+            assert!(serde_json::from_value::<AdviceResponse>(body.clone()).is_err());
         }
         body["answers"]["noul"]["confidence"] = json!(0.8);
         body["answers"]["noul"]
             .as_object_mut()
             .unwrap()
             .remove("noul");
-        assert!(AdviceResponse::parse(&serde_json::to_vec(&body).unwrap()).is_err());
+        assert!(serde_json::from_value::<AdviceResponse>(body.clone()).is_err());
     }
 
     #[test]
-    fn rejects_duplicate_unknown_missing_wrong_type_and_fabricated_probability_data() {
+    fn rejects_unknown_missing_wrong_type_and_fabricated_probability_data() {
         let request = request();
         for (body, expected) in [
-            (
-                r#"{"answers":{"choice":{"type":"choice","choice":"yes","probabilities":{"yes":0.5,"no":0.5},"confidence":0.8}},"answers":{}}"#,
-                "duplicate JSON key",
-            ),
-            (r#"{"answers":{},"extra":true}"#, "invalid advice response"),
+            (r#"{"answers":{},"extra":true}"#, "unknown field"),
             (
                 r#"{"answers":{"unexpected":{"type":"noul","noul":0.5}}}"#,
                 "exactly match",
             ),
         ] {
-            match AdviceResponse::parse(body.as_bytes()) {
+            match serde_json::from_slice::<AdviceResponse>(body.as_bytes()) {
                 Ok(response) => {
                     let error = request.validate_response(&response).unwrap_err();
                     assert!(error.contains(expected), "{error}");
                 }
-                Err(error) => assert!(error.contains(expected), "{error}"),
+                Err(error) => assert!(error.to_string().contains(expected), "{error}"),
             }
         }
 
@@ -700,23 +554,5 @@ mod tests {
             .validate_response(&score_response)
             .unwrap_err()
             .contains("weighted ordered-level"));
-    }
-
-    #[test]
-    fn config_requires_positive_bounds_and_rejects_unknown_fields() {
-        let config: AdviceCommandConfig = serde_json::from_value(json!({
-            "command":"script.py", "args":[], "timeout_ms":1,
-            "max_request_bytes":1, "max_response_bytes":1
-        }))
-        .unwrap();
-        config.validate().unwrap();
-        let mut config = config;
-        config.timeout_ms = 0;
-        assert!(config.validate().unwrap_err().contains("positive"));
-        assert!(serde_json::from_value::<AdviceCommandConfig>(json!({
-            "command":"script.py", "args":[], "timeout_ms":1,
-            "max_request_bytes":1, "max_response_bytes":1, "calls":5
-        }))
-        .is_err());
     }
 }

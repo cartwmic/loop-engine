@@ -9,7 +9,7 @@ use crate::{
     ContextAppendEffect, ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation,
     EvaluationFeedback, EvaluationRequest, EvaluationResult, HistoryEntry, InvocationId, Lifecycle,
     ProviderAssociation, ProviderSelector, Run, RunId, SemanticSequence, StateId, Timestamp,
-    Transition, WorkSlotBinding, WorkSlotId, WorkSlotInvocation, Workflow,
+    Transition, WorkSlotId, WorkSlotInvocation, Workflow,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -299,66 +299,6 @@ pub struct CreateRunResult {
     pub history: HistoryEntry,
 }
 
-/// The explicit driver acts used by the pre-stable-reference append path.
-///
-/// These types remain deserializable so completed historical requests and
-/// fixtures can still be read.  New append execution rejects them; they are
-/// not aliases for the stable-reference contract.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CarryAct {
-    #[serde(rename = "unchanged", alias = "unchanged-carry")]
-    Unchanged,
-    #[serde(rename = "override", alias = "override-carry")]
-    Override,
-}
-
-impl CarryAct {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Unchanged => "unchanged-carry",
-            Self::Override => "override-carry",
-        }
-    }
-}
-
-/// Legacy request metadata retained only at the decoding boundary.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CarryRequest {
-    pub source_record_id: ContextRecordId,
-    pub invocation_id: InvocationId,
-    pub assignment_id: String,
-    pub act: CarryAct,
-    pub attesting_driver: Value,
-    #[serde(default)]
-    pub overridden_inputs: Vec<String>,
-}
-
-impl CarryRequest {
-    pub fn new(
-        source_record_id: impl Into<ContextRecordId>,
-        invocation_id: impl Into<InvocationId>,
-        assignment_id: impl Into<String>,
-        act: CarryAct,
-        attesting_driver: Value,
-    ) -> Self {
-        Self {
-            source_record_id: source_record_id.into(),
-            invocation_id: invocation_id.into(),
-            assignment_id: assignment_id.into(),
-            act,
-            attesting_driver,
-            overridden_inputs: Vec::new(),
-        }
-    }
-
-    pub fn with_overridden_inputs(mut self, inputs: Vec<String>) -> Self {
-        self.overridden_inputs = inputs;
-        self
-    }
-}
-
 /// Key in caller data for the concise stable origin reference.
 pub const ORIGIN_KEY: &str = "origin";
 /// Reserved key populated by core from durable invocation state.
@@ -387,17 +327,6 @@ impl OriginReference {
             kind: kind.into(),
             id: id.into(),
             assignment_id: None,
-        }
-    }
-
-    pub fn selected_assignment_output(
-        invocation_id: impl Into<String>,
-        assignment_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            kind: "selected-assignment-output".to_owned(),
-            id: invocation_id.into(),
-            assignment_id: Some(assignment_id.into()),
         }
     }
 
@@ -441,67 +370,13 @@ impl EvidenceApplicability {
     }
 }
 
-/// Durable, engine-resolved projection of one selected assignment output.
-///
-/// This value is generated from an invocation and worker record at append
-/// time.  It is deliberately separate from the caller's concise [`OriginReference`]
-/// so callers cannot supply or overwrite selected-attempt facts.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct EngineOrigin {
-    pub invocation_id: InvocationId,
-    pub assignment_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selected_attempt: Option<u32>,
-    pub selected_output_sha256: String,
-    pub selected_output_path: String,
-    pub capture_dir: String,
-    pub command: String,
-    pub args: Vec<String>,
-    pub binding: WorkSlotBinding,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub slot_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recovery_source: Option<Value>,
-}
-
-impl EngineOrigin {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        invocation_id: impl Into<InvocationId>,
-        assignment_id: impl Into<String>,
-        selected_attempt: Option<u32>,
-        selected_output_sha256: impl Into<String>,
-        selected_output_path: impl Into<String>,
-        capture_dir: impl Into<String>,
-        command: impl Into<String>,
-        args: Vec<String>,
-        binding: WorkSlotBinding,
-    ) -> Self {
-        Self {
-            invocation_id: invocation_id.into(),
-            assignment_id: assignment_id.into(),
-            selected_attempt,
-            selected_output_sha256: selected_output_sha256.into(),
-            selected_output_path: selected_output_path.into(),
-            capture_dir: capture_dir.into(),
-            command: command.into(),
-            args,
-            binding,
-            slot_id: None,
-            recovery_source: None,
-        }
-    }
-}
-
 /// Semantic input for an atomic context append.
 ///
 /// The adapter allocates the context record's semantic sequence.  The
 /// supplied record ID, kind, data, and timestamp remain caller-owned data.
 /// Stable origins embedded in `data` are the one generic exception: core
 /// validates same-run engine identities and adds its reserved resolved
-/// projection before persistence. The legacy `carry` field remains
-/// deserializable for historical boundaries but is rejected by execution.
+/// projection before persistence.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AppendContextRequest {
     pub run_id: RunId,
@@ -509,8 +384,6 @@ pub struct AppendContextRequest {
     pub kind: String,
     pub data: Value,
     pub created_at: Timestamp,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub carry: Option<CarryRequest>,
     /// Insert only if no semantic mutation occurred since preflight/admission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_last_sequence: Option<SemanticSequence>,
@@ -530,40 +403,7 @@ impl AppendContextRequest {
             kind: kind.into(),
             data,
             created_at,
-            carry: None,
             expected_last_sequence: None,
-        }
-    }
-
-    pub fn with_carry(mut self, carry: CarryRequest) -> Self {
-        self.carry = Some(carry);
-        self
-    }
-}
-
-/// A separate immutable generic advice-attempt record. Unlike ordinary
-/// context append, recording an invocation attempt does not arm or complete a
-/// primary work slot.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct AppendAdviceAttemptRequest {
-    pub run_id: RunId,
-    pub record_id: ContextRecordId,
-    pub data: Value,
-    pub created_at: Timestamp,
-}
-
-impl AppendAdviceAttemptRequest {
-    pub fn new(
-        run_id: impl Into<RunId>,
-        record_id: impl Into<ContextRecordId>,
-        data: Value,
-        created_at: Timestamp,
-    ) -> Self {
-        Self {
-            run_id: run_id.into(),
-            record_id: record_id.into(),
-            data,
-            created_at,
         }
     }
 }
@@ -858,25 +698,6 @@ pub trait Persistence {
             "append-snapshot-unsupported",
             "persistence adapter cannot snapshot append admission inputs",
         )))
-    }
-
-    /// Atomically retain one generic advisory attempt as immutable run context
-    /// and history, without arming or changing the primary run state.
-    fn append_advice_attempt(
-        &self,
-        _request: AppendAdviceAttemptRequest,
-    ) -> Result<AppendContextResult, PersistenceError> {
-        Err(PersistenceError::failure(PersistenceFailure::new(
-            "advice-capture-unsupported",
-            "persistence adapter cannot retain generic advice attempts",
-        )))
-    }
-
-    /// Return the run-owned artifact root recorded at start. This is separate
-    /// from caller initial input because non-object and caller-supplied roots
-    /// are both valid frozen inputs.
-    fn load_run_artifact_root(&self, _run_id: &RunId) -> Result<Option<String>, PersistenceError> {
-        Ok(None)
     }
 
     /// Atomically conditionally commit a transition and its history entry.

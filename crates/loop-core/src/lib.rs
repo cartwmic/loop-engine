@@ -16,9 +16,8 @@ mod ports;
 mod workflow;
 
 pub use advice::{
-    parse_json_rejecting_duplicate_keys, AdviceAdmissibility, AdviceAnswer, AdviceCommandConfig,
-    AdviceQuestion, AdviceRequest, AdviceResponse, AdviceScoreLevel, ADVICE_CAPTURE_KIND,
-    ADVICE_COMMAND_INPUT_KEY, ADVICE_PROTOCOL_VERSION,
+    AdviceAdmissibility, AdviceAnswer, AdviceQuestion, AdviceRequest, AdviceResponse,
+    AdviceScoreLevel, ADVICE_PROTOCOL_VERSION,
 };
 pub use advice_transition::{
     effective_advice_policy, validate_advice_record, AdviceAuthor, AdviceDeparture,
@@ -35,12 +34,10 @@ pub use execution_contract::{
 };
 pub use invocation::project_invocation_status;
 pub use model::{
-    check_known_output_conflicts, AllowResponse, AssignmentLabel, CaptureExit, CompletionMode,
-    ContextAppendEffect, ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation,
-    DurableEvaluationResult, EvaluationFeedback, EvaluationRequest, EvaluationResult, EventId,
-    FanOutRecoveryAdapterUsage, FanOutRecoveryApproval, FanOutRecoveryDerivation,
-    FanOutRecoveryInput, FanOutRecoverySource, HistoryAction, HistoryEntry, InnerWorker,
-    InvocationId, JsonValue, Lifecycle, OverrideSummary, PriorEvaluation,
+    AllowResponse, AssignmentLabel, CaptureExit, CompletionMode, ContextAppendEffect,
+    ContextRecord, ContextRecordId, ControlRevision, DurableEvaluation, DurableEvaluationResult,
+    EvaluationFeedback, EvaluationRequest, EvaluationResult, EventId, HistoryAction, HistoryEntry,
+    InnerWorker, InvocationId, JsonValue, Lifecycle, OverrideSummary, PriorEvaluation,
     ProjectedInvocationStatus, ProviderAssociation, ProviderSelector, Run, RunId, SemanticSequence,
     SkippedBoundCheck, SkippedProviderEvaluation, State, StateId, Timestamp, Transition,
     TransitionHistoryOutcome, TransitionKind, TransitionOverride, WaiterWrittenStatus, WorkSlot,
@@ -62,14 +59,14 @@ pub use operations::{
 };
 pub use outcome::{OperationOutcome, OperationStatus, OutcomeIssue};
 pub use ports::{
-    Admission, AdmitRequest, AppendAdviceAttemptRequest, AppendContextRequest, AppendContextResult,
-    AppendSnapshot, CandidateRecord, CarryAct, CarryRequest, CheckedEvaluationSnapshot,
-    CheckedEvaluationSnapshotRequest, CommitTransitionRequest, CommitTransitionResult,
-    CreateRunRequest, CreateRunResult, EngineOrigin, EvidenceApplicability, OriginReference,
-    Persistence, PersistenceConflict, PersistenceError, PersistenceFailure, PersistenceRejection,
-    ProviderError, ProviderGateway, ProviderResolutionError, ProviderResolver, RecordDenialRequest,
-    RecordDenialResult, Refusal, RunSummary, ShowData, TerminateRequest, TerminateResult,
-    ENGINE_ORIGIN_KEY, EVIDENCE_APPLICABILITY_KIND, ORIGIN_KEY,
+    Admission, AdmitRequest, AppendContextRequest, AppendContextResult, AppendSnapshot,
+    CandidateRecord, CheckedEvaluationSnapshot, CheckedEvaluationSnapshotRequest,
+    CommitTransitionRequest, CommitTransitionResult, CreateRunRequest, CreateRunResult,
+    EvidenceApplicability, OriginReference, Persistence, PersistenceConflict, PersistenceError,
+    PersistenceFailure, PersistenceRejection, ProviderError, ProviderGateway,
+    ProviderResolutionError, ProviderResolver, RecordDenialRequest, RecordDenialResult, Refusal,
+    RunSummary, ShowData, TerminateRequest, TerminateResult, ENGINE_ORIGIN_KEY,
+    EVIDENCE_APPLICABILITY_KIND, ORIGIN_KEY,
 };
 pub use workflow::{
     resolve_transition, validate_workflow, workflow_validation_errors, TransitionResolutionError,

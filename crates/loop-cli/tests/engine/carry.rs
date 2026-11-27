@@ -224,26 +224,6 @@ fn evidence_applicability_is_concise_same_run_context_and_stays_visible() {
     assert!(current["data"].get("attested_dimensions").is_none());
 }
 
-#[test]
-fn core_legacy_carry_requests_decode_but_are_not_executed() {
-    let request = serde_json::from_value::<AppendContextRequest>(json!({
-        "run_id": "run-1",
-        "record_id": "record-1",
-        "kind": "unchanged-carry",
-        "data": {},
-        "created_at": 1,
-        "carry": {
-            "source_record_id": "source",
-            "invocation_id": "invocation",
-            "assignment_id": "axis-a",
-            "act": "unchanged",
-            "attesting_driver": {"name": "driver"}
-        }
-    }))
-    .expect("legacy request remains decodable");
-    assert!(request.carry.is_some());
-}
-
 // --- Public CLI acceptance-lane regressions (AC-2) ---
 
 /// A checked self-loop lets the tests seed durable workflow evaluations

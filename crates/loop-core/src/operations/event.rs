@@ -10,7 +10,7 @@ use crate::{
     request_from_snapshot, resolve_transition, CheckedEvaluationSnapshotRequest,
     CommitTransitionRequest, CommitTransitionResult, EvaluationResult, EventId, Lifecycle,
     OperationOutcome, OutcomeIssue, Persistence, ProviderGateway, RecordDenialRequest, RunId,
-    Timestamp, Transition, TransitionResolutionError,
+    Transition, TransitionResolutionError,
 };
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
@@ -22,10 +22,6 @@ use std::convert::Infallible;
 pub struct Request {
     pub run_id: RunId,
     pub event: EventId,
-    /// Clock used to project invocation overlay status. Defaults to now in
-    /// [`Request::new`]; tests that need overrun control it with [`Request::with_now`].
-    #[serde(default = "current_timestamp")]
-    pub now: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub override_attestation: Option<crate::StateVisitAttestation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -37,15 +33,9 @@ impl Request {
         Self {
             run_id: run_id.into(),
             event: event.into(),
-            now: current_timestamp(),
             override_attestation: None,
             advice_exception: None,
         }
-    }
-
-    pub fn with_now(mut self, now: Timestamp) -> Self {
-        self.now = now;
-        self
     }
 
     pub fn with_override(mut self, attestation: crate::StateVisitAttestation) -> Self {
@@ -156,33 +146,6 @@ where
     }
 
     evaluate_checked(run, &transition, advice_exception, gateway, persistence)
-}
-
-/// Execute `event` with ports first, which is convenient for composition
-/// roots that keep their adapters together.
-pub fn execute_with_ports<G, P>(
-    gateway: &G,
-    persistence: &P,
-    request: Request,
-) -> OperationOutcome<Result>
-where
-    G: ProviderGateway + ?Sized,
-    P: Persistence + ?Sized,
-{
-    execute(request, gateway, persistence)
-}
-
-/// Execute `event` with persistence first.
-pub fn execute_with_persistence<P, G>(
-    persistence: &P,
-    gateway: &G,
-    request: Request,
-) -> OperationOutcome<Result>
-where
-    G: ProviderGateway + ?Sized,
-    P: Persistence + ?Sized,
-{
-    execute(request, gateway, persistence)
 }
 
 fn resolve_requested_transition<'a>(
@@ -507,14 +470,6 @@ where
         Ok(_) => OperationOutcome::rejected_feedback(feedback),
         Err(error) => persistence_error(error),
     }
-}
-
-fn current_timestamp() -> Timestamp {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
-        .unwrap_or(0);
-    Timestamp::from_unix_millis(millis)
 }
 
 #[cfg(test)]

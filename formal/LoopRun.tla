@@ -79,7 +79,7 @@ Init ==
     /\ res = [a \in Attempts |-> "none"]
 
 (************************ operator and observer actions ********************)
-\* `show`: sets observed_control_revision = control_revision (sqlite.rs:1022-1027).
+\* `show`: sets observed_control_revision = control_revision (sqlite.rs:953-958).
 \* It works on a run in any lifecycle.
 Observe ==
     /\ observed /= rev
@@ -87,7 +87,7 @@ Observe ==
     /\ UNCHANGED <<lifecycle, state, rev, hist, appends, pc, ev, expRev, res>>
 
 \* `append`: a context-only write. It needs an active, observed run and does
-\* not advance control_revision (sqlite.rs:448-512).
+\* not advance control_revision (sqlite.rs:438-502).
 AppendContext ==
     /\ ActiveGuard
     /\ ObservedGuard
@@ -96,7 +96,7 @@ AppendContext ==
     /\ hist' = Append(hist, Entry("context", rev, state, state))
     /\ UNCHANGED <<lifecycle, state, rev, observed, pc, ev, expRev, res>>
 
-\* `terminate`: one transaction (sqlite.rs:797-830).
+\* `terminate`: one transaction (sqlite.rs:728-761).
 Terminate ==
     /\ ActiveGuard
     /\ ObservedGuard
@@ -106,7 +106,7 @@ Terminate ==
     /\ UNCHANGED <<state, observed, appends, pc, ev, expRev, res>>
 
 (*********************** one event attempt, step by step *******************)
-\* Read the run, resolve the event, check the observation (event.rs:90-143).
+\* Read the run, resolve the event, check the observation (event.rs:80-133).
 \* The attempt records the revision it saw. A request that cannot start ends
 \* with no write.
 LoadOk(a) ==
@@ -122,7 +122,7 @@ LoadRejected(a) ==
     /\ pc' = [pc EXCEPT ![a] = "done"]
     /\ UNCHANGED <<lifecycle, state, rev, observed, hist, appends, ev, expRev, res>>
 
-\* Check-free edge: one commit transaction (event.rs:285-314, sqlite.rs:597-743).
+\* Check-free edge: one commit transaction (event.rs:248-277, sqlite.rs:528-674).
 \* Checked edge: the same transaction, after the provider call.
 CommitWrite(a) ==
     /\ lifecycle' = IF Tgt(ev[a]) = "F" THEN "Final" ELSE "Active"
@@ -137,8 +137,8 @@ CommitFree(a) ==
     /\ CommitGuard(a)
     /\ CommitWrite(a)
 
-\* Checked edge: load the evaluation snapshot (event.rs:382-398,
-\* sqlite.rs:960-998). It is a read; it takes the run's revision at that moment.
+\* Checked edge: load the evaluation snapshot (event.rs:345-361,
+\* sqlite.rs:891-929). It is a read; it takes the run's revision at that moment.
 Snapshot(a) ==
     /\ pc[a] = "read" /\ Checked(ev[a])
     /\ ActiveGuard /\ SourceGuard(a)
@@ -153,7 +153,7 @@ SnapshotRejected(a) ==
     /\ UNCHANGED <<lifecycle, state, rev, observed, hist, appends, ev, expRev, res>>
 
 \* The provider call runs outside every persistence transaction
-\* (event.rs:402-406). Either answer can come back after the run has moved.
+\* (event.rs:365-369). Either answer can come back after the run has moved.
 ProviderAllows(a) ==
     /\ pc[a] = "snapped"
     /\ pc' = [pc EXCEPT ![a] = "evaluated"]
@@ -172,7 +172,7 @@ CommitAllowed(a) ==
     /\ CommitWrite(a)
 
 \* A denial is recorded in one transaction with the same guards
-\* (sqlite.rs:745-795). It writes history but leaves state and revision alone.
+\* (sqlite.rs:676-726). It writes history but leaves state and revision alone.
 RecordDenial(a) ==
     /\ pc[a] = "evaluated" /\ res[a] = "deny"
     /\ CommitGuard(a)
