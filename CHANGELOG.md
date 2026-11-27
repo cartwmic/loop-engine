@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.72.2] - 2026-11-27
+
+`append` no longer carries code that refuses input retired in earlier releases, and the evaluation harness under `evals/` is removed. Version 0.72.1 was prepared (its entry above) but never tagged or published; its change is released here, so 0.72.2 follows 0.72.0 on the release page.
+
+- loop-core, loop-cli and loop-integrations: `append` stores the record kinds `unchanged-carry` and `override-carry`, and records whose data holds any of the 14 old key names, like any other record; it still refuses the retired `selected-assignment-output` origin kind, now under the general unsupported-origin code (`selected-output-linkage-refused`) or, on an `evidence-applicability` record, under `evidence-applicability-refused`. The refusal list, its helper items and the `ENGINE_ORIGIN_KEY` constant are deleted. (#243)
+- evals/ and README.md: removes the whole `evals/` folder and the README line that linked to it; this is the change the unpublished 0.72.1 entry lists. (#245)
+
 ## [0.72.1] - 2026-11-27
 
 The evaluation harness under `evals/` is removed. Nothing in the workspace, CI or the release used it.
