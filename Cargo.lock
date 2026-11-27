@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "bookends-check"
-version = "0.71.3"
+version = "0.72.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "lean-change-provider"
-version = "0.71.3"
+version = "0.72.0"
 dependencies = [
  "loop-core",
  "loop-integrations",
@@ -234,7 +234,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "loop-cli"
-version = "0.71.3"
+version = "0.72.0"
 dependencies = [
  "libc",
  "loop-core",
@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "loop-core"
-version = "0.71.3"
+version = "0.72.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -254,7 +254,7 @@ dependencies = [
 
 [[package]]
 name = "loop-integrations"
-version = "0.71.3"
+version = "0.72.0"
 dependencies = [
  "loop-core",
  "rusqlite",
@@ -267,7 +267,7 @@ dependencies = [
 
 [[package]]
 name = "loop-reference-fixtures"
-version = "0.71.3"
+version = "0.72.0"
 dependencies = [
  "loop-core",
  "serde",
@@ -294,7 +294,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "policy-document-provider"
-version = "0.71.3"
+version = "0.72.0"
 dependencies = [
  "loop-core",
  "loop-integrations",
@@ -328,7 +328,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "research-provider"
-version = "0.71.3"
+version = "0.72.0"
 dependencies = [
  "loop-core",
  "loop-integrations",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "workspace-integration"
-version = "0.71.3"
+version = "0.72.0"
 dependencies = [
  "bookends-check",
  "libc",
