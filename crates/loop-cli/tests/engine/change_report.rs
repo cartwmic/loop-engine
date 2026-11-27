@@ -77,16 +77,17 @@ fn external_work_full_show_keeps_pending_history_unsampled() {
         .contains("unsampled"));
     assert_eq!(result["result"]["current_state_instructions"], "review");
 
-    // Retired origins refuse even when supplied on applicability records.
-    for kind in ["review", "evidence-applicability"] {
+    // The retired origin kind is refused, on an applicability record by that kind's own check.
+    for (kind, code) in [
+        ("review", "selected-output-linkage-refused"),
+        ("evidence-applicability", "evidence-applicability-refused"),
+    ] {
         let output = Command::new(workspace_integration::binary("loop-engine"))
             .args(["--database", database.to_str().unwrap(), "--json", "append", "report-run",
                 "--kind", kind, "--data", r#"{"origin":{"kind":"selected-assignment-output","id":"pending","assignment_id":"worker"}}"#])
             .bounded_output("retired origin").unwrap();
         assert!(!output.status.success());
-        assert!(
-            String::from_utf8_lossy(&output.stdout).contains("selected-assignment-output-retired")
-        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains(code));
     }
     // Historical pending work cannot prevent an externally driven departure.
     let output = Command::new(workspace_integration::binary("loop-engine"))

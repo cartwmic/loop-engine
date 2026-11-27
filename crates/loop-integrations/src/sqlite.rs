@@ -2029,7 +2029,11 @@ mod tests {
     fn append_integrity_and_engine_shapes_precede_provider_admission() {
         let adapter = admission_adapter(true);
         let gateway = admission_gateway(Ok(loop_core::Admission::Admitted));
-        let bad = append_candidate("candidate", "note", json!({"loop_engine_carry": {}}));
+        let bad = append_candidate(
+            "candidate",
+            "note",
+            json!({"origin": {"kind": "bogus", "id": "x"}}),
+        );
         let outcome = loop_core::execute_append_with_gateway(bad.clone(), &adapter, &gateway);
         assert_eq!(outcome.issue().unwrap().code, "run-not-observed");
         adapter.load_show_data(&"admission".into()).unwrap();
@@ -2039,7 +2043,11 @@ mod tests {
         let outcome = loop_core::execute_append_with_gateway(bad, &adapter, &gateway);
         assert_eq!(outcome.issue().unwrap().code, "duplicate-context-record");
         let outcome = loop_core::execute_append_with_gateway(
-            append_candidate("new", "note", json!({"loop_engine_carry": {}})),
+            append_candidate(
+                "new",
+                "note",
+                json!({"origin": {"kind": "bogus", "id": "x"}}),
+            ),
             &adapter,
             &gateway,
         );

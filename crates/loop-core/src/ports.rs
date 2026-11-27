@@ -301,17 +301,13 @@ pub struct CreateRunResult {
 
 /// Key in caller data for the concise stable origin reference.
 pub const ORIGIN_KEY: &str = "origin";
-/// Reserved key populated by core from durable invocation state.
-pub const ENGINE_ORIGIN_KEY: &str = "loop_engine_origin";
 /// Context kind for a driver-owned evidence applicability declaration.
 pub const EVIDENCE_APPLICABILITY_KIND: &str = "evidence-applicability";
 
-/// A small run-local reference to an engine-owned origin.
+/// A small run-local reference to an earlier record of the same run.
 ///
-/// `id` is the invocation ID for `selected-assignment-output` and a context
-/// record ID for `context-record`.  `assignment_id` is required only for a
-/// selected assignment output.  The reference is caller data; the resolved
-/// metadata under [`ENGINE_ORIGIN_KEY`] is engine-authored.
+/// `kind` is `context-record` and `id` is that record's ID. `assignment_id`
+/// must be absent: a `context-record` origin that carries one is refused.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OriginReference {
