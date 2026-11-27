@@ -77,6 +77,19 @@ fn tombstone(id: &str, title: &str) -> String {
     format!("### {id}: {title}\n- Status: tombstone\n")
 }
 
+/// An isolated HOME for each spawned checker: a sibling of the receipt root,
+/// so a host test run never touches the real state directory or log.
+fn state_home(receipt_root: &Path) -> PathBuf {
+    receipt_root
+        .parent()
+        .expect("receipt root has a parent")
+        .join("home")
+}
+
+fn log_path(receipt_root: &Path) -> PathBuf {
+    state_home(receipt_root).join("state/bookends-check/log.jsonl")
+}
+
 fn run_checker(repo: &Path, updates: &str, receipt_root: &Path, extra: &[&str]) -> Output {
     let mut command = Command::new(checker());
     command
@@ -84,6 +97,8 @@ fn run_checker(repo: &Path, updates: &str, receipt_root: &Path, extra: &[&str]) 
         .args(["--repo", repo.to_str().expect("repo path")])
         .args(["--updates-stdin", "--receipt-root"])
         .arg(receipt_root)
+        .env("HOME", state_home(receipt_root))
+        .env("XDG_STATE_HOME", state_home(receipt_root).join("state"))
         .args(extra)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -230,6 +245,7 @@ fn run_gate(fixture: &GateFixture, updates: &str, receipt_name: &str) -> Output 
         .env("BOOKENDS_REMOTE", "origin")
         .env_remove("BOOKENDS_BYPASS")
         .env_remove("BOOKENDS_MAX_COMMITS")
+        .env("HOME", fixture.root.path().join("home"))
         .env("XDG_STATE_HOME", fixture.root.path().join("state"))
         .env(
             "BOOKENDS_RECEIPT_ROOT",
@@ -419,6 +435,154 @@ fn backlog_t08_dirty_tip_blocks_despite_clean_intermediates() {
     assert!(
         stdout.contains(&new) && stdout.contains("LE-3"),
         "tip finding missing: {stdout}"
+    );
+}
+
+#[test]
+fn backlog_t08_annotated_tag_tip_with_coverage_finding_blocks() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(root.path());
+    enable_graph(&repo, &live("LE-1", "One"), "# bookends:LE-1\n");
+    let old = commit(&repo, "base");
+
+    write_file(
+        &repo,
+        "docs/PRD.md",
+        &(live("LE-1", "One") + &live("LE-3", "Three")),
+    );
+    let tip = commit(&repo, "tip adds uncovered LE-3");
+    git(&repo, &["tag", "-a", "-m", "release", "v1", &tip]);
+    let tag_oid = git(&repo, &["rev-parse", "refs/tags/v1"]);
+    assert_ne!(tag_oid, tip, "fixture must be an annotated tag object");
+
+    let receipts = root.path().join("receipts");
+    let updates = format!("refs/tags/v1 {tag_oid} refs/tags/v1 {old}\n");
+    let output = run_checker(&repo, &updates, &receipts, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(first_line(&output), "RED", "{stdout}");
+    assert!(stdout.contains("LE-3"), "tip finding missing: {stdout}");
+}
+
+#[test]
+fn backlog_t08_annotated_tag_tip_with_deleted_prd_blocks() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(root.path());
+    enable_graph(&repo, &live("LE-1", "One"), "# bookends:LE-1\n");
+    let old = commit(&repo, "base");
+
+    git(&repo, &["rm", "-q", "docs/PRD.md"]);
+    let tip = commit(&repo, "tip deletes the PRD");
+    git(&repo, &["tag", "-a", "-m", "release", "v1", &tip]);
+    let tag_oid = git(&repo, &["rev-parse", "refs/tags/v1"]);
+    assert_ne!(tag_oid, tip, "fixture must be an annotated tag object");
+
+    let receipts = root.path().join("receipts");
+    let updates = format!("refs/tags/v1 {tag_oid} refs/tags/v1 {old}\n");
+    let output = run_checker(&repo, &updates, &receipts, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(first_line(&output), "RED", "{stdout}");
+    assert!(
+        stdout.contains("docs/PRD.md is missing"),
+        "missing-PRD reason absent: {stdout}"
+    );
+}
+
+/// The action log sits in the state directory, one JSON line per run.
+fn log_records(receipt_root: &Path) -> Vec<serde_json::Value> {
+    fs::read_to_string(log_path(receipt_root))
+        .expect("action log in the state directory")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("log line is JSON"))
+        .collect()
+}
+
+fn assert_log_ties_to_receipt(record: &serde_json::Value, receipt_text: &str) {
+    let id = record["id"].as_str().expect("log id");
+    assert!(
+        receipt_text.contains(&format!("run_id: {id}")),
+        "receipt lacks run_id {id}: {receipt_text}"
+    );
+}
+
+#[test]
+fn backlog_t08_red_annotated_tag_push_writes_one_log_line() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(root.path());
+    enable_graph(&repo, &live("LE-1", "One"), "# bookends:LE-1\n");
+    let old = commit(&repo, "base");
+    write_file(
+        &repo,
+        "docs/PRD.md",
+        &(live("LE-1", "One") + &live("LE-3", "Three")),
+    );
+    let tip = commit(&repo, "tip adds uncovered LE-3");
+    git(&repo, &["tag", "-a", "-m", "release", "v1", &tip]);
+    let tag_oid = git(&repo, &["rev-parse", "refs/tags/v1"]);
+
+    let receipts = root.path().join("receipts");
+    let updates = format!("refs/tags/v1 {tag_oid} refs/tags/v1 {old}\n");
+    let output = run_checker(&repo, &updates, &receipts, &[]);
+    assert_eq!(output.status.code(), Some(1));
+
+    let records = log_records(&root.path().join("receipts"));
+    assert_eq!(records.len(), 1, "one line per run: {records:?}");
+    let record = &records[0];
+    assert_eq!(record["action"], "publication");
+    assert_eq!(record["outcome"], "red");
+    assert!(record["duration_ms"].is_u64(), "duration: {record}");
+    assert!(
+        record["ts"].as_str().is_some_and(|ts| ts.ends_with('Z')),
+        "UTC timestamp: {record}"
+    );
+    assert!(record["findings"].as_u64().unwrap_or(0) >= 1, "{record}");
+    assert_eq!(record["refs"][0], "refs/tags/v1");
+    assert_log_ties_to_receipt(record, &one_receipt(&receipts));
+}
+
+#[test]
+fn backlog_t08_green_push_writes_one_log_line() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(root.path());
+    enable_graph(&repo, &live("LE-1", "One"), "# bookends:LE-1\n");
+    let old = commit(&repo, "base");
+    write_file(&repo, "tests/journey.py", "# bookends:LE-1\n# touched\n");
+    let new = commit(&repo, "harmless change");
+
+    let receipts = root.path().join("receipts");
+    let updates = format!("refs/heads/main {new} refs/heads/main {old}\n");
+    let output = run_checker(&repo, &updates, &receipts, &[]);
+    assert_eq!(first_line(&output), "GREEN");
+
+    let records = log_records(&root.path().join("receipts"));
+    assert_eq!(records.len(), 1, "one line per run: {records:?}");
+    assert_eq!(records[0]["action"], "publication");
+    assert_eq!(records[0]["outcome"], "green");
+    assert!(records[0]["duration_ms"].is_u64(), "{}", records[0]);
+    assert_log_ties_to_receipt(&records[0], &one_receipt(&receipts));
+}
+
+#[test]
+fn backlog_t08_unwritable_log_does_not_change_the_verdict() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(root.path());
+    enable_graph(&repo, &live("LE-1", "One"), "# bookends:LE-1\n");
+    let old = commit(&repo, "base");
+    write_file(&repo, "tests/journey.py", "# bookends:LE-1\n# touched\n");
+    let new = commit(&repo, "harmless change");
+    // A directory where the log file belongs makes the append fail.
+    let receipts = root.path().join("receipts");
+    fs::create_dir_all(log_path(&receipts)).expect("block log path");
+
+    let updates = format!("refs/heads/main {new} refs/heads/main {old}\n");
+    let output = run_checker(&repo, &updates, &receipts, &[]);
+    assert_eq!(first_line(&output), "GREEN");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("action log unavailable"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
@@ -971,4 +1135,61 @@ fn backlog_t08_gate_rejects_mixed_invalid_update_without_remote_mutation() {
         ref_oid(&fixture.bare, "refs/heads/obsolete"),
         Some(fixture.base)
     );
+}
+
+fn files_named(dir: &Path, name: &str, found: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).expect("read dir").flatten() {
+        let path = entry.path();
+        if path.file_name().is_some_and(|n| n == ".git") {
+            continue;
+        }
+        if path.is_dir() {
+            files_named(&path, name, found);
+        } else if path.file_name().is_some_and(|n| n == name) {
+            found.push(path);
+        }
+    }
+}
+
+#[test]
+fn backlog_t08_receipt_root_inside_the_repo_leaves_no_log_in_the_checkout() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(root.path());
+    enable_graph(&repo, &live("LE-1", "One"), "# bookends:LE-1\n");
+    let old = commit(&repo, "base");
+    write_file(&repo, "tests/journey.py", "# bookends:LE-1\n# touched\n");
+    let new = commit(&repo, "harmless change");
+
+    // The refused root is inside the checkout; its parent is the checkout.
+    let receipts = repo.join("receipts");
+    let isolated = root.path().join("receipts");
+    let updates = format!("refs/heads/main {new} refs/heads/main {old}\n");
+    let mut command = Command::new(checker());
+    command
+        .current_dir(&repo)
+        .args(["--repo", repo.to_str().expect("repo path")])
+        .args(["--updates-stdin", "--receipt-root"])
+        .arg(&receipts)
+        .env("HOME", state_home(&isolated))
+        .env("XDG_STATE_HOME", state_home(&isolated).join("state"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn checker");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(updates.as_bytes())
+        .expect("write updates");
+    let output = child.wait_with_output().expect("wait");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("outside the repository"));
+
+    let mut found = Vec::new();
+    files_named(&repo, "log.jsonl", &mut found);
+    assert!(found.is_empty(), "log inside the checkout: {found:?}");
+    let records = log_records(&isolated);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["outcome"], "refused");
 }

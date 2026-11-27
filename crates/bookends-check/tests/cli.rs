@@ -2,10 +2,11 @@ mod common;
 
 use std::process::Command;
 
-use common::{bin, green_graph, write_prd, Repo};
+use common::{bin, green_graph, isolate, write_prd, Repo};
 
 fn run(repo: &Repo, extra: &[&str]) -> (i32, String, String) {
-    let output = Command::new(bin())
+    let state = tempfile::tempdir().expect("state tempdir");
+    let output = isolate(&mut Command::new(bin()), state.path())
         .current_dir(repo.path())
         .args(extra)
         .output()
@@ -19,7 +20,11 @@ fn run(repo: &Repo, extra: &[&str]) -> (i32, String, String) {
 
 #[test]
 fn help_exits_zero() {
-    let output = Command::new(bin()).arg("--help").output().expect("spawn");
+    let state = tempfile::tempdir().expect("state tempdir");
+    let output = isolate(&mut Command::new(bin()), state.path())
+        .arg("--help")
+        .output()
+        .expect("spawn");
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("bookends-check"), "{stdout}");
@@ -30,7 +35,11 @@ fn help_exits_zero() {
 #[test]
 fn version_flags_print_name_and_package_version_on_stdout() {
     for flag in ["--version", "-V"] {
-        let output = Command::new(bin()).arg(flag).output().expect("spawn");
+        let state = tempfile::tempdir().expect("state tempdir");
+        let output = isolate(&mut Command::new(bin()), state.path())
+            .arg(flag)
+            .output()
+            .expect("spawn");
         assert_eq!(output.status.code(), Some(0), "flag={flag}");
         assert!(output.stderr.is_empty(), "flag={flag}: {:?}", output.stderr);
         assert_eq!(
@@ -43,8 +52,32 @@ fn version_flags_print_name_and_package_version_on_stdout() {
 
 #[test]
 fn usage_unknown_flag_exits_two() {
-    let output = Command::new(bin()).arg("--nope").output().expect("spawn");
+    let state = tempfile::tempdir().expect("state tempdir");
+    let output = isolate(&mut Command::new(bin()), state.path())
+        .arg("--nope")
+        .output()
+        .expect("spawn");
     assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn help_version_and_usage_errors_write_no_action_log_line() {
+    for args in [
+        vec!["--help"],
+        vec!["--version"],
+        vec!["-V"],
+        vec!["--nope"],
+    ] {
+        let state = tempfile::tempdir().expect("state tempdir");
+        isolate(&mut Command::new(bin()), state.path())
+            .args(&args)
+            .output()
+            .expect("spawn");
+        assert!(
+            !state.path().join("state/bookends-check").exists(),
+            "{args:?} wrote to the state directory"
+        );
+    }
 }
 
 #[test]

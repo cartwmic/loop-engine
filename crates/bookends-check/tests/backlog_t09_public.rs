@@ -51,8 +51,12 @@ fn commit(repo: &Path, message: &str) {
 }
 
 fn run_checker(repo: &Path) -> Output {
+    // Isolated state so a host test run never writes the real action log.
+    let state = tempfile::tempdir().expect("state tempdir");
     Command::new(checker())
         .current_dir(repo)
+        .env("HOME", state.path())
+        .env("XDG_STATE_HOME", state.path().join("state"))
         .args(["--repo", repo.to_str().expect("repo path")])
         .output()
         .expect("spawn checker")
