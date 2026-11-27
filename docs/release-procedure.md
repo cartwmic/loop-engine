@@ -58,7 +58,7 @@ So `release.yml` runs `scripts/check-downstream-bump.sh` as the first gate step 
 - the dotfiles skill bundles hold a file the commit no longer ships (the bump stops on such an orphan);
 - a Loop Engine pin's `matching_regex` in the dotfiles mise config matches none of the archives in this release's dist plan, so mise could not resolve the tool.
 
-When it stops, change dotfiles first (drop the list entry and delete the bundle file, or fix the pin), merge that, and rerun the release; or restore the file here. A dotfiles repository that cannot be read also stops the release, so a rerun picks it up. The same check runs by hand with `scripts/check-downstream-bump.sh --plan <dist plan json> [--rev <commit>]` from a checkout.
+When it stops, change dotfiles first (drop the list entry and delete the bundle file, or fix the pin), merge that, and rerun the release. Restoring the file here instead needs a fresh release, because `release-after-merge.sh` has already merged the release-prep commit when its dry run is refused. A dotfiles repository that cannot be read also stops the release, so a rerun picks it up. The refusal is the failed step's workflow annotation and log in the release run.
 
 ## Running release-after-merge.sh
 

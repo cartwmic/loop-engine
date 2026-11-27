@@ -33,6 +33,7 @@ STUB_IMPORTER = textwrap.dedent(
     open(args["--source"] + "/marker").read()
     if "docs/needed.md" not in files:
         print("import_release_skills: using-x expects docs/needed.md in the tag, which no longer has it", file=sys.stderr)
+        print("second line of the refusal", file=sys.stderr)
         sys.exit(1)
     print("stub importer: %d files, ok" % len(files))
     """
@@ -95,6 +96,7 @@ class CheckDownstreamBumpTests(unittest.TestCase):
         annotation = [line for line in result.stdout.splitlines() if line.startswith("::error")]
         self.assertEqual(len(annotation), 1)
         self.assertIn("docs/needed.md", annotation[0])
+        self.assertIn("%0Asecond line of the refusal", annotation[0])  # the importer's lines are joined, not cut at the first
 
     def test_a_downstream_that_cannot_be_read_stops_the_release(self):
         result = self.run_script(DOWNSTREAM_REPO=(self.dir / "nowhere").as_uri())
@@ -107,6 +109,13 @@ class CheckDownstreamBumpTests(unittest.TestCase):
         result = self.run_script()
         self.assertEqual(result.returncode, 1)
         self.assertIn("has no " + IMPORTER, result.stderr)
+
+    def test_an_importer_without_the_check_mode_stops_the_release(self):
+        (self.downstream / IMPORTER).write_text("import sys\nprint(\"invalid choice: 'check'\", file=sys.stderr)\nsys.exit(2)\n")
+        git(self.downstream, "commit", "-q", "-am", "old importer")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("invalid choice", result.stderr)
 
     def test_it_reads_the_downstream_branch_it_is_given(self):
         git(self.downstream, "switch", "-q", "-c", "other")
