@@ -126,7 +126,8 @@ fn run(
             return Ok(ExitCode::from(1));
         }
     };
-    action.findings = report.findings.len();
+    action.commit = report.checked_commit.clone();
+    action.found(&report.findings);
     match &report.status {
         CheckStatus::Green => {
             writeln!(stdout, "GREEN")?;
@@ -304,6 +305,7 @@ fn parse_args(args: &[String]) -> Result<Invocation, ParseOutcome> {
 }
 
 fn run_candidate(path: &PathBuf, action: &mut ActionLog) -> Result<ExitCode, io::Error> {
+    action.candidate = Some(path.display().to_string());
     let text = if path == std::path::Path::new("-") {
         let mut text = String::new();
         io::stdin().read_to_string(&mut text)?;
@@ -328,7 +330,7 @@ fn run_candidate(path: &PathBuf, action: &mut ActionLog) -> Result<ExitCode, io:
         }
         Err(findings) => {
             action.outcome = "red";
-            action.findings = findings.len();
+            action.found(&findings);
             let mut stdout = io::stdout();
             writeln!(stdout, "RED")?;
             for finding in findings {
@@ -590,8 +592,8 @@ fn retain_bypass(
     Ok(path)
 }
 
-/// One structured log line per run of a check or candidate command, kept
-/// beside the receipts. It never changes the verdict: a failed write is
+/// One structured log line per run of a check or candidate command, kept in
+/// the state directory. It never changes the verdict: a failed write is
 /// reported on stderr only.
 struct ActionLog {
     id: String,
@@ -602,7 +604,10 @@ struct ActionLog {
     repo: Option<String>,
     remote: Option<String>,
     refs: Vec<String>,
+    commit: Option<String>,
+    candidate: Option<String>,
     findings: usize,
+    finding_text: Vec<String>,
     commits_checked: usize,
     complete: Option<bool>,
     bypass_class: Option<String>,
@@ -627,13 +632,23 @@ impl ActionLog {
             repo: None,
             remote: None,
             refs: Vec::new(),
+            commit: None,
+            candidate: None,
             findings: 0,
+            finding_text: Vec::new(),
             commits_checked: 0,
             complete: None,
             bypass_class: None,
             receipt: None,
             error: None,
         }
+    }
+
+    /// Keep the findings a check or candidate run printed, in full: no
+    /// receipt holds them for these runs.
+    fn found(&mut self, findings: &[String]) {
+        self.findings = findings.len();
+        self.finding_text = findings.to_vec();
     }
 
     fn red(&mut self, error: String) {
@@ -674,7 +689,10 @@ impl ActionLog {
             "repo": self.repo,
             "remote": self.remote,
             "refs": self.refs,
+            "commit": self.commit,
+            "candidate": self.candidate,
             "findings": self.findings,
+            "finding_text": self.finding_text,
             "commits_checked": self.commits_checked,
             "complete": self.complete,
             "bypass_class": self.bypass_class,
@@ -740,8 +758,12 @@ fn print_help() {
          Publication checks retain a synced range/completeness receipt; bypass\n\
          permission also requires a synced write-once receipt.\n\
          Every run of a check or candidate command appends one JSON line to\n\
-         $XDG_STATE_HOME/bookends-check/log.jsonl, never under\n\
-         --receipt-root. Its id is the run_id in the receipt. A log write failure is reported on stderr and never\n\
+         $XDG_STATE_HOME/bookends-check/log.jsonl (else\n\
+         ~/.local/state/bookends-check/log.jsonl), never under\n\
+         --receipt-root. A failed check or candidate run's line names the\n\
+         commit or candidate file checked and carries the finding text; a\n\
+         publication run's receipt holds its findings. Its id is the run_id\n\
+         in the receipt. A log write failure is reported on stderr and never\n\
          changes the verdict."
     );
 }
