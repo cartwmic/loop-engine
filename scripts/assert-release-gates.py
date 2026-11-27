@@ -96,20 +96,24 @@ def main() -> int:
             fail(f"exact-commit gate missing {token}")
     if re.search(r"^        (if|continue-on-error):", gate_block, re.MULTILINE):
         fail("exact-commit gate must be mandatory")
+    downstream_match = re.search(r'id: "?downstream-bump-check"?', local)
+    if not downstream_match or downstream_match.start() >= build:
+        fail("downstream pin-bump check must run before local artifact build")
     install_match = re.search(r'id: "?install-native-dist"?', local)
     check_match = re.search(r'id: "?check-release-generation"?', local)
     if not install_match or not check_match or not gate < install_match.start() < check_match.start() < build:
         fail("mandatory pinned native dist install and wrapper check must precede local build")
     for match, required in (
+        (downstream_match, ('scripts/check-downstream-bump.sh', '--plan', '${{ needs.plan.outputs.val }}')),
         (install_match, ('${{ matrix.install_dist.run }}',)),
         (check_match, ('dist --version', 'cargo-dist 0.32.0', 'python3 scripts/generate-release.py --check')),
     ):
         end = local.find("\n      - ", match.start())
         step = local[match.start():end if end >= 0 else len(local)]
         if any(token not in step for token in required):
-            fail("mandatory pinned native dist install or wrapper check missing required command")
+            fail("mandatory downstream bump check, pinned native dist install or wrapper check missing required command")
         if re.search(r"^        (if|continue-on-error):", step, re.MULTILINE):
-            fail("native dist install and wrapper check must be mandatory")
+            fail("downstream bump check, native dist install and wrapper check must be mandatory")
     expected_needs = {
         "build-local-artifacts": {"plan"},
         "build-global-artifacts": {"plan", "build-local-artifacts"},
