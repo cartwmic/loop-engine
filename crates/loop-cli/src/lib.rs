@@ -2466,8 +2466,7 @@ fn usage(command: Option<&str>) -> String {
         Some("append") => {
             "Usage: loop-engine [options] append <run-id> <kind> <data-json>\n\n".to_owned()
                 + "Options: --record-id <id> --database <path> --json\n"
-                + "Stable worker output data uses {\"origin\":{\"kind\":\"selected-assignment-output\",\"id\":\"INVOCATION_ID\",\"assignment_id\":\"ASSIGNMENT_ID\"}};\n"
-                + "the engine resolves the selected attempt and capture metadata. Evidence reuse uses\n"
+                + "Data may cite an earlier record of the run with {\"origin\":{\"kind\":\"context-record\",\"id\":\"RECORD_ID\"}}. Evidence reuse uses\n"
                 + "kind evidence-applicability with {origin,target,attesting_driver,reason}.\n"
         }
         Some("event") => "Usage: loop-engine [options] event <run-id> <event> [--advice-exception JSON | --override JSON]\n\nAdvice exception only excuses exactly named unanswered due advice occasions. --override remains a separate broader exception.\n".to_owned(),
