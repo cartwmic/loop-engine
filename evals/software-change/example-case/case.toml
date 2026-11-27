@@ -1,3 +1,0 @@
-id = "label-keys"
-version = "1"
-allowed_edit_scope = ["labels.py"]
