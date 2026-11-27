@@ -36,6 +36,7 @@ python3 scripts/generate-prd-journey.py
 python3 scripts/run-release-tests-sharded.py
 python3 scripts/test_prd_prose_check.py
 python3 scripts/test_triage_skills.py
+python3 scripts/test_check_downstream_bump.py
 python3 scripts/test_bookends_base.py
 
 # Capture metadata separately so a Cargo failure retains its own exit status.

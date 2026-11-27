@@ -1,3 +1,12 @@
+- name: Check the downstream pin bump would take this commit
+  id: downstream-bump-check
+  shell: bash
+  env:
+    DIST_PLAN: ${{ needs.plan.outputs.val }}
+  run: |
+    set -euo pipefail
+    printf '%s\n' "$DIST_PLAN" > "$RUNNER_TEMP/downstream-plan.json"
+    scripts/check-downstream-bump.sh --plan "$RUNNER_TEMP/downstream-plan.json"
 - name: Require successful push CI for this exact commit
   id: exact-commit-ci
   shell: bash

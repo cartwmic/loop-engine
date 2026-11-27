@@ -161,6 +161,8 @@ jobs:
         run: python3 scripts/test_prd_prose_check.py
       - name: Triage skill copies tests
         run: python3 scripts/test_triage_skills.py
+      - name: Downstream bump check tests
+        run: python3 scripts/test_check_downstream_bump.py
       # A push checks the commits from the base scripts/bookends-base.py picks
       # (defined in docs/culprit-hunt.md step 1). The base is found in its own
       # step, so a lookup that fails leaves the Bookends step skipped, and a
