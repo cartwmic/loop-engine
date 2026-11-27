@@ -59,10 +59,19 @@ at `$XDG_STATE_HOME/bookends-check/log.jsonl` (else
 `ts` (UTC), `action` (`publication`, `check` or `candidate`), `outcome`
 (`green`, `red`, `bypass`, `refused` when a receipt cannot be written, or
 `error`), `duration_ms`, `id`, and for replay `repo`, `remote`, `refs`,
-`findings`, `commits_checked`, `complete`, `bypass_class`, `receipt` and
-`error`. The `id` is also the `run_id` in the receipt. A failed log write is
-reported on stderr and never changes the verdict. Bypass reasons are not
-logged.
+`commit`, `candidate`, `findings`, `finding_text`, `commits_checked`,
+`complete`, `bypass_class`, `receipt` and `error`. The `id` is also the
+`run_id` in the receipt. A failed log write is reported on stderr and never
+changes the verdict. Bypass reasons are not logged.
+
+Two fields name what a `check` or `candidate` run looked at, because those runs
+write no receipt: `commit` is the commit `HEAD` named when a `check` run read
+the work tree (`null` for other actions, and for a directory with no commit;
+the work tree may also hold uncommitted changes), and `candidate` is the path
+given to a `candidate` run (`-` for standard input; `null` for other actions).
+`finding_text` lists every finding the run printed, in full and in order, so
+its length equals `findings`; it is empty for a green run and for a
+`publication` run, whose receipt holds the finding text in `diagnostics`.
 
 ## Optional contract class
 

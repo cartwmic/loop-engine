@@ -39,6 +39,10 @@ pub struct CheckReport {
     pub status: CheckStatus,
     pub live_ids: Vec<String>,
     pub findings: Vec<String>,
+    /// The commit `HEAD` named when the work tree was checked; `None` when
+    /// the directory is not a git work tree or has no commit yet. The work
+    /// tree itself may hold uncommitted changes the check also read.
+    pub checked_commit: Option<String>,
 }
 
 impl CheckReport {
@@ -47,6 +51,7 @@ impl CheckReport {
             status: CheckStatus::Green,
             live_ids,
             findings: Vec::new(),
+            checked_commit: None,
         }
     }
 
@@ -56,6 +61,7 @@ impl CheckReport {
             status: CheckStatus::Red,
             live_ids,
             findings,
+            checked_commit: None,
         }
     }
 
@@ -68,6 +74,7 @@ impl CheckReport {
                 },
                 live_ids: self.live_ids,
                 findings: Vec::new(),
+                checked_commit: self.checked_commit,
             },
             _ => self,
         }

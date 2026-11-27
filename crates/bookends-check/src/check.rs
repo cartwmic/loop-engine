@@ -31,7 +31,8 @@ pub fn check_repo(
         ));
     }
 
-    let report = evaluate(repo_root);
+    let mut report = evaluate(repo_root);
+    report.checked_commit = git::head_commit(repo_root).ok().flatten();
     Ok(report.apply_bypass(bypass))
 }
 
