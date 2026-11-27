@@ -69,9 +69,10 @@ write no receipt: `commit` is the commit `HEAD` named when a `check` run read
 the work tree (`null` for other actions, and for a directory with no commit;
 the work tree may also hold uncommitted changes), and `candidate` is the path
 given to a `candidate` run (`-` for standard input; `null` for other actions).
-`finding_text` lists every finding the run printed, in full and in order, so
-its length equals `findings`; it is empty for a green run and for a
-`publication` run, whose receipt holds the finding text in `diagnostics`.
+For a `check` or `candidate` run, `finding_text` lists every finding the run
+printed, in full and in order, so its length equals `findings`; it is empty for
+a green run. For a `publication` run it is always empty: the receipt holds the
+finding text in `diagnostics`.
 
 ## Optional contract class
 

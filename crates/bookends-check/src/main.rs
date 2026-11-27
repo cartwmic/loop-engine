@@ -760,9 +760,10 @@ fn print_help() {
          Every run of a check or candidate command appends one JSON line to\n\
          $XDG_STATE_HOME/bookends-check/log.jsonl (else\n\
          ~/.local/state/bookends-check/log.jsonl), never under\n\
-         --receipt-root. A failed run's line names the commit or candidate\n\
-         file checked and carries the finding text. Its id is the run_id in\n\
-         the receipt. A log write failure is reported on stderr and never\n\
+         --receipt-root. A failed check or candidate run's line names the\n\
+         commit or candidate file checked and carries the finding text; a\n\
+         publication run's receipt holds its findings. Its id is the run_id\n\
+         in the receipt. A log write failure is reported on stderr and never\n\
          changes the verdict."
     );
 }
