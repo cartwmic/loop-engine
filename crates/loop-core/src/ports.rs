@@ -301,17 +301,13 @@ pub struct CreateRunResult {
 
 /// Key in caller data for the concise stable origin reference.
 pub const ORIGIN_KEY: &str = "origin";
-/// Reserved key populated by core from durable invocation state.
-pub const ENGINE_ORIGIN_KEY: &str = "loop_engine_origin";
 /// Context kind for a driver-owned evidence applicability declaration.
 pub const EVIDENCE_APPLICABILITY_KIND: &str = "evidence-applicability";
 
-/// A small run-local reference to an engine-owned origin.
+/// A small run-local reference to an earlier record of the same run.
 ///
-/// `id` is the invocation ID for `selected-assignment-output` and a context
-/// record ID for `context-record`.  `assignment_id` is required only for a
-/// selected assignment output.  The reference is caller data; the resolved
-/// metadata under [`ENGINE_ORIGIN_KEY`] is engine-authored.
+/// `kind` is `context-record` and `id` is that record's ID. `assignment_id`
+/// must be absent: a `context-record` origin that carries one is refused.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OriginReference {
@@ -375,8 +371,7 @@ impl EvidenceApplicability {
 /// The adapter allocates the context record's semantic sequence.  The
 /// supplied record ID, kind, data, and timestamp remain caller-owned data.
 /// Stable origins embedded in `data` are the one generic exception: core
-/// validates same-run engine identities and adds its reserved resolved
-/// projection before persistence.
+/// validates a same-run `context-record` origin before persistence.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AppendContextRequest {
     pub run_id: RunId,

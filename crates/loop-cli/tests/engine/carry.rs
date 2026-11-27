@@ -98,7 +98,7 @@ fn show(database: &Path) -> Value {
 }
 
 #[test]
-fn append_rejects_caller_spoof_and_legacy_new_operations() {
+fn append_refuses_the_retired_origin_kind_and_stores_old_record_kinds_and_keys() {
     let directory = tempdir().expect("tempdir");
     let database = directory.path().join("loop.sqlite");
     let persistence = SqlitePersistence::open(&database).expect("sqlite");
@@ -127,7 +127,7 @@ fn append_rejects_caller_spoof_and_legacy_new_operations() {
         ],
     );
     assert_eq!(spoofed["status"], "rejected");
-    assert_eq!(spoofed["code"], "selected-assignment-output-retired");
+    assert_eq!(spoofed["code"], "selected-output-linkage-refused");
 
     for kind in ["unchanged-carry", "override-carry"] {
         let (_, retired, _) = cli(
@@ -139,8 +139,7 @@ fn append_rejects_caller_spoof_and_legacy_new_operations() {
                 r#"{"source_record_id":"old","invocation_id":"invocation-1","assignment_id":"axis-a","attesting_driver":{"name":"driver"}}"#,
             ],
         );
-        assert_eq!(retired["status"], "rejected", "{retired}");
-        assert_eq!(retired["code"], "carry-refused", "{retired}");
+        assert_eq!(retired["status"], "completed", "{retired}");
     }
 
     let (_, verbose, _) = cli(
@@ -152,8 +151,46 @@ fn append_rejects_caller_spoof_and_legacy_new_operations() {
             r#"{"originating_output":{"invocation_id":"invocation-1","assignment_id":"axis-a","selected_attempt":2,"sha256":"sha256:selected-output","path":"capture/axis-a/attempts/2/stdout"}}"#,
         ],
     );
-    assert_eq!(verbose["status"], "rejected");
-    assert_eq!(verbose["code"], "selected-output-linkage-refused");
+    assert_eq!(verbose["status"], "completed", "{verbose}");
+
+    // On an evidence-applicability record an old key is still refused, under that kind's own
+    // code. The origin names a record that exists, so the key alone decides the outcome.
+    persistence
+        .append_context(AppendContextRequest::new(
+            "stable-run",
+            "source",
+            "review-evidence",
+            json!({"result": "pass"}),
+            Timestamp::from_unix_millis(2),
+        ))
+        .expect("append source evidence");
+    let applicability_data = |extra: &str| {
+        format!(
+            r#"{{"origin":{{"kind":"context-record","id":"source"}},"target":{{"revision":"2"}},"attesting_driver":{{"name":"driver"}},"reason":"reason"{extra}}}"#
+        )
+    };
+    let (_, with_key, _) = cli(
+        &database,
+        &[
+            "append",
+            "stable-run",
+            "evidence-applicability",
+            &applicability_data(r#","command":"old""#),
+        ],
+    );
+    assert_eq!(with_key["status"], "rejected", "{with_key}");
+    let code = &with_key["code"];
+    assert_eq!(code, "evidence-applicability-refused", "{with_key}");
+    let (_, without_key, _) = cli(
+        &database,
+        &[
+            "append",
+            "stable-run",
+            "evidence-applicability",
+            &applicability_data(""),
+        ],
+    );
+    assert_eq!(without_key["status"], "completed", "{without_key}");
 }
 
 #[test]

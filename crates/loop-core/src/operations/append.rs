@@ -4,8 +4,7 @@ use super::{persistence_error, provider_error};
 use crate::{
     Admission, AdmitRequest, AppendContextRequest, AppendContextResult, AppendSnapshot,
     CandidateRecord, EvidenceApplicability, OperationOutcome, OriginReference, OutcomeIssue,
-    Persistence, PersistenceError, ProviderGateway, ENGINE_ORIGIN_KEY, EVIDENCE_APPLICABILITY_KIND,
-    ORIGIN_KEY,
+    Persistence, PersistenceError, ProviderGateway, EVIDENCE_APPLICABILITY_KIND, ORIGIN_KEY,
 };
 use serde_json::{Map, Value};
 
@@ -15,23 +14,6 @@ pub type Request = AppendContextRequest;
 
 /// Successful `append` data returned by the persistence boundary.
 pub type Result = AppendContextResult;
-
-const LEGACY_ORIGIN_KEYS: &[&str] = &[
-    ENGINE_ORIGIN_KEY,
-    "loop_engine_carry",
-    "originating_output",
-    "originating_output_sha256",
-    "originating_output_path",
-    "overridden_inputs",
-    "attested_dimensions",
-    "selected_attempt",
-    "selected_output_sha256",
-    "selected_output_path",
-    "capture_dir",
-    "command",
-    "args",
-    "binding",
-];
 
 enum PreparationError {
     Rejected { code: &'static str, message: String },
@@ -53,17 +35,6 @@ impl PreparationError {
     fn applicability(message: impl Into<String>) -> Self {
         Self::rejected("evidence-applicability-refused", message)
     }
-
-    fn legacy_carry(message: impl Into<String>) -> Self {
-        Self::rejected("carry-refused", message)
-    }
-}
-
-fn legacy_origin_key(data: &Map<String, Value>) -> Option<&'static str> {
-    LEGACY_ORIGIN_KEYS
-        .iter()
-        .copied()
-        .find(|key| data.contains_key(*key))
 }
 
 fn parse_origin(data: &Map<String, Value>) -> std::result::Result<Option<OriginReference>, String> {
@@ -134,13 +105,6 @@ fn prepare_data<P>(
 where
     P: Persistence + ?Sized,
 {
-    if matches!(request.kind.as_str(), "unchanged-carry" | "override-carry") {
-        return Err(PreparationError::legacy_carry(format!(
-            "context kind `{}` is retired; use `{EVIDENCE_APPLICABILITY_KIND}`",
-            request.kind
-        )));
-    }
-
     let Some(object) = request.data.as_object() else {
         if request.kind == EVIDENCE_APPLICABILITY_KIND {
             return Err(PreparationError::applicability(
@@ -149,23 +113,6 @@ where
         }
         return Ok(request.data.clone());
     };
-    if object
-        .get(ORIGIN_KEY)
-        .and_then(|origin| origin.get("kind"))
-        .and_then(Value::as_str)
-        == Some("selected-assignment-output")
-    {
-        return Err(PreparationError::rejected(
-            "selected-assignment-output-retired",
-            "selected-assignment-output origins are retired; record external work as caller-supplied context",
-        ));
-    }
-    if let Some(key) = legacy_origin_key(object) {
-        return Err(PreparationError::origin(format!(
-            "legacy or engine-owned origin field `{key}` cannot be supplied by the caller"
-        )));
-    }
-
     if request.kind == EVIDENCE_APPLICABILITY_KIND {
         let applicability = serde_json::from_value::<EvidenceApplicability>(request.data.clone())
             .map_err(|error| {
@@ -200,12 +147,8 @@ where
             validate_context_origin(request, &origin, persistence, context)?;
             Ok(request.data.clone())
         }
-        "selected-assignment-output" => Err(PreparationError::rejected(
-            "selected-assignment-output-retired",
-            "selected-assignment-output origins are retired; record external work as caller-supplied context",
-        )),
         _ => Err(PreparationError::origin(format!(
-            "unsupported origin kind `{}`; expected `selected-assignment-output` or `context-record`",
+            "unsupported origin kind `{}`; expected `context-record`",
             origin.kind
         ))),
     }
