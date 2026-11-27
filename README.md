@@ -40,7 +40,6 @@ The software-change provider was replaced by lean-change. Earlier software-chang
 
 Primary commands are `start`, `list`, `show`, `append`, `event`, `history`, `terminate`; targeted `read`, terminal `explore` and passive `monitor` expose retained state, and explicit `reclaim` shrinks a catalog holding legacy payloads. Monitoring does not track external execution. Providers implement describe/evaluate transport and may opt in to `capture`, which keeps each approved artifact's exact bytes in the catalog so a run's approved documents survive deletion of its files.
 
-Whole-workflow model comparisons: [evaluation harness](evals/README.md).
 
 ## Validation
 
