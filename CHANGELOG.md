@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.72.1] - 2026-11-27
+
+The evaluation harness under `evals/` is removed. Nothing in the workspace, CI or the release used it.
+
+- evals/ and README.md: removes the whole `evals/` folder (the harness, its test image and its stored results) and the README line that linked to it. The harness stays in Git history at the commit before this release; a new, smaller one is tracked in #244. (#245)
+
 ## [0.72.0] - 2026-11-27
 
 A release can no longer be tagged when the dotfiles pin bump would fail on it, and the `append` help names an origin the tool accepts.
