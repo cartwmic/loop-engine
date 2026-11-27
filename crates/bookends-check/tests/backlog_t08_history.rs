@@ -423,6 +423,52 @@ fn backlog_t08_dirty_tip_blocks_despite_clean_intermediates() {
 }
 
 #[test]
+fn backlog_t08_annotated_tag_tip_with_coverage_finding_blocks() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(root.path());
+    enable_graph(&repo, &live("LE-1", "One"), "# bookends:LE-1\n");
+    let old = commit(&repo, "base");
+
+    write_file(
+        &repo,
+        "docs/PRD.md",
+        &(live("LE-1", "One") + &live("LE-3", "Three")),
+    );
+    let tip = commit(&repo, "tip adds uncovered LE-3");
+    git(&repo, &["tag", "-a", "-m", "release", "v1", &tip]);
+    let tag_oid = git(&repo, &["rev-parse", "refs/tags/v1"]);
+    assert_ne!(tag_oid, tip, "fixture must be an annotated tag object");
+
+    let receipts = root.path().join("receipts");
+    let updates = format!("refs/tags/v1 {tag_oid} refs/tags/v1 {old}\n");
+    let output = run_checker(&repo, &updates, &receipts, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(first_line(&output), "RED", "{stdout}");
+    assert!(stdout.contains("LE-3"), "tip finding missing: {stdout}");
+}
+
+#[test]
+fn backlog_t08_annotated_tag_tip_with_deleted_prd_blocks() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let repo = init_repo(root.path());
+    enable_graph(&repo, &live("LE-1", "One"), "# bookends:LE-1\n");
+    let old = commit(&repo, "base");
+
+    git(&repo, &["rm", "-q", "docs/PRD.md"]);
+    let tip = commit(&repo, "tip deletes the PRD");
+    git(&repo, &["tag", "-a", "-m", "release", "v1", &tip]);
+    let tag_oid = git(&repo, &["rev-parse", "refs/tags/v1"]);
+
+    let receipts = root.path().join("receipts");
+    let updates = format!("refs/tags/v1 {tag_oid} refs/tags/v1 {old}\n");
+    let output = run_checker(&repo, &updates, &receipts, &[]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(first_line(&output), "RED", "{stdout}");
+}
+
+#[test]
 fn backlog_t08_merge_commit_checks_the_non_first_parent() {
     let root = tempfile::tempdir().expect("tempdir");
     let repo = init_repo(root.path());

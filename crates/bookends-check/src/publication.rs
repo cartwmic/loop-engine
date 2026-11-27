@@ -199,12 +199,18 @@ pub fn check_publication(
     for update in updates {
         let (range, range_findings, range_live_ids) = check_update(repo_root, update, options);
         checked_commits.extend(range.introduced_commits.iter().cloned());
-        let tip_mark = format!("{}:", update.new_oid);
-        let tip_paren = format!("{} (", update.new_oid);
+        // Findings are keyed by the peeled commit id, so an annotated tag's
+        // tag-object id never matches them.  Acquisition failures happen
+        // before peeling and are keyed by the pushed id, so accept both.
+        let tip_ids: Vec<&str> = std::iter::once(update.new_oid.as_str())
+            .chain(range.new_commit.as_deref())
+            .collect();
         for finding in range_findings {
-            if finding.starts_with(&tip_mark)
-                || finding.starts_with(&tip_paren)
-                || finding.contains(" (parent ")
+            if tip_ids.iter().any(|id| {
+                finding
+                    .strip_prefix(id)
+                    .is_some_and(|rest| rest.starts_with(':') || rest.starts_with(" ("))
+            }) || finding.contains(" (parent ")
                 || is_acquisition_failure(&finding)
             {
                 findings.push(finding);
