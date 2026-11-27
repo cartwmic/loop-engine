@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tarfile
@@ -26,7 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DIST_URL = "https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-x86_64-unknown-linux-gnu.tar.xz"
 COUNTED = ("crates/loop-core/src", "crates/loop-integrations/src")
-SCHEMA = re.compile(r"CREATE (TABLE|INDEX|UNIQUE INDEX)|ALTER TABLE|user_version")
+SEARCHED = ("crates", "tests", "Cargo.toml", "Cargo.lock")
 RESULT = re.compile(r"test result: \w+\. (\d+) passed; (\d+) failed")
 failed = False
 
@@ -62,6 +63,12 @@ def non_test_lines(path: Path) -> int:
     return len(lines)
 
 
+def matches(pattern: str) -> list[tuple[Path, int]]:
+    expression = re.compile(pattern)
+    files = [p for name in SEARCHED for p in ([ROOT / name] if (ROOT / name).is_file() else sorted((ROOT / name).rglob("*"))) if p.is_file()]
+    return [(p, n) for p in files for n, line in enumerate(p.read_text(errors="replace").splitlines(), 1) if expression.search(line)]
+
+
 def environment(scratch: Path) -> dict[str, str]:
     env = dict(os.environ)
     if not os.access(env.get("HOME", "/nonexistent"), os.W_OK):
@@ -89,8 +96,16 @@ def main() -> int:
         engine = str(bin_dir / "loop-engine")
         usage = run(engine, "--help", env=env).stdout.split("Commands:")[1].split("\n\n")[0]
         commands = [line.split()[0] for line in usage.splitlines() if line.strip()]
-        help_text = "".join(run(engine, command, "--help", env=env).stdout for command in commands)
-        print(f"help text of {len(commands)} commands sha256: {hashlib.sha256(help_text.encode()).hexdigest()}")
+        help_text = "".join(run(engine, *command, "--help", env=env).stdout for command in [(), *((name,) for name in commands)])
+        print(f"help text of loop-engine and {len(commands)} commands ({' '.join(commands)}) sha256: {hashlib.sha256(help_text.encode()).hexdigest()}")
+        database = Path(tmp) / "schema" / "loop.db"
+        database.parent.mkdir()
+        created = run(engine, "--database", str(database), "list", env=env)
+        schema = sqlite3.connect(database)
+        objects = schema.execute("select type, name, sql from sqlite_master order by type, name").fetchall()
+        version = schema.execute("pragma user_version").fetchone()[0]
+        report("new database", created)
+        print(f"schema of a new database: {len(objects)} objects, user_version {version}, sha256: {hashlib.sha256(json.dumps([version, objects]).encode()).hexdigest()}")
 
         def tool(name: str) -> str:
             return str(bin_dir / name)
@@ -109,11 +124,13 @@ def main() -> int:
             report(f"journey {name}", run("python3", f"scripts/{script}", *args, env=env))
 
     sources = sorted(p for d in COUNTED for p in (ROOT / d).rglob("*.rs"))
-    statements = sorted(line for p in sorted((ROOT / "crates/loop-integrations/src").rglob("*.rs")) for line in p.read_text().splitlines() if SCHEMA.search(line))
-    print(f"schema statements sha256: {hashlib.sha256(chr(10).join(statements).encode()).hexdigest()}")
     print(f"non-test lines in {' and '.join(Path(d).parts[1] for d in COUNTED)}: {sum(non_test_lines(p) for p in sources)}")
     print(f"Cargo.lock packages: {(ROOT / 'Cargo.lock').read_text().count('[[package]]')}")
-    return 1 if failed else 0
+    found = [(path, number, pattern) for pattern in sys.argv[1:] for path, number in matches(pattern)]
+    print(f"patterns found in {', '.join(SEARCHED)}: {len(found)} matches for {len(sys.argv) - 1} patterns")
+    for path, number, pattern in found[:20]:
+        print(f"  {path.relative_to(ROOT)}:{number}: {pattern}")
+    return 1 if failed or found else 0
 
 
 if __name__ == "__main__":
