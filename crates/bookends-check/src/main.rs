@@ -36,10 +36,12 @@ fn run(
         Ok(invocation) => invocation,
         Err(ParseOutcome::Help) => {
             print_help();
+            action.skip = true;
             return Ok(ExitCode::from(0));
         }
         Err(ParseOutcome::Version) => {
             println!("bookends-check {}", env!("CARGO_PKG_VERSION"));
+            action.skip = true;
             return Ok(ExitCode::from(0));
         }
         Err(ParseOutcome::Usage(msg)) => {
@@ -64,7 +66,6 @@ fn run(
     let bypass = opts.bypass.as_ref().map(|(c, r)| (c.as_str(), r.as_str()));
     action.action = "check";
     action.repo = Some(repo.display().to_string());
-    action.receipt_root = opts.receipt_root.clone();
 
     if opts.updates_stdin {
         let mut input = String::new();
@@ -450,11 +451,7 @@ fn retain_publication_receipt(
     let repository = fs::canonicalize(repo)?;
     let root = match root {
         Some(root) => root.to_path_buf(),
-        None => env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
-            .ok_or_else(|| io::Error::other("no local state directory"))?
-            .join("bookends-check/gates"),
+        None => state_dir()?.join("gates"),
     };
     fs::create_dir_all(&root)?;
     let root = fs::canonicalize(root)?;
@@ -530,11 +527,7 @@ fn retain_bypass(
     let repository = fs::canonicalize(repo)?;
     let root = match root {
         Some(root) => root.to_path_buf(),
-        None => env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
-            .ok_or_else(|| io::Error::other("no local state directory"))?
-            .join("bookends-check/bypasses"),
+        None => state_dir()?.join("bypasses"),
     };
     fs::create_dir_all(&root)?;
     let root = fs::canonicalize(root)?;
@@ -614,7 +607,6 @@ struct ActionLog {
     complete: Option<bool>,
     bypass_class: Option<String>,
     receipt: Option<PathBuf>,
-    receipt_root: Option<PathBuf>,
     error: Option<String>,
 }
 
@@ -640,7 +632,6 @@ impl ActionLog {
             complete: None,
             bypass_class: None,
             receipt: None,
-            receipt_root: None,
             error: None,
         }
     }
@@ -653,17 +644,6 @@ impl ActionLog {
     fn refused(&mut self, error: String) {
         self.outcome = "refused";
         self.error = Some(error);
-    }
-
-    fn log_path(&self) -> io::Result<PathBuf> {
-        if let Some(root) = &self.receipt_root {
-            return Ok(root.parent().unwrap_or(root).join("log.jsonl"));
-        }
-        Ok(env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
-            .ok_or_else(|| io::Error::other("no local state directory"))?
-            .join("bookends-check/log.jsonl"))
     }
 
     fn write(&self, duration: std::time::Duration) {
@@ -679,7 +659,9 @@ impl ActionLog {
     }
 
     fn append(&self, duration: std::time::Duration) -> io::Result<()> {
-        let path = self.log_path()?;
+        // Always the state directory, never the receipt root: a mistaken root
+        // must not put the log in the checkout.
+        let path = state_dir()?.join("log.jsonl");
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -708,6 +690,15 @@ impl ActionLog {
             .open(path)?
             .write_all(&line)
     }
+}
+
+/// `$XDG_STATE_HOME/bookends-check`, else `~/.local/state/bookends-check`.
+fn state_dir() -> io::Result<PathBuf> {
+    Ok(env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+        .ok_or_else(|| io::Error::other("no local state directory"))?
+        .join("bookends-check"))
 }
 
 /// `YYYY-MM-DDTHH:MM:SS.mmmZ` in UTC.
@@ -749,9 +740,8 @@ fn print_help() {
          Publication checks retain a synced range/completeness receipt; bypass\n\
          permission also requires a synced write-once receipt.\n\
          Every run of a check or candidate command appends one JSON line to\n\
-         log.jsonl in the receipt root's parent directory (default\n\
-         $XDG_STATE_HOME/bookends-check/log.jsonl). Its run_id matches the\n\
-         receipt's. A log write failure is reported on stderr and never\n\
+         $XDG_STATE_HOME/bookends-check/log.jsonl, never under\n\
+         --receipt-root. Its id is the run_id in the receipt. A log write failure is reported on stderr and never\n\
          changes the verdict."
     );
 }

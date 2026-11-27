@@ -96,6 +96,14 @@ fn git(repo: &Path, args: &[&str]) {
     );
 }
 
+/// Point a spawned checker's HOME and XDG_STATE_HOME at `state`, so a host
+/// test run never writes the real action log or receipts.
+pub fn isolate<'a>(command: &'a mut Command, state: &std::path::Path) -> &'a mut Command {
+    command
+        .env("HOME", state)
+        .env("XDG_STATE_HOME", state.join("state"))
+}
+
 pub fn bin() -> PathBuf {
     workspace_integration::binary("bookends-check")
 }

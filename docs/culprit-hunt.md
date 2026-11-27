@@ -110,7 +110,7 @@ run-and-wake -- kgate --cpu 4 --mem 3Gi -- sh -c 'set -u; before=$1; shift; carg
 
 - The pod's checker is built from the worktree's source with cargo. That avoids the gate wrapper, which takes the first `bookends-check` on PATH, and any inherited `BOOKENDS_*` variables, so no bypass applies.
 - The arguments are the ones the wrapper passes in CI: `--updates-stdin --remote origin`. The `printf` line is the same update line the CI step pipes.
-- `--receipt-root /tmp/bookends-receipts` keeps the receipt in the pod, outside the repository, as the checker requires. The checker's `log.jsonl` lands beside it, in `/tmp`.
+- `--receipt-root /tmp/bookends-receipts` keeps the receipt in the pod, outside the repository, as the checker requires. The checker's `log.jsonl` is not under it: it goes to the pod's state directory.
 - `before` is passed as `$1`. Each further argument becomes the head, so `<before> <after>` checks the commits listed in step 1.
 - Exit 2 means the build failed. That is no result.
 - If the replay prints `RED`, read its findings as in "The step failed" above.

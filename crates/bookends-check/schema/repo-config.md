@@ -52,9 +52,10 @@ interrupted or bounded walk, or changed local HEAD/index/worktree is incomplete
 and cannot produce `GREEN`. Publication invocations retain a write-once range
 and completeness receipt outside the repository.
 
-Every `check` or `candidate` run also appends one JSON line to `log.jsonl`
-in the receipt root's parent directory (default
-`$XDG_STATE_HOME/bookends-check/log.jsonl`, or `~/.local/state/...`). Fields:
+Every `check` or `candidate` run also appends one JSON line
+at `$XDG_STATE_HOME/bookends-check/log.jsonl` (else
+`~/.local/state/bookends-check/log.jsonl`), whatever `--receipt-root` says.
+`--help`, `--version` and usage errors write no line. Fields:
 `ts` (UTC), `action` (`publication`, `check` or `candidate`), `outcome`
 (`green`, `red`, `bypass`, `refused` when a receipt cannot be written, or
 `error`), `duration_ms`, `id`, and for replay `repo`, `remote`, `refs`,
