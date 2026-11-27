@@ -157,6 +157,44 @@ fn append_rejects_caller_spoof_and_legacy_new_operations() {
 }
 
 #[test]
+fn append_help_example_is_accepted_and_names_no_retired_origin() {
+    let directory = tempdir().expect("tempdir");
+    let database = directory.path().join("loop.sqlite");
+    let persistence = SqlitePersistence::open(&database).expect("sqlite");
+    create_run(&persistence, "stable-run");
+    persistence
+        .append_context(AppendContextRequest::new(
+            "stable-run",
+            "original-evidence",
+            "review-evidence",
+            json!({"axis": "axis-a", "result": "pass"}),
+            Timestamp::from_unix_millis(2),
+        ))
+        .expect("append source evidence");
+
+    let help = Command::new(workspace_integration::binary("loop-engine"))
+        .args(["append", "--help"])
+        .bounded_output("loop-engine append help")
+        .expect("help process");
+    assert!(help.status.success());
+    let help = String::from_utf8(help.stdout).expect("help text");
+    assert!(
+        !help.contains("selected-assignment-output"),
+        "help teaches a retired origin: {help}"
+    );
+
+    let start = help.find(r#"{"origin""#).expect("origin example in help");
+    let end = start + help[start..].find("}}").expect("origin example end") + 2;
+    let example = help[start..end].replace("RECORD_ID", "original-evidence");
+
+    let (_, appended, _) = cli(
+        &database,
+        &["append", "stable-run", "review-evidence", &example],
+    );
+    assert_eq!(appended["status"], "completed", "{example}: {appended}");
+}
+
+#[test]
 fn evidence_applicability_is_concise_same_run_context_and_stays_visible() {
     let directory = tempdir().expect("tempdir");
     let database = directory.path().join("loop.sqlite");
